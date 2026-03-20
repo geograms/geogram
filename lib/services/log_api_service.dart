@@ -14744,6 +14744,14 @@ class LogApiService with ChatModificationMixin {
           break; // Proceed to render
       }
 
+      // Serve assets from inside the NDF archive
+      if (action.startsWith('assets/')) {
+        if (request.method != 'GET') return null;
+        final ndfBytes = await workStorage.readDocumentBytes(workspaceId, filename);
+        if (ndfBytes == null) return shelf.Response.notFound('Not found');
+        return _handleNdfAssetRequest(ndfBytes, action);
+      }
+
       // Handle feedback actions (like, comment, feedback) on sub-paths
       if (action.isNotEmpty) {
         return await _handleWorkFeedbackAction(
@@ -14860,6 +14868,18 @@ class LogApiService with ChatModificationMixin {
         headers: {'Content-Type': 'text/html'},
       );
     }
+  }
+
+  /// Serve a file from inside an NDF (ZIP) archive via HTTP.
+  /// Returns null if the request method is not GET.
+  shelf.Response? _handleNdfAssetRequest(Uint8List ndfBytes, String assetPath) {
+    final fileBytes = NdfService().readArchiveFileFromBytes(ndfBytes, assetPath);
+    if (fileBytes == null) return shelf.Response.notFound('Asset not found');
+    final mimeType = lookupMimeType(assetPath, headerBytes: fileBytes) ?? 'application/octet-stream';
+    return shelf.Response.ok(fileBytes, headers: {
+      'Content-Type': mimeType,
+      'Cache-Control': 'public, max-age=31536000, immutable',
+    });
   }
 
   /// Handle feedback actions on work documents: like, comment, feedback, comment/{id}
@@ -15569,12 +15589,11 @@ ${_getWorkExplorerStyles()}
         }
       }
 
-      // Extract thumbnail
-      String? thumbnailDataUri;
+      // Thumbnail URL — served via the story's asset endpoint
+      String? thumbnailUrl;
       for (final entry in archive) {
         if (entry.name == 'assets/thumbnails/preview.png' && entry.isFile) {
-          final bytes = Uint8List.fromList(entry.content as List<int>);
-          thumbnailDataUri = 'data:image/png;base64,${base64Encode(bytes)}';
+          thumbnailUrl = '${story.filename}/assets/thumbnails/preview.png';
           break;
         }
       }
@@ -15584,7 +15603,7 @@ ${_getWorkExplorerStyles()}
         title: story.title,
         description: story.description,
         tags: story.tags,
-        thumbnailDataUri: thumbnailDataUri,
+        thumbnailUrl: thumbnailUrl,
         sceneCount: story.content?.sceneCount ?? 0,
         modified: story.modified,
       ));
@@ -15688,6 +15707,12 @@ ${_getWorkExplorerStyles()}
           return _buildStoryAccessDeniedPage(headers);
         }
       }
+    }
+
+    // Serve assets from inside the NDF archive
+    if (action.startsWith('assets/')) {
+      if (request.method != 'GET') return null;
+      return _handleNdfAssetRequest(ndfBytes!, action);
     }
 
     // Handle feedback sub-paths

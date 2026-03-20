@@ -27,7 +27,7 @@ class StoryGalleryEntry {
   final String title;
   final String? description;
   final List<String> tags;
-  final String? thumbnailDataUri;
+  final String? thumbnailUrl;
   final int sceneCount;
   final DateTime modified;
 
@@ -36,7 +36,7 @@ class StoryGalleryEntry {
     required this.title,
     this.description,
     this.tags = const [],
-    this.thumbnailDataUri,
+    this.thumbnailUrl,
     this.sceneCount = 0,
     required this.modified,
   });
@@ -88,25 +88,21 @@ class StoryWebViewerService {
       }
       final storyContent = StoryContent.fromJson(mainJson, loadedScenes: scenes);
 
-      // Collect background images as base64 data URIs
-      final backgroundDataUris = <String, String>{};
+      // Collect background image asset URLs (served via HTTP instead of base64)
+      final assetBaseUrl = storyFilename.isNotEmpty ? '$storyFilename/' : '';
+      final backgroundUrls = <String, String>{};
       for (final scene in storyContent.orderedScenes) {
         final bgAsset = scene.background.asset;
         if (bgAsset != null && bgAsset.isNotEmpty) {
-          if (!backgroundDataUris.containsKey(bgAsset)) {
+          if (!backgroundUrls.containsKey(bgAsset)) {
             final assetPath = bgAsset.startsWith('asset://') ? bgAsset.substring(8) : bgAsset;
-            final imageBytes = _readArchiveFile(archive, assetPath);
-            if (imageBytes != null) {
-              final ext = assetPath.split('.').last.toLowerCase();
-              final mime = _mimeForExtension(ext);
-              backgroundDataUris[bgAsset] = 'data:$mime;base64,${base64Encode(imageBytes)}';
-            }
+            backgroundUrls[bgAsset] = '$assetBaseUrl$assetPath';
           }
         }
       }
 
       // Build STORY_DATA JSON
-      final storyData = _buildStoryData(storyContent, backgroundDataUris);
+      final storyData = _buildStoryData(storyContent, backgroundUrls);
       final storyDataJson = jsonEncode(storyData);
 
       // Build page
@@ -156,7 +152,7 @@ class StoryWebViewerService {
     final cardsHtml = StringBuffer();
     for (final entry in entries) {
       final tagsAttr = entry.tags.map((t) => escapeHtml(t.toLowerCase())).join(' ');
-      final thumbnail = entry.thumbnailDataUri;
+      final thumbnail = entry.thumbnailUrl;
       final thumbHtml = thumbnail != null
           ? '<img src="$thumbnail" alt="${escapeHtml(entry.title)}" class="story-card-thumb">'
           : '<div class="story-card-thumb story-card-thumb-placeholder"></div>';
@@ -269,30 +265,12 @@ function filterStories(tag) {
     return null;
   }
 
-  Uint8List? _readArchiveFile(Archive archive, String path) {
-    for (final entry in archive) {
-      if (entry.name == path && entry.isFile) {
-        return Uint8List.fromList(entry.content as List<int>);
-      }
-    }
-    return null;
-  }
 
-  String _mimeForExtension(String ext) {
-    switch (ext) {
-      case 'png': return 'image/png';
-      case 'jpg': case 'jpeg': return 'image/jpeg';
-      case 'gif': return 'image/gif';
-      case 'webp': return 'image/webp';
-      case 'svg': return 'image/svg+xml';
-      default: return 'image/png';
-    }
-  }
 
   /// Build the STORY_DATA JSON object for the JS runtime.
   Map<String, dynamic> _buildStoryData(
     StoryContent content,
-    Map<String, String> backgroundDataUris,
+    Map<String, String> backgroundUrls,
   ) {
     final scenesData = <Map<String, dynamic>>[];
     for (final scene in content.orderedScenes) {
@@ -325,10 +303,10 @@ function filterStories(tag) {
         });
       }
 
-      String? bgDataUri;
+      String? bgUrl;
       final bgAsset = scene.background.asset;
-      if (bgAsset != null && backgroundDataUris.containsKey(bgAsset)) {
-        bgDataUri = backgroundDataUris[bgAsset];
+      if (bgAsset != null && backgroundUrls.containsKey(bgAsset)) {
+        bgUrl = backgroundUrls[bgAsset];
       }
 
       scenesData.add({
@@ -336,7 +314,7 @@ function filterStories(tag) {
         'index': scene.index,
         'title': scene.title,
         'background': {
-          'dataUri': bgDataUri,
+          'assetUrl': bgUrl,
           'placeholder': scene.background.placeholder,
           'appearAt': scene.background.appearAt,
         },
@@ -773,8 +751,8 @@ ${interaction.permitComments ? feedback.getCommentsScript(ownerNpub, storyFilena
     container.style.opacity = '0';
     setTimeout(function() {
       // Set background
-      if (scene.background.dataUri) {
-        container.style.backgroundImage = 'url(' + scene.background.dataUri + ')';
+      if (scene.background.assetUrl) {
+        container.style.backgroundImage = 'url(' + scene.background.assetUrl + ')';
         container.style.backgroundColor = scene.background.placeholder || '#000';
       } else {
         container.style.backgroundImage = 'none';

@@ -6,7 +6,6 @@
 // Web viewer service for NDF documents — generates read-only HTML pages.
 // Pure Dart, no Flutter dependencies.
 
-import 'dart:convert' show base64Encode;
 import 'dart:typed_data';
 
 import '../../util/feedback_comment_utils.dart';
@@ -73,6 +72,10 @@ class NdfWebViewerService {
     final metadata = _ndfService.readMetadataFromBytes(ndfBytes);
     if (metadata == null) return null;
 
+    // Compute asset URL prefix so HTML references assets via HTTP instead of base64
+    final assetBaseUrl = documentFilename.isNotEmpty ? '$documentFilename/' : '';
+    final assetVersion = metadata.revision > 0 ? '?v=${metadata.revision}' : '';
+
     switch (metadata.type) {
       case NdfDocumentType.spreadsheet:
         return buildSpreadsheetPage(
@@ -105,6 +108,8 @@ class NdfWebViewerService {
           comments: comments,
           ownerNpub: ownerNpub,
           documentFilename: documentFilename,
+          assetBaseUrl: assetBaseUrl,
+          assetVersion: assetVersion,
         );
       case NdfDocumentType.presentation:
         return _buildPresentationPage(ndfBytes, metadata: metadata,
@@ -112,21 +117,24 @@ class NdfWebViewerService {
           menuItems: menuItems, logoText: logoText, logoHref: logoHref,
           interaction: interaction, likesCount: likesCount,
           likedHexPubkeys: likedHexPubkeys, comments: comments,
-          ownerNpub: ownerNpub, documentFilename: documentFilename);
+          ownerNpub: ownerNpub, documentFilename: documentFilename,
+          assetBaseUrl: assetBaseUrl, assetVersion: assetVersion);
       case NdfDocumentType.voicememo:
         return _buildVoiceMemoPage(ndfBytes, metadata: metadata,
           ownerIdentifier: ownerIdentifier, workspaceName: workspaceName,
           menuItems: menuItems, logoText: logoText, logoHref: logoHref,
           interaction: interaction, likesCount: likesCount,
           likedHexPubkeys: likedHexPubkeys, comments: comments,
-          ownerNpub: ownerNpub, documentFilename: documentFilename);
+          ownerNpub: ownerNpub, documentFilename: documentFilename,
+          assetBaseUrl: assetBaseUrl, assetVersion: assetVersion);
       case NdfDocumentType.todo:
         return _buildTodoPage(ndfBytes, metadata: metadata,
           ownerIdentifier: ownerIdentifier, workspaceName: workspaceName,
           menuItems: menuItems, logoText: logoText, logoHref: logoHref,
           interaction: interaction, likesCount: likesCount,
           likedHexPubkeys: likedHexPubkeys, comments: comments,
-          ownerNpub: ownerNpub, documentFilename: documentFilename);
+          ownerNpub: ownerNpub, documentFilename: documentFilename,
+          assetBaseUrl: assetBaseUrl, assetVersion: assetVersion);
       default:
         return null; // Other types not yet supported
     }
@@ -238,6 +246,8 @@ class NdfWebViewerService {
     List<FeedbackComment> comments = const [],
     String ownerNpub = '',
     String documentFilename = '',
+    String assetBaseUrl = '',
+    String assetVersion = '',
   }) {
     final mainJson =
         _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/main.json');
@@ -251,7 +261,7 @@ class NdfWebViewerService {
     final contentHtml = StringBuffer();
     contentHtml.write('<div class="doc-content">');
     for (final element in content.content) {
-      contentHtml.write(_renderDocElement(element, ndfBytes));
+      contentHtml.write(_renderDocElement(element, assetBaseUrl, assetVersion));
     }
     contentHtml.write('</div>');
 
@@ -357,7 +367,7 @@ $extraScripts
   // Document element renderers
   // ============================================================
 
-  String _renderDocElement(DocumentElement element, Uint8List ndfBytes) {
+  String _renderDocElement(DocumentElement element, String assetBaseUrl, String assetVersion) {
     switch (element.type) {
       case DocumentElementType.heading:
         final h = element as HeadingElement;
@@ -377,7 +387,7 @@ $extraScripts
 
       case DocumentElementType.image:
         final img = element as ImageElement;
-        return _renderImage(img, ndfBytes);
+        return _renderImage(img, assetBaseUrl, assetVersion);
 
       case DocumentElementType.table:
         final t = element as TableElement;
@@ -451,27 +461,14 @@ $extraScripts
     return buf.toString();
   }
 
-  String _renderImage(ImageElement img, Uint8List ndfBytes) {
-    // For asset:// references, we can't serve them inline — show alt text or placeholder
-    if (img.isAsset) {
-      // Try to read image from NDF archive and embed as data URI
-      final assetPath = 'assets/${img.assetPath}';
-      final imageBytes = _ndfService.readArchiveFileFromBytes(ndfBytes, assetPath);
-      if (imageBytes != null) {
-        final ext = img.assetPath?.split('.').last.toLowerCase() ?? 'png';
-        final mime = ext == 'jpg' || ext == 'jpeg' ? 'image/jpeg'
-            : ext == 'png' ? 'image/png'
-            : ext == 'gif' ? 'image/gif'
-            : ext == 'svg' ? 'image/svg+xml'
-            : ext == 'webp' ? 'image/webp'
-            : 'image/png';
-        final b64 = base64Encode(imageBytes);
-        final alt = img.alt != null ? ' alt="${escapeHtml(img.alt!)}"' : '';
-        final caption = img.caption != null
-            ? '<figcaption>${escapeHtml(img.caption!)}</figcaption>'
-            : '';
-        return '<figure><img src="data:$mime;base64,$b64"$alt style="max-width:100%">$caption</figure>';
-      }
+  String _renderImage(ImageElement img, String assetBaseUrl, String assetVersion) {
+    // Serve asset images via HTTP URL instead of base64 data URI
+    if (img.isAsset && img.assetPath != null) {
+      final alt = img.alt != null ? ' alt="${escapeHtml(img.alt!)}"' : '';
+      final caption = img.caption != null
+          ? '<figcaption>${escapeHtml(img.caption!)}</figcaption>'
+          : '';
+      return '<figure><img src="${assetBaseUrl}assets/${img.assetPath}$assetVersion"$alt style="max-width:100%">$caption</figure>';
     }
     // External URL or failed asset
     final alt = img.alt ?? img.caption ?? '';
@@ -599,6 +596,7 @@ $extraScripts
     int likesCount = 0, List<String> likedHexPubkeys = const [],
     List<FeedbackComment> comments = const [], String ownerNpub = '',
     String documentFilename = '',
+    String assetBaseUrl = '', String assetVersion = '',
   }) {
     final mainJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/main.json');
     if (mainJson == null) return null;
@@ -659,12 +657,7 @@ $extraScripts
 
         if (el.type == SlideElementType.image && el.imagePath != null) {
           final imgPath = el.imagePath!.startsWith('asset://') ? 'assets/${el.imagePath!.substring(8)}' : el.imagePath!;
-          final imgBytes = _ndfService.readArchiveFileFromBytes(ndfBytes, imgPath);
-          if (imgBytes != null) {
-            final ext = imgPath.split('.').last.toLowerCase();
-            final mime = ext == 'jpg' || ext == 'jpeg' ? 'image/jpeg' : ext == 'svg' ? 'image/svg+xml' : 'image/$ext';
-            slidesHtml.write('<div class="slide-el" style="$posStyle"><img src="data:$mime;base64,${base64Encode(imgBytes)}" style="width:100%;height:100%;object-fit:contain;"></div>');
-          }
+          slidesHtml.write('<div class="slide-el" style="$posStyle"><img src="$assetBaseUrl$imgPath$assetVersion" style="width:100%;height:100%;object-fit:contain;"></div>');
         } else {
           final style = el.style;
           final textStyles = <String>[];
@@ -973,6 +966,7 @@ $extraScripts
     int likesCount = 0, List<String> likedHexPubkeys = const [],
     List<FeedbackComment> comments = const [], String ownerNpub = '',
     String documentFilename = '',
+    String assetBaseUrl = '', String assetVersion = '',
   }) {
     final mainJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/main.json');
     if (mainJson == null) return null;
@@ -1037,7 +1031,7 @@ $extraScripts
       if (pending.isNotEmpty) {
         contentHtml.write('<div class="todo-section">');
         for (final item in pending) {
-          contentHtml.write(_buildTodoItemHtml(item, ndfBytes));
+          contentHtml.write(_buildTodoItemHtml(item, assetBaseUrl, assetVersion));
         }
         contentHtml.write('</div>');
       }
@@ -1051,7 +1045,7 @@ $extraScripts
         contentHtml.write('</div>');
         contentHtml.write('<div class="todo-completed-list" id="todo-completed-list">');
         for (final item in completed) {
-          contentHtml.write(_buildTodoItemHtml(item, ndfBytes));
+          contentHtml.write(_buildTodoItemHtml(item, assetBaseUrl, assetVersion));
         }
         contentHtml.write('</div>');
         contentHtml.write('</div>');
@@ -1119,7 +1113,7 @@ $extraScripts
     );
   }
 
-  String _buildTodoItemHtml(TodoItem item, Uint8List ndfBytes) {
+  String _buildTodoItemHtml(TodoItem item, String assetBaseUrl, String assetVersion) {
     final buf = StringBuffer();
     final safeId = item.id.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '');
     final hasDetails = (item.description != null && item.description!.isNotEmpty) ||
@@ -1192,20 +1186,11 @@ $extraScripts
         buf.write('<p class="todo-item-desc">${escapeHtml(item.description!)}</p>');
       }
 
-      // Pictures
+      // Pictures — served via HTTP asset endpoint
       if (item.pictures.isNotEmpty) {
         buf.write('<div class="todo-pictures">');
         for (final picPath in item.pictures) {
-          final picBytes = _ndfService.readArchiveFileFromBytes(ndfBytes, 'assets/$picPath');
-          if (picBytes != null) {
-            final ext = picPath.split('.').last.toLowerCase();
-            final mime = ext == 'png' ? 'image/png'
-                : ext == 'gif' ? 'image/gif'
-                : ext == 'webp' ? 'image/webp'
-                : 'image/jpeg';
-            final dataUri = 'data:$mime;base64,${base64Encode(picBytes)}';
-            buf.write('<img class="todo-picture" src="$dataUri" alt="" onclick="openLightbox(this.src)">');
-          }
+          buf.write('<img class="todo-picture" src="${assetBaseUrl}assets/$picPath$assetVersion" alt="" onclick="openLightbox(this.src)">');
         }
         buf.write('</div>');
       }
@@ -1392,6 +1377,7 @@ $extraScripts
     int likesCount = 0, List<String> likedHexPubkeys = const [],
     List<FeedbackComment> comments = const [], String ownerNpub = '',
     String documentFilename = '',
+    String assetBaseUrl = '', String assetVersion = '',
   }) {
     final mainJson = _ndfService.readArchiveJsonFromBytes(ndfBytes, 'content/main.json');
     if (mainJson == null) return null;
@@ -1420,16 +1406,7 @@ $extraScripts
       contentHtml.write('<div class="vm-clips">');
       for (var i = 0; i < clips.length; i++) {
         final clip = clips[i];
-        final audioPath = 'assets/${clip.audioFile}';
-        final audioBytes = _ndfService.readArchiveFileFromBytes(ndfBytes, audioPath);
-        final ext = clip.audioFile.split('.').last.toLowerCase();
-        final audioMime = ext == 'ogg' ? 'audio/ogg'
-            : ext == 'mp3' ? 'audio/mpeg'
-            : ext == 'wav' ? 'audio/wav'
-            : ext == 'webm' ? 'audio/webm'
-            : ext == 'm4a' ? 'audio/mp4'
-            : 'audio/ogg';
-        final hasAudio = audioBytes != null;
+        final hasAudio = clip.audioFile.isNotEmpty;
         final clipId = 'clip-$i';
         final hasTranscript = clip.transcription != null && content.settings.showTranscriptions;
 
@@ -1475,7 +1452,7 @@ $extraScripts
           contentHtml.write('<span class="vm-time" id="$clipId-dur">${clip.durationFormatted}</span>');
           contentHtml.write('</div>');
           contentHtml.write('</div>');
-          contentHtml.write('<audio id="$clipId-audio" src="data:$audioMime;base64,${base64Encode(audioBytes)}" preload="none"></audio>');
+          contentHtml.write('<audio id="$clipId-audio" src="${assetBaseUrl}assets/${clip.audioFile}$assetVersion" preload="none"></audio>');
         }
 
         if (hasTranscript) {

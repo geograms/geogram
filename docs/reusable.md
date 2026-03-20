@@ -42,6 +42,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [FileSystemService path utilities](#filesystemservice-path-utilities) - Cross-platform path handling (Windows `\` + Unix `/`)
 - [ZipProfileStorage](#zipprofilestorage) - ProfileStorage backed by an in-memory ZIP archive (NDF files)
 - [NdfService.updateArchiveEntriesInBytes](#ndfserviceupdatearchiveentriesinbytes) - Pure-bytes ZIP entry updater (no filesystem I/O)
+- [_handleNdfAssetRequest](#_handlendfassetrequest--serve-files-from-zip-archives-via-http) - Serve files from NDF archives via HTTP with MIME detection and caching
 
 ### Mirror Sync Constants
 - [kSyncableFolders](#ksyncablefolders) - Canonical list of folder IDs that can be synced between devices
@@ -11202,6 +11203,30 @@ await storage.writeBytes(path, updated);
 ```
 
 **Used in**: NDF HTML cache (`log_api_service.dart` — caches rendered `index.html` inside NDF archives)
+
+---
+
+## _handleNdfAssetRequest — Serve files from ZIP archives via HTTP
+
+**File**: `lib/services/log_api_service.dart`
+
+Serves individual files from inside an NDF (ZIP) archive via HTTP, with proper MIME type detection and immutable caching. Used by both Work and Stories routes to serve images, audio, and other assets referenced by the cached `index.html`.
+
+```dart
+shelf.Response? _handleNdfAssetRequest(Uint8List ndfBytes, String assetPath) {
+  final fileBytes = NdfService().readArchiveFileFromBytes(ndfBytes, assetPath);
+  if (fileBytes == null) return shelf.Response.notFound('Asset not found');
+  final mimeType = lookupMimeType(assetPath, headerBytes: fileBytes) ?? 'application/octet-stream';
+  return shelf.Response.ok(fileBytes, headers: {
+    'Content-Type': mimeType,
+    'Cache-Control': 'public, max-age=31536000, immutable',
+  });
+}
+```
+
+**Route wiring pattern**: intercept `action.startsWith('assets/')` before the feedback dispatch in any NDF-serving route. Access-control checks (visibility, unlisted key, permissions) run before the action dispatch, so assets inherit the same protection.
+
+**Used in**: Work route (`_handleWorkRoute`) and Stories route (`_handleStoryViewer`)
 
 ---
 
