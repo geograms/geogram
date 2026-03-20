@@ -35,12 +35,12 @@ void tdongle_ui_update(void);
 void tdongle_ui_push_message(const char *from, const char *text);
 
 /**
- * @brief Update the device-count shown in the bottom-left corner.
+ * @brief Update the device-count shown in the bottom-right corner.
  */
 void tdongle_ui_set_device_count(int count);
 
 /**
- * @brief Update the IP address shown in the bottom-right corner.
+ * @brief Update the IP address shown in the bottom-left corner.
  */
 void tdongle_ui_set_ip(const char *ip);
 

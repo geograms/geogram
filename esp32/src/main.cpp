@@ -80,6 +80,8 @@
     #include "model_config.h"
     #include "model_init.h"
     #include "tdongle_ui.h"
+    #include "ble_hello.h"
+    #include "nostr_keys.h"
 #elif BOARD_MODEL == MODEL_HELTEC_V3
     #include "model_config.h"
     #include "model_init.h"
@@ -935,7 +937,7 @@ extern "C" void app_main(void)
     // KV4P: station init (BLE observer+broadcaster added after HTTP server)
     station_init();
 #elif BOARD_MODEL == MODEL_TDONGLE_S3
-    // T-Dongle-S3: display only (BLE/WiFi added back later)
+    // T-Dongle-S3: display + BLE HELLO
     {
         st7735_handle_t lcd = model_get_lcd();
         if (lcd) {
@@ -945,6 +947,16 @@ extern "C" void app_main(void)
             } else {
                 ESP_LOGW(TAG, "T-Dongle UI init failed: %s", esp_err_to_name(ret));
             }
+        }
+
+        // Init nostr keys (for callsign) and BLE HELLO
+        nostr_keys_init();
+        const char *callsign = nostr_keys_get_callsign();
+        ret = ble_hello_init(callsign);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "BLE HELLO active — callsign: %s", callsign);
+        } else {
+            ESP_LOGW(TAG, "BLE HELLO init failed: %s", esp_err_to_name(ret));
         }
     }
 #endif
@@ -1351,10 +1363,21 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Entering main loop...");
 
 #if BOARD_MODEL == MODEL_TDONGLE_S3
-    // T-Dongle-S3: main loop drives the display (same pattern as old Arduino code)
-    while (1) {
-        tdongle_ui_update();
-        vTaskDelay(pdMS_TO_TICKS(5));
+    // T-Dongle-S3: main loop drives display + polls BLE device count
+    {
+        uint32_t last_count_ms = 0;
+        while (1) {
+            tdongle_ui_update();
+
+            // Update device count on display every ~5 seconds
+            uint32_t now_ms = esp_log_timestamp();
+            if (now_ms - last_count_ms > 5000) {
+                tdongle_ui_set_device_count(ble_hello_device_count());
+                last_count_ms = now_ms;
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
     }
 #else
     while (1) {

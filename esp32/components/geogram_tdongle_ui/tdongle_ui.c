@@ -8,7 +8,7 @@
  *   ├──────────────────────────────────────┤
  *   │  black chat area  (messages)     46px│
  *   ├──────────────────────────────────────┤
- *   │  grey bottom bar  (count + IP)   14px│
+ *   │  grey bottom bar  (IP + count)   14px│
  *   └──────────────────────────────────────┘
  */
 
@@ -216,17 +216,17 @@ static void build_ui(void)
     lv_obj_clear_flag(bot, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_align(bot, LV_ALIGN_BOTTOM_MID, 0, 0);
 
-    s_count_label = lv_label_create(bot);
-    lv_label_set_text(s_count_label, "");
-    lv_obj_set_style_text_font(s_count_label, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(s_count_label, lv_color_black(), 0);
-    lv_obj_align(s_count_label, LV_ALIGN_LEFT_MID, 4, 0);
-
     s_ip_label = lv_label_create(bot);
     lv_label_set_text(s_ip_label, "");
     lv_obj_set_style_text_font(s_ip_label, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(s_ip_label, lv_color_black(), 0);
-    lv_obj_align(s_ip_label, LV_ALIGN_RIGHT_MID, -4, 0);
+    lv_obj_align(s_ip_label, LV_ALIGN_LEFT_MID, 4, 0);
+
+    s_count_label = lv_label_create(bot);
+    lv_label_set_text(s_count_label, "");
+    lv_obj_set_style_text_font(s_count_label, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(s_count_label, lv_color_black(), 0);
+    lv_obj_align(s_count_label, LV_ALIGN_RIGHT_MID, -4, 0);
 }
 
 /* ---- public API --------------------------------------------------------- */
