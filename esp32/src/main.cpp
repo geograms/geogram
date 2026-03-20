@@ -82,6 +82,8 @@
     #include "tdongle_ui.h"
     #include "ble_hello.h"
     #include "nostr_keys.h"
+    #include "wifi_bsp.h"
+    #include "http_server.h"
 #elif BOARD_MODEL == MODEL_HELTEC_V3
     #include "model_config.h"
     #include "model_init.h"
@@ -328,6 +330,52 @@ static void start_mesh_mode(void)
 
 }
 #endif  // CONFIG_GEOGRAM_MESH_ENABLED
+
+// ============================================================================
+// T-Dongle-S3 WiFi Support
+// ============================================================================
+
+#if BOARD_MODEL == MODEL_TDONGLE_S3
+
+/**
+ * @brief WiFi event callback for T-Dongle-S3
+ */
+static void tdongle_wifi_event_cb(geogram_wifi_status_t status, void *event_data)
+{
+    char ip_str[16];
+
+    switch (status) {
+        case GEOGRAM_WIFI_STATUS_GOT_IP:
+            geogram_wifi_get_ip(ip_str);
+            ESP_LOGI(TAG, "T-Dongle STA connected, IP: %s", ip_str);
+            tdongle_ui_set_ip(ip_str);
+            break;
+
+        case GEOGRAM_WIFI_STATUS_DISCONNECTED:
+            ESP_LOGW(TAG, "T-Dongle STA disconnected, showing AP IP");
+            tdongle_ui_set_ip("192.168.4.1");
+            break;
+
+        case GEOGRAM_WIFI_STATUS_AP_STARTED:
+            ESP_LOGI(TAG, "T-Dongle AP started");
+            tdongle_ui_set_ip("192.168.4.1");
+            break;
+
+        default:
+            break;
+    }
+}
+
+/**
+ * @brief WiFi credentials received via captive portal
+ */
+static void tdongle_wifi_config_received(const char *ssid, const char *password)
+{
+    ESP_LOGI(TAG, "WiFi credentials received for SSID: %s", ssid);
+    geogram_wifi_connect_sta(ssid, password);
+}
+
+#endif  // BOARD_MODEL == MODEL_TDONGLE_S3
 
 #if BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
 
@@ -937,7 +985,7 @@ extern "C" void app_main(void)
     // KV4P: station init (BLE observer+broadcaster added after HTTP server)
     station_init();
 #elif BOARD_MODEL == MODEL_TDONGLE_S3
-    // T-Dongle-S3: display + BLE HELLO
+    // T-Dongle-S3: display + BLE HELLO + WiFi AP + captive portal
     {
         st7735_handle_t lcd = model_get_lcd();
         if (lcd) {
@@ -958,6 +1006,51 @@ extern "C" void app_main(void)
         } else {
             ESP_LOGW(TAG, "BLE HELLO init failed: %s", esp_err_to_name(ret));
         }
+
+        // Start WiFi AP (same pattern as KV4P standalone mode)
+        ret = geogram_wifi_init();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "T-Dongle WiFi init failed: %s", esp_err_to_name(ret));
+        } else {
+            geogram_wifi_ap_config_t ap_config = {};
+            strncpy(ap_config.ssid, "geogram", sizeof(ap_config.ssid) - 1);
+            strncpy(ap_config.password, "geogram", sizeof(ap_config.password) - 1);
+            ap_config.channel = 1;
+            ap_config.max_connections = 4;
+            ap_config.callback = tdongle_wifi_event_cb;
+
+            ret = geogram_wifi_start_ap(&ap_config);
+            if (ret == ESP_OK) {
+                ESP_LOGI(TAG, "WiFi AP started: geogram (password: geogram)");
+                tdongle_ui_set_ip("192.168.4.1");
+
+                // Auto-connect STA if saved credentials exist (5s delay)
+                {
+                    char saved_ssid[33] = {0};
+                    char saved_pass[65] = {0};
+                    if (geogram_wifi_load_credentials(saved_ssid, saved_pass) == ESP_OK
+                        && strlen(saved_ssid) > 0) {
+                        ESP_LOGI(TAG, "Will auto-connect to saved WiFi in 5 s: %s", saved_ssid);
+                        vTaskDelay(pdMS_TO_TICKS(5000));
+                        ESP_LOGI(TAG, "Auto-connecting to saved WiFi: %s", saved_ssid);
+                        geogram_wifi_connect_sta(saved_ssid, saved_pass);
+                    }
+                }
+
+                // DNS server for captive portal
+                uint32_t ap_ip = 0;
+                if (geogram_wifi_get_ap_ip_addr(&ap_ip) == ESP_OK) {
+                    dns_server_start(ap_ip);
+                }
+
+                // HTTP server with WiFi config UI
+                station_init();
+                http_server_start_ex(tdongle_wifi_config_received, true);
+                ESP_LOGI(TAG, "HTTP server + captive portal started");
+            } else {
+                ESP_LOGE(TAG, "Failed to start WiFi AP: %s", esp_err_to_name(ret));
+            }
+        }
     }
 #endif
 
@@ -974,6 +1067,11 @@ extern "C" void app_main(void)
 
 #if defined(CONFIG_GEOGRAM_MESH_ENABLED) && (BOARD_MODEL == MODEL_KV4P)
     geogram_log_plain(TAG, "KV4P: mesh auto-start disabled (using standalone AP mode)");
+#endif
+
+#if defined(CONFIG_GEOGRAM_MESH_ENABLED) && (BOARD_MODEL == MODEL_TDONGLE_S3)
+    geogram_log_plain(TAG, "Starting mesh mode on T-Dongle-S3");
+    start_mesh_mode();
 #endif
 
 #if BOARD_MODEL == MODEL_ESP32S3_EPAPER_1IN54
