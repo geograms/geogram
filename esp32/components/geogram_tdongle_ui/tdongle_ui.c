@@ -146,7 +146,7 @@ void tdongle_ui_update(void)
         if (s_count_label) {
             char buf[16];
             if (s_dev_count > 0)
-                snprintf(buf, sizeof(buf), "x%d", s_dev_count);
+                snprintf(buf, sizeof(buf), LV_SYMBOL_BLUETOOTH "%d", s_dev_count);
             else
                 buf[0] = '\0';
             lv_label_set_text(s_count_label, buf);
