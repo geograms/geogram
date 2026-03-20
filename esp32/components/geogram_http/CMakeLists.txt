@@ -18,7 +18,7 @@ if("${IDF_TARGET}" STREQUAL "esp32" OR "${IDF_TARGET}" STREQUAL "esp32s2" OR "${
 endif()
 
 idf_component_register(
-    SRCS "http_server.c"
+    SRCS "http_server.c" "chat_page.c"
     INCLUDE_DIRS "."
     REQUIRES ${HTTP_REQUIRES}
     PRIV_REQUIRES ${HTTP_PRIV_REQUIRES}
