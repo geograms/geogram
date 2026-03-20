@@ -1351,9 +1351,10 @@ extern "C" void app_main(void)
     ESP_LOGI(TAG, "Entering main loop...");
 
 #if BOARD_MODEL == MODEL_TDONGLE_S3
-    // T-Dongle-S3: display-only idle loop (LVGL task handles rendering)
+    // T-Dongle-S3: main loop drives the display (same pattern as old Arduino code)
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        tdongle_ui_update();
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 #else
     while (1) {

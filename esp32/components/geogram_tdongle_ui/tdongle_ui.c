@@ -17,8 +17,8 @@
 #include <stdio.h>
 #include "lvgl.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
 
 static const char *TAG = "tdongle_ui";
 
@@ -77,63 +77,78 @@ static void lcd_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *
     lv_disp_flush_ready(drv);
 }
 
-/* ---- LVGL tick ---------------------------------------------------------- */
+/* ---- update (called from main loop, same pattern as old Arduino code) --- */
 
-static void lvgl_task(void *arg)
+static uint32_t s_uptime_last = 0;
+
+void tdongle_ui_update(void)
 {
-    (void)arg;
-    static char combined[MSG_MAX * MSG_CAP + 8];  /* static to save stack */
-    uint32_t uptime_last = UINT32_MAX;
+    /* Pump LVGL first — flushes dirty regions from previous iteration */
+    lv_timer_handler();
 
-    ESP_LOGI(TAG, "LVGL task running");
+    /* Uptime label (once per second) */
+    uint32_t total_sec = (uint32_t)(esp_timer_get_time() / 1000000);
+    if (total_sec != s_uptime_last && s_status_label) {
+        s_uptime_last = total_sec;
 
-    while (1) {
-        /* --- apply deferred state --- */
-        if (s_msgs_dirty) {
-            s_msgs_dirty = false;
-            combined[0] = '\0';
-            for (uint8_t i = 0; i < s_msg_cnt; i++) {
-                if (i > 0) strcat(combined, "\n");
-                strncat(combined, s_msgs[i], sizeof(combined) - strlen(combined) - 1);
-            }
-            lv_label_set_text(s_msg_label, s_msg_cnt ? combined : "--");
+        static char buf[64];
+        uint32_t days    = total_sec / 86400;
+        uint32_t hours   = (total_sec / 3600) % 24;
+        uint32_t minutes = (total_sec / 60) % 60;
+        uint32_t seconds = total_sec % 60;
+
+        if (days == 0) {
+            snprintf(buf, sizeof(buf), "geogram uptime: %02lu:%02lu:%02lu",
+                     (unsigned long)hours, (unsigned long)minutes, (unsigned long)seconds);
+        } else {
+            snprintf(buf, sizeof(buf), "geogram uptime: %lu day%s %02lu h",
+                     (unsigned long)days, (days == 1 ? "" : "s"), (unsigned long)hours);
         }
+        lv_label_set_text(s_status_label, buf);
+    }
 
-        if (s_dev_dirty) {
-            s_dev_dirty = false;
-            char buf[12];
+    /* Apply chat messages */
+    if (s_msgs_dirty) {
+        s_msgs_dirty = false;
+
+        if (s_msg_label) {
+            static char combined[MSG_MAX * MSG_CAP + 8];
+            combined[0] = '\0';
+
+            for (uint8_t i = 0; i < s_msg_cnt; i++) {
+                strncat(combined, s_msgs[i], sizeof(combined) - 1 - strlen(combined));
+                if (i + 1 < s_msg_cnt) {
+                    strncat(combined, "\n", sizeof(combined) - 1 - strlen(combined));
+                }
+            }
+
+            lv_label_set_text(s_msg_label, (s_msg_cnt == 0) ? "--" : combined);
+
+            lv_obj_t *parent = lv_obj_get_parent(s_msg_label);
+            lv_obj_update_layout(parent);
+            lv_obj_scroll_to_y(parent, LV_COORD_MAX, LV_ANIM_OFF);
+        }
+    }
+
+    /* Device count */
+    if (s_dev_dirty) {
+        s_dev_dirty = false;
+        if (s_count_label) {
+            char buf[16];
             if (s_dev_count > 0)
                 snprintf(buf, sizeof(buf), "x%d", s_dev_count);
             else
                 buf[0] = '\0';
             lv_label_set_text(s_count_label, buf);
         }
+    }
 
-        if (s_ip_dirty) {
-            s_ip_dirty = false;
+    /* IP label */
+    if (s_ip_dirty) {
+        s_ip_dirty = false;
+        if (s_ip_label) {
             lv_label_set_text(s_ip_label, s_ip_str);
         }
-
-        /* --- uptime (once per second) --- */
-        uint32_t sec = (uint32_t)(xTaskGetTickCount() / configTICK_RATE_HZ);
-        if (sec != uptime_last) {
-            uptime_last = sec;
-            char buf[48];
-            uint32_t d = sec / 86400, h = (sec / 3600) % 24,
-                     m = (sec / 60) % 60, s = sec % 60;
-            if (d == 0)
-                snprintf(buf, sizeof(buf), "geogram  %02lu:%02lu:%02lu",
-                         (unsigned long)h, (unsigned long)m, (unsigned long)s);
-            else
-                snprintf(buf, sizeof(buf), "geogram  %lud %02luh",
-                         (unsigned long)d, (unsigned long)h);
-            lv_label_set_text(s_status_label, buf);
-        }
-
-        /* --- LVGL timer handler (processes dirty areas, calls flush) --- */
-        lv_timer_handler();
-
-        vTaskDelay(pdMS_TO_TICKS(30));
     }
 }
 
@@ -252,10 +267,7 @@ esp_err_t tdongle_ui_init(st7735_handle_t lcd)
     s_ip_str[0] = '\0';
     s_ip_dirty = false;
 
-    /* LVGL task (8 KB stack — LVGL + flush needs headroom) */
-    xTaskCreate(lvgl_task, "tdongle_ui", 8192, NULL, 5, NULL);
-
-    ESP_LOGI(TAG, "T-Dongle UI initialised (%dx%d)", SCREEN_W, SCREEN_H);
+    ESP_LOGI(TAG, "T-Dongle UI initialised (%dx%d) — call tdongle_ui_update() from main loop", SCREEN_W, SCREEN_H);
     return ESP_OK;
 }
 

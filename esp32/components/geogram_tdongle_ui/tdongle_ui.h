@@ -22,9 +22,15 @@ extern "C" {
 esp_err_t tdongle_ui_init(st7735_handle_t lcd);
 
 /**
- * @brief Push a chat message onto the display.
+ * @brief Call from the main loop — pumps LVGL and updates uptime/messages.
  *
- * Thread-safe — can be called from any task (e.g. BLE callback).
+ * Mirrors the old Arduino updateDisplay() pattern: lv_timer_handler()
+ * first, then apply deferred label changes.
+ */
+void tdongle_ui_update(void);
+
+/**
+ * @brief Push a chat message onto the display.
  */
 void tdongle_ui_push_message(const char *from, const char *text);
 
