@@ -80,10 +80,20 @@ static void lcd_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *
 /* ---- update (called from main loop, same pattern as old Arduino code) --- */
 
 static uint32_t s_uptime_last = 0;
+static uint64_t s_last_tick_us = 0;
 
 void tdongle_ui_update(void)
 {
-    /* Pump LVGL first — flushes dirty regions from previous iteration */
+    /* Advance LVGL tick (the managed LVGL component doesn't see our lv_conf.h,
+     * so LV_TICK_CUSTOM is not active — we must call lv_tick_inc manually) */
+    uint64_t now_us = esp_timer_get_time();
+    uint32_t elapsed_ms = (uint32_t)((now_us - s_last_tick_us) / 1000);
+    if (elapsed_ms > 0) {
+        lv_tick_inc(elapsed_ms);
+        s_last_tick_us = now_us;
+    }
+
+    /* Pump LVGL — flushes dirty regions from previous iteration */
     lv_timer_handler();
 
     /* Uptime label (once per second) */
