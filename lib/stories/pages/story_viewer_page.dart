@@ -61,9 +61,6 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   void initState() {
     super.initState();
     _initMusicPlayer();
-    if (!widget.isPreview) {
-      _initQuizStore();
-    }
     _loadContent();
   }
 
@@ -94,6 +91,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
   Future<void> _loadContent() async {
     setState(() => _isLoading = true);
     try {
+      await _initQuizStore();
       await _soundService.init();
       _content = await widget.storage.loadStoryContent(widget.story);
       if (_content != null && _content!.startScene != null) {
