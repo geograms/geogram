@@ -149,11 +149,16 @@ static void start_advertise(void)
     adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;  /* connectable for GATT */
     adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
 
+    /* --- Primary advertising data ---
+     * Must include the FFE0 service UUID — Flutter app scans with
+     * withServices:[FFE0] filter and won't see us without it. */
+    ble_uuid16_t svc_uuid = BLE_UUID16_INIT(SVC_UUID);
+
     struct ble_hs_adv_fields fields = {0};
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.name = (uint8_t *)s_callsign;
-    fields.name_len = strlen(s_callsign);
-    fields.name_is_complete = 1;
+    fields.uuids16 = &svc_uuid;
+    fields.num_uuids16 = 1;
+    fields.uuids16_is_complete = 1;
     fields.mfg_data = s_mfg_data;
     fields.mfg_data_len = s_mfg_len;
 
@@ -161,6 +166,18 @@ static void start_advertise(void)
     if (rc != 0) {
         ESP_LOGW(TAG, "adv_set_fields failed: %d", rc);
         return;
+    }
+
+    /* --- Scan response data ---
+     * Put the device name here to save primary adv space. */
+    struct ble_hs_adv_fields rsp_fields = {0};
+    rsp_fields.name = (uint8_t *)s_callsign;
+    rsp_fields.name_len = strlen(s_callsign);
+    rsp_fields.name_is_complete = 1;
+
+    rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "adv_rsp_set_fields failed: %d", rc);
     }
 
     rc = ble_gap_adv_start(BLE_OWN_ADDR_PUBLIC, NULL, BLE_HS_FOREVER,
