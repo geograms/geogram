@@ -19,7 +19,6 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/semphr.h"
 
 static const char *TAG = "tdongle_ui";
 
@@ -40,7 +39,6 @@ static st7735_handle_t      s_lcd;
 static lv_disp_draw_buf_t   s_draw_buf;
 static lv_disp_drv_t        s_disp_drv;
 static lv_disp_t           *s_disp;
-static SemaphoreHandle_t    s_lvgl_mutex;
 
 /* LVGL widgets */
 static lv_obj_t *s_status_label;
@@ -84,24 +82,21 @@ static void lcd_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *
 static void lvgl_task(void *arg)
 {
     (void)arg;
+    static char combined[MSG_MAX * MSG_CAP + 8];  /* static to save stack */
     uint32_t uptime_last = UINT32_MAX;
+
+    ESP_LOGI(TAG, "LVGL task running");
 
     while (1) {
         /* --- apply deferred state --- */
         if (s_msgs_dirty) {
             s_msgs_dirty = false;
-            char combined[MSG_MAX * MSG_CAP + 8];
             combined[0] = '\0';
             for (uint8_t i = 0; i < s_msg_cnt; i++) {
                 if (i > 0) strcat(combined, "\n");
                 strncat(combined, s_msgs[i], sizeof(combined) - strlen(combined) - 1);
             }
-            xSemaphoreTake(s_lvgl_mutex, portMAX_DELAY);
             lv_label_set_text(s_msg_label, s_msg_cnt ? combined : "--");
-            lv_obj_t *parent = lv_obj_get_parent(s_msg_label);
-            lv_obj_update_layout(parent);
-            lv_obj_scroll_to_y(parent, LV_COORD_MAX, LV_ANIM_OFF);
-            xSemaphoreGive(s_lvgl_mutex);
         }
 
         if (s_dev_dirty) {
@@ -111,16 +106,12 @@ static void lvgl_task(void *arg)
                 snprintf(buf, sizeof(buf), "x%d", s_dev_count);
             else
                 buf[0] = '\0';
-            xSemaphoreTake(s_lvgl_mutex, portMAX_DELAY);
             lv_label_set_text(s_count_label, buf);
-            xSemaphoreGive(s_lvgl_mutex);
         }
 
         if (s_ip_dirty) {
             s_ip_dirty = false;
-            xSemaphoreTake(s_lvgl_mutex, portMAX_DELAY);
             lv_label_set_text(s_ip_label, s_ip_str);
-            xSemaphoreGive(s_lvgl_mutex);
         }
 
         /* --- uptime (once per second) --- */
@@ -136,18 +127,13 @@ static void lvgl_task(void *arg)
             else
                 snprintf(buf, sizeof(buf), "geogram  %lud %02luh",
                          (unsigned long)d, (unsigned long)h);
-
-            xSemaphoreTake(s_lvgl_mutex, portMAX_DELAY);
             lv_label_set_text(s_status_label, buf);
-            xSemaphoreGive(s_lvgl_mutex);
         }
 
-        /* --- LVGL timer handler --- */
-        xSemaphoreTake(s_lvgl_mutex, portMAX_DELAY);
+        /* --- LVGL timer handler (processes dirty areas, calls flush) --- */
         lv_timer_handler();
-        xSemaphoreGive(s_lvgl_mutex);
 
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
 }
 
@@ -225,9 +211,6 @@ esp_err_t tdongle_ui_init(st7735_handle_t lcd)
     if (!lcd) return ESP_ERR_INVALID_ARG;
     s_lcd = lcd;
 
-    s_lvgl_mutex = xSemaphoreCreateMutex();
-    if (!s_lvgl_mutex) return ESP_ERR_NO_MEM;
-
     /* LVGL init */
     lv_init();
 
@@ -269,8 +252,8 @@ esp_err_t tdongle_ui_init(st7735_handle_t lcd)
     s_ip_str[0] = '\0';
     s_ip_dirty = false;
 
-    /* LVGL task */
-    xTaskCreate(lvgl_task, "tdongle_ui", 4096, NULL, 5, NULL);
+    /* LVGL task (8 KB stack — LVGL + flush needs headroom) */
+    xTaskCreate(lvgl_task, "tdongle_ui", 8192, NULL, 5, NULL);
 
     ESP_LOGI(TAG, "T-Dongle UI initialised (%dx%d)", SCREEN_W, SCREEN_H);
     return ESP_OK;
