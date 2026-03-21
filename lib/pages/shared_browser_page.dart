@@ -6,6 +6,7 @@
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/app.dart';
 import '../models/shared_folder.dart';
@@ -17,6 +18,8 @@ import '../services/groups_service.dart';
 import '../services/contact_service.dart';
 import '../services/profile_storage.dart';
 import '../services/shared_folder_service.dart';
+import '../services/station_node_service.dart';
+import '../services/station_service.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_key_generator.dart';
 import 'contact_picker_page.dart';
@@ -44,6 +47,8 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
   List<SharedFolder> _folders = [];
   bool _isLoading = true;
   bool _hasMigrated = false;
+  String? _lanUrl;
+  String? _stationUrl;
 
   @override
   void initState() {
@@ -76,6 +81,40 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     }
 
     await _loadFolders();
+    await _detectUrls();
+  }
+
+  Future<void> _detectUrls() async {
+    if (kIsWeb) return;
+    try {
+      // LAN URL: local IP + HTTP port
+      final interfaces = await NetworkInterface.list();
+      final lanIp = interfaces
+          .expand((i) => i.addresses)
+          .where((a) => a.type == InternetAddressType.IPv4 && !a.isLoopback)
+          .map((a) => a.address)
+          .firstOrNull;
+      if (lanIp != null) {
+        final settings = await StationNodeService().loadNetworkSettings();
+        final port = settings['httpPort'] as int? ?? 3456;
+        _lanUrl = 'http://$lanIp:$port';
+      }
+
+      // Station URL: preferred station ws→http
+      final station = StationService().getPreferredStation();
+      if (station != null && station.url.isNotEmpty) {
+        var url = station.url;
+        if (url.startsWith('wss://')) {
+          url = url.replaceFirst('wss://', 'https://');
+        } else if (url.startsWith('ws://')) {
+          url = url.replaceFirst('ws://', 'http://');
+        }
+        if (url.endsWith('/')) url = url.substring(0, url.length - 1);
+        _stationUrl = url;
+      }
+
+      if (mounted) setState(() {});
+    } catch (_) {}
   }
 
   Future<void> _loadFolders() async {
@@ -606,6 +645,64 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     );
   }
 
+  /// Build the shared folder URL path segment
+  String _folderUrlPath(SharedFolder folder) {
+    return '/shared/${folder.sanitizedFilename}/';
+  }
+
+  Widget _buildUrlRow(SharedFolder folder, ThemeData theme) {
+    final urlPath = _folderUrlPath(folder);
+    final urls = <(String label, String url)>[];
+    if (_lanUrl != null) urls.add(('LAN', '$_lanUrl$urlPath'));
+    if (_stationUrl != null) urls.add(('Station', '$_stationUrl$urlPath'));
+    if (urls.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Wrap(
+        spacing: 12,
+        children: urls.map((e) {
+          return GestureDetector(
+            onTap: () {
+              Clipboard.setData(ClipboardData(text: e.$2));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('${e.$1} URL copied'),
+                  duration: const Duration(seconds: 2),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            },
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  e.$1 == 'LAN' ? Icons.lan : Icons.cloud,
+                  size: 12,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 3),
+                Text(
+                  e.$2,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontSize: 11,
+                  ),
+                ),
+                const SizedBox(width: 3),
+                Icon(
+                  Icons.copy,
+                  size: 11,
+                  color: theme.colorScheme.primary.withValues(alpha: 0.6),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Widget _buildFolderTile(SharedFolder folder, ThemeData theme) {
     return ListTile(
       leading: CircleAvatar(
@@ -669,6 +766,8 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
               ],
             ],
           ),
+          if (folder.visibility != SharedFolderVisibility.private_)
+            _buildUrlRow(folder, theme),
         ],
       ),
       isThreeLine: true,

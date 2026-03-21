@@ -1122,10 +1122,18 @@ class WebSocketService {
       return (statusCode: 200, contentType: 'text/html', body: utf8.encode(dirHtml));
     }
 
-    // Serve actual file from disk
+    // Serve actual file or subdirectory from disk
     final targetPath = '$diskPath/$remainingPath';
-    final file = File(targetPath);
 
+    // Check if it's a subdirectory → generate listing
+    final targetDir = Directory(targetPath);
+    if (await targetDir.exists()) {
+      final subTitle = '${entry.title} / ${remainingPath.replaceAll('/', ' / ')}';
+      final dirHtml = await _generateDirectoryListing(targetPath, subTitle, '$folderSlug/$remainingPath', storagePath);
+      return (statusCode: 200, contentType: 'text/html', body: utf8.encode(dirHtml));
+    }
+
+    final file = File(targetPath);
     if (!await file.exists()) {
       LogService().log('File not found: $targetPath');
       return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
