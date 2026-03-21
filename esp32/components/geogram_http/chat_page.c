@@ -740,7 +740,8 @@ esp_err_t chat_page_serve(httpd_req_t *req)
     }
     httpd_resp_sendstr_chunk(req, "\")+\"\\n;return NostrTools;\"))();if(__nt){window.NostrTools=__nt;}}catch(e){window.nostrToolsError=(e&&e.message)?e.message:String(e);}");
     httpd_resp_sendstr_chunk(req, LANDING_PAGE_HTML_SUFFIX);
-    return httpd_resp_sendstr_chunk(req, NULL);
+    httpd_resp_sendstr_chunk(req, NULL);  // Terminate chunked response
+    return ESP_OK;
 }
 
 // ============================================================================

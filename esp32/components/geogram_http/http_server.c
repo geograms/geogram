@@ -494,9 +494,15 @@ static void set_captive_redirect_headers(httpd_req_t *req)
 
 static esp_err_t captive_portal_handler(httpd_req_t *req)
 {
+#if BOARD_MODEL == MODEL_KV4P || BOARD_MODEL == MODEL_TDONGLE_S3
+    // Serve chat page directly — more reliable than 302 for captive portal
+    // mini-browsers. Android sees non-204, iOS sees non-"Success" → detected.
+    return chat_page_serve(req);
+#else
     set_captive_redirect_headers(req);
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
+#endif
 }
 
 /**
@@ -504,9 +510,13 @@ static esp_err_t captive_portal_handler(httpd_req_t *req)
  */
 static esp_err_t http_404_redirect_handler(httpd_req_t *req, httpd_err_code_t err)
 {
+#if BOARD_MODEL == MODEL_KV4P || BOARD_MODEL == MODEL_TDONGLE_S3
+    return chat_page_serve(req);
+#else
     set_captive_redirect_headers(req);
     httpd_resp_send(req, NULL, 0);
     return ESP_FAIL;  // Close socket after redirect
+#endif
 }
 
 // ============================================================================
