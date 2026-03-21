@@ -267,10 +267,15 @@ class DhtNode {
 
   /// Look up peers for an info_hash.
   ///
-  /// Returns peers found (also available via [onPeerFound] stream).
+  /// Returns peers found from both the local peer store and remote DHT nodes.
+  /// Also available via [onPeerFound] stream.
   Future<List<PeerInfo>> getPeers(Uint8List infoHash) async {
     if (!_running) return [];
-    return _iterativeGetPeers(infoHash);
+    final remotePeers = await _iterativeGetPeers(infoHash);
+    // Merge with locally stored peers (from incoming announces)
+    final localPeers = getCachedPeers(infoHash);
+    final merged = <PeerInfo>{...remotePeers, ...localPeers};
+    return merged.toList();
   }
 
   /// Start periodic re-announce on all topics.
@@ -534,6 +539,13 @@ class DhtNode {
 
     // Respond with ack
     _respondPing(txId, fromIp, fromPort);
+  }
+
+  // ─── Public Helpers ─────────────────────────────────────────────
+
+  /// Ping a node (adds it to routing table on response).
+  void pingNode(String ip, int port) {
+    _sendPing(ip, port);
   }
 
   // ─── Sending Queries ────────────────────────────────────────────

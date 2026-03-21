@@ -14,6 +14,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../services/app_args.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
@@ -60,6 +61,9 @@ class P2PService {
   Stream<(Uint8List infoHash, PeerInfo peer)> get onPeerFound =>
       _dht.onPeerFound;
 
+  /// DHT node's UDP port.
+  int get dhtPort => _dht.localPort;
+
   /// DHT routing table size.
   int get dhtPeerCount => _dht.routingTableSize;
 
@@ -87,8 +91,9 @@ class P2PService {
 
   /// Start the P2P service.
   ///
-  /// [localPort] — the port our local server listens on (e.g., 3456).
-  Future<void> start({int localPort = 3456}) async {
+  /// [localPort] — the port our local server listens on (default from AppArgs).
+  Future<void> start({int? localPort}) async {
+    localPort ??= AppArgs().port;
     if (!_enabled) return;
     if (_dht.isRunning) return;
 
@@ -214,11 +219,20 @@ class P2PService {
   /// Get all active direct connections.
   List<DirectConnection> get activeConnections => _icePunch.activeConnections;
 
+  /// Manually add a DHT node (for testing / direct peering).
+  Future<void> addNode(String ip, int port) async {
+    if (!_dht.isRunning) return;
+    // Send a find_node to the peer — this will add them to our routing table
+    // and trigger them to add us to theirs.
+    _dht.pingNode(ip, port);
+  }
+
   /// Get comprehensive status for API/UI.
   Map<String, dynamic> getStatus() {
     return {
       'enabled': _enabled,
       'running': _dht.isRunning,
+      'dht_port': _dht.isRunning ? _dht.localPort : null,
       'node_type': _capability.type.name,
       'public_ip': _capability.publicIp,
       'public_port': _capability.publicPort,

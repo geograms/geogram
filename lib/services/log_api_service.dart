@@ -19700,6 +19700,27 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
             headers: headers,
           );
 
+        case 'dht_add_node':
+          final ip = params['ip'] as String?;
+          final port = params['port'] as int?;
+          if (ip == null || port == null) {
+            return shelf.Response(400,
+              body: jsonEncode({
+                'success': false,
+                'error': 'ip and port parameters required',
+              }),
+              headers: headers,
+            );
+          }
+          await p2pService.addNode(ip, port);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Pinged DHT node $ip:$port',
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response(400,
             body: jsonEncode({
@@ -19710,6 +19731,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
                 'dht_start',
                 'dht_stop',
                 'dht_find_user',
+                'dht_add_node',
               ],
             }),
             headers: headers,
