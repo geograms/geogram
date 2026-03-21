@@ -376,35 +376,21 @@ class StoryNdfService {
   /// Extract the first quiz_blur asset to a temp file.
   /// Returns the temp path, or null if no blur asset exists.
   Future<String?> extractQuizBlurToTemp(String filePath) async {
-    try {
-      Uint8List? bytes;
-      if (storage != null) {
-        bytes = await storage!.readBytes(_toRelative(filePath));
-      } else {
-        final file = File(filePath);
-        if (!await file.exists()) return null;
-        bytes = await file.readAsBytes();
+    // Scan archive entries for a quiz_blur asset
+    final files = await _listArchiveFiles(filePath);
+    String? blurEntry;
+    for (final f in files) {
+      if (f.startsWith('assets/quiz_blur/') && f.endsWith('_blur.jpg')) {
+        blurEntry = f;
+        break;
       }
-      if (bytes == null) return null;
-
-      final archive = ZipDecoder().decodeBytes(bytes);
-      for (final entry in archive) {
-        if (entry.isFile &&
-            entry.name.startsWith('assets/quiz_blur/') &&
-            entry.name.endsWith('_blur.jpg')) {
-          final tempDir = Directory.systemTemp;
-          final tempFile = File(
-            '${tempDir.path}/story_blur_${DateTime.now().millisecondsSinceEpoch}.jpg',
-          );
-          await tempFile.writeAsBytes(entry.content as List<int>);
-          return tempFile.path;
-        }
-      }
-      return null;
-    } catch (e) {
-      _log.log('StoryNdfService: Error extracting quiz blur: $e');
-      return null;
     }
+    if (blurEntry == null) return null;
+
+    // Use the same extraction path as regular media
+    // Convert archive path 'assets/quiz_blur/...' → 'asset://quiz_blur/...'
+    final assetRef = 'asset://${blurEntry.substring(7)}';
+    return extractMediaToTemp(filePath, assetRef);
   }
 
   /// Read thumbnail
