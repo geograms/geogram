@@ -487,6 +487,7 @@ static void set_captive_redirect_headers(httpd_req_t *req)
 
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", location);
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache, no-store, must-revalidate");
     httpd_resp_set_hdr(req, "Pragma", "no-cache");
     httpd_resp_set_hdr(req, "Expires", "0");
@@ -519,19 +520,34 @@ static const char *CAPTIVE_LANDING_HTML =
  * minimal landing page with a link that opens the real browser, since the
  * popup WebView is sandboxed (no localStorage/crypto for chat JS).
  */
+/**
+ * @brief Captive portal probe handler — serves a landing page (not a redirect)
+ *
+ * Android/iOS probe specific URLs to detect captive portals. Returning HTML
+ * (not 204, not "Success") triggers the captive portal popup. We serve a
+ * minimal landing page with a link that opens the real browser, since the
+ * popup WebView is sandboxed (no localStorage/crypto for chat JS).
+ * Connection: close prevents background apps from holding sockets open.
+ */
 static esp_err_t captive_portal_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_send(req, CAPTIVE_LANDING_HTML, strlen(CAPTIVE_LANDING_HTML));
     return ESP_OK;
 }
 
 /**
  * @brief Custom 404 handler - redirect unknown URIs to main page for captive portal
+ *
+ * Background apps (Facebook, WhatsApp, etc.) hit the ESP32 because captive
+ * portal DNS resolves all domains to 192.168.4.1. Close connections immediately
+ * to avoid exhausting the limited socket pool.
  */
 static esp_err_t http_404_redirect_handler(httpd_req_t *req, httpd_err_code_t err)
 {
     set_captive_redirect_headers(req);
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_send(req, NULL, 0);
     return ESP_FAIL;  // Close socket after redirect
 }
@@ -1674,9 +1690,9 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     config.lru_purge_enable = true;
     config.stack_size = 8192;
     config.max_uri_handlers = 26;
-    config.max_open_sockets = 5;
-    config.recv_wait_timeout = 5;
-    config.send_wait_timeout = 5;
+    config.max_open_sockets = 7;
+    config.recv_wait_timeout = 2;
+    config.send_wait_timeout = 2;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d (station_api=%d)", config.server_port, enable_station_api);
 
