@@ -1,7 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/station.dart';
+import '../p2p/dht_node.dart' show PeerInfo;
+import '../p2p/node_capability.dart';
+import '../p2p/p2p_service.dart';
 import '../services/station_service.dart';
 import '../services/log_service.dart';
 import '../services/station_discovery_service.dart';
@@ -22,12 +26,22 @@ class _StationsPageState extends State<StationsPage> {
   final I18nService _i18n = I18nService();
   List<Station> _allStations = [];
   bool _isLoading = true;
+  StreamSubscription<List<PeerInfo>>? _p2pSub;
 
   @override
   void initState() {
     super.initState();
     _loadStations();
     _ensureUserLocation();
+    _p2pSub = P2PService().onDiscoveredPeersChanged.listen((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _p2pSub?.cancel();
+    super.dispose();
   }
 
   /// Ensure user location is set, auto-detect if not
@@ -557,6 +571,11 @@ class _StationsPageState extends State<StationsPage> {
                       );
                     }),
 
+                  const SizedBox(height: 32),
+
+                  // P2P Discovery Section
+                  _buildP2PSection(Theme.of(context)),
+
                   const SizedBox(height: 80),
                 ],
               ),
@@ -567,6 +586,123 @@ class _StationsPageState extends State<StationsPage> {
         label: Text(_i18n.t('add_station')),
       ),
     );
+  }
+
+  Widget _buildP2PSection(ThemeData theme) {
+    final p2p = P2PService();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              Icons.language,
+              color: theme.colorScheme.primary,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'P2P Discovery',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SwitchListTile(
+          title: const Text('Enable P2P'),
+          subtitle: const Text('Find devices via BitTorrent DHT'),
+          value: p2p.enabled,
+          onChanged: (value) {
+            setState(() {
+              p2p.enabled = value;
+              if (value && !p2p.isRunning) {
+                p2p.start();
+              }
+            });
+          },
+        ),
+        if (p2p.isRunning) ...[
+          ListTile(
+            leading: Icon(
+              _nodeTypeIcon(p2p.nodeType),
+              color: _nodeTypeColor(p2p.nodeType),
+            ),
+            title: Text('Node type: ${_nodeTypeLabel(p2p.nodeType)}'),
+            subtitle: Text(
+              p2p.publicIp != null
+                  ? 'Public: ${p2p.publicIp}:${p2p.publicPort}'
+                  : 'Detecting...',
+            ),
+          ),
+          ListTile(
+            leading: Icon(Icons.hub, color: theme.colorScheme.primary),
+            title: Text('DHT peers: ${p2p.dhtPeerCount}'),
+            subtitle: Text('Direct connections: ${p2p.directConnectionCount}'),
+          ),
+          if (p2p.discoveredPeers.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text(
+                'Devices found via internet',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+            ),
+            ...p2p.discoveredPeers.map((peer) => ListTile(
+              leading: CircleAvatar(
+                backgroundColor: Colors.teal.withValues(alpha: 0.1),
+                child: const Icon(Icons.language, color: Colors.teal),
+              ),
+              title: Text('${peer.ip}:${peer.port}'),
+              subtitle: const Text('DHT'),
+            )),
+          ],
+        ],
+      ],
+    );
+  }
+
+  String _nodeTypeLabel(NodeType type) {
+    switch (type) {
+      case NodeType.typeA:
+        return 'A (Public)';
+      case NodeType.typeB:
+        return 'B (NAT)';
+      case NodeType.typeC:
+        return 'C (Symmetric NAT)';
+      case NodeType.unknown:
+        return 'Detecting...';
+    }
+  }
+
+  IconData _nodeTypeIcon(NodeType type) {
+    switch (type) {
+      case NodeType.typeA:
+        return Icons.public;
+      case NodeType.typeB:
+        return Icons.router;
+      case NodeType.typeC:
+        return Icons.shield;
+      case NodeType.unknown:
+        return Icons.help_outline;
+    }
+  }
+
+  Color _nodeTypeColor(NodeType type) {
+    switch (type) {
+      case NodeType.typeA:
+        return Colors.green;
+      case NodeType.typeB:
+        return Colors.orange;
+      case NodeType.typeC:
+        return Colors.red;
+      case NodeType.unknown:
+        return Colors.grey;
+    }
   }
 }
 
