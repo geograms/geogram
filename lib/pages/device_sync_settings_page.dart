@@ -8,6 +8,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/mirror_config.dart';
+import '../p2p/node_capability.dart';
+import '../p2p/p2p_service.dart';
 import '../services/mirror_config_service.dart';
 import '../services/mirror_discovery_service.dart';
 import '../services/websocket_service.dart';
@@ -68,6 +70,11 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
                   children: [
                     // This device section
                     _buildThisDeviceSection(theme),
+
+                    const Divider(),
+
+                    // P2P Discovery section
+                    _buildP2PSection(theme),
 
                     const Divider(),
 
@@ -265,6 +272,97 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
         const SizedBox(height: 16),
       ],
     );
+  }
+
+  Widget _buildP2PSection(ThemeData theme) {
+    final p2p = P2PService();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Text(
+            'P2P Discovery',
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        SwitchListTile(
+          title: const Text('Enable P2P'),
+          subtitle: const Text('Find devices via DHT without station'),
+          value: p2p.enabled,
+          onChanged: (value) {
+            setState(() {
+              p2p.enabled = value;
+              if (value && !p2p.isRunning) {
+                p2p.start();
+              }
+            });
+          },
+        ),
+        if (p2p.isRunning) ...[
+          ListTile(
+            leading: Icon(
+              _nodeTypeIcon(p2p.nodeType),
+              color: _nodeTypeColor(p2p.nodeType),
+            ),
+            title: Text('Node type: ${_nodeTypeLabel(p2p.nodeType)}'),
+            subtitle: Text(
+              p2p.publicIp != null
+                  ? 'Public: ${p2p.publicIp}:${p2p.publicPort}'
+                  : 'Detecting...',
+            ),
+          ),
+          ListTile(
+            leading: Icon(Icons.hub, color: theme.colorScheme.primary),
+            title: Text('DHT peers: ${p2p.dhtPeerCount}'),
+            subtitle: Text('Direct connections: ${p2p.directConnectionCount}'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  String _nodeTypeLabel(NodeType type) {
+    switch (type) {
+      case NodeType.typeA:
+        return 'A (Public)';
+      case NodeType.typeB:
+        return 'B (NAT)';
+      case NodeType.typeC:
+        return 'C (Symmetric NAT)';
+      case NodeType.unknown:
+        return 'Detecting...';
+    }
+  }
+
+  IconData _nodeTypeIcon(NodeType type) {
+    switch (type) {
+      case NodeType.typeA:
+        return Icons.public;
+      case NodeType.typeB:
+        return Icons.router;
+      case NodeType.typeC:
+        return Icons.shield;
+      case NodeType.unknown:
+        return Icons.help_outline;
+    }
+  }
+
+  Color _nodeTypeColor(NodeType type) {
+    switch (type) {
+      case NodeType.typeA:
+        return Colors.green;
+      case NodeType.typeB:
+        return Colors.orange;
+      case NodeType.typeC:
+        return Colors.red;
+      case NodeType.unknown:
+        return Colors.grey;
+    }
   }
 
   Future<void> _confirmRemovePeer(MirrorPeer peer) async {

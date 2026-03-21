@@ -11512,3 +11512,69 @@ MeetingVisibility.unlisted   // Direct link only, not listed on /meet/
 **Listing filter**: `log_api_service.dart:_handleMeetListingPage()` filters archives, schedules, and active meetings by visibility.
 
 **Used in**: `ConferenceHostPage` (creation), `ConferenceArchiveDetailPage` (post-creation editing)
+
+---
+
+## P2P Discovery via Mainline DHT
+
+### Bencode Codec (`lib/p2p/bencode.dart`)
+
+Reusable encoder/decoder for BitTorrent bencoding format. Supports strings, integers, lists, and sorted-key dictionaries. Used for all DHT UDP message serialization.
+
+```dart
+import 'package:geogram/p2p/bencode.dart';
+
+// Encode
+final bytes = Bencode.encode({'q': 'ping', 'a': {'id': nodeId}});
+
+// Decode
+final msg = Bencode.decode(udpData);
+final dict = Bencode.asMap(msg);
+final method = Bencode.asString(dict['q']);
+```
+
+### Kademlia Routing Table (`lib/p2p/k_bucket.dart`)
+
+Reusable 160-bucket Kademlia routing table with XOR distance metric. Generic enough for any DHT overlay.
+
+```dart
+import 'package:geogram/p2p/k_bucket.dart';
+
+final table = RoutingTable(localId: myNodeId);
+table.insertNode(DhtContact(nodeId: id, ip: '1.2.3.4', port: 6881));
+final closest = table.findClosest(targetId, count: 8);
+
+// XOR distance utilities
+final dist = xorDistance(a, b);
+final bucket = distanceBucket(dist);
+```
+
+### DHT Node (`lib/p2p/dht_node.dart`)
+
+BEP 5 Mainline DHT node. Handles UDP transport, ping/find_node/get_peers/announce_peer RPCs, token validation, and iterative lookups.
+
+```dart
+import 'package:geogram/p2p/dht_node.dart';
+
+final dht = DhtNode();
+await dht.start();
+await dht.bootstrap();
+await dht.announce(sha1Hash('geogram'), 3456);
+final peers = await dht.getPeers(sha1Hash(npub));
+```
+
+### P2P Service (`lib/p2p/p2p_service.dart`)
+
+Singleton orchestrator tying together DHT, STUN-based NAT detection, and UDP hole punching. Announces on SHA1("geogram") (global) and SHA1(npub) (per-user) topics.
+
+### DHT Transport (`lib/connection/transports/dht_transport.dart`)
+
+Transport implementation (priority 25) for the ConnectionManager. Wraps HTTP requests as JSON messages over direct UDP connections established via hole punching.
+
+### Node Capability Detection (`lib/p2p/node_capability.dart`)
+
+STUN-based NAT type detection. Classifies nodes as Type A (public), Type B (predictable NAT), or Type C (symmetric NAT). Type A nodes auto-start as STUN reflectors.
+
+### ICE Hole Punching (`lib/p2p/ice_punch.dart`)
+
+Simplified ICE — raw UDP simultaneous open. No WebRTC overhead. Manages direct connections with keepalive and identity handshake.

@@ -28,6 +28,7 @@ import 'services/station_service.dart';
 import 'services/conference_service.dart';
 import 'services/station_node_service.dart';
 import 'services/station_discovery_service.dart';
+import 'p2p/p2p_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
@@ -73,6 +74,7 @@ import 'services/group_sync_service.dart';
 import 'services/map_tile_service.dart';
 import 'cli/pure_storage_config.dart';
 import 'connection/connection_manager.dart';
+import 'connection/transports/dht_transport.dart';
 import 'connection/transports/lan_transport.dart';
 import 'connection/transports/ble_transport.dart';
 import 'services/ble_identity_service.dart';
@@ -548,17 +550,18 @@ void main() async {
 
       // Initialize ConnectionManager with transports after StationService
       // This is needed for DevicesService to route requests properly
-      // Transport priority: USB (5) > LAN (10) > WebRTC (15) > Station (30) > BT Classic (35) > BLE (40)
+      // Transport priority: USB (5) > LAN (10) > WebRTC (15) > DHT (25) > Station (30) > BT Classic (35) > BLE (40)
       final connectionManager = ConnectionManager();
       connectionManager.registerTransport(UsbAoaTransport());
       connectionManager.registerTransport(LanTransport());
       connectionManager.registerTransport(WebRTCTransport());
+      connectionManager.registerTransport(DhtTransport());
       connectionManager.registerTransport(StationTransport());
       connectionManager.registerTransport(BluetoothClassicTransport());
       connectionManager.registerTransport(BleTransport());
       await connectionManager.initialize();
       LogService().log(
-        'ConnectionManager initialized with USB + LAN + WebRTC + Station + BT Classic + BLE transports (deferred)',
+        'ConnectionManager initialized with USB + LAN + WebRTC + DHT + Station + BT Classic + BLE transports (deferred)',
       );
 
       // UpdateService may check for updates - defer it
@@ -568,6 +571,13 @@ void main() async {
       // Start station auto-discovery (background task)
       StationDiscoveryService().start();
       LogService().log('StationDiscoveryService started (deferred)');
+
+      // Start P2P DHT discovery (background task)
+      P2PService().start().then((_) {
+        LogService().log('P2PService started (deferred)');
+      }).catchError((e) {
+        LogService().log('P2PService failed to start: $e');
+      });
 
       // Start peer discovery API service (port 3456 for local device discovery)
       // Enable via CLI flags if specified (--http-api, --debug-api)

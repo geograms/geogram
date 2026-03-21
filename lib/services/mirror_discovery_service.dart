@@ -7,7 +7,7 @@ import 'log_service.dart';
 import 'profile_service.dart';
 import 'station_discovery_service.dart';
 
-/// A mirror device discovered via station relay or LAN scan.
+/// A mirror device discovered via station relay, LAN scan, or DHT.
 class MirrorDevice {
   final String deviceId; // Station connection ID
   final String? installId; // Per-install UUID (first 4 chars used as display suffix)
@@ -17,9 +17,9 @@ class MirrorDevice {
   final String? deviceName; // Device-chosen name (e.g., "thinkpad", "My Phone")
   final String platform;
   final String deviceType;
-  final String connectionType; // 'station', 'lan'
+  final String connectionType; // 'station', 'lan', 'dht'
   final bool verified;
-  final String? directAddress; // LAN IP:port (from StationDiscoveryService)
+  final String? directAddress; // LAN IP:port or DHT peer address
   final String? stationRelayUrl; // station relay URL
   DateTime lastSeen;
 
@@ -65,6 +65,7 @@ class MirrorDevice {
 /// Singleton service that aggregates mirror device presence from:
 /// - Station WebSocket (mirrors_update messages + hello_ack mirror_count)
 /// - LAN scan (StationDiscoveryService results filtered for same callsign)
+/// - DHT (P2P discovery via BitTorrent Mainline DHT)
 class MirrorDiscoveryService {
   static final MirrorDiscoveryService _instance = MirrorDiscoveryService._internal();
   factory MirrorDiscoveryService() => _instance;
@@ -128,11 +129,11 @@ class MirrorDiscoveryService {
       ));
     }
 
-    // Merge: replace all station-sourced mirrors, preserve LAN-sourced ones
-    final lanMirrors = mirrors.value
-        .where((s) => s.connectionType == 'lan')
+    // Merge: replace all station-sourced mirrors, preserve LAN + DHT ones
+    final otherMirrors = mirrors.value
+        .where((s) => s.connectionType != 'station')
         .toList();
-    final merged = [...stationMirrors, ...lanMirrors];
+    final merged = [...stationMirrors, ...otherMirrors];
 
     // Stable sort so the list doesn't jump around
     merged.sort((a, b) => a.deviceId.compareTo(b.deviceId));
@@ -173,11 +174,11 @@ class MirrorDiscoveryService {
   void handleHelloAckMirrorCount(int count) {
     _lastHelloAckMirrorCount = count;
     if (count == 0) {
-      // Clear station mirrors (LAN ones might still exist)
-      final lanMirrors = mirrors.value
-          .where((s) => s.connectionType == 'lan')
+      // Clear station mirrors (LAN + DHT ones might still exist)
+      final otherMirrors = mirrors.value
+          .where((s) => s.connectionType != 'station')
           .toList();
-      mirrors.value = lanMirrors;
+      mirrors.value = otherMirrors;
     }
     LogService().log('MirrorDiscovery: hello_ack reports $count mirror(s)');
   }
@@ -214,11 +215,11 @@ class MirrorDiscoveryService {
 
     if (lanMirrors.isEmpty) return;
 
-    // Merge: replace all LAN-sourced mirrors, preserve station-sourced ones
-    final stationMirrors = mirrors.value
-        .where((m) => m.connectionType == 'station')
+    // Merge: replace all LAN-sourced mirrors, preserve station + DHT ones
+    final otherMirrors = mirrors.value
+        .where((m) => m.connectionType != 'lan')
         .toList();
-    final merged = [...stationMirrors, ...lanMirrors];
+    final merged = [...otherMirrors, ...lanMirrors];
 
     // Stable sort so the list doesn't jump around
     merged.sort((a, b) => a.deviceId.compareTo(b.deviceId));
@@ -231,6 +232,44 @@ class MirrorDiscoveryService {
 
     // Notify listener for peer auto-registration
     _scheduleCallback(lanMirrors);
+  }
+
+  /// Handle DHT-discovered peer devices.
+  ///
+  /// Merges DHT-discovered mirrors with station + LAN sources.
+  /// Deduplicates by deviceId across all sources.
+  void handleDhtDiscovery(List<MirrorDevice> dhtMirrors) {
+    if (dhtMirrors.isEmpty) return;
+
+    final myDeviceId = ConfigService().deviceId;
+
+    // Filter out self
+    final filtered = dhtMirrors
+        .where((m) => m.deviceId != myDeviceId)
+        .toList();
+    if (filtered.isEmpty) return;
+
+    // Merge: replace all DHT-sourced mirrors, preserve station + LAN ones
+    final otherMirrors = mirrors.value
+        .where((m) => m.connectionType != 'dht')
+        .toList();
+
+    // Dedup: don't add DHT mirrors that already exist via station or LAN
+    final existingIds = otherMirrors.map((m) => m.deviceId).toSet();
+    final uniqueDht = filtered
+        .where((m) => !existingIds.contains(m.deviceId))
+        .toList();
+
+    final merged = [...otherMirrors, ...uniqueDht];
+
+    // Stable sort
+    merged.sort((a, b) => a.deviceId.compareTo(b.deviceId));
+
+    if (!_mirrorListChanged(mirrors.value, merged)) return;
+    mirrors.value = merged;
+
+    LogService().log('MirrorDiscovery: ${uniqueDht.length} DHT mirror(s)');
+    _scheduleCallback(uniqueDht);
   }
 
   /// Clear all mirror state (e.g. on profile switch or disconnect).
