@@ -1256,10 +1256,30 @@ class WebSocketService {
       if (template != null) {
         final profile = ProfileService().getProfile();
         final collectionName = profile.nickname.isNotEmpty ? profile.nickname : profile.callsign;
+        // Calculate depth from folderSlug (e.g. 'box/apps/android' → 3 segments → depth 4)
+        final segments = folderSlug.split('/');
+        final depth = segments.length + 1;
+        final homeUrl = '../' * depth;
+
+        // Build breadcrumb HTML
+        final breadcrumbBuf = StringBuffer();
+        final sharedHref = '../' * segments.length;
+        breadcrumbBuf.write('<a class="breadcrumb-item" href="$sharedHref">Shared</a>');
+        for (var i = 0; i < segments.length; i++) {
+          breadcrumbBuf.write('\n        <span class="breadcrumb-sep">&rsaquo;</span>');
+          final segmentName = _escapeHtml(Uri.decodeComponent(segments[i]));
+          if (i < segments.length - 1) {
+            final href = '../' * (segments.length - 1 - i);
+            breadcrumbBuf.write('\n        <a class="breadcrumb-item" href="$href">$segmentName</a>');
+          } else {
+            breadcrumbBuf.write('\n        <span class="breadcrumb-item active">$segmentName</span>');
+          }
+        }
+
         final menuItems = await AppService().generateDeviceMenu(
           activeApp: 'shared',
           appsPath: p.dirname(storagePath),
-          depth: 2,
+          depth: depth,
         );
 
         return themeService.processTemplate(template, {
@@ -1268,7 +1288,8 @@ class WebSocketService {
           'FOLDER_SLUG': folderSlug,
           'CONTENT': contentBuf.toString(),
           'MENU_ITEMS': menuItems,
-          'HOME_URL': '../../',
+          'HOME_URL': homeUrl,
+          'BREADCRUMB': breadcrumbBuf.toString(),
           'NOSTR_STYLES': getNostrLoginStyles(),
           'NOSTR_HEADER': getNostrLoginHeaderHtml(),
           'NOSTR_SCRIPTS': getNostrLoginScripts(),
