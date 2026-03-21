@@ -109,6 +109,28 @@ class _StoryCardWidgetState extends State<StoryCardWidget> {
                     ),
                   ),
 
+                  // Restart quiz button (shown on solved quiz stories)
+                  if (_isQuizSolved)
+                    Positioned(
+                      top: 4,
+                      left: 4,
+                      child: GestureDetector(
+                        onTap: _resetQuiz,
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: colorScheme.surface.withValues(alpha: 0.8),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.refresh,
+                            size: 18,
+                            color: colorScheme.onSurface,
+                          ),
+                        ),
+                      ),
+                    ),
+
                   // Menu button
                   Positioned(
                     top: 4,
@@ -270,6 +292,17 @@ class _StoryCardWidgetState extends State<StoryCardWidget> {
         ),
       ),
     );
+  }
+
+  /// Whether this story has a quiz and it's been solved.
+  bool get _isQuizSolved =>
+      _blurredPath != null &&
+      (widget.quizStore?.isStorySolved(widget.story.id) ?? false);
+
+  /// Reset quiz state and switch back to blurred thumbnail.
+  void _resetQuiz() {
+    widget.quizStore?.clearStory(widget.story.id);
+    setState(() {});
   }
 
   /// Pick the right thumbnail: blurred if quiz unsolved, clear otherwise.
