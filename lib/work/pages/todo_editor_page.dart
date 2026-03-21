@@ -5,6 +5,7 @@
 
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -888,6 +889,17 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
     final title = _content!.title;
     final items = _getSortedItems();
 
+    // Pre-load all pictures (PDF build is synchronous)
+    final pictureData = <String, pw.MemoryImage>{};
+    for (final item in items) {
+      for (final picPath in item.pictures) {
+        final bytes = await _ndfService.readAsset(widget.filePath, picPath);
+        if (bytes != null) {
+          pictureData[picPath] = pw.MemoryImage(bytes);
+        }
+      }
+    }
+
     final pdf = pw.Document();
     String fmtDate(DateTime d) =>
         '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -993,6 +1005,18 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
                         )).toList(),
                       ),
                     ),
+                  if (item.pictures.any((p) => pictureData.containsKey(p)))
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(left: 24, top: 4),
+                      child: pw.Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: item.pictures
+                            .where((p) => pictureData.containsKey(p))
+                            .map((p) => pw.Image(pictureData[p]!, width: 120, height: 90, fit: pw.BoxFit.contain))
+                            .toList(),
+                      ),
+                    ),
                 ],
               ),
             );
@@ -1004,11 +1028,26 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
     try {
       final bytes = await pdf.save();
       final safeName = title.replaceAll(RegExp(r'[^\w\s-]'), '').replaceAll(RegExp(r'\s+'), '_');
-      final tempDir = await Directory.systemTemp.createTemp('todo_pdf_');
-      final file = File('${tempDir.path}/$safeName.pdf');
-      await file.writeAsBytes(bytes);
 
-      await Share.shareXFiles([XFile(file.path)], subject: title);
+      if (Platform.isAndroid || Platform.isIOS) {
+        final tempDir = await Directory.systemTemp.createTemp('todo_pdf_');
+        final file = File('${tempDir.path}/$safeName.pdf');
+        await file.writeAsBytes(bytes);
+        await Share.shareXFiles([XFile(file.path)], subject: title);
+      } else {
+        // Desktop: use save file dialog
+        final savePath = await FilePicker.platform.saveFile(
+          dialogTitle: _i18n.t('work_todo_export_pdf'),
+          fileName: '$safeName.pdf',
+        );
+        if (savePath == null) return;
+        await File(savePath).writeAsBytes(bytes);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${_i18n.t('work_todo_export_pdf')}: $savePath')),
+          );
+        }
+      }
     } catch (e) {
       LogService().log('TodoEditorPage: Error exporting PDF: $e');
       if (mounted) {
