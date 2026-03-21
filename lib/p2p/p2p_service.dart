@@ -89,6 +89,15 @@ class P2PService {
   /// Stream subscriptions.
   StreamSubscription? _peerFoundSub;
 
+  /// Peers discovered via DHT for our own npub (our other devices).
+  final Set<PeerInfo> discoveredPeers = {};
+
+  /// Stream of discovered peer updates.
+  final _peersController = StreamController<List<PeerInfo>>.broadcast();
+
+  /// Stream that emits when discovered peers change.
+  Stream<List<PeerInfo>> get onDiscoveredPeersChanged => _peersController.stream;
+
   /// Start the P2P service.
   ///
   /// [localPort] — the port our local server listens on (default from AppArgs).
@@ -135,11 +144,18 @@ class P2PService {
     // Listen for newly discovered peers
     _peerFoundSub = _dht.onPeerFound.listen(_onPeerFound);
 
-    // Periodically re-check STUN (IP may change)
+    // Scan for our own devices on DHT (other devices with our npub)
+    _scanForOwnDevices();
+
+    // Periodically re-check STUN and scan for own devices (every 5 min)
     _stunRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
       final peers = _dht.getCachedPeers(_geogramHash);
       await _capability.detect(_dht, peers);
+      _scanForOwnDevices();
     });
+
+    // Notify listeners
+    _peersController.add(discoveredPeers.toList());
 
     LogService().log('P2P service started '
         '(type: ${_capability.type.name}, '
@@ -156,6 +172,7 @@ class P2PService {
 
     _icePunch.closeAll();
     await _dht.stop();
+    discoveredPeers.clear();
 
     LogService().log('P2P service stopped');
   }
@@ -247,8 +264,40 @@ class P2PService {
   // ─── Internal ──────────────────────────────────────────────────
 
   void _onPeerFound((Uint8List infoHash, PeerInfo peer) event) {
-    // Log discovery but don't auto-connect (let transport layer decide)
-    LogService().log('P2P: peer found ${event.$2} for ${_hexPrefix(event.$1)}');
+    final (infoHash, peer) = event;
+
+    // If this peer is on our npub topic, it's one of our own devices
+    if (_npubHash != null && _toHex(infoHash) == _toHex(_npubHash!)) {
+      _addDiscoveredPeer(peer);
+    }
+  }
+
+  /// Scan the DHT for other devices with our npub.
+  Future<void> _scanForOwnDevices() async {
+    if (_npubHash == null || !_dht.isRunning) return;
+    final peers = await _dht.getPeers(_npubHash!);
+    var added = 0;
+    for (final peer in peers) {
+      if (_addDiscoveredPeer(peer)) added++;
+    }
+    if (added > 0) {
+      LogService().log('P2P: found $added device(s) for own npub via DHT');
+    }
+  }
+
+  /// Add a DHT-discovered peer to the discovered peers set.
+  /// Returns true if the peer was new.
+  bool _addDiscoveredPeer(PeerInfo peer) {
+    final myPort = AppArgs().port;
+    // Skip self
+    if (peer.ip == _capability.publicIp && peer.port == myPort) return false;
+    if ((peer.ip == '127.0.0.1' || peer.ip == '0.0.0.0') && peer.port == myPort) return false;
+
+    if (discoveredPeers.add(peer)) {
+      _peersController.add(discoveredPeers.toList());
+      return true;
+    }
+    return false;
   }
 
   Future<RawDatagramSocket> _createSocket() async {

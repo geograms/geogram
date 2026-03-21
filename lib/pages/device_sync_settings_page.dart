@@ -8,6 +8,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/mirror_config.dart';
+import '../p2p/dht_node.dart' show PeerInfo;
 import '../p2p/node_capability.dart';
 import '../p2p/p2p_service.dart';
 import '../services/mirror_config_service.dart';
@@ -321,6 +322,25 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
             title: Text('DHT peers: ${p2p.dhtPeerCount}'),
             subtitle: Text('Direct connections: ${p2p.directConnectionCount}'),
           ),
+          if (p2p.discoveredPeers.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+              child: Text(
+                'Devices found via internet',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+            ),
+            ...p2p.discoveredPeers.map((peer) => ListTile(
+              leading: CircleAvatar(
+                backgroundColor: Colors.teal.withValues(alpha: 0.1),
+                child: const Icon(Icons.language, color: Colors.teal),
+              ),
+              title: Text('${peer.ip}:${peer.port}'),
+              subtitle: const Text('DHT'),
+            )),
+          ],
         ],
       ],
     );
@@ -448,6 +468,10 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
       case 'windows':
         icon = Icons.desktop_windows;
         color = Colors.blue;
+        break;
+      case 'internet':
+        icon = Icons.language;
+        color = Colors.teal;
         break;
       default:
         icon = Icons.devices;

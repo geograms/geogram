@@ -234,44 +234,6 @@ class MirrorDiscoveryService {
     _scheduleCallback(lanMirrors);
   }
 
-  /// Handle DHT-discovered peer devices.
-  ///
-  /// Merges DHT-discovered mirrors with station + LAN sources.
-  /// Deduplicates by deviceId across all sources.
-  void handleDhtDiscovery(List<MirrorDevice> dhtMirrors) {
-    if (dhtMirrors.isEmpty) return;
-
-    final myDeviceId = ConfigService().deviceId;
-
-    // Filter out self
-    final filtered = dhtMirrors
-        .where((m) => m.deviceId != myDeviceId)
-        .toList();
-    if (filtered.isEmpty) return;
-
-    // Merge: replace all DHT-sourced mirrors, preserve station + LAN ones
-    final otherMirrors = mirrors.value
-        .where((m) => m.connectionType != 'dht')
-        .toList();
-
-    // Dedup: don't add DHT mirrors that already exist via station or LAN
-    final existingIds = otherMirrors.map((m) => m.deviceId).toSet();
-    final uniqueDht = filtered
-        .where((m) => !existingIds.contains(m.deviceId))
-        .toList();
-
-    final merged = [...otherMirrors, ...uniqueDht];
-
-    // Stable sort
-    merged.sort((a, b) => a.deviceId.compareTo(b.deviceId));
-
-    if (!_mirrorListChanged(mirrors.value, merged)) return;
-    mirrors.value = merged;
-
-    LogService().log('MirrorDiscovery: ${uniqueDht.length} DHT mirror(s)');
-    _scheduleCallback(uniqueDht);
-  }
-
   /// Clear all mirror state (e.g. on profile switch or disconnect).
   void clear() {
     mirrors.value = [];
