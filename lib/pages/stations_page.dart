@@ -634,7 +634,7 @@ class _StationsPageState extends State<StationsPage> {
             subtitle: Text(
               p2p.publicIp != null
                   ? 'Public: ${p2p.publicIp}:${p2p.publicPort}'
-                  : 'Detecting...',
+                  : 'Waiting for Geogram reflectors on DHT',
             ),
           ),
           ListTile(

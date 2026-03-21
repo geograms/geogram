@@ -14,15 +14,20 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../models/monitored_task.dart';
 import '../services/app_args.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/app_service.dart';
+import '../services/task_monitor_service.dart';
 import 'dht_node.dart';
 import 'ice_punch.dart';
 import 'k_bucket.dart';
 import 'node_capability.dart';
+
+/// Task monitor ID for DHT discovery.
+const String _kTaskId = 'p2p_discovery.dht';
 
 /// File path for persisted DHT node cache (relative to profile storage).
 const String _kNodeCachePath = 'p2p/dht_cache.json';
@@ -101,6 +106,7 @@ class P2PService {
   /// Start the P2P service.
   ///
   /// [localPort] — the port our local server listens on (default from AppArgs).
+  /// Runs DHT bootstrap and announce in the background to avoid blocking the UI.
   Future<void> start({int? localPort}) async {
     localPort ??= AppArgs().port;
     if (!_enabled) return;
@@ -115,51 +121,81 @@ class P2PService {
 
     _npubHash = sha1Hash(npub);
 
-    // Load persisted node ID
-    final persistedId = await _loadNodeId();
+    // Register as a monitored task
+    TaskMonitorService().register(MonitoredTask(
+      id: _kTaskId,
+      name: 'P2P Discovery',
+      description: 'BitTorrent DHT peer discovery',
+      serviceName: 'P2PService',
+      priority: TaskPriority.low,
+      type: TaskType.periodic,
+      interval: const Duration(minutes: 5),
+    ));
+    TaskMonitorService().reportStart(_kTaskId);
 
-    // Start DHT node
-    await _dht.start(persistedNodeId: persistedId);
+    try {
+      // Load persisted node ID
+      final persistedId = await _loadNodeId();
 
-    // Save node ID for next session
-    await _saveNodeId(_dht.nodeId);
+      // Start DHT node (binds UDP socket)
+      await _dht.start(persistedNodeId: persistedId);
 
-    // Load cached nodes and bootstrap
-    final cachedNodes = await _loadCachedNodes();
-    await _dht.bootstrap(cachedNodes: cachedNodes);
+      // Save node ID for next session
+      await _saveNodeId(_dht.nodeId);
 
-    // Announce on both topics
-    await _dht.announce(_geogramHash, localPort);
-    if (_npubHash != null) {
-      await _dht.announce(_npubHash!, localPort);
-    }
+      // Yield before heavy bootstrap work
+      await Future.delayed(Duration.zero);
 
-    // Start periodic re-announce
-    _dht.startPeriodicAnnounce();
+      // Load cached nodes and bootstrap
+      final cachedNodes = await _loadCachedNodes();
+      await _dht.bootstrap(cachedNodes: cachedNodes);
 
-    // Detect node type
-    final typeAPeers = await _dht.getPeers(_geogramHash);
-    await _capability.detect(_dht, typeAPeers);
+      // Yield before announces
+      await Future.delayed(Duration.zero);
 
-    // Listen for newly discovered peers
-    _peerFoundSub = _dht.onPeerFound.listen(_onPeerFound);
+      // Announce on both topics
+      await _dht.announce(_geogramHash, localPort!);
+      if (_npubHash != null) {
+        await _dht.announce(_npubHash!, localPort);
+      }
 
-    // Scan for our own devices on DHT (other devices with our npub)
-    _scanForOwnDevices();
+      // Start periodic re-announce
+      _dht.startPeriodicAnnounce();
 
-    // Periodically re-check STUN and scan for own devices (every 5 min)
-    _stunRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
-      final peers = _dht.getCachedPeers(_geogramHash);
-      await _capability.detect(_dht, peers);
+      // Yield before node type detection
+      await Future.delayed(Duration.zero);
+
+      // Detect node type
+      final typeAPeers = await _dht.getPeers(_geogramHash);
+      await _capability.detect(_dht, typeAPeers);
+
+      // Listen for newly discovered peers
+      _peerFoundSub = _dht.onPeerFound.listen(_onPeerFound);
+
+      // Scan for our own devices on DHT (other devices with our npub)
       _scanForOwnDevices();
-    });
 
-    // Notify listeners
-    _peersController.add(discoveredPeers.toList());
+      // Periodically re-check STUN and scan for own devices (every 5 min)
+      _stunRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
+        if (!_dht.isRunning) return;
+        TaskMonitorService().reportStart(_kTaskId);
+        final peers = _dht.getCachedPeers(_geogramHash);
+        await _capability.detect(_dht, peers);
+        _scanForOwnDevices();
+        TaskMonitorService().reportSuccess(_kTaskId);
+      });
 
-    LogService().log('P2P service started '
-        '(type: ${_capability.type.name}, '
-        'dht: ${_dht.routingTableSize} nodes)');
+      // Notify listeners
+      _peersController.add(discoveredPeers.toList());
+
+      TaskMonitorService().reportSuccess(_kTaskId);
+      LogService().log('P2P service started '
+          '(type: ${_capability.type.name}, '
+          'dht: ${_dht.routingTableSize} nodes)');
+    } catch (e) {
+      TaskMonitorService().reportFailure(_kTaskId, e);
+      LogService().log('P2P service failed: $e');
+    }
   }
 
   /// Stop the P2P service and persist state.
@@ -168,11 +204,14 @@ class P2PService {
     _peerFoundSub?.cancel();
 
     // Save routing table for next session
-    await _saveCachedNodes(_dht.getNodesForCache());
+    if (_dht.isRunning) {
+      await _saveCachedNodes(_dht.getNodesForCache());
+    }
 
     _icePunch.closeAll();
     await _dht.stop();
     discoveredPeers.clear();
+    TaskMonitorService().unregister(_kTaskId);
 
     LogService().log('P2P service stopped');
   }

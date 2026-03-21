@@ -205,35 +205,41 @@ class DhtNode {
   /// Bootstrap the DHT by contacting well-known nodes.
   ///
   /// Also accepts [cachedNodes] from a previous session.
+  /// Non-blocking: yields to the event loop between phases.
   Future<void> bootstrap({List<DhtContact>? cachedNodes}) async {
     if (!_running) return;
 
-    // Try cached nodes first
+    // Phase 1: Insert cached nodes and ping them (fast, no blocking)
     if (cachedNodes != null) {
       for (final node in cachedNodes) {
         _routingTable.insertNode(node);
         _sendPing(node.ip, node.port);
       }
+      // Yield to event loop after batch
+      await Future.delayed(Duration.zero);
     }
 
-    // Contact bootstrap nodes (IPv4 only — our socket is IPv4)
+    // Phase 2: Resolve bootstrap nodes one at a time with short timeouts
     for (final (host, port) in kBootstrapNodes) {
+      if (!_running) return;
       try {
-        final addresses = await InternetAddress.lookup(host);
+        final addresses = await InternetAddress.lookup(host)
+            .timeout(const Duration(seconds: 3), onTimeout: () => []);
         final ipv4 = addresses.where(
             (a) => a.type == InternetAddressType.IPv4).toList();
         if (ipv4.isNotEmpty) {
           _sendFindNode(ipv4.first.address, port, nodeId);
-        } else {
-          LogService().log('DHT bootstrap: no IPv4 for $host');
         }
       } catch (e) {
         LogService().log('DHT bootstrap: failed to resolve $host: $e');
       }
+      // Yield between DNS lookups
+      await Future.delayed(Duration.zero);
     }
 
-    // Wait a moment, then do iterative find_node on ourselves to populate table
+    // Phase 3: Wait for responses, then populate routing table
     await Future.delayed(const Duration(seconds: 3));
+    if (!_running) return;
     await _iterativeFindNode(nodeId);
 
     LogService().log('DHT bootstrap complete: ${_routingTable.nodeCount} nodes');
@@ -600,9 +606,9 @@ class DhtNode {
       'a': args,
     }, ip, port);
 
-    // Timeout
+    // Timeout (short to avoid blocking the event loop)
     return completer.future.timeout(
-      const Duration(seconds: 10),
+      const Duration(seconds: 4),
       onTimeout: () {
         _pendingQueries.remove(txKey);
         return null;
@@ -637,7 +643,7 @@ class DhtNode {
     final queried = <String>{};
     var closest = _routingTable.findClosest(target);
 
-    for (var round = 0; round < 5; round++) {
+    for (var round = 0; round < 3 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
@@ -660,6 +666,8 @@ class DhtNode {
       }
 
       closest = _routingTable.findClosest(target);
+      // Yield to event loop between rounds
+      await Future.delayed(Duration.zero);
     }
 
     return closest;
@@ -671,7 +679,7 @@ class DhtNode {
     final foundPeers = <PeerInfo>{};
     var closest = _routingTable.findClosest(infoHash);
 
-    for (var round = 0; round < 5; round++) {
+    for (var round = 0; round < 3 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
@@ -709,6 +717,8 @@ class DhtNode {
       }
 
       closest = _routingTable.findClosest(infoHash);
+      // Yield to event loop between rounds
+      await Future.delayed(Duration.zero);
     }
 
     // Store found peers
