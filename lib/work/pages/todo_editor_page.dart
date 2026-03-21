@@ -8,6 +8,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/i18n_service.dart';
@@ -644,6 +647,16 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
                       ],
                     ),
                   ),
+                  PopupMenuItem(
+                    value: 'export_pdf',
+                    child: Row(
+                      children: [
+                        const Icon(Icons.picture_as_pdf_outlined),
+                        const SizedBox(width: 8),
+                        Text(_i18n.t('work_todo_export_pdf')),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -742,6 +755,9 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
         break;
       case 'settings':
         _showSettings();
+        break;
+      case 'export_pdf':
+        _exportAsPdf();
         break;
     }
   }
@@ -863,6 +879,143 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
         );
         _hasChanges = true;
       });
+    }
+  }
+
+  Future<void> _exportAsPdf() async {
+    if (_content == null) return;
+
+    final title = _content!.title;
+    final items = _getSortedItems();
+
+    final pdf = pw.Document();
+    String fmtDate(DateTime d) =>
+        '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(40),
+        header: (context) => pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Text(title, style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
+            pw.SizedBox(height: 4),
+            pw.Text(
+              'Exported ${fmtDate(DateTime.now())}',
+              style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+            ),
+            pw.Divider(),
+            pw.SizedBox(height: 8),
+          ],
+        ),
+        build: (context) {
+          return items.map((item) {
+            final checkbox = item.isCompleted ? '[x]' : '[ ]';
+            final priorityLabel = item.priority == TodoPriority.high
+                ? ' [HIGH]'
+                : item.priority == TodoPriority.low
+                    ? ' [low]'
+                    : '';
+
+            return pw.Padding(
+              padding: const pw.EdgeInsets.only(bottom: 12),
+              child: pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.RichText(
+                    text: pw.TextSpan(
+                      children: [
+                        pw.TextSpan(
+                          text: '$checkbox ',
+                          style: pw.TextStyle(fontSize: 12, font: pw.Font.courier()),
+                        ),
+                        pw.TextSpan(
+                          text: item.title,
+                          style: pw.TextStyle(
+                            fontSize: 12,
+                            fontWeight: pw.FontWeight.bold,
+                            decoration: item.isCompleted ? pw.TextDecoration.lineThrough : null,
+                          ),
+                        ),
+                        if (priorityLabel.isNotEmpty)
+                          pw.TextSpan(
+                            text: priorityLabel,
+                            style: pw.TextStyle(
+                              fontSize: 10,
+                              fontWeight: pw.FontWeight.bold,
+                              color: item.priority == TodoPriority.high
+                                  ? PdfColors.red
+                                  : PdfColors.grey600,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (item.description != null && item.description!.isNotEmpty)
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(left: 24, top: 2),
+                      child: pw.Text(
+                        item.description!,
+                        style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey800),
+                      ),
+                    ),
+                  if (item.isCompleted && item.durationSummary != null)
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(left: 24, top: 2),
+                      child: pw.Text(
+                        'Completed in ${item.durationSummary} (${fmtDate(item.completedAt!)})',
+                        style: const pw.TextStyle(fontSize: 9, color: PdfColors.green800),
+                      ),
+                    ),
+                  if (item.links.isNotEmpty)
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(left: 24, top: 2),
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: item.links.map((link) => pw.Text(
+                          '${link.title}: ${link.url}',
+                          style: const pw.TextStyle(fontSize: 9, color: PdfColors.blue800),
+                        )).toList(),
+                      ),
+                    ),
+                  if (item.updates.isNotEmpty)
+                    pw.Padding(
+                      padding: const pw.EdgeInsets.only(left: 24, top: 4),
+                      child: pw.Column(
+                        crossAxisAlignment: pw.CrossAxisAlignment.start,
+                        children: item.updates.map((update) => pw.Padding(
+                          padding: const pw.EdgeInsets.only(bottom: 2),
+                          child: pw.Text(
+                            '${fmtDate(update.createdAt)}: ${update.content}',
+                            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
+                          ),
+                        )).toList(),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }).toList();
+        },
+      ),
+    );
+
+    try {
+      final bytes = await pdf.save();
+      final safeName = title.replaceAll(RegExp(r'[^\w\s-]'), '').replaceAll(RegExp(r'\s+'), '_');
+      final tempDir = await Directory.systemTemp.createTemp('todo_pdf_');
+      final file = File('${tempDir.path}/$safeName.pdf');
+      await file.writeAsBytes(bytes);
+
+      await Share.shareXFiles([XFile(file.path)], subject: title);
+    } catch (e) {
+      LogService().log('TodoEditorPage: Error exporting PDF: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_i18n.t('error_generic'))),
+        );
+      }
     }
   }
 

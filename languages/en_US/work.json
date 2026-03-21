@@ -290,6 +290,7 @@
   "work_todo_priority_normal": "Normal",
   "work_todo_priority_low": "Low",
   "work_todo_rename": "Rename TODO",
+  "work_todo_export_pdf": "Export as PDF",
   "work_todo_title": "Title",
   "edit": "Edit",
   "delete": "Delete",

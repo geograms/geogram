@@ -290,6 +290,7 @@
   "work_todo_priority_normal": "Normal",
   "work_todo_priority_low": "Niedrig",
   "work_todo_rename": "Aufgabenliste umbenennen",
+  "work_todo_export_pdf": "Als PDF exportieren",
   "work_todo_title": "Titel",
   "edit": "Bearbeiten",
   "delete": "Löschen",
