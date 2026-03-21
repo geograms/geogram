@@ -492,12 +492,23 @@ static void set_captive_redirect_headers(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Expires", "0");
 }
 
+// Small HTML page that triggers captive portal detection and redirects to root.
+// Much lighter than serving the full chat page on every captive portal probe.
+#if BOARD_MODEL == MODEL_KV4P || BOARD_MODEL == MODEL_TDONGLE_S3
+static const char *CAPTIVE_REDIRECT_HTML =
+    "<!DOCTYPE html><html><head>"
+    "<meta http-equiv=\"refresh\" content=\"0;url=/\">"
+    "</head><body><a href=\"/\">Open Chat</a></body></html>";
+#endif
+
 static esp_err_t captive_portal_handler(httpd_req_t *req)
 {
 #if BOARD_MODEL == MODEL_KV4P || BOARD_MODEL == MODEL_TDONGLE_S3
-    // Serve chat page directly — more reliable than 302 for captive portal
-    // mini-browsers. Android sees non-204, iOS sees non-"Success" → detected.
-    return chat_page_serve(req);
+    // Return a tiny HTML page — non-204 triggers Android captive portal,
+    // non-"Success" triggers iOS. Meta-refresh sends user to chat page.
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, CAPTIVE_REDIRECT_HTML, strlen(CAPTIVE_REDIRECT_HTML));
+    return ESP_OK;
 #else
     set_captive_redirect_headers(req);
     httpd_resp_send(req, NULL, 0);
@@ -511,7 +522,9 @@ static esp_err_t captive_portal_handler(httpd_req_t *req)
 static esp_err_t http_404_redirect_handler(httpd_req_t *req, httpd_err_code_t err)
 {
 #if BOARD_MODEL == MODEL_KV4P || BOARD_MODEL == MODEL_TDONGLE_S3
-    return chat_page_serve(req);
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, CAPTIVE_REDIRECT_HTML, strlen(CAPTIVE_REDIRECT_HTML));
+    return ESP_OK;
 #else
     set_captive_redirect_headers(req);
     httpd_resp_send(req, NULL, 0);
@@ -1657,7 +1670,7 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     config.lru_purge_enable = true;
     config.stack_size = 8192;
     config.max_uri_handlers = 26;
-    config.max_open_sockets = 3;
+    config.max_open_sockets = 5;
     config.recv_wait_timeout = 5;
     config.send_wait_timeout = 5;
 
