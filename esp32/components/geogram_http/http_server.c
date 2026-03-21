@@ -493,48 +493,22 @@ static void set_captive_redirect_headers(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Expires", "0");
 }
 
-// Minimal landing page for captive portal popup WebViews.
-// No JS, no localStorage, no crypto — just a link to open the real browser.
-static const char *CAPTIVE_LANDING_HTML =
-    "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">"
-    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-    "<title>geogram</title>"
-    "<style>"
-    "body{font-family:sans-serif;background:#101010;color:#f0f0f0;display:flex;"
-    "justify-content:center;align-items:center;min-height:100vh;margin:0}"
-    ".box{text-align:center;padding:24px}"
-    "h1{color:#ffa86a;margin-bottom:16px}"
-    "a{display:inline-block;background:#ffa86a;color:#101010;padding:12px 24px;"
-    "border-radius:6px;text-decoration:none;font-weight:bold;font-size:16px}"
-    "</style></head><body><div class=\"box\">"
-    "<h1>geogram</h1>"
-    "<p style=\"margin-bottom:16px\">Open chat in your browser:</p>"
-    "<a href=\"http://192.168.4.1/\">Open Chat</a>"
-    "</div></body></html>";
+// CAPTIVE_LANDING_HTML removed — captive portal now serves the full chat page
+// via chat_page_serve(). StorageProvider + SessionProvider in chat JS handle
+// the sandboxed WebView environment (no localStorage/crypto).
 
 /**
- * @brief Captive portal probe handler — serves a landing page (not a redirect)
+ * @brief Captive portal probe handler — serves the full chat page
  *
  * Android/iOS probe specific URLs to detect captive portals. Returning HTML
- * (not 204, not "Success") triggers the captive portal popup. We serve a
- * minimal landing page with a link that opens the real browser, since the
- * popup WebView is sandboxed (no localStorage/crypto for chat JS).
- */
-/**
- * @brief Captive portal probe handler — serves a landing page (not a redirect)
- *
- * Android/iOS probe specific URLs to detect captive portals. Returning HTML
- * (not 204, not "Success") triggers the captive portal popup. We serve a
- * minimal landing page with a link that opens the real browser, since the
- * popup WebView is sandboxed (no localStorage/crypto for chat JS).
- * Connection: close prevents background apps from holding sockets open.
+ * (not 204, not "Success") triggers the captive portal popup. The chat page
+ * works directly inside the popup thanks to StorageProvider (cookie fallback
+ * when localStorage is blocked) and SessionProvider (server-generated identity
+ * when crypto.getRandomValues() is unavailable).
  */
 static esp_err_t captive_portal_handler(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_set_hdr(req, "Connection", "close");
-    httpd_resp_send(req, CAPTIVE_LANDING_HTML, strlen(CAPTIVE_LANDING_HTML));
-    return ESP_OK;
+    return chat_page_serve(req);
 }
 
 /**

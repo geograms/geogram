@@ -27,6 +27,7 @@ esp_err_t chat_page_serve(httpd_req_t *req);
  *
  * Initializes the mesh chat system and registers:
  * - GET  /api/chat/messages
+ * - GET  /api/chat/session
  * - POST /api/chat/send
  * - POST /api/chat/send-file
  * - POST /api/chat/client

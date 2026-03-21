@@ -100,8 +100,8 @@ echo "Running captive portal checks via http://${AP_IP}..."
 FAILURES=0
 
 run_check "/" "200" "Chat landing page loads" "api/chat/messages" || FAILURES=$((FAILURES + 1))
-run_check "/generate_204" "302" "Android captive endpoint redirects" || FAILURES=$((FAILURES + 1))
-run_check "/hotspot-detect.html" "302" "Apple captive endpoint redirects" || FAILURES=$((FAILURES + 1))
+run_check "/generate_204" "200" "Android captive endpoint serves chat" "api/chat/messages" || FAILURES=$((FAILURES + 1))
+run_check "/hotspot-detect.html" "200" "Apple captive endpoint serves chat" "api/chat/messages" || FAILURES=$((FAILURES + 1))
 run_check "/ncsi.txt" "302" "Windows captive endpoint redirects" || FAILURES=$((FAILURES + 1))
 
 if (( FAILURES > 0 )); then

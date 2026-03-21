@@ -10,6 +10,7 @@
 #include <string.h>
 #include "chat_page.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "mesh_chat.h"
 #include "app_config.h"
 #ifdef CONFIG_GEOGRAM_MESH_ENABLED
@@ -265,8 +266,23 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "let skipHistory=false;"
     "const MAX_FILE_BYTES=20*1024*1024;"
     "const CHUNK_SIZE=1500;"
+    "const StorageProvider=(()=>{"
+    "let hasLS=false;"
+    "try{localStorage.setItem('_p','1');localStorage.removeItem('_p');hasLS=true;}catch(e){}"
+    "const _mem=new Map();"
+    "function getCookie(n){const m=document.cookie.match(new RegExp('(?:^|; )'+n+'=([^;]*)'));return m?decodeURIComponent(m[1]):null;}"
+    "function setCookie(n,v){document.cookie=n+'='+encodeURIComponent(v)+';path=/;SameSite=Lax;max-age=86400';}"
+    "function delCookie(n){document.cookie=n+'=;path=/;max-age=0';}"
+    "const cookieKeys=new Set(['geogram_client_id','geogram_session']);"
+    "return {"
+    "get(k){if(hasLS)return localStorage.getItem(k);if(cookieKeys.has(k))return getCookie(k);return _mem.get(k)||null;},"
+    "set(k,v){if(hasLS){localStorage.setItem(k,v);return;}if(cookieKeys.has(k)){setCookie(k,v);return;}_mem.set(k,v);},"
+    "del(k){if(hasLS){localStorage.removeItem(k);return;}if(cookieKeys.has(k)){delCookie(k);return;}_mem.delete(k);},"
+    "hasLocalStorage(){return hasLS;}"
+    "};})();"
+    "const store=StorageProvider;"
     "const clientIdKey='geogram_client_id';"
-    "const clientId=localStorage.getItem(clientIdKey)||(()=>{const id='c'+Math.random().toString(36).slice(2,10);localStorage.setItem(clientIdKey,id);return id;})();"
+    "const clientId=store.get(clientIdKey)||(()=>{const id='c'+Math.random().toString(36).slice(2,10);store.set(clientIdKey,id);return id;})();"
     "let ws=null;"
     "const fileStore=new Map();"
     "const seenCallsigns=new Set();"
@@ -280,10 +296,10 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "seenCallsigns.forEach(c=>{if(c&&c!==me){const o=document.createElement('option');o.value=c;dl.appendChild(o);}});"
     "}"
     "const msgStorageKey='geogram_messages';"
-    "let storedMessages=JSON.parse(localStorage.getItem(msgStorageKey)||'[]');"
+    "let storedMessages=JSON.parse(store.get(msgStorageKey)||'[]');"
     "const storedMsgKeys=new Set(storedMessages.map(m=>m.from+'_'+m.ts+'_'+(m.text||'').slice(0,20)));"
     "function getMsgKey(m){return m.from+'_'+m.ts+'_'+(m.text||'').slice(0,20);}"
-    "function saveMessages(){while(storedMessages.length>10000)storedMessages.shift();localStorage.setItem(msgStorageKey,JSON.stringify(storedMessages));}"
+    "function saveMessages(){while(storedMessages.length>10000)storedMessages.shift();store.set(msgStorageKey,JSON.stringify(storedMessages));}"
     "let pendingFile=null;"
     "const pendingRequests=new Set();"
     "const downloads=new Map();"
@@ -330,7 +346,7 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "if(!clientKeys||!clientKeys.pubkey||!window.NostrTools)return;"
     "if(!clientKeys.npub){clientKeys.npub=NostrTools.nip19.npubEncode(clientKeys.pubkey);}"
     "if(!clientKeys.callsign){clientKeys.callsign=callsignFromNpub(clientKeys.npub);}"
-    "localStorage.setItem(storageKey,JSON.stringify(clientKeys));"
+    "store.set(storageKey,JSON.stringify(clientKeys));"
     "}"
     "async function generateKeys(){"
     "if(!window.NostrTools){throw new Error(window.nostrToolsError||'NostrTools missing');}"
@@ -338,7 +354,7 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "if(NostrTools.generateSecretKey){sk=NostrTools.generateSecretKey();}"
     "else if(NostrTools.generatePrivateKey){sk=NostrTools.generatePrivateKey();}"
     "else if(window.crypto&&window.crypto.getRandomValues){const tmp=new Uint8Array(32);window.crypto.getRandomValues(tmp);sk=tmp;}"
-    "else{throw new Error('keygen not available');}"
+    "else{const tmp=new Uint8Array(32);for(let i=0;i<32;i++)tmp[i]=Math.floor(Math.random()*256);sk=tmp;}"
     "const norm=normalizeSecretKey(sk);"
     "if(!norm){throw new Error('invalid key');}"
     "const pubHex=getPublicKeyHex(norm.bytes||norm.hex);"
@@ -347,6 +363,14 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "const callsign=callsignFromNpub(npub);"
     "return {nsec,npub,callsign,mode:'local',privkey:norm.hex,pubkey:pubHex};"
     "}"
+    "async function initKeysFromServer(){"
+    "try{const r=await fetch('/api/chat/session');if(!r.ok)throw new Error('session request failed');"
+    "const d=await r.json();"
+    "clientKeys={callsign:d.callsign,mode:'server',pubkey:'',npub:''};"
+    "store.set(clientIdKey,d.clientId);"
+    "store.set('geogram_session',d.clientId+':'+d.callsign);"
+    "return true;}catch(e){return false;}"
+    "}"
     "async function initKeys(){"
     "if(window.nostr&&window.nostr.getPublicKey){"
     "try{const pubHex=await window.nostr.getPublicKey();"
@@ -354,18 +378,24 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "ensureNpubAndCallsign();"
     "return;}catch(e){}"
     "}"
-    "const saved=localStorage.getItem(storageKey);"
+    "const saved=store.get(storageKey);"
     "if(saved){try{clientKeys=JSON.parse(saved);}catch(e){clientKeys=null;}}"
     "if(clientKeys&&clientKeys.mode==='local'&&clientKeys.privkey&&(!clientKeys.pubkey||!clientKeys.npub)){"
     "const pubHex=getPublicKeyHex(clientKeys.privkey);"
     "clientKeys.pubkey=pubHex;"
     "clientKeys.npub=clientKeys.npub||NostrTools.nip19.npubEncode(pubHex);"
     "clientKeys.callsign=clientKeys.callsign||callsignFromNpub(clientKeys.npub);"
-    "localStorage.setItem(storageKey,JSON.stringify(clientKeys));"
+    "store.set(storageKey,JSON.stringify(clientKeys));"
     "}"
     "if(!clientKeys||!clientKeys.nsec||!clientKeys.npub||!clientKeys.callsign){"
+    "const hasCrypto=window.crypto&&typeof window.crypto.getRandomValues==='function';"
+    "const hasNostr=!!window.NostrTools;"
+    "if(hasCrypto&&hasNostr){"
     "clientKeys=await generateKeys();"
-    "localStorage.setItem(storageKey,JSON.stringify(clientKeys));"
+    "store.set(storageKey,JSON.stringify(clientKeys));"
+    "}else{"
+    "await initKeysFromServer();"
+    "}"
     "}"
     "}"
     "function updateStatus(){"
@@ -595,7 +625,7 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "function initWebSocket(){}"
     "let aprsAvailable=false,aprsLastId='';"
     "const aprsStorageKey='geogram_aprs_messages';"
-    "let storedAprs=JSON.parse(localStorage.getItem(aprsStorageKey)||'[]');"
+    "let storedAprs=JSON.parse(store.get(aprsStorageKey)||'[]');"
     "function probeAprs(){"
     "fetch('/api/aprs/status').then(r=>{if(!r.ok)throw 0;return r.json();}).then(d=>{"
     "aprsAvailable=true;$('aprsStatus').style.display='';$('aprsTo').style.display='';updateAprsStatus(d);loadAprs();"
@@ -625,15 +655,15 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "if(d.messages&&d.messages.length){"
     "d.messages.forEach(m=>{if(m.from)seenCallsigns.add(m.from);if(m.to)seenCallsigns.add(m.to);storedAprs.push(m);$('messages').appendChild(renderAprsMsg(m));});"
     "while(storedAprs.length>500)storedAprs.shift();"
-    "localStorage.setItem(aprsStorageKey,JSON.stringify(storedAprs));"
+    "store.set(aprsStorageKey,JSON.stringify(storedAprs));"
     "updateCallsignList();"
     "$('messages').scrollTop=$('messages').scrollHeight;}"
     "if(d.count!==undefined)fetch('/api/aprs/status').then(r=>r.json()).then(updateAprsStatus).catch(()=>{});"
     "}).catch(()=>{});}"
     "function clearLocalData(){"
-    "localStorage.removeItem(storageKey);"
-    "localStorage.removeItem(msgStorageKey);"
-    "localStorage.removeItem(aprsStorageKey);"
+    "store.del(storageKey);"
+    "store.del(msgStorageKey);"
+    "store.del(aprsStorageKey);"
     "clientKeys=null;"
     "storedMessages=[];"
     "storedMsgKeys.clear();"
@@ -644,7 +674,7 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "$('status').textContent='Reset complete';"
     "initKeys().then(()=>{updateStatus();reportClient(clientKeys);}).catch(()=>{});"
     "}"
-    "function clearAprs(){storedAprs=[];aprsLastId='';localStorage.removeItem(aprsStorageKey);"
+    "function clearAprs(){storedAprs=[];aprsLastId='';store.del(aprsStorageKey);"
     "document.querySelectorAll('.msg').forEach(el=>{if(el.querySelector('.badge.aprs-rx,.badge.aprs-tx'))el.remove();});"
     "showSnackbar('APRS messages cleared');}"
     "function initMenu(){"
@@ -941,6 +971,68 @@ static esp_err_t api_chat_client_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/**
+ * @brief Handler for GET /api/chat/session — generate server-side identity
+ *
+ * For captive portal WebViews where crypto.getRandomValues() is unavailable.
+ * Checks for existing geogram_session cookie; if absent, generates a new
+ * clientId + callsign using esp_random(). Sets cookie and returns JSON.
+ * Zero RAM cost — cookie is self-contained, no server-side session table.
+ */
+static esp_err_t api_chat_session_get_handler(httpd_req_t *req)
+{
+    char cookie_buf[128] = {0};
+    char client_id[12] = {0};
+    char callsign[8] = {0};
+
+    /* Check for existing session cookie: geogram_session=<clientId>:<callsign> */
+    if (httpd_req_get_hdr_value_str(req, "Cookie", cookie_buf, sizeof(cookie_buf)) == ESP_OK) {
+        const char *sess = strstr(cookie_buf, "geogram_session=");
+        if (sess) {
+            sess += 16; /* skip "geogram_session=" */
+            const char *colon = strchr(sess, ':');
+            const char *end = strchr(sess, ';');
+            if (!end) end = sess + strlen(sess);
+            if (colon && colon < end) {
+                size_t id_len = colon - sess;
+                size_t cs_len = end - colon - 1;
+                if (id_len > 0 && id_len < sizeof(client_id) && cs_len > 0 && cs_len < sizeof(callsign)) {
+                    memcpy(client_id, sess, id_len);
+                    client_id[id_len] = '\0';
+                    memcpy(callsign, colon + 1, cs_len);
+                    callsign[cs_len] = '\0';
+                }
+            }
+        }
+    }
+
+    /* Generate new session if no valid cookie found */
+    if (client_id[0] == '\0' || callsign[0] == '\0') {
+        uint32_t r1 = esp_random();
+        uint32_t r2 = esp_random();
+        snprintf(client_id, sizeof(client_id), "c%08lx", (unsigned long)r1);
+        snprintf(callsign, sizeof(callsign), "X2%04lX", (unsigned long)(r2 & 0xFFFF));
+    }
+
+    /* Set cookie */
+    char cookie_hdr[80];
+    snprintf(cookie_hdr, sizeof(cookie_hdr),
+             "geogram_session=%s:%s; Path=/; SameSite=Lax; Max-Age=86400",
+             client_id, callsign);
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie_hdr);
+
+    /* Return JSON */
+    char resp[96];
+    int resp_len = snprintf(resp, sizeof(resp),
+                            "{\"clientId\":\"%s\",\"callsign\":\"%s\"}",
+                            client_id, callsign);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_send(req, resp, resp_len);
+    return ESP_OK;
+}
+
 // ============================================================================
 // URI definitions
 // ============================================================================
@@ -973,6 +1065,13 @@ static const httpd_uri_t uri_api_chat_client = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t uri_api_chat_session = {
+    .uri = "/api/chat/session",
+    .method = HTTP_GET,
+    .handler = api_chat_session_get_handler,
+    .user_ctx = NULL
+};
+
 // ============================================================================
 // Public: register all chat handlers
 // ============================================================================
@@ -984,6 +1083,7 @@ esp_err_t chat_page_register_handlers(httpd_handle_t server)
     httpd_register_uri_handler(server, &uri_api_chat_send);
     httpd_register_uri_handler(server, &uri_api_chat_send_file);
     httpd_register_uri_handler(server, &uri_api_chat_client);
+    httpd_register_uri_handler(server, &uri_api_chat_session);
     ESP_LOGI(TAG, "Chat API endpoints registered");
     return ESP_OK;
 }
