@@ -969,7 +969,7 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
                       padding: const pw.EdgeInsets.only(left: 24, top: 2),
                       child: pw.Text(
                         item.description!,
-                        style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey800),
+                        style: pw.TextStyle(fontSize: 10, color: PdfColors.grey800, decoration: item.isCompleted ? pw.TextDecoration.lineThrough : null),
                       ),
                     ),
                   if (item.isCompleted && item.durationSummary != null)
