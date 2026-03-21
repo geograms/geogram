@@ -272,14 +272,12 @@ class _StoryCardWidgetState extends State<StoryCardWidget> {
     );
   }
 
-  /// Pick the right thumbnail: blurred if quiz exists but unsolved, clear otherwise.
+  /// Pick the right thumbnail: blurred if quiz unsolved, clear otherwise.
+  /// The presence of a blur asset in the NDF is the signal that the story has a quiz.
   String _pickThumbnail() {
-    if (_blurredPath != null && widget.quizStore != null) {
-      final store = widget.quizStore!;
-      if (store.hasQuizEntries(widget.story.id) &&
-          !store.isStorySolved(widget.story.id)) {
-        return _blurredPath!;
-      }
+    if (_blurredPath != null) {
+      final solved = widget.quizStore?.isStorySolved(widget.story.id) ?? false;
+      if (!solved) return _blurredPath!;
     }
     return _thumbnailPath!;
   }
