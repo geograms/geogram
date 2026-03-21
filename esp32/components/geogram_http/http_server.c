@@ -508,6 +508,7 @@ static void set_captive_redirect_headers(httpd_req_t *req)
  */
 static esp_err_t captive_portal_handler(httpd_req_t *req)
 {
+    httpd_resp_set_hdr(req, "Connection", "close");
     return chat_page_serve(req);
 }
 

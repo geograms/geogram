@@ -280,6 +280,9 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "del(k){if(hasLS){localStorage.removeItem(k);return;}if(cookieKeys.has(k)){delCookie(k);return;}_mem.delete(k);},"
     "hasLocalStorage(){return hasLS;}"
     "};})();"
+    "const _baseUrl=(location.hostname==='192.168.4.1')?'':'http://192.168.4.1';"
+    "const _origFetch=window.fetch;"
+    "window.fetch=function(url,opts){if(typeof url==='string'&&url.startsWith('/')&&_baseUrl){url=_baseUrl+url;}return _origFetch.call(this,url,opts);};"
     "const store=StorageProvider;"
     "const clientIdKey='geogram_client_id';"
     "const clientId=store.get(clientIdKey)||(()=>{const id='c'+Math.random().toString(36).slice(2,10);store.set(clientIdKey,id);return id;})();"
@@ -477,8 +480,8 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "body+='&event='+encodeURIComponent(JSON.stringify(signed));"
     "}catch(e){}"
     "}"
-    "const r=await fetch('/api/chat/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body});"
-    "if(r.ok){"
+    "const r=await fetch('/api/chat/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body}).catch(e=>{showSnackbar('Send error: '+e.message);return null;});"
+    "if(r&&r.ok){"
     "if(aprsAvailable){"
     "var aprsToRaw=$('aprsTo').value.trim();const aprsTo=(aprsToRaw.toLowerCase()==='anyone'||!aprsToRaw)?'CQ':aprsToRaw.toUpperCase();"
     "const from=(clientKeys&&clientKeys.callsign)||'NOCALL';"
@@ -488,10 +491,11 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "}"
     "inp.value='';await load();loadAprs();}"
     "}"
-    "}catch(e){}"
+    "}catch(e){showSnackbar('Send failed: '+(e&&e.message||e));}"
     "$('send').disabled=false;inp.focus();}"
     "$('send').onclick=send;"
-    "$('input').onkeypress=e=>{if(e.key==='Enter')send();};"
+    "$('input').onkeypress=e=>{if(e.key==='Enter'){e.preventDefault();send();}};"
+    "$('input').onkeydown=e=>{if(e.keyCode===13){e.preventDefault();send();}};"
     "$('messages').onclick=async e=>{const btn=e.target.closest('.file-action');if(!btn)return;"
     "const sha1=btn.getAttribute('data-sha1');"
     "if(fileStore.has(sha1)){"
@@ -759,6 +763,7 @@ esp_err_t chat_page_serve(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "HTTP GET / (chat landing page)");
     httpd_resp_set_type(req, "text/html");
+    httpd_resp_set_hdr(req, "Connection", "close");
     httpd_resp_sendstr_chunk(req, LANDING_PAGE_HTML_PREFIX);
     httpd_resp_sendstr_chunk(req, "try{const __nt=(new Function(atob(\"");
     const size_t chunk_size = 1024;
@@ -1013,7 +1018,7 @@ static esp_err_t api_chat_session_get_handler(httpd_req_t *req)
         uint32_t r1 = esp_random();
         uint32_t r2 = esp_random();
         snprintf(client_id, sizeof(client_id), "c%08lx", (unsigned long)r1);
-        snprintf(callsign, sizeof(callsign), "X2%04lX", (unsigned long)(r2 & 0xFFFF));
+        snprintf(callsign, sizeof(callsign), "X1%04lX", (unsigned long)(r2 & 0xFFFF));
     }
 
     /* Set cookie */
