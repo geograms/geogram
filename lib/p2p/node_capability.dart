@@ -61,31 +61,35 @@ class NodeCapability {
   /// Whether hole punching is expected to work.
   bool get canHolePunch => _type == NodeType.typeA || _type == NodeType.typeB;
 
-  /// Detect NAT type by querying two STUN reflectors.
+  /// Detect NAT type by querying STUN reflectors.
   ///
   /// [dht] — the running DHT node (provides the UDP socket port).
   /// [stunPeers] — Type A Geogram nodes discovered via DHT that run STUN.
-  ///   Falls back to the existing StunServerService STUN on the local station
-  ///   or well-known STUN servers.
+  ///   Only uses Geogram nodes as STUN reflectors — no external infrastructure.
+  ///   If fewer than 2 peers are available, detection is deferred until more
+  ///   Type A nodes are discovered via DHT.
   Future<void> detect(DhtNode dht, List<PeerInfo> stunPeers) async {
     if (stunPeers.length < 2) {
-      // Not enough STUN reflectors — try public STUN servers as fallback
-      final fallbackResults = await _queryPublicStun(dht.localPort);
-      if (fallbackResults.isNotEmpty) {
-        _publicIp = fallbackResults.first.publicIp;
-        _publicPort = fallbackResults.first.publicPort;
-
-        // Check if public IP matches a local interface
-        if (await _isLocalIp(_publicIp!)) {
-          _type = NodeType.typeA;
-        } else if (fallbackResults.length >= 2 &&
-            fallbackResults[0].publicPort == fallbackResults[1].publicPort) {
-          _type = NodeType.typeB;
+      if (stunPeers.length == 1) {
+        // Single reflector — can learn public IP but not NAT type
+        final result = await _queryStun(
+            stunPeers.first.ip, 3478, dht.localPort);
+        if (result != null) {
+          _publicIp = result.publicIp;
+          _publicPort = result.publicPort;
+          if (await _isLocalIp(_publicIp!)) {
+            _type = NodeType.typeA;
+          } else {
+            // Assume B (most common) until we find a second reflector
+            _type = NodeType.typeB;
+          }
         } else {
-          _type = NodeType.typeC;
+          _type = NodeType.unknown;
         }
       } else {
+        // No STUN reflectors available yet — defer detection
         _type = NodeType.unknown;
+        LogService().log('NodeCapability: no Geogram STUN reflectors found yet, deferring');
       }
     } else {
       // Query two Geogram STUN reflectors
@@ -167,75 +171,6 @@ class NodeCapability {
     } catch (e) {
       LogService().log('STUN query to $serverIp:$serverPort failed: $e');
       return null;
-    } finally {
-      sock?.close();
-    }
-  }
-
-  /// Query well-known public STUN servers as fallback.
-  ///
-  /// Uses a SINGLE socket for both queries so the NAT port mapping
-  /// comparison is valid (same source port → same NAT mapping for
-  /// predictable NAT, different for symmetric NAT).
-  Future<List<StunResult>> _queryPublicStun(int localPort) async {
-    const servers = [
-      ('stun.l.google.com', 19302),
-      ('stun1.l.google.com', 19302),
-    ];
-
-    // Resolve all server IPs first
-    final resolved = <(String ip, int port)>[];
-    for (final (host, port) in servers) {
-      try {
-        final addrs = await InternetAddress.lookup(host);
-        final ipv4 = addrs.where(
-            (a) => a.type == InternetAddressType.IPv4).toList();
-        if (ipv4.isNotEmpty) {
-          resolved.add((ipv4.first.address, port));
-        }
-      } catch (_) {}
-    }
-    if (resolved.isEmpty) return [];
-
-    // Use a single socket for all queries
-    RawDatagramSocket? sock;
-    try {
-      sock = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      final results = <StunResult>[];
-
-      for (final (ip, port) in resolved) {
-        final request = _buildStunRequest();
-        final sent = sock.send(request, InternetAddress(ip), port);
-        if (sent <= 0) continue;
-
-        final completer = Completer<StunResult?>();
-        late StreamSubscription sub;
-        sub = sock.listen((event) {
-          if (event == RawSocketEvent.read) {
-            final dg = sock?.receive();
-            if (dg != null) {
-              final result = _parseStunResponse(dg.data);
-              if (result != null && !completer.isCompleted) {
-                completer.complete(result);
-              }
-            }
-          }
-        });
-
-        final result = await completer.future
-            .timeout(const Duration(seconds: 5), onTimeout: () => null);
-        sub.cancel();
-
-        if (result != null) {
-          LogService().log('STUN: $ip:$port -> ${result.publicIp}:${result.publicPort}');
-          results.add(result);
-        }
-      }
-
-      return results;
-    } catch (e) {
-      LogService().log('STUN public query failed: $e');
-      return [];
     } finally {
       sock?.close();
     }
