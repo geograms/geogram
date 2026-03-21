@@ -91,10 +91,10 @@ class PeerInfo {
 /// BEP 5 DHT Node.
 class DhtNode {
   /// Our 20-byte node ID.
-  late final Uint8List nodeId;
+  late Uint8List nodeId;
 
   /// Kademlia routing table.
-  late final RoutingTable _routingTable;
+  late RoutingTable _routingTable;
 
   /// UDP socket.
   RawDatagramSocket? _socket;
@@ -174,10 +174,14 @@ class DhtNode {
 
     _socket!.listen(
       _handleDatagram,
-      onError: (e) => LogService().log('DHT socket error: $e'),
+      onError: (e) {
+        // Non-fatal: send errors (e.g., IPv6 target on IPv4 socket) arrive here
+        // but the socket stays open.
+        LogService().log('DHT socket error: $e');
+      },
       onDone: () {
-        _running = false;
         LogService().log('DHT socket closed');
+        _running = false;
       },
     );
 
@@ -212,12 +216,16 @@ class DhtNode {
       }
     }
 
-    // Contact bootstrap nodes
+    // Contact bootstrap nodes (IPv4 only — our socket is IPv4)
     for (final (host, port) in kBootstrapNodes) {
       try {
         final addresses = await InternetAddress.lookup(host);
-        if (addresses.isNotEmpty) {
-          _sendFindNode(addresses.first.address, port, nodeId);
+        final ipv4 = addresses.where(
+            (a) => a.type == InternetAddressType.IPv4).toList();
+        if (ipv4.isNotEmpty) {
+          _sendFindNode(ipv4.first.address, port, nodeId);
+        } else {
+          LogService().log('DHT bootstrap: no IPv4 for $host');
         }
       } catch (e) {
         LogService().log('DHT bootstrap: failed to resolve $host: $e');
@@ -599,12 +607,14 @@ class DhtNode {
   }
 
   void _sendMessage(Map<String, dynamic> msg, String ip, int port) {
-    if (_socket == null) return;
+    if (_socket == null || !_running) return;
+    // Skip bogus addresses
+    if (ip.isEmpty || ip == '0.0.0.0' || ip.contains(':')) return;
     try {
       final encoded = Bencode.encode(msg);
       _socket!.send(encoded, InternetAddress(ip), port);
     } catch (e) {
-      LogService().log('DHT send error to $ip:$port: $e');
+      // SocketException on send is non-fatal — skip this peer
     }
   }
 

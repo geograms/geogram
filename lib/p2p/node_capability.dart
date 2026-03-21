@@ -135,7 +135,11 @@ class NodeCapability {
 
       // Build STUN Binding Request
       final request = _buildStunRequest();
-      sock.send(request, InternetAddress(serverIp), serverPort);
+      final sent = sock.send(request, InternetAddress(serverIp), serverPort);
+      if (sent <= 0) {
+        LogService().log('STUN: send returned $sent to $serverIp:$serverPort');
+        return null;
+      }
 
       // Wait for response
       final completer = Completer<StunResult?>();
@@ -156,6 +160,9 @@ class NodeCapability {
           .timeout(const Duration(seconds: 5), onTimeout: () => null);
 
       sub.cancel();
+      if (result != null) {
+        LogService().log('STUN: $serverIp:$serverPort -> ${result.publicIp}:${result.publicPort}');
+      }
       return result;
     } catch (e) {
       LogService().log('STUN query to $serverIp:$serverPort failed: $e');
@@ -166,22 +173,72 @@ class NodeCapability {
   }
 
   /// Query well-known public STUN servers as fallback.
+  ///
+  /// Uses a SINGLE socket for both queries so the NAT port mapping
+  /// comparison is valid (same source port → same NAT mapping for
+  /// predictable NAT, different for symmetric NAT).
   Future<List<StunResult>> _queryPublicStun(int localPort) async {
     const servers = [
       ('stun.l.google.com', 19302),
       ('stun1.l.google.com', 19302),
     ];
 
-    final results = <StunResult>[];
+    // Resolve all server IPs first
+    final resolved = <(String ip, int port)>[];
     for (final (host, port) in servers) {
       try {
         final addrs = await InternetAddress.lookup(host);
-        if (addrs.isEmpty) continue;
-        final result = await _queryStun(addrs.first.address, port, localPort);
-        if (result != null) results.add(result);
+        final ipv4 = addrs.where(
+            (a) => a.type == InternetAddressType.IPv4).toList();
+        if (ipv4.isNotEmpty) {
+          resolved.add((ipv4.first.address, port));
+        }
       } catch (_) {}
     }
-    return results;
+    if (resolved.isEmpty) return [];
+
+    // Use a single socket for all queries
+    RawDatagramSocket? sock;
+    try {
+      sock = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      final results = <StunResult>[];
+
+      for (final (ip, port) in resolved) {
+        final request = _buildStunRequest();
+        final sent = sock.send(request, InternetAddress(ip), port);
+        if (sent <= 0) continue;
+
+        final completer = Completer<StunResult?>();
+        late StreamSubscription sub;
+        sub = sock.listen((event) {
+          if (event == RawSocketEvent.read) {
+            final dg = sock?.receive();
+            if (dg != null) {
+              final result = _parseStunResponse(dg.data);
+              if (result != null && !completer.isCompleted) {
+                completer.complete(result);
+              }
+            }
+          }
+        });
+
+        final result = await completer.future
+            .timeout(const Duration(seconds: 5), onTimeout: () => null);
+        sub.cancel();
+
+        if (result != null) {
+          LogService().log('STUN: $ip:$port -> ${result.publicIp}:${result.publicPort}');
+          results.add(result);
+        }
+      }
+
+      return results;
+    } catch (e) {
+      LogService().log('STUN public query failed: $e');
+      return [];
+    } finally {
+      sock?.close();
+    }
   }
 
   /// Check if an IP matches one of our local network interfaces.
