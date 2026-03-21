@@ -435,6 +435,127 @@ class ThemesEmbedded {
   static const String _defaultBlogStylesCss = r'''
 /* Blog styles - extends global */
 
+/* ── Timeline (shared with events) ──────────────── */
+
+.timeline {
+  position: relative;
+}
+
+.tl-year-group {
+  margin-bottom: 10px;
+}
+
+.tl-year-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0;
+  position: relative;
+}
+
+.tl-year-label {
+  display: inline-block;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  background: var(--background);
+  padding: 4px 12px;
+  border: 2px dashed var(--accent);
+  position: relative;
+  z-index: 1;
+}
+
+.tl-track {
+  position: relative;
+  padding-left: 28px;
+  border-left: 2px dashed var(--border-color);
+  margin-left: 18px;
+}
+
+.tl-node {
+  display: block;
+  position: relative;
+  padding: 16px 0;
+  text-decoration: none;
+  color: inherit;
+}
+
+.tl-node:not(:last-child) {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tl-dot {
+  position: absolute;
+  left: -34px;
+  top: 22px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border-color);
+  border: 2px solid var(--background);
+  box-shadow: 0 0 0 2px var(--border-color);
+  transition: all 0.15s;
+}
+
+.tl-node:hover .tl-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.tl-card {
+  transition: transform 0.1s;
+}
+
+.tl-node:hover .tl-card {
+  transform: translateX(4px);
+}
+
+.tl-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 4px;
+  line-height: 1.3;
+}
+
+.tl-desc {
+  font-size: 0.9rem;
+  color: var(--color);
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+.tl-excerpt {
+  font-size: 0.85rem;
+  color: var(--color);
+  opacity: 0.55;
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+
+.tl-meta {
+  font-size: 0.9rem;
+  color: var(--color);
+  opacity: 0.6;
+}
+
+.tl-sep {
+  margin: 0 6px;
+  opacity: 0.4;
+}
+
+@media (max-width: 480px) {
+  .tl-track {
+    padding-left: 20px;
+    margin-left: 12px;
+  }
+  .tl-dot {
+    left: -26px;
+    width: 8px;
+    height: 8px;
+  }
+}
+
 /* ── Blog listing cards ─────────────────────────── */
 
 /* Override global post-title styles for blog cards */
