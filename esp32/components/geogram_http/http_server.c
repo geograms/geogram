@@ -513,6 +513,25 @@ static esp_err_t captive_portal_handler(httpd_req_t *req)
 }
 
 /**
+ * @brief CORS preflight handler for cross-origin requests
+ *
+ * When the captive portal WebView is on connectivitycheck.gstatic.com and
+ * fetch() URLs are rewritten to http://192.168.4.1/api/..., the browser
+ * sends an OPTIONS preflight. Allow all origins/methods/headers.
+ */
+static esp_err_t cors_preflight_handler(httpd_req_t *req)
+{
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "Content-Type");
+    httpd_resp_set_hdr(req, "Access-Control-Max-Age", "86400");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+/**
  * @brief Custom 404 handler - redirect unknown URIs to main page for captive portal
  *
  * Background apps (Facebook, WhatsApp, etc.) hit the ESP32 because captive
@@ -1642,6 +1661,14 @@ static const httpd_uri_t uri_hotspot_detect = {
     .user_ctx = NULL
 };
 
+// CORS preflight for cross-origin captive portal requests
+static const httpd_uri_t uri_cors_api = {
+    .uri = "/api/*",
+    .method = HTTP_OPTIONS,
+    .handler = cors_preflight_handler,
+    .user_ctx = NULL
+};
+
 // ============================================================================
 // Server start/stop
 // ============================================================================
@@ -1664,7 +1691,7 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
     config.stack_size = 8192;
-    config.max_uri_handlers = 26;
+    config.max_uri_handlers = 30;
     config.max_open_sockets = 7;
     config.recv_wait_timeout = 2;
     config.send_wait_timeout = 2;
@@ -1691,6 +1718,9 @@ esp_err_t http_server_start_ex(wifi_config_callback_t callback, bool enable_stat
     // Register captive portal handlers
     httpd_register_uri_handler(s_server, &uri_generate_204);
     httpd_register_uri_handler(s_server, &uri_hotspot_detect);
+
+    // CORS preflight for cross-origin captive portal requests
+    httpd_register_uri_handler(s_server, &uri_cors_api);
 
     // Register Station API handlers if enabled
     if (enable_station_api) {

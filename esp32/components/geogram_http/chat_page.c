@@ -477,8 +477,12 @@ static const char *LANDING_PAGE_HTML_SUFFIX =
     "body+='&event='+encodeURIComponent(JSON.stringify(signed));"
     "}catch(e){}"
     "}"
-    "const r=await fetch('/api/chat/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body}).catch(e=>{showSnackbar('Send error: '+e.message);return null;});"
-    "if(r&&r.ok){"
+    "let sendOk=false;"
+    "try{const r=await fetch('/api/chat/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body});"
+    "const j=await r.json();sendOk=j&&j.ok===true;}catch(e){"
+    "try{const r2=await fetch('/api/chat/send?'+body);const j2=await r2.json();sendOk=j2&&j2.ok===true;}catch(e2){"
+    "try{const img=new Image();img.src='/api/chat/send?'+body;sendOk=true;}catch(e3){}}}"
+    "if(sendOk){"
     "if(aprsAvailable){"
     "var aprsToRaw=$('aprsTo').value.trim();const aprsTo=(aprsToRaw.toLowerCase()==='anyone'||!aprsToRaw)?'CQ':aprsToRaw.toUpperCase();"
     "const from=(clientKeys&&clientKeys.callsign)||'NOCALL';"
@@ -886,6 +890,49 @@ static esp_err_t api_chat_send_post_handler(httpd_req_t *req)
 }
 
 /**
+ * @brief Handler for GET /api/chat/send — send via query params (captive portal fallback)
+ *
+ * Android captive portal WebViews block POST requests but allow GET.
+ * Accepts ?text=...&callsign=...&client_ts=... as query parameters.
+ */
+static esp_err_t api_chat_send_get_handler(httpd_req_t *req)
+{
+    char query[512] = {0};
+    char text[MESH_CHAT_MAX_MESSAGE_LEN + 1] = {0};
+    char callsign[MESH_CHAT_MAX_CALLSIGN_LEN] = {0};
+    char ts_str[16] = {0};
+
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "text", text, sizeof(text)) != ESP_OK ||
+        text[0] == '\0') {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"ok\":false,\"error\":\"Missing 'text'\"}", -1);
+        return ESP_OK;
+    }
+
+    httpd_query_key_value(query, "callsign", callsign, sizeof(callsign));
+    httpd_query_key_value(query, "client_ts", ts_str, sizeof(ts_str));
+
+    uint32_t timestamp = 0;
+    if (ts_str[0]) {
+        timestamp = (uint32_t)strtoul(ts_str, NULL, 10);
+    }
+
+    ESP_LOGI(TAG, "Chat send (GET): callsign=%s text=%.40s", callsign[0] ? callsign : "(none)", text);
+
+    esp_err_t err = mesh_chat_add_local_message_with_timestamp(
+        callsign[0] ? callsign : NULL, text, timestamp, MESH_CHAT_CH_WIFI);
+
+    char resp[64];
+    int resp_len = snprintf(resp, sizeof(resp), "{\"ok\":%s}", err == ESP_OK ? "true" : "false");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Connection", "close");
+    httpd_resp_send(req, resp, resp_len);
+    return ESP_OK;
+}
+
+/**
  * @brief Handler for POST /api/chat/send-file — send file metadata message
  */
 static esp_err_t api_chat_send_file_post_handler(httpd_req_t *req)
@@ -1048,6 +1095,13 @@ static const httpd_uri_t uri_api_chat_messages = {
     .user_ctx = NULL
 };
 
+static const httpd_uri_t uri_api_chat_send_get = {
+    .uri = "/api/chat/send",
+    .method = HTTP_GET,
+    .handler = api_chat_send_get_handler,
+    .user_ctx = NULL
+};
+
 static const httpd_uri_t uri_api_chat_send = {
     .uri = "/api/chat/send",
     .method = HTTP_POST,
@@ -1084,6 +1138,7 @@ esp_err_t chat_page_register_handlers(httpd_handle_t server)
 {
     mesh_chat_init();
     httpd_register_uri_handler(server, &uri_api_chat_messages);
+    httpd_register_uri_handler(server, &uri_api_chat_send_get);
     httpd_register_uri_handler(server, &uri_api_chat_send);
     httpd_register_uri_handler(server, &uri_api_chat_send_file);
     httpd_register_uri_handler(server, &uri_api_chat_client);
