@@ -1166,6 +1166,26 @@ class DebugController {
         'params': {'offer_id': 'Offer ID to check (required)'},
       },
       {
+        'action': 'dht_status',
+        'description': 'Get DHT/P2P discovery status (node type, peers, connections)',
+        'params': {},
+      },
+      {
+        'action': 'dht_start',
+        'description': 'Start the P2P DHT discovery service',
+        'params': {},
+      },
+      {
+        'action': 'dht_stop',
+        'description': 'Stop the P2P DHT discovery service',
+        'params': {},
+      },
+      {
+        'action': 'dht_find_user',
+        'description': 'Find all online devices for a specific npub via DHT',
+        'params': {'npub': 'NOSTR public key (npub1...) to search for'},
+      },
+      {
         'action': 'list_devices',
         'description': 'List all known devices with online status',
         'params': {},

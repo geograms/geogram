@@ -120,6 +120,7 @@ import '../wallet/models/debt_entry.dart';
 import '../wallet/models/debt_summary.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
+import '../p2p/p2p_service.dart';
 import '../transfer/models/transfer_models.dart';
 import '../transfer/models/transfer_offer.dart';
 import '../transfer/services/transfer_service.dart';
@@ -2710,6 +2711,11 @@ class LogApiService with ChatModificationMixin {
       // Handle mirror sync debug actions
       if (action.toLowerCase().startsWith('mirror_')) {
         return await _handleMirrorAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle DHT/P2P discovery debug actions
+      if (action.toLowerCase().startsWith('dht_')) {
+        return await _handleDhtAction(action.toLowerCase(), params, headers);
       }
 
       // Handle P2P transfer debug actions
@@ -19605,6 +19611,112 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       }
     } catch (e, stack) {
       LogService().log('LogApiService: P2P action error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  // ============================================================
+  // Debug API - DHT/P2P Discovery Actions
+  // ============================================================
+
+  /// Handle DHT/P2P discovery debug actions
+  Future<shelf.Response> _handleDhtAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final p2pService = P2PService();
+
+      switch (action) {
+        case 'dht_status':
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              ...p2pService.getStatus(),
+            }),
+            headers: headers,
+          );
+
+        case 'dht_start':
+          if (p2pService.isRunning) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'message': 'P2P service already running',
+                ...p2pService.getStatus(),
+              }),
+              headers: headers,
+            );
+          }
+          await p2pService.start();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'P2P service started',
+              ...p2pService.getStatus(),
+            }),
+            headers: headers,
+          );
+
+        case 'dht_stop':
+          await p2pService.stop();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'P2P service stopped',
+            }),
+            headers: headers,
+          );
+
+        case 'dht_find_user':
+          final npub = params['npub'] as String?;
+          if (npub == null || npub.isEmpty) {
+            return shelf.Response(400,
+              body: jsonEncode({
+                'success': false,
+                'error': 'npub parameter required',
+              }),
+              headers: headers,
+            );
+          }
+          final peers = await p2pService.findDevicesForUser(npub);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'npub': npub,
+              'devices': peers.map((p) => {
+                'ip': p.ip,
+                'port': p.port,
+              }).toList(),
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response(400,
+            body: jsonEncode({
+              'success': false,
+              'error': 'Unknown DHT action: $action',
+              'available': [
+                'dht_status',
+                'dht_start',
+                'dht_stop',
+                'dht_find_user',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: DHT action error: $e');
       LogService().log('Stack: $stack');
       return shelf.Response.internalServerError(
         body: jsonEncode({
