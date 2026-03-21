@@ -492,13 +492,26 @@ static void set_captive_redirect_headers(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Expires", "0");
 }
 
-// Small HTML page that triggers captive portal detection and redirects to root.
-// Much lighter than serving the full chat page on every captive portal probe.
+// Small HTML page that triggers captive portal detection and guides user
+// to open the chat in a full browser (captive portal WebViews are sandboxed
+// and lack localStorage/crypto needed for Nostr key generation).
 #if BOARD_MODEL == MODEL_KV4P || BOARD_MODEL == MODEL_TDONGLE_S3
 static const char *CAPTIVE_REDIRECT_HTML =
-    "<!DOCTYPE html><html><head>"
-    "<meta http-equiv=\"refresh\" content=\"0;url=/\">"
-    "</head><body><a href=\"/\">Open Chat</a></body></html>";
+    "<!DOCTYPE html><html><head><meta charset=\"UTF-8\">"
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+    "<title>geogram</title>"
+    "<style>"
+    "body{font-family:sans-serif;background:#101010;color:#f0f0f0;display:flex;"
+    "justify-content:center;align-items:center;min-height:100vh;margin:0}"
+    ".box{text-align:center;padding:24px}"
+    "h1{color:#ffa86a;margin-bottom:16px}"
+    "a{display:inline-block;background:#ffa86a;color:#101010;padding:12px 24px;"
+    "border-radius:6px;text-decoration:none;font-weight:bold;font-size:16px}"
+    "</style></head><body><div class=\"box\">"
+    "<h1>geogram</h1>"
+    "<p style=\"margin-bottom:16px\">Open chat in your browser:</p>"
+    "<a href=\"http://192.168.4.1/\">Open Chat</a>"
+    "</div></body></html>";
 #endif
 
 static esp_err_t captive_portal_handler(httpd_req_t *req)
