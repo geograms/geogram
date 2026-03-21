@@ -4139,7 +4139,7 @@ button:disabled {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
   <title>{{FOLDER_NAME}} - {{COLLECTION_NAME}}</title>
   <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="../styles.css">
+  <link rel="stylesheet" href="{{HOME_URL}}shared/styles.css">
   {{NOSTR_STYLES}}
 </head>
 <body>
@@ -4163,8 +4163,7 @@ button:disabled {
   <div class="content">
     <div class="shared-directory">
       <div class="breadcrumb">
-        <a class="breadcrumb-item" href="../">Shared</a>
-        <span class="breadcrumb-item active">{{FOLDER_NAME}}</span>
+        {{BREADCRUMB}}
       </div>
 
       <div class="file-list-container">
