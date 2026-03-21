@@ -277,7 +277,7 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
     // if (path != null) { play(path); }
   }
 
-  void _restartStory() {
+  Future<void> _restartStory() async {
     if (_content == null) return;
     _quizStore?.clearStory(widget.story.id);
     _autoAdvanceTimer?.cancel();
@@ -288,7 +288,6 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
     });
     _navigateToScene(_content!.startSceneId, addToHistory: false);
     _startStoryMusic();
-    widget.storage.setBlurredThumbnail(widget.story);
   }
 
   void _exitStory() {
@@ -330,8 +329,6 @@ class _StoryViewerPageState extends State<StoryViewerPage> {
                 storage: widget.storage,
                 onTrigger: _handleTrigger,
                 quizStore: _quizStore,
-                onAllQuizzesSolved: () =>
-                    widget.storage.restoreClearThumbnail(widget.story),
               ),
 
               // Top-right controls

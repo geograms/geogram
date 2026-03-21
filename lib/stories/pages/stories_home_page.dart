@@ -9,6 +9,7 @@ import '../../services/app_service.dart';
 import '../../services/i18n_service.dart';
 import '../../util/app_constants.dart';
 import '../models/story.dart';
+import '../services/quiz_state_store.dart';
 import '../services/stories_storage_service.dart';
 import '../widgets/story_card_widget.dart';
 import 'story_viewer_page.dart';
@@ -61,6 +62,7 @@ class StoriesHomePage extends StatefulWidget {
 
 class _StoriesHomePageState extends State<StoriesHomePage> {
   late StoriesStorageService _storage;
+  QuizStateStore? _quizStore;
   List<Story> _stories = [];
   List<Story> _filteredStories = [];
   bool _isLoading = true;
@@ -75,12 +77,20 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
       storage: AppService().profileStorage,
     );
     _searchController.addListener(_filterStories);
+    _initQuizStore();
     _loadStories();
+  }
+
+  Future<void> _initQuizStore() async {
+    _quizStore = QuizStateStore(storiesDir: _storage.storiesDir);
+    await _quizStore!.initialize();
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _quizStore?.close();
     super.dispose();
   }
 
@@ -495,6 +505,7 @@ class _StoriesHomePageState extends State<StoriesHomePage> {
           story: story,
           storage: _storage,
           i18n: widget.i18n,
+          quizStore: _quizStore,
           onTap: () => _openViewer(story),
           onEdit: () => _openStudio(story),
           onDelete: () => _deleteStory(story),

@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../services/i18n_service.dart';
 import '../models/story.dart';
+import '../services/quiz_state_store.dart';
 import '../services/stories_storage_service.dart';
 
 /// Card widget for displaying a story in the grid
@@ -16,6 +17,7 @@ class StoryCardWidget extends StatefulWidget {
   final Story story;
   final StoriesStorageService storage;
   final I18nService i18n;
+  final QuizStateStore? quizStore;
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -27,6 +29,7 @@ class StoryCardWidget extends StatefulWidget {
     required this.story,
     required this.storage,
     required this.i18n,
+    this.quizStore,
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
@@ -40,6 +43,7 @@ class StoryCardWidget extends StatefulWidget {
 
 class _StoryCardWidgetState extends State<StoryCardWidget> {
   String? _thumbnailPath;
+  String? _blurredPath;
 
   @override
   void initState() {
@@ -48,10 +52,16 @@ class _StoryCardWidgetState extends State<StoryCardWidget> {
   }
 
   Future<void> _loadThumbnail() async {
-    // Try to extract thumbnail - either from metadata or direct path
-    final path = await widget.storage.extractThumbnail(widget.story);
-    if (mounted && path != null) {
-      setState(() => _thumbnailPath = path);
+    // Load both clear and blurred thumbnails in parallel
+    final results = await Future.wait([
+      widget.storage.extractThumbnail(widget.story),
+      widget.storage.extractBlurredThumbnail(widget.story),
+    ]);
+    if (mounted) {
+      setState(() {
+        _thumbnailPath = results[0];
+        _blurredPath = results[1];
+      });
     }
   }
 
@@ -73,10 +83,10 @@ class _StoryCardWidgetState extends State<StoryCardWidget> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  // Background/thumbnail
+                  // Background/thumbnail — show blurred if quiz unsolved
                   if (_thumbnailPath != null)
                     Image.file(
-                      File(_thumbnailPath!),
+                      File(_pickThumbnail()),
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => _buildPlaceholder(colorScheme),
                     )
@@ -260,6 +270,18 @@ class _StoryCardWidgetState extends State<StoryCardWidget> {
         ),
       ),
     );
+  }
+
+  /// Pick the right thumbnail: blurred if quiz exists but unsolved, clear otherwise.
+  String _pickThumbnail() {
+    if (_blurredPath != null && widget.quizStore != null) {
+      final store = widget.quizStore!;
+      if (store.hasQuizEntries(widget.story.id) &&
+          !store.isStorySolved(widget.story.id)) {
+        return _blurredPath!;
+      }
+    }
+    return _thumbnailPath!;
   }
 
   Widget _buildPlaceholder(ColorScheme colorScheme) {

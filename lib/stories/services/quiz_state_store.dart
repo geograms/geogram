@@ -76,13 +76,38 @@ class QuizStateStore {
     );
   }
 
-  /// Clear all quiz states for a story (used by restart)
+  /// Reset all quiz states for a story (used by restart).
+  /// Preserves rows so hasQuizEntries still returns true.
   void clearStory(String storyId) {
     if (_db == null) return;
     _db!.execute(
-      'DELETE FROM quiz_states WHERE story_id = ?',
+      'UPDATE quiz_states SET attempts_used = 0, solved = 0 WHERE story_id = ?',
       [storyId],
     );
+  }
+
+  /// Whether any quiz rows exist for the given story.
+  bool hasQuizEntries(String storyId) {
+    if (_db == null) return false;
+    final rows = _db!.select(
+      'SELECT 1 FROM quiz_states WHERE story_id = ? LIMIT 1',
+      [storyId],
+    );
+    return rows.isNotEmpty;
+  }
+
+  /// True when quiz rows exist AND every row has solved=1.
+  bool isStorySolved(String storyId) {
+    if (_db == null) return false;
+    final rows = _db!.select(
+      'SELECT COUNT(*) AS total, SUM(solved) AS solved_count FROM quiz_states WHERE story_id = ?',
+      [storyId],
+    );
+    if (rows.isEmpty) return false;
+    final total = rows.first['total'] as int? ?? 0;
+    if (total == 0) return false;
+    final solvedCount = rows.first['solved_count'] as int? ?? 0;
+    return solvedCount == total;
   }
 
   void close() {

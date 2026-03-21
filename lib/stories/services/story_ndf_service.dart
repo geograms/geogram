@@ -373,14 +373,37 @@ class StoryNdfService {
     }
   }
 
-  /// Switch thumbnail pointer without writing image bytes
-  Future<void> setThumbnailRef(String filePath, String assetRef) async {
-    final story = await readStory(filePath);
-    if (story != null) {
-      final updated = story.copyWith(
-        thumbnail: assetRef,
-      );
-      await saveStoryMetadata(filePath, updated);
+  /// Extract the first quiz_blur asset to a temp file.
+  /// Returns the temp path, or null if no blur asset exists.
+  Future<String?> extractQuizBlurToTemp(String filePath) async {
+    try {
+      Uint8List? bytes;
+      if (storage != null) {
+        bytes = await storage!.readBytes(_toRelative(filePath));
+      } else {
+        final file = File(filePath);
+        if (!await file.exists()) return null;
+        bytes = await file.readAsBytes();
+      }
+      if (bytes == null) return null;
+
+      final archive = ZipDecoder().decodeBytes(bytes);
+      for (final entry in archive) {
+        if (entry.isFile &&
+            entry.name.startsWith('assets/quiz_blur/') &&
+            entry.name.endsWith('_blur.jpg')) {
+          final tempDir = Directory.systemTemp;
+          final tempFile = File(
+            '${tempDir.path}/story_blur_${DateTime.now().millisecondsSinceEpoch}.jpg',
+          );
+          await tempFile.writeAsBytes(entry.content as List<int>);
+          return tempFile.path;
+        }
+      }
+      return null;
+    } catch (e) {
+      _log.log('StoryNdfService: Error extracting quiz blur: $e');
+      return null;
     }
   }
 
