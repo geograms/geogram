@@ -704,7 +704,7 @@ class DhtNode {
     final queried = <String>{};
     var closest = _routingTable.findClosest(target);
 
-    for (var round = 0; round < 2 && _running; round++) {
+    for (var round = 0; round < 5 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
@@ -740,7 +740,7 @@ class DhtNode {
     final foundPeers = <PeerInfo>{};
     var closest = _routingTable.findClosest(infoHash);
 
-    for (var round = 0; round < 2 && _running; round++) {
+    for (var round = 0; round < 5 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
