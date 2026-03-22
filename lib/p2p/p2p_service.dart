@@ -38,6 +38,9 @@ const String _kNodeCachePath = 'p2p/dht_cache.json';
 /// File path for persisted node ID.
 const String _kNodeIdPath = 'p2p/node_id.bin';
 
+/// File path for cached discovered peers.
+const String _kPeerCachePath = 'p2p/peer_cache.json';
+
 /// P2P Discovery Service.
 ///
 /// Singleton orchestrator that manages DHT announcement, peer discovery,
@@ -164,10 +167,11 @@ class P2PService {
     _stunRefreshTimer?.cancel();
     _peerFoundSub?.cancel();
 
-    // Save routing table for next session
+    // Save state for next session
     if (_dht.isRunning) {
       await _saveCachedNodes(_dht.getNodesForCache());
     }
+    await _saveDiscoveredPeers();
 
     _icePunch.closeAll();
     await _dht.stop();
@@ -270,6 +274,9 @@ class P2PService {
     if (!_dht.isRunning) return;
 
     try {
+      // Phase 0: Load cached peers from previous session and re-probe
+      await _loadAndProbeCachedPeers();
+
       // Phase 1: Bootstrap
       final cachedNodes = await _loadCachedNodes();
       await _dht.bootstrap(cachedNodes: cachedNodes);
@@ -364,29 +371,12 @@ class P2PService {
     }
   }
 
-  /// Register a DHT peer in DevicesService immediately (shows in Devices UI),
-  /// then try HTTP probe to get the real callsign/name.
+  /// Probe a DHT peer via HTTP to get its identity, then register in Devices UI.
+  /// Only registers peers whose identity can be confirmed.
   Future<void> _registerDhtPeer(PeerInfo peer) async {
-    // Use a temporary callsign from the IP until we can identify the peer
-    final tempCallsign = 'DHT-${peer.ip.replaceAll('.', '')}';
     final peerUrl = 'http://${peer.ip}:${peer.port}';
+    final myCallsign = ProfileService().getProfile().callsign;
 
-    // Register immediately so it shows in the Devices UI
-    DevicesService().addOrUpdateDevice(RemoteDevice(
-      callsign: tempCallsign,
-      name: '${peer.ip}:${peer.port}',
-      url: peerUrl,
-      isOnline: true,
-      hasCachedData: false,
-      apps: [],
-      connectionMethods: ['internet'],
-      source: DeviceSourceType.direct,
-      lastSeen: DateTime.now(),
-      platform: 'internet',
-    ));
-    LogService().log('P2P: registered DHT peer ${peer.ip}:${peer.port}');
-
-    // Try HTTP probe to get real identity (may fail for NAT'd peers)
     try {
       final response = await http.get(Uri.parse('$peerUrl/api/status'))
           .timeout(const Duration(seconds: 5));
@@ -395,15 +385,17 @@ class P2PService {
       final data = json.decode(response.body) as Map<String, dynamic>;
       final callsign = data['callsign'] as String?;
       if (callsign == null || callsign.isEmpty) return;
-
-      final myCallsign = ProfileService().getProfile().callsign;
       if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
 
-      // Replace temp entry with real identity
+      final nickname = data['nickname'] as String?;
+      final displayName = (nickname != null && nickname.isNotEmpty)
+          ? '$nickname ($callsign)'
+          : callsign;
+
       DevicesService().addOrUpdateDevice(RemoteDevice(
         callsign: callsign.toUpperCase(),
-        name: data['name'] as String? ?? callsign,
-        nickname: data['nickname'] as String?,
+        name: displayName,
+        nickname: nickname,
         npub: data['npub'] as String?,
         url: peerUrl,
         isOnline: true,
@@ -414,9 +406,10 @@ class P2PService {
         lastSeen: DateTime.now(),
         platform: data['platform'] as String?,
       ));
-      LogService().log('P2P: identified ${peer.ip}:${peer.port} as $callsign');
+      LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
     } catch (_) {
-      // HTTP probe failed — peer stays with temp callsign (behind NAT)
+      // HTTP probe failed (peer behind NAT) — don't show unidentified peers
+      LogService().log('P2P: peer ${peer.ip}:${peer.port} not reachable via HTTP');
     }
   }
 
@@ -485,6 +478,42 @@ class P2PService {
               })
           .toList();
       await storage.writeJson(_kNodeCachePath, {'nodes': list});
+    } catch (_) {}
+  }
+
+  /// Save discovered peers to disk for fast restart.
+  Future<void> _saveDiscoveredPeers() async {
+    try {
+      final storage = AppService().profileStorage;
+      if (storage == null) return;
+      await storage.createDirectory('p2p');
+      final list = discoveredPeers.map((p) => {
+        'ip': p.ip,
+        'port': p.port,
+      }).toList();
+      await storage.writeJson(_kPeerCachePath, {'peers': list});
+    } catch (_) {}
+  }
+
+  /// Load cached discovered peers from disk and re-probe them.
+  Future<void> _loadAndProbeCachedPeers() async {
+    try {
+      final storage = AppService().profileStorage;
+      if (storage == null) return;
+      final data = await storage.readJson(_kPeerCachePath);
+      if (data == null) return;
+
+      final peers = data['peers'] as List<dynamic>? ?? [];
+      for (final entry in peers) {
+        if (entry is! Map<String, dynamic>) continue;
+        final ip = entry['ip'] as String?;
+        final port = entry['port'] as int?;
+        if (ip == null || port == null) continue;
+        _addDiscoveredPeer(PeerInfo(ip: ip, port: port));
+      }
+      if (peers.isNotEmpty) {
+        LogService().log('P2P: loaded ${peers.length} cached peer(s)');
+      }
     } catch (_) {}
   }
 
