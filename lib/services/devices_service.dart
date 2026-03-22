@@ -2537,21 +2537,11 @@ class DevicesService {
   /// Fetch connected devices from the connected station
   Future<void> _fetchStationClients() async {
     try {
-      // Try connected station first, fall back to preferred station
-      var station = _stationService.getConnectedStation();
-      if (station == null) {
-        // No connected station - try preferred station for device list
-        // This allows showing station devices even before WebSocket connects
-        station = _stationService.getPreferredStation();
-        if (station == null) {
-          LogService().log(
-            'DevicesService: No station available to fetch devices from',
-          );
-          return;
-        }
-        LogService().log(
-          'DevicesService: Using preferred station for device list (not yet connected)',
-        );
+      // Only fetch when station WebSocket is actually connected
+      // Fetching from an unreachable station causes TLS buffering OOM
+      final station = _stationService.getConnectedStation();
+      if (station == null || !station.isConnected) {
+        return;
       }
 
       // Convert WebSocket URL to HTTP and extract base (remove path like /ws)
