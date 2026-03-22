@@ -12,7 +12,6 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import '../services/log_service.dart';
-import '../services/stun_server_service.dart';
 import 'dht_node.dart';
 
 /// Node connectivity type.
@@ -69,65 +68,42 @@ class NodeCapability {
   ///   If fewer than 2 peers are available, detection is deferred until more
   ///   Type A nodes are discovered via DHT.
   Future<void> detect(DhtNode dht, List<PeerInfo> stunPeers) async {
-    if (stunPeers.length < 2) {
-      if (stunPeers.length == 1) {
-        // Single reflector — can learn public IP but not NAT type
-        final result = await _queryStun(
-            stunPeers.first.ip, 3478, dht.localPort);
-        if (result != null) {
-          _publicIp = result.publicIp;
-          _publicPort = result.publicPort;
-          if (await _isLocalIp(_publicIp!)) {
-            _type = NodeType.typeA;
-          } else {
-            // Assume B (most common) until we find a second reflector
-            _type = NodeType.typeB;
-          }
-        } else {
-          _type = NodeType.unknown;
-        }
-      } else {
-        // No STUN reflectors available yet — defer detection
-        _type = NodeType.unknown;
-        LogService().log('NodeCapability: no Geogram STUN reflectors found yet, deferring');
-      }
+    if (stunPeers.isEmpty) {
+      _type = NodeType.unknown;
+      LogService().log('NodeCapability: no peers to query, deferring');
+      return;
+    }
+
+    // Query Geogram peers as STUN reflectors on their announced port
+    final results = <StunResult>[];
+    for (final peer in stunPeers.take(3)) {
+      final result = await _queryStun(peer.ip, peer.port, dht.localPort);
+      if (result != null) results.add(result);
+      if (results.length >= 2) break;
+    }
+
+    if (results.isEmpty) {
+      _type = NodeType.unknown;
+      LogService().log('NodeCapability: STUN queries failed, deferring');
+      return;
+    }
+
+    _publicIp = results.first.publicIp;
+    _publicPort = results.first.publicPort;
+
+    if (await _isLocalIp(_publicIp!)) {
+      _type = NodeType.typeA;
+    } else if (results.length >= 2 &&
+        results[0].publicPort == results[1].publicPort) {
+      _type = NodeType.typeB;
+    } else if (results.length >= 2) {
+      _type = NodeType.typeC;
     } else {
-      // Query two Geogram STUN reflectors
-      final results = <StunResult>[];
-      for (final peer in stunPeers.take(2)) {
-        final result = await _queryStun(peer.ip, 3478, dht.localPort);
-        if (result != null) results.add(result);
-      }
-
-      if (results.isEmpty) {
-        _type = NodeType.unknown;
-        return;
-      }
-
-      _publicIp = results.first.publicIp;
-      _publicPort = results.first.publicPort;
-
-      if (await _isLocalIp(_publicIp!)) {
-        _type = NodeType.typeA;
-      } else if (results.length >= 2 &&
-          results[0].publicPort == results[1].publicPort) {
-        _type = NodeType.typeB;
-      } else if (results.length >= 2) {
-        _type = NodeType.typeC;
-      } else {
-        // Only one result — assume B (common case)
-        _type = NodeType.typeB;
-      }
+      _type = NodeType.typeB; // single result, assume predictable NAT
     }
 
     LogService().log('NodeCapability: detected as ${_type.name} '
         '(public: $_publicIp:$_publicPort)');
-
-    // If Type A, start STUN reflector for other nodes
-    if (_type == NodeType.typeA && !StunServerService().isRunning) {
-      await StunServerService().start();
-      LogService().log('NodeCapability: Started STUN reflector (Type A node)');
-    }
   }
 
   /// Query a STUN server and return our mapped address.
@@ -256,7 +232,6 @@ class NodeCapability {
       'public_ip': _publicIp,
       'public_port': _publicPort,
       'can_hole_punch': canHolePunch,
-      'is_stun_reflector': isTypeA && StunServerService().isRunning,
     };
   }
 }

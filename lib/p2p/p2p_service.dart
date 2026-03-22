@@ -20,6 +20,7 @@ import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/app_service.dart';
+import '../services/stun_server_service.dart';
 import '../services/task_monitor_service.dart';
 import 'dht_node.dart';
 import 'ice_punch.dart';
@@ -162,10 +163,15 @@ class P2PService {
       // Start periodic re-announce
       _dht.startPeriodicAnnounce();
 
+      // Start STUN reflector on our API port so other peers can query us
+      if (!StunServerService().isRunning) {
+        await StunServerService().start(port: localPort!);
+      }
+
       // Yield before node type detection
       await Future.delayed(Duration.zero);
 
-      // Detect node type
+      // Detect node type by querying other Geogram peers as STUN reflectors
       final typeAPeers = await _dht.getPeers(_geogramHash);
       await _capability.detect(_dht, typeAPeers);
 
