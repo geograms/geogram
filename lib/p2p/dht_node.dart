@@ -240,14 +240,12 @@ class DhtNode {
       await Future.delayed(const Duration(milliseconds: 50));
     }
 
-    // Phase 3: Wait for responses, then populate routing table
+    // Phase 3: Wait for responses
     await Future.delayed(const Duration(seconds: 3));
     if (!_running) return;
 
-    if (_routingTable.nodeCount > 0) {
-      await _iterativeFindNode(nodeId);
-    } else {
-      // No responses yet — retry bootstrap nodes with longer wait
+    if (_routingTable.nodeCount == 0) {
+      // No responses — retry with longer wait
       LogService().log('DHT bootstrap: no responses, retrying...');
       for (final (host, port) in kBootstrapNodes) {
         if (!_running) return;
@@ -262,8 +260,16 @@ class DhtNode {
         } catch (_) {}
       }
       await Future.delayed(const Duration(seconds: 5));
-      if (_routingTable.nodeCount > 0) {
-        await _iterativeFindNode(nodeId);
+    }
+
+    // Do ONE lightweight round to expand table without blocking for long
+    if (_routingTable.nodeCount > 0) {
+      final closest = _routingTable.findClosest(nodeId);
+      final batch = closest.take(3).toList();
+      if (batch.isNotEmpty) {
+        final futures = batch.map((n) => _sendFindNode(n.ip, n.port, nodeId));
+        await Future.wait(futures);
+        await Future.delayed(const Duration(milliseconds: 100));
       }
     }
 
@@ -728,7 +734,7 @@ class DhtNode {
 
       closest = _routingTable.findClosest(target);
       // Real pause to let the UI thread breathe on mobile
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 500));
     }
 
     return closest;
@@ -779,7 +785,7 @@ class DhtNode {
 
       closest = _routingTable.findClosest(infoHash);
       // Real pause to let the UI thread breathe on mobile
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 500));
     }
 
     // Store found peers
