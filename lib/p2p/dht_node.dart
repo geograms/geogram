@@ -25,6 +25,8 @@ const List<(String host, int port)> kBootstrapNodes = [
   ('router.bittorrent.com', 6881),
   ('dht.transmissionbt.com', 6881),
   ('router.utorrent.com', 6881),
+  ('dht.libtorrent.org', 25401),
+  ('dht.aelitis.com', 6881),
 ];
 
 /// How often to re-announce on DHT topics (minutes).
@@ -239,9 +241,31 @@ class DhtNode {
     }
 
     // Phase 3: Wait for responses, then populate routing table
-    await Future.delayed(const Duration(seconds: 2));
+    await Future.delayed(const Duration(seconds: 3));
     if (!_running) return;
-    await _iterativeFindNode(nodeId);
+
+    if (_routingTable.nodeCount > 0) {
+      await _iterativeFindNode(nodeId);
+    } else {
+      // No responses yet — retry bootstrap nodes with longer wait
+      LogService().log('DHT bootstrap: no responses, retrying...');
+      for (final (host, port) in kBootstrapNodes) {
+        if (!_running) return;
+        try {
+          final addresses = await InternetAddress.lookup(host)
+              .timeout(const Duration(seconds: 3), onTimeout: () => []);
+          final ipv4 = addresses.where(
+              (a) => a.type == InternetAddressType.IPv4).toList();
+          if (ipv4.isNotEmpty) {
+            _sendFindNode(ipv4.first.address, port, nodeId);
+          }
+        } catch (_) {}
+      }
+      await Future.delayed(const Duration(seconds: 5));
+      if (_routingTable.nodeCount > 0) {
+        await _iterativeFindNode(nodeId);
+      }
+    }
 
     LogService().log('DHT bootstrap complete: ${_routingTable.nodeCount} nodes');
   }
