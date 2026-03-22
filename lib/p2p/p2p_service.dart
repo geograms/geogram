@@ -294,6 +294,7 @@ class P2PService {
     if (!_dht.isRunning) return;
     try {
       await _dht.announce(_geogramHash, port);
+      await Future.delayed(const Duration(seconds: 1));
       if (_npubHash != null && _dht.isRunning) {
         await _dht.announce(_npubHash!, port);
       }
@@ -301,7 +302,7 @@ class P2PService {
       LogService().log('P2P: announced on DHT');
 
       // Schedule detection after another pause
-      Timer(const Duration(seconds: 3), () => _detectAndScan());
+      Timer(const Duration(seconds: 5), () => _detectAndScan());
     } catch (e) {
       LogService().log('P2P announce failed: $e');
     }
@@ -311,13 +312,28 @@ class P2PService {
     if (!_dht.isRunning) return;
     try {
       await _capability.detectFromDht(_dht);
-      await _scanForOwnDevices();
+
+      // Check cached peers first (no network)
+      final cachedGlobal = _dht.getCachedPeers(_geogramHash);
+      for (final peer in cachedGlobal) {
+        _addDiscoveredPeer(peer);
+      }
 
       _stunRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
         if (!_dht.isRunning) return;
         _taskHandle?.markRunning();
         await _capability.detectFromDht(_dht);
-        await _scanForOwnDevices();
+        // Light scan: check cached peers only (populated by fire-and-forget responses)
+        final peers = _dht.getCachedPeers(_geogramHash);
+        for (final peer in peers) {
+          _addDiscoveredPeer(peer);
+        }
+        if (_npubHash != null) {
+          final npubPeers = _dht.getCachedPeers(_npubHash!);
+          for (final peer in npubPeers) {
+            _addDiscoveredPeer(peer);
+          }
+        }
         _taskHandle?.markIdle();
       });
 
