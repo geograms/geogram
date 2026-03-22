@@ -1221,6 +1221,27 @@ class DevicesService {
     return device;
   }
 
+  /// Add or update a device from external discovery (e.g., DHT P2P).
+  void addOrUpdateDevice(RemoteDevice device) {
+    final key = device.callsign.toUpperCase();
+    if (_isDeviceRemoved(key)) return;
+
+    final existing = _devices[key];
+    if (existing != null) {
+      // Merge connection methods
+      final methods = {...existing.connectionMethods, ...device.connectionMethods};
+      existing.connectionMethods = methods.toList();
+      existing.isOnline = true;
+      existing.lastSeen = DateTime.now();
+      existing.url ??= device.url;
+      existing.npub ??= device.npub;
+      existing.platform ??= device.platform;
+    } else {
+      _devices[key] = device;
+    }
+    _devicesController.add(getAllDevices());
+  }
+
   /// Get list of pinned device callsigns from config
   Set<String> _getPinnedDevices() {
     final config = ConfigService();

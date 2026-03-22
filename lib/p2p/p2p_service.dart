@@ -11,11 +11,15 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:http/http.dart' as http;
+import '../models/device_source.dart';
 import '../services/app_args.dart';
 import '../services/config_service.dart';
+import '../services/devices_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/app_service.dart';
@@ -302,39 +306,86 @@ class P2PService {
 
   void _onPeerFound((Uint8List infoHash, PeerInfo peer) event) {
     final (infoHash, peer) = event;
+    _addDiscoveredPeer(peer);
+  }
 
-    // If this peer is on our npub topic, it's one of our own devices
-    if (_npubHash != null && _toHex(infoHash) == _toHex(_npubHash!)) {
+  /// Scan the DHT for devices on the geogram global topic and our npub topic.
+  Future<void> _scanForOwnDevices() async {
+    if (!_dht.isRunning) return;
+
+    // Scan global geogram topic
+    final globalPeers = await _dht.getPeers(_geogramHash);
+    for (final peer in globalPeers) {
       _addDiscoveredPeer(peer);
     }
-  }
 
-  /// Scan the DHT for other devices with our npub.
-  Future<void> _scanForOwnDevices() async {
-    if (_npubHash == null || !_dht.isRunning) return;
-    final peers = await _dht.getPeers(_npubHash!);
-    var added = 0;
-    for (final peer in peers) {
-      if (_addDiscoveredPeer(peer)) added++;
-    }
-    if (added > 0) {
-      LogService().log('P2P: found $added device(s) for own npub via DHT');
+    // Scan our npub topic
+    if (_npubHash != null) {
+      final npubPeers = await _dht.getPeers(_npubHash!);
+      for (final peer in npubPeers) {
+        _addDiscoveredPeer(peer);
+      }
     }
   }
 
-  /// Add a DHT-discovered peer to the discovered peers set.
-  /// Returns true if the peer was new.
-  bool _addDiscoveredPeer(PeerInfo peer) {
+  /// Set of peers we already tried to probe (avoid repeated HTTP calls).
+  final Set<String> _probedPeers = {};
+
+  /// Add a DHT-discovered peer and probe it for identity.
+  void _addDiscoveredPeer(PeerInfo peer) {
     final myPort = AppArgs().port;
     // Skip self
-    if (peer.ip == _capability.publicIp && peer.port == myPort) return false;
-    if ((peer.ip == '127.0.0.1' || peer.ip == '0.0.0.0') && peer.port == myPort) return false;
+    if (peer.ip == _capability.publicIp && peer.port == myPort) return;
+    if ((peer.ip == '127.0.0.1' || peer.ip == '0.0.0.0') && peer.port == myPort) return;
 
     if (discoveredPeers.add(peer)) {
       _peersController.add(discoveredPeers.toList());
-      return true;
+      // Probe the peer in the background to get its identity
+      final key = '${peer.ip}:${peer.port}';
+      if (!_probedPeers.contains(key)) {
+        _probedPeers.add(key);
+        _probePeer(peer);
+      }
     }
-    return false;
+  }
+
+  /// Probe a DHT-discovered peer's HTTP API to get its identity,
+  /// then register it in DevicesService so it appears in the Devices UI.
+  Future<void> _probePeer(PeerInfo peer) async {
+    try {
+      final url = 'http://${peer.ip}:${peer.port}/api/status';
+      final response = await http.get(Uri.parse(url))
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode != 200) return;
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final callsign = data['callsign'] as String?;
+      if (callsign == null || callsign.isEmpty) return;
+
+      // Skip self
+      final myCallsign = ProfileService().getProfile().callsign;
+      if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
+
+      // Register in DevicesService (handles both add and update)
+      DevicesService().addOrUpdateDevice(RemoteDevice(
+        callsign: callsign.toUpperCase(),
+        name: data['name'] as String? ?? callsign,
+        nickname: data['nickname'] as String?,
+        npub: data['npub'] as String?,
+        url: 'http://${peer.ip}:${peer.port}',
+        isOnline: true,
+        hasCachedData: false,
+        apps: [],
+        connectionMethods: ['internet'],
+        source: DeviceSourceType.direct,
+        lastSeen: DateTime.now(),
+        platform: data['platform'] as String?,
+      ));
+
+      LogService().log('P2P: probed ${peer.ip}:${peer.port} → $callsign (internet)');
+    } catch (e) {
+      // Peer not reachable via HTTP — expected for NAT'd peers
+    }
   }
 
   Future<RawDatagramSocket> _createSocket() async {
