@@ -710,7 +710,7 @@ class DhtNode {
     final queried = <String>{};
     var closest = _routingTable.findClosest(target);
 
-    for (var round = 0; round < 3 && _running; round++) {
+    for (var round = 0; round < 4 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
@@ -721,13 +721,15 @@ class DhtNode {
       }
       if (toQuery.isEmpty) break;
 
-      // Query one at a time to avoid blocking the event loop
-      final node = toQuery.first;
-      final result = await _sendFindNode(node.ip, node.port, target);
-      if (result != null) _processNodes(result);
+      // Fire 3 queries in parallel but don't wait long
+      final batch = toQuery.take(3).toList();
+      for (final node in batch) {
+        _sendFindNode(node.ip, node.port, target); // fire-and-forget
+      }
+      // Short wait for responses to arrive via UDP listener
+      await Future.delayed(const Duration(seconds: 2));
 
       closest = _routingTable.findClosest(target);
-      await Future.delayed(const Duration(milliseconds: 500));
     }
 
     return closest;
@@ -739,7 +741,7 @@ class DhtNode {
     final foundPeers = <PeerInfo>{};
     var closest = _routingTable.findClosest(infoHash);
 
-    for (var round = 0; round < 3 && _running; round++) {
+    for (var round = 0; round < 4 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
@@ -750,10 +752,16 @@ class DhtNode {
       }
       if (toQuery.isEmpty) break;
 
-      // Query one at a time to avoid blocking the event loop
-      final node = toQuery.first;
-      final result = await _sendGetPeers(node.ip, node.port, infoHash);
-      final results = [result];
+      // Fire 3 queries — await only the first to get results
+      final batch = toQuery.take(3).toList();
+      // Send all, await the first only
+      final firstResult = await _sendGetPeers(batch.first.ip, batch.first.port, infoHash);
+      for (var i = 1; i < batch.length; i++) {
+        _sendGetPeers(batch[i].ip, batch[i].port, infoHash); // fire remaining
+      }
+      final results = [firstResult];
+      // Short wait for remaining responses
+      await Future.delayed(const Duration(seconds: 1));
 
       for (final result in results) {
         if (result == null) continue;
