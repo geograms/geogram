@@ -166,6 +166,9 @@ class P2PService {
         _addDiscoveredPeer(p);
       }
 
+      // Probe known devices via their npub on DHT
+      await _probeKnownDevicesViaDht();
+
       // Periodic refresh
       _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
         if (_dht == null || !_dht!.isRunning) return;
@@ -174,6 +177,7 @@ class P2PService {
         for (final peer in p) {
           _addDiscoveredPeer(peer);
         }
+        await _probeKnownDevicesViaDht();
       });
 
       _dhtPort = _dht!.localPort;
@@ -216,6 +220,49 @@ class P2PService {
     _running = false;
     _taskHandle?.dispose();
     _taskHandle = null;
+  }
+
+  /// Look up each known device's npub on the DHT.
+  /// If found, mark it online with 'internet' connection method.
+  Future<void> _probeKnownDevicesViaDht() async {
+    if (_dht == null || !_dht!.isRunning) return;
+
+    final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
+    final devService = DevicesService();
+    final allDevices = devService.getAllDevices();
+
+    for (final device in allDevices) {
+      if (device.callsign.toUpperCase() == myCallsign) continue;
+      final npub = device.npub;
+      if (npub == null || npub.isEmpty) continue;
+
+      // Search DHT for this device's npub
+      final hash = sha1Hash(npub);
+      final peers = await _dht!.getPeers(hash);
+
+      if (peers.isNotEmpty) {
+        // Device is online via DHT — update with internet tag
+        if (!device.connectionMethods.contains('internet')) {
+          device.connectionMethods = [...device.connectionMethods, 'internet'];
+        }
+        device.isOnline = true;
+        device.lastSeen = DateTime.now();
+
+        // Store the DHT peer address for potential direct connection
+        final peer = peers.first;
+        final dhtUrl = 'http://${peer.ip}:${peer.port}';
+        // Only update URL if the current one is unreachable (LAN IP from old network)
+        if (device.url != null && !device.isOnline) {
+          device.url = dhtUrl;
+        }
+
+        devService.addOrUpdateDevice(device);
+        LogService().log('P2P: ${device.callsign} found via DHT at ${peer.ip}:${peer.port}');
+      }
+
+      // Yield between lookups
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
   }
 
   /// Find devices for a specific npub via DHT.
@@ -276,13 +323,15 @@ class P2PService {
     }
   }
 
+  /// Try to identify a DHT peer via direct HTTP (works on LAN/same-network).
+  /// For NAT'd peers, _probeKnownDevicesViaDht handles identification via npub.
   Future<void> _registerDhtPeer(PeerInfo peer) async {
     final peerUrl = 'http://${peer.ip}:${peer.port}';
     final myCallsign = ProfileService().getProfile().callsign;
 
     try {
       final response = await http.get(Uri.parse('$peerUrl/api/status'))
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 3));
       if (response.statusCode != 200) return;
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -311,7 +360,7 @@ class P2PService {
       ));
       LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
     } catch (_) {
-      // HTTP probe failed — peer behind NAT
+      // HTTP probe failed (NAT) — _probeKnownDevicesViaDht will handle via npub
     }
   }
 
