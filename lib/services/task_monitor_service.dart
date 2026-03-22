@@ -60,6 +60,7 @@ class TaskMonitorService {
     task.successCount++;
     if (task.lastRunAt != null) {
       task.lastDuration = DateTime.now().difference(task.lastRunAt!);
+      task.totalCpuMs += task.lastDuration!.inMilliseconds;
     }
     task.lastError = null;
     task.status = TaskStatus.idle;

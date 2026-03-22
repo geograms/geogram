@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/material.dart';
+import 'models/monitored_task.dart';
+import 'services/task_monitor_service.dart';
+import 'util/cpu_measure.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:io' if (dart.library.html) 'platform/io_stub.dart';
@@ -166,6 +169,59 @@ import 'services/mirror_sync_service.dart';
 import 'widgets/transfer/incoming_transfer_dialog.dart';
 import 'transfer/services/p2p_transfer_service.dart';
 import 'cli/console.dart';
+
+/// Wrap a service init with CPU + memory profiling via TaskMonitor.
+Future<void> _initService(String id, String name, Future<void> Function() init) async {
+  final monitor = TaskMonitorService();
+  final task = MonitoredTask(
+    id: 'startup.$id',
+    name: name,
+    description: 'Startup initialization',
+    serviceName: 'Startup',
+    priority: TaskPriority.normal,
+    type: TaskType.oneshot,
+  );
+  monitor.register(task);
+  final before = CpuSnapshot.now();
+  monitor.reportStart(task.id);
+  try {
+    await init();
+    final delta = CpuSnapshot.now().delta(before);
+    task.initCpuMs = delta.cpuMs;
+    task.initWallMs = delta.wallMs;
+    task.rssDeltaBytes = delta.rssDeltaBytes;
+    monitor.reportSuccess(task.id);
+  } catch (e) {
+    monitor.reportFailure(task.id, e);
+    rethrow;
+  }
+}
+
+/// Log startup profiling summary sorted by CPU time.
+void _logStartupProfile() {
+  final tasks = TaskMonitorService().tasks
+      .where((t) => t.id.startsWith('startup.'))
+      .toList()
+    ..sort((a, b) => b.initCpuMs.compareTo(a.initCpuMs));
+  if (tasks.isEmpty) return;
+
+  final totalCpu = tasks.fold<int>(0, (s, t) => s + t.initCpuMs);
+  final totalWall = tasks.fold<int>(0, (s, t) => s + t.initWallMs);
+  final rss = (ProcessInfo.currentRss / 1024 / 1024).toStringAsFixed(1);
+
+  LogService().log('');
+  LogService().log('=== STARTUP PROFILING ===');
+  for (final t in tasks) {
+    final rssMB = t.rssDeltaBytes / 1024 / 1024;
+    final rssStr = '${rssMB >= 0 ? "+" : ""}${rssMB.toStringAsFixed(1)}MB';
+    LogService().log('  ${t.initCpuMs.toString().padLeft(5)}ms cpu  '
+        '${t.initWallMs.toString().padLeft(5)}ms wall  '
+        '${rssStr.padLeft(8)}  ${t.name}');
+  }
+  LogService().log('  TOTAL: ${totalCpu}ms cpu, ${totalWall}ms wall, RSS: ${rss}MB');
+  LogService().log('=========================');
+  LogService().log('');
+}
 
 void main() async {
   print('MAIN: Starting Geogram (kIsWeb: $kIsWeb)'); // Debug
@@ -369,20 +425,10 @@ void main() async {
       }
     }
 
-    // Initialize web theme service (extracts bundled themes on first run)
-    await WebThemeService().init();
-    LogService().log('WebThemeService initialized');
-
-    // Initialize app theme service
-    await AppThemeService().initialize();
-    LogService().log('AppThemeService initialized');
-
-    // Initialize profile and app services
-    await AppService().init();
-    LogService().log('AppService initialized');
-
-    await ProfileService().initialize();
-    LogService().log('ProfileService initialized');
+    await _initService('web_theme', 'WebThemeService', () => WebThemeService().init());
+    await _initService('app_theme', 'AppThemeService', () => AppThemeService().initialize());
+    await _initService('app_service', 'AppService', () => AppService().init());
+    await _initService('profile', 'ProfileService', () => ProfileService().initialize());
 
     // Set active callsign for app storage path
     final profile = ProfileService().getProfile();
@@ -433,40 +479,19 @@ void main() async {
     }
     LogService().log('Default apps creation ${isFirstLaunch ? "deferred (first launch)" : "started"}');
 
-    // Initialize notification service (needed for UI badges)
-    await NotificationService().initialize();
-    LogService().log('NotificationService initialized');
-
-    // Initialize chat notification service (needed for unread counts)
-    ChatNotificationService().initialize();
-    LogService().log('ChatNotificationService initialized');
-
-    // Initialize station content notification service (blog/events/places in Now feed)
-    StationContentNotificationService().initialize();
-    LogService().log('StationContentNotificationService initialized');
-
-    // Initialize station chat queue processing (keeps retrying queued sends)
-    StationChatQueueService().initialize();
-    LogService().log('StationChatQueueService initialized');
-
-    // Initialize station activity publishing (keeps retrying queued feed updates)
-    StationActivityPublisherService().initialize();
-    LogService().log('StationActivityPublisherService initialized');
+    await _initService('notification', 'NotificationService', () => NotificationService().initialize());
+    await _initService('chat_notification', 'ChatNotificationService', () async => ChatNotificationService().initialize());
+    await _initService('station_content', 'StationContentNotification', () async => StationContentNotificationService().initialize());
+    await _initService('chat_queue', 'StationChatQueueService', () async => StationChatQueueService().initialize());
+    await _initService('activity_publisher', 'StationActivityPublisher', () async => StationActivityPublisherService().initialize());
 
     // Wire event-creation activity publishing (decoupled for CLI compatibility)
     EventService.onEventCreated = (event) =>
         StationActivityPublisherService().publishEventRecord(event);
 
-    // Initialize USB attachment service (Android only, for ESP32 auto-detection)
     if (!kIsWeb && Platform.isAndroid) {
-      UsbAttachmentService().initialize();
-      LogService().log('UsbAttachmentService initialized');
-    }
-
-    // Initialize file viewer service (Android only, for external file viewing)
-    if (!kIsWeb && Platform.isAndroid) {
-      FileViewerService().initialize();
-      LogService().log('FileViewerService initialized');
+      await _initService('usb_attach', 'UsbAttachmentService', () async => UsbAttachmentService().initialize());
+      await _initService('file_viewer', 'FileViewerService', () async => FileViewerService().initialize());
     }
 
     // Initialize DM notification service (for push notifications on mobile)
@@ -479,29 +504,18 @@ void main() async {
       );
       firstLaunch = firstLaunchComplete != true;
     }
-    await DMNotificationService().initialize(
-      skipPermissionRequest: firstLaunch,
-    );
-    LogService().log(
-      'DMNotificationService initialized (skipPermission: $firstLaunch)',
-    );
-
-    await BackupNotificationService().initialize(
-      skipPermissionRequest: firstLaunch,
-    );
-    LogService().log(
-      'BackupNotificationService initialized (skipPermission: $firstLaunch)',
-    );
-
-    await MessageAttentionService().initialize();
-    LogService().log('MessageAttentionService initialized');
+    await _initService('dm_notification', 'DMNotificationService', () =>
+        DMNotificationService().initialize(skipPermissionRequest: firstLaunch));
+    await _initService('backup_notification', 'BackupNotificationService', () =>
+        BackupNotificationService().initialize(skipPermissionRequest: firstLaunch));
+    await _initService('message_attention', 'MessageAttentionService', () =>
+        MessageAttentionService().initialize());
 
     // Auto-transcription disabled at startup — runs on demand from meeting UI
     // MeetingTranscriptionService().startBackgroundAutoTranscription();
     // LogService().log('MeetingTranscriptionService background auto-transcription wired');
 
-    await TrayService().initialize();
-    LogService().log('TrayService initialized');
+    await _initService('tray', 'TrayService', () => TrayService().initialize());
 
     // Handle --minimized startup: hide to tray or minimize to taskbar
     if (AppArgs().minimized) {
@@ -521,6 +535,9 @@ void main() async {
     print('MAIN ERROR: $e');
     print('MAIN STACK: $stackTrace');
   }
+
+  // Log startup profiling before launching the app
+  _logStartupProfile();
 
   // Start the app immediately - don't wait for non-critical services
   print('MAIN: Starting app (deferred services will initialize in background)');

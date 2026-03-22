@@ -59,6 +59,20 @@ class MonitoredTask {
   String? lastError;
   final DateTime registeredAt;
 
+  // --- CPU profiling (mutable) ---
+
+  /// Cumulative real CPU time across all runs (ms).
+  int totalCpuMs;
+
+  /// One-shot init CPU time (ms). Set for TaskType.oneshot.
+  int initCpuMs;
+
+  /// One-shot init wall-clock time (ms).
+  int initWallMs;
+
+  /// RSS change during init (bytes, can be negative).
+  int rssDeltaBytes;
+
   MonitoredTask({
     required this.id,
     required this.name,
@@ -74,6 +88,10 @@ class MonitoredTask {
     this.successCount = 0,
     this.failCount = 0,
     this.lastError,
+    this.totalCpuMs = 0,
+    this.initCpuMs = 0,
+    this.initWallMs = 0,
+    this.rssDeltaBytes = 0,
     DateTime? registeredAt,
   }) : registeredAt = registeredAt ?? DateTime.now();
 
@@ -92,6 +110,10 @@ class MonitoredTask {
         'successCount': successCount,
         'failCount': failCount,
         'lastError': lastError,
+        'totalCpuMs': totalCpuMs,
+        'initCpuMs': initCpuMs,
+        'initWallMs': initWallMs,
+        'rssDeltaBytes': rssDeltaBytes,
         'registeredAt': registeredAt.toIso8601String(),
       };
 }
