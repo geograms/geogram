@@ -44,7 +44,7 @@ class NodeCapability {
       final nodes = dht.getExternalNodes(count: 6);
       for (final node in nodes) {
         dht.pingNode(node.ip, node.port);
-        await Future.delayed(Duration.zero);
+        await Future.delayed(const Duration(milliseconds: 100));
       }
       // Wait for responses
       await Future.delayed(const Duration(seconds: 3));

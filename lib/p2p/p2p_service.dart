@@ -147,14 +147,14 @@ class P2PService {
       await _saveNodeId(_dht.nodeId);
 
       // Yield before heavy bootstrap work
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 100));
 
       // Load cached nodes and bootstrap
       final cachedNodes = await _loadCachedNodes();
       await _dht.bootstrap(cachedNodes: cachedNodes);
 
       // Yield before announces
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 100));
 
       // Announce on both topics
       await _dht.announce(_geogramHash, localPort!);
@@ -166,7 +166,7 @@ class P2PService {
       _dht.startPeriodicAnnounce();
 
       // Yield before node type detection
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 100));
 
       // Detect node type — learn our public IP from DHT responses
       await _capability.detectFromDht(_dht);

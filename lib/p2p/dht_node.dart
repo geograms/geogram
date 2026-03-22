@@ -209,14 +209,16 @@ class DhtNode {
   Future<void> bootstrap({List<DhtContact>? cachedNodes}) async {
     if (!_running) return;
 
-    // Phase 1: Insert cached nodes and ping them (fast, no blocking)
+    // Phase 1: Insert cached nodes and ping a few (not all — avoid flood)
     if (cachedNodes != null) {
       for (final node in cachedNodes) {
         _routingTable.insertNode(node);
+      }
+      // Ping only first 8 to verify they're alive
+      for (final node in cachedNodes.take(8)) {
         _sendPing(node.ip, node.port);
       }
-      // Yield to event loop after batch
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 50));
     }
 
     // Phase 2: Resolve bootstrap nodes one at a time with short timeouts
@@ -233,12 +235,11 @@ class DhtNode {
       } catch (e) {
         LogService().log('DHT bootstrap: failed to resolve $host: $e');
       }
-      // Yield between DNS lookups
-      await Future.delayed(Duration.zero);
+      await Future.delayed(const Duration(milliseconds: 50));
     }
 
     // Phase 3: Wait for responses, then populate routing table
-    await Future.delayed(const Duration(seconds: 3));
+    await Future.delayed(const Duration(seconds: 2));
     if (!_running) return;
     await _iterativeFindNode(nodeId);
 
@@ -702,8 +703,8 @@ class DhtNode {
       }
 
       closest = _routingTable.findClosest(target);
-      // Yield to event loop between rounds
-      await Future.delayed(Duration.zero);
+      // Real pause to let the UI thread breathe on mobile
+      await Future.delayed(const Duration(milliseconds: 100));
     }
 
     return closest;
@@ -753,8 +754,8 @@ class DhtNode {
       }
 
       closest = _routingTable.findClosest(infoHash);
-      // Yield to event loop between rounds
-      await Future.delayed(Duration.zero);
+      // Real pause to let the UI thread breathe on mobile
+      await Future.delayed(const Duration(milliseconds: 100));
     }
 
     // Store found peers
