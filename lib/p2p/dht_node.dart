@@ -280,28 +280,35 @@ class DhtNode {
 
   /// Announce this node on a topic (info_hash).
   ///
-  /// [infoHash] — 20-byte info_hash.
-  /// [port] — port to announce (e.g., local shelf server port).
+  /// Does a proper iterative get_peers first to find the K-closest nodes
+  /// and collect their tokens, then announces to those specific nodes.
   Future<void> announce(Uint8List infoHash, int port) async {
     if (!_running) return;
 
     final hexHash = _toHex(infoHash);
     _announcedTopics[hexHash] = port;
 
-    // First do get_peers to collect tokens
+    // Iterative get_peers finds K-closest nodes and collects tokens
     await _iterativeGetPeers(infoHash);
 
-    // Then announce to nodes that gave us tokens
-    final closest = _routingTable.findClosest(infoHash);
-    for (final node in closest) {
-      final key = '${node.ip}:${node.port}';
-      final token = _receivedTokens[key];
-      if (token != null) {
-        _sendAnnouncePeer(node.ip, node.port, infoHash, port, token);
+    // Announce to ALL nodes that gave us tokens during the lookup
+    // These are the nodes closest to the info_hash — exactly where
+    // other peers will look when they do get_peers for the same hash
+    var announced = 0;
+    for (final entry in _receivedTokens.entries) {
+      final parts = entry.key.split(':');
+      if (parts.length == 2) {
+        final ip = parts[0];
+        final nodePort = int.tryParse(parts[1]);
+        if (nodePort != null) {
+          _sendAnnouncePeer(ip, nodePort, infoHash, port, entry.value);
+          announced++;
+        }
       }
     }
 
-    LogService().log('DHT announced on ${_hexPrefix(infoHash)} port $port');
+    LogService().log('DHT announced on ${_hexPrefix(infoHash)} port $port '
+        'to $announced nodes');
   }
 
   /// Look up peers for an info_hash.
@@ -703,9 +710,8 @@ class DhtNode {
       'a': args,
     }, ip, port);
 
-    // Very short timeout — responses usually arrive within 500ms
     return completer.future.timeout(
-      const Duration(seconds: 1),
+      const Duration(seconds: 3),
       onTimeout: () {
         _pendingQueries.remove(txKey);
         return null;
@@ -735,64 +741,158 @@ class DhtNode {
 
   // ─── Iterative Operations ──────────────────────────────────────
 
-  /// Iterative find_node: find the [kBucketSize] closest nodes to [target].
+  /// Proper BEP 5 iterative find_node.
+  ///
+  /// Maintains its own candidate set sorted by XOR distance to target.
+  /// Iterates until no closer nodes are found (converged).
   Future<List<DhtContact>> _iterativeFindNode(Uint8List target) async {
+    // Candidate set: all nodes discovered during this lookup, sorted by distance
+    final candidates = <String, DhtContact>{};   // key → contact
+    final distances = <String, Uint8List>{};      // key → xor distance
     final queried = <String>{};
-    var closest = _routingTable.findClosest(target);
 
-    for (var round = 0; round < 4 && _running; round++) {
-      final toQuery = <DhtContact>[];
-      for (final node in closest) {
-        final key = '${node.ip}:${node.port}';
-        if (!queried.contains(key)) {
-          queried.add(key);
-          toQuery.add(node);
-        }
-      }
-      if (toQuery.isEmpty) break;
-
-      // Fire 3 queries, wait briefly for responses
-      final batch = toQuery.take(3).toList();
-      for (final node in batch) {
-        _sendFindNode(node.ip, node.port, target);
-      }
-      await Future.delayed(const Duration(seconds: 1));
-
-      closest = _routingTable.findClosest(target);
+    // Seed with closest nodes from routing table
+    for (final node in _routingTable.findClosest(target, count: 8)) {
+      final key = '${node.ip}:${node.port}';
+      candidates[key] = node;
+      distances[key] = xorDistance(node.nodeId, target);
     }
 
-    return closest;
+    for (var round = 0; round < 10 && _running; round++) {
+      // Pick alpha=3 unqueried candidates closest to target
+      final unqueried = candidates.keys
+          .where((k) => !queried.contains(k))
+          .toList()
+        ..sort((a, b) => compareDistance(distances[a]!, distances[b]!));
+      final toQuery = unqueried.take(3).toList();
+      if (toQuery.isEmpty) break; // converged
+
+      // Parallel queries with await
+      final futures = toQuery.map((key) {
+        queried.add(key);
+        final node = candidates[key]!;
+        return _sendFindNode(node.ip, node.port, target);
+      }).toList();
+      final results = await Future.wait(futures);
+
+      bool improved = false;
+      for (final result in results) {
+        if (result == null) continue;
+        // Extract nodes from response
+        if (result.containsKey('nodes')) {
+          final nodesBytes = Bencode.asBytes(result['nodes']);
+          for (var i = 0; i + 26 <= nodesBytes.length; i += 26) {
+            final contact = DhtContact.fromCompactNodeInfo(nodesBytes, i);
+            if (contact.ip == '0.0.0.0' || contact.port == 0) continue;
+            final key = '${contact.ip}:${contact.port}';
+            if (!candidates.containsKey(key)) {
+              candidates[key] = contact;
+              distances[key] = xorDistance(contact.nodeId, target);
+              _routingTable.insertNode(contact);
+              improved = true;
+            }
+          }
+        }
+      }
+
+      if (!improved) break; // no new closer nodes found
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+
+    // Return K-closest from candidates
+    final sorted = candidates.keys.toList()
+      ..sort((a, b) => compareDistance(distances[a]!, distances[b]!));
+    return sorted.take(kBucketSize).map((k) => candidates[k]!).toList();
   }
 
-  /// Iterative get_peers: find peers for [infoHash].
+  /// Proper BEP 5 iterative get_peers.
+  ///
+  /// Iterates through the DHT hop by hop until it reaches the K-closest
+  /// nodes to the info_hash. Returns peers if found, and stores tokens
+  /// for later announce_peer.
   Future<List<PeerInfo>> _iterativeGetPeers(Uint8List infoHash) async {
+    final candidates = <String, DhtContact>{};
+    final distances = <String, Uint8List>{};
     final queried = <String>{};
     final foundPeers = <PeerInfo>{};
-    var closest = _routingTable.findClosest(infoHash);
 
-    for (var round = 0; round < 4 && _running; round++) {
-      final toQuery = <DhtContact>[];
-      for (final node in closest) {
-        final key = '${node.ip}:${node.port}';
-        if (!queried.contains(key)) {
-          queried.add(key);
-          toQuery.add(node);
-        }
-      }
-      if (toQuery.isEmpty) break;
-
-      // Fire 3 queries, responses handled by _handleResponse
-      final batch = toQuery.take(3).toList();
-      for (final node in batch) {
-        _sendGetPeers(node.ip, node.port, infoHash);
-      }
-      // Wait for responses to arrive and be processed
-      await Future.delayed(const Duration(seconds: 1));
-      closest = _routingTable.findClosest(infoHash);
+    // Seed with closest nodes from routing table
+    for (final node in _routingTable.findClosest(infoHash, count: 8)) {
+      final key = '${node.ip}:${node.port}';
+      candidates[key] = node;
+      distances[key] = xorDistance(node.nodeId, infoHash);
     }
 
-    // Return peers from the store (populated by _handleResponse)
-    return getCachedPeers(infoHash);
+    for (var round = 0; round < 10 && _running; round++) {
+      final unqueried = candidates.keys
+          .where((k) => !queried.contains(k))
+          .toList()
+        ..sort((a, b) => compareDistance(distances[a]!, distances[b]!));
+      final toQuery = unqueried.take(3).toList();
+      if (toQuery.isEmpty) break;
+
+      final futures = toQuery.map((key) {
+        queried.add(key);
+        final node = candidates[key]!;
+        return _sendGetPeers(node.ip, node.port, infoHash);
+      }).toList();
+      final results = await Future.wait(futures);
+
+      bool improved = false;
+      for (final result in results) {
+        if (result == null) continue;
+
+        // Peers found — collect them
+        if (result.containsKey('values')) {
+          try {
+            final values = Bencode.asList(result['values']);
+            for (final v in values) {
+              final bytes = Bencode.asBytes(v);
+              if (bytes.length == 6) {
+                final (ip, port) = DhtContact.parseCompactPeer(bytes);
+                foundPeers.add(PeerInfo(ip: ip, port: port));
+              }
+            }
+          } catch (_) {}
+        }
+
+        // Closer nodes returned — add to candidates
+        if (result.containsKey('nodes')) {
+          final nodesBytes = Bencode.asBytes(result['nodes']);
+          for (var i = 0; i + 26 <= nodesBytes.length; i += 26) {
+            final contact = DhtContact.fromCompactNodeInfo(nodesBytes, i);
+            if (contact.ip == '0.0.0.0' || contact.port == 0) continue;
+            final key = '${contact.ip}:${contact.port}';
+            if (!candidates.containsKey(key)) {
+              candidates[key] = contact;
+              distances[key] = xorDistance(contact.nodeId, infoHash);
+              _routingTable.insertNode(contact);
+              improved = true;
+            }
+          }
+        }
+      }
+
+      if (!improved && foundPeers.isNotEmpty) break;
+      if (!improved) break; // converged without peers
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+
+    // Store found peers
+    final hexHash = _toHex(infoHash);
+    _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
+    _peerStore[hexHash]!.addAll(foundPeers);
+
+    // Emit events
+    for (final peer in foundPeers) {
+      _peerFoundController.add((infoHash, peer));
+    }
+
+    LogService().log('DHT get_peers: ${queried.length} nodes queried, '
+        '${foundPeers.length} peers found, '
+        '${candidates.length} total candidates');
+
+    return foundPeers.toList();
   }
 
   /// Extract and insert nodes from a response's "nodes" field.
