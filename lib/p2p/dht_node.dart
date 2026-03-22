@@ -710,7 +710,7 @@ class DhtNode {
     final queried = <String>{};
     var closest = _routingTable.findClosest(target);
 
-    for (var round = 0; round < 5 && _running; round++) {
+    for (var round = 0; round < 3 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
@@ -721,19 +721,12 @@ class DhtNode {
       }
       if (toQuery.isEmpty) break;
 
-      // Query up to 3 in parallel
-      final batch = toQuery.take(3).toList();
-      final futures = batch.map((node) =>
-          _sendFindNode(node.ip, node.port, target));
-      final results = await Future.wait(futures);
-
-      for (final result in results) {
-        if (result == null) continue;
-        _processNodes(result);
-      }
+      // Query one at a time to avoid blocking the event loop
+      final node = toQuery.first;
+      final result = await _sendFindNode(node.ip, node.port, target);
+      if (result != null) _processNodes(result);
 
       closest = _routingTable.findClosest(target);
-      // Real pause to let the UI thread breathe on mobile
       await Future.delayed(const Duration(milliseconds: 500));
     }
 
@@ -746,7 +739,7 @@ class DhtNode {
     final foundPeers = <PeerInfo>{};
     var closest = _routingTable.findClosest(infoHash);
 
-    for (var round = 0; round < 5 && _running; round++) {
+    for (var round = 0; round < 3 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
@@ -757,10 +750,10 @@ class DhtNode {
       }
       if (toQuery.isEmpty) break;
 
-      final batch = toQuery.take(3).toList();
-      final futures = batch.map((node) =>
-          _sendGetPeers(node.ip, node.port, infoHash));
-      final results = await Future.wait(futures);
+      // Query one at a time to avoid blocking the event loop
+      final node = toQuery.first;
+      final result = await _sendGetPeers(node.ip, node.port, infoHash);
+      final results = [result];
 
       for (final result in results) {
         if (result == null) continue;
