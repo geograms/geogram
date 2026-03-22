@@ -231,36 +231,34 @@ class P2PService {
     final devService = DevicesService();
     final allDevices = devService.getAllDevices();
 
-    for (final device in allDevices) {
-      if (device.callsign.toUpperCase() == myCallsign) continue;
-      final npub = device.npub;
-      if (npub == null || npub.isEmpty) continue;
+    // Only probe devices that have an npub and aren't already online via other methods
+    final toProbe = allDevices.where((d) =>
+        d.callsign.toUpperCase() != myCallsign &&
+        d.npub != null &&
+        d.npub!.isNotEmpty).take(5).toList(); // limit to 5 to avoid blocking
 
-      // Search DHT for this device's npub
-      final hash = sha1Hash(npub);
-      final peers = await _dht!.getPeers(hash);
+    for (final device in toProbe) {
+      if (_dht == null || !_dht!.isRunning) break;
+
+      final hash = sha1Hash(device.npub!);
+      // Use cached peers first (instant), then try network lookup with short timeout
+      var peers = _dht!.getCachedPeers(hash);
+      if (peers.isEmpty) {
+        peers = await _dht!.getPeers(hash);
+      }
 
       if (peers.isNotEmpty) {
-        // Device is online via DHT — update with internet tag
         if (!device.connectionMethods.contains('internet')) {
           device.connectionMethods = [...device.connectionMethods, 'internet'];
         }
         device.isOnline = true;
         device.lastSeen = DateTime.now();
 
-        // Store the DHT peer address for potential direct connection
         final peer = peers.first;
-        final dhtUrl = 'http://${peer.ip}:${peer.port}';
-        // Only update URL if the current one is unreachable (LAN IP from old network)
-        if (device.url != null && !device.isOnline) {
-          device.url = dhtUrl;
-        }
-
         devService.addOrUpdateDevice(device);
         LogService().log('P2P: ${device.callsign} found via DHT at ${peer.ip}:${peer.port}');
       }
 
-      // Yield between lookups
       await Future.delayed(const Duration(milliseconds: 200));
     }
   }
