@@ -1924,10 +1924,14 @@ class DevicesService {
     // Get connected station
     final station = _stationService.getConnectedStation();
     if (station == null || !station.isConnected) {
-      // No active station WebSocket connection - remove 'internet' from connectionMethods
-      device.connectionMethods = device.connectionMethods
-          .where((m) => m != 'internet')
-          .toList();
+      // No active station — but don't remove 'internet' if DHT set it recently
+      final dhtFresh = device.lastSeen != null &&
+          DateTime.now().difference(device.lastSeen!).inMinutes < 30;
+      if (!dhtFresh) {
+        device.connectionMethods = device.connectionMethods
+            .where((m) => m != 'internet')
+            .toList();
+      }
       return false;
     }
 
@@ -1954,10 +1958,14 @@ class DevicesService {
             ];
           }
         } else {
-          // Device not connected via station - remove 'internet' tag
-          device.connectionMethods = device.connectionMethods
-              .where((m) => m != 'internet')
-              .toList();
+          // Device not connected via station — but keep 'internet' if DHT set it
+          final dhtFresh = device.lastSeen != null &&
+              DateTime.now().difference(device.lastSeen!).inMinutes < 30;
+          if (!dhtFresh) {
+            device.connectionMethods = device.connectionMethods
+                .where((m) => m != 'internet')
+                .toList();
+          }
         }
 
         _notifyListeners();

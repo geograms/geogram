@@ -280,14 +280,16 @@ class P2PService {
         .take(5)
         .toList();
 
-    // Schedule each lookup with staggered delays
+    // Schedule each lookup with staggered delays.
+    // getPeers runs async on the main isolate — the await inside
+    // the Timer callback yields to the event loop between rounds.
     for (var i = 0; i < devices.length; i++) {
       final device = devices[i];
-      Timer(Duration(seconds: 3 + i * 15), () async {
+      Timer(Duration(seconds: 5 + i * 20), () {
         if (_dht == null || !_dht!.isRunning) return;
         final hash = sha1Hash(device.npub!);
-        await _dht!.getPeers(hash);
-        _probeKnownDevicesViaDht();
+        // Don't await — let it run in background, probe cache after delay
+        _dht!.getPeers(hash).then((_) => _probeKnownDevicesViaDht());
       });
     }
   }
