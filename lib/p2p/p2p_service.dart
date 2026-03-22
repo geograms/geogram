@@ -166,8 +166,11 @@ class P2PService {
         _addDiscoveredPeer(p);
       }
 
-      // Probe known devices via their npub on DHT
-      await _probeKnownDevicesViaDht();
+      // Populate cache for known devices' npubs (deferred to avoid blocking)
+      Timer(const Duration(seconds: 5), () => _populateNpubCache());
+
+      // Probe from cache (instant — cache populated by _populateNpubCache or periodic)
+      _probeKnownDevicesViaDht();
 
       // Periodic refresh
       _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
@@ -177,7 +180,8 @@ class P2PService {
         for (final peer in p) {
           _addDiscoveredPeer(peer);
         }
-        await _probeKnownDevicesViaDht();
+        _probeKnownDevicesViaDht(); // check cache (instant)
+        Timer(const Duration(seconds: 3), () => _populateNpubCache()); // refresh cache
       });
 
       _dhtPort = _dht!.localPort;
@@ -241,11 +245,10 @@ class P2PService {
       if (_dht == null || !_dht!.isRunning) break;
 
       final hash = sha1Hash(device.npub!);
-      // Use cached peers first (instant), then try network lookup with short timeout
-      var peers = _dht!.getCachedPeers(hash);
-      if (peers.isEmpty) {
-        peers = await _dht!.getPeers(hash);
-      }
+      // Use cached peers first (instant, from previous get_peers responses).
+      // Don't do a full network getPeers here — it blocks the main thread
+      // for seconds per device. The periodic announce/scan populates the cache.
+      final peers = _dht!.getCachedPeers(hash);
 
       if (peers.isNotEmpty) {
         if (!device.connectionMethods.contains('internet')) {
@@ -261,6 +264,26 @@ class P2PService {
 
       await Future.delayed(const Duration(milliseconds: 200));
     }
+  }
+
+  /// Do one getPeers for each known device's npub to populate the cache.
+  /// Runs deferred so it doesn't block startup.
+  Future<void> _populateNpubCache() async {
+    if (_dht == null || !_dht!.isRunning) return;
+    final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
+    final devices = DevicesService().getAllDevices();
+
+    for (final device in devices.take(5)) {
+      if (device.callsign.toUpperCase() == myCallsign) continue;
+      if (device.npub == null || device.npub!.isEmpty) continue;
+      if (_dht == null || !_dht!.isRunning) break;
+
+      await _dht!.getPeers(sha1Hash(device.npub!));
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    // Now re-probe from cache
+    _probeKnownDevicesViaDht();
   }
 
   /// Find devices for a specific npub via DHT.
