@@ -1,18 +1,14 @@
-/// P2P Discovery Service — orchestrates DHT, STUN, and hole punching.
+/// P2P Discovery Service — orchestrates DHT in a background isolate.
 ///
-/// Ties together:
-/// - DhtNode: BEP 5 Mainline DHT for peer discovery
-/// - NodeCapability: NAT type detection via STUN
-/// - IcePunch: UDP hole punching for direct connections
-///
-/// Each device announces under two DHT topics:
-/// 1. SHA1("geogram") — global topic (find all Geogram nodes)
-/// 2. SHA1(npub) — per-user topic (find all devices for a specific identity)
+/// All DHT work (bootstrap, announce, get_peers, detect) runs in a
+/// separate Dart isolate so it never blocks the main thread's HTTP
+/// server or UI. Communication via SendPort/ReceivePort.
 library;
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
@@ -24,102 +20,65 @@ import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/app_service.dart';
 import '../util/task_monitor_helpers.dart';
-import 'dht_node.dart';
-import 'ice_punch.dart';
-import 'k_bucket.dart';
+import 'dht_isolate.dart';
+import 'dht_node.dart' show PeerInfo, sha1Hash;
 import 'node_capability.dart';
 
-/// Task monitor ID for DHT discovery.
+/// File paths for persisted state.
+const String _kNodeCachePath = 'p2p/dht_cache.json';
+const String _kNodeIdPath = 'p2p/node_id.bin';
+const String _kPeerCachePath = 'p2p/peer_cache.json';
 const String _kTaskId = 'p2p_discovery.dht';
 
-/// File path for persisted DHT node cache (relative to profile storage).
-const String _kNodeCachePath = 'p2p/dht_cache.json';
-
-/// File path for persisted node ID.
-const String _kNodeIdPath = 'p2p/node_id.bin';
-
-/// File path for cached discovered peers.
-const String _kPeerCachePath = 'p2p/peer_cache.json';
-
-/// P2P Discovery Service.
-///
-/// Singleton orchestrator that manages DHT announcement, peer discovery,
-/// NAT detection, and direct connection establishment.
+/// P2P Discovery Service — singleton.
 class P2PService {
   static final P2PService _instance = P2PService._internal();
   factory P2PService() => _instance;
   P2PService._internal();
 
-  /// Core components.
-  final DhtNode _dht = DhtNode();
-  final NodeCapability _capability = NodeCapability();
-  final IcePunch _icePunch = IcePunch();
-
-  /// Whether P2P is enabled (user preference).
   bool _enabled = true;
   bool get enabled => _enabled;
   set enabled(bool value) {
     _enabled = value;
-    if (!value && _dht.isRunning) {
-      stop();
-    }
+    if (!value) stop();
   }
 
-  /// Whether the service is currently running.
-  bool get isRunning => _dht.isRunning;
-
-  /// Stream of newly discovered peers (forwarded from DhtNode).
-  Stream<(Uint8List infoHash, PeerInfo peer)> get onPeerFound =>
-      _dht.onPeerFound;
-
-  /// DHT node's UDP port.
-  int get dhtPort => _dht.localPort;
-
-  /// DHT routing table size.
-  int get dhtPeerCount => _dht.routingTableSize;
-
-  /// Active direct connections count.
-  int get directConnectionCount => _icePunch.connectionCount;
-
-  /// Detected node type.
-  NodeType get nodeType => _capability.type;
-
-  /// Our public address.
-  String? get publicIp => _capability.publicIp;
-  int? get publicPort => _capability.publicPort;
-
-  /// The global Geogram info_hash.
-  late final Uint8List _geogramHash = sha1Hash('geogram');
-
-  /// Our npub info_hash (set after profile is loaded).
-  Uint8List? _npubHash;
-
-  /// Re-STUN timer (every 5 minutes to track IP changes).
-  Timer? _stunRefreshTimer;
-
-  /// Stream subscriptions.
-  StreamSubscription? _peerFoundSub;
-
-  /// Task monitor handle.
+  // Isolate state
+  Isolate? _isolate;
+  ReceivePort? _receivePort;
+  SendPort? _commandPort;
   MonitoredIsolateHandle? _taskHandle;
 
-  /// Peers discovered via DHT for our own npub (our other devices).
+  // Status from isolate
+  bool _running = false;
+  bool get isRunning => _running;
+  int _dhtPort = 0;
+  int get dhtPort => _dhtPort;
+  int _dhtNodes = 0;
+  int get dhtPeerCount => _dhtNodes;
+  int _storedPeers = 0;
+  NodeType _nodeType = NodeType.unknown;
+  NodeType get nodeType => _nodeType;
+  String? _publicIp;
+  String? get publicIp => _publicIp;
+  int? _publicPort;
+  int? get publicPort => _publicPort;
+  int get directConnectionCount => 0; // TODO: hole punching
+
+  // Discovered peers
   final Set<PeerInfo> discoveredPeers = {};
-
-  /// Stream of discovered peer updates.
   final _peersController = StreamController<List<PeerInfo>>.broadcast();
-
-  /// Stream that emits when discovered peers change.
   Stream<List<PeerInfo>> get onDiscoveredPeersChanged => _peersController.stream;
+  final Set<String> _probedPeers = {};
 
-  /// Start the P2P service.
-  ///
-  /// [localPort] — the port our local server listens on (default from AppArgs).
-  /// Runs DHT bootstrap and announce in the background to avoid blocking the UI.
+  /// Pending find_user completers
+  final Map<String, Completer<List<Map<String, dynamic>>>> _findCompleters = {};
+
+  /// Start the P2P service in a background isolate.
   Future<void> start({int? localPort}) async {
     localPort ??= AppArgs().port;
     if (!_enabled) return;
-    if (_dht.isRunning) return;
+    if (_running) return;
 
     final profile = ProfileService().getProfile();
     final npub = profile.npub;
@@ -128,273 +87,215 @@ class P2PService {
       return;
     }
 
-    _npubHash = sha1Hash(npub);
-
-    // Register as a monitored task
     _taskHandle = MonitoredIsolateHandle(
       id: _kTaskId,
       name: 'P2P Discovery',
-      description: 'BitTorrent DHT peer discovery',
+      description: 'BitTorrent DHT peer discovery (isolate)',
       serviceName: 'P2PService',
     );
-    _taskHandle!.markRunning();
 
-    try {
-      final delay = const Duration(seconds: 2);
+    // Load persisted state
+    final persistedId = await _loadNodeId();
+    final cachedNodes = await _loadCachedNodesRaw();
+    final cachedPeers = await _loadCachedPeersRaw();
 
-      final announcePort = localPort!;
-      Timer(delay, () async {
-        if (!_enabled) return;
-        try {
-          final persistedId = await _loadNodeId();
-          await _dht.start(persistedNodeId: persistedId);
-          await _saveNodeId(_dht.nodeId);
-          _peerFoundSub = _dht.onPeerFound.listen(_onPeerFound);
-          LogService().log('P2P: DHT socket open on port ${_dht.localPort}');
-          _bootstrapAndAnnounce(announcePort);
-        } catch (e) {
-          _taskHandle?.markError(e);
-          LogService().log('P2P service failed: $e');
+    // Load cached peers immediately (before isolate starts)
+    if (cachedPeers != null) {
+      for (final entry in cachedPeers) {
+        final ip = entry['ip'] as String?;
+        final port = entry['port'] as int?;
+        if (ip != null && port != null) {
+          _addDiscoveredPeer(PeerInfo(ip: ip, port: port));
         }
-      });
-
-      LogService().log('P2P: scheduled DHT start in ${delay.inSeconds}s');
-    } catch (e) {
-      _taskHandle?.markError(e);
-      LogService().log('P2P service failed: $e');
+      }
     }
+
+    // Spawn the DHT isolate
+    _receivePort = ReceivePort();
+    final params = DhtIsolateParams(
+      sendPort: _receivePort!.sendPort,
+      announcePort: localPort,
+      npub: npub,
+      persistedNodeId: persistedId,
+      cachedNodes: cachedNodes,
+      cachedPeers: cachedPeers,
+    );
+
+    _receivePort!.listen(_handleIsolateMessage);
+    _isolate = await Isolate.spawn(dhtIsolateEntry, params);
+    _running = true;
+    _taskHandle?.markRunning();
+    LogService().log('P2P: isolate spawned');
   }
 
-  /// Stop the P2P service and persist state.
+  /// Stop the P2P service.
   Future<void> stop() async {
-    _stunRefreshTimer?.cancel();
-    _peerFoundSub?.cancel();
-
-    // Save state for next session
-    if (_dht.isRunning) {
-      await _saveCachedNodes(_dht.getNodesForCache());
+    if (_commandPort != null) {
+      _commandPort!.send(jsonEncode({'action': 'stop'}));
+      // Wait briefly for cache to be sent back
+      await Future.delayed(const Duration(seconds: 1));
     }
-    await _saveDiscoveredPeers();
-
-    _icePunch.closeAll();
-    await _dht.stop();
-    discoveredPeers.clear();
-    _taskHandle?.dispose();
-    _taskHandle = null;
-
+    _cleanup();
     LogService().log('P2P service stopped');
   }
 
-  /// Find all online devices for a specific npub.
-  ///
-  /// Returns list of IP:port entries — one per device.
+  void _cleanup() {
+    _isolate?.kill(priority: Isolate.beforeNextEvent);
+    _isolate = null;
+    _receivePort?.close();
+    _receivePort = null;
+    _commandPort = null;
+    _running = false;
+    _taskHandle?.dispose();
+    _taskHandle = null;
+  }
+
+  /// Find devices for a specific npub via DHT.
   Future<List<PeerInfo>> findDevicesForUser(String npub) async {
-    if (!_dht.isRunning) return [];
-    final hash = sha1Hash(npub);
-    return _dht.getPeers(hash);
+    if (!_running || _commandPort == null) return [];
+    final completer = Completer<List<Map<String, dynamic>>>();
+    _findCompleters[npub] = completer;
+    _commandPort!.send(jsonEncode({'action': 'find_user', 'npub': npub}));
+    final results = await completer.future.timeout(
+      const Duration(seconds: 15),
+      onTimeout: () => [],
+    );
+    _findCompleters.remove(npub);
+    return results.map((r) => PeerInfo(
+      ip: r['ip'] as String,
+      port: r['port'] as int,
+    )).toList();
   }
 
-  /// Attempt to connect directly to a peer via hole punching.
-  Future<DirectConnection?> connectTo(PeerInfo peer) async {
-    if (!_dht.isRunning) return null;
-
-    if (_capability.publicIp == null) {
-      LogService().log('P2P: Cannot connect — own public address unknown');
-      return null;
-    }
-
-    final ourCandidate = IceCandidate(
-      ip: _capability.publicIp!,
-      port: _capability.publicPort!,
-    );
-
-    final theirCandidate = IceCandidate(
-      ip: peer.ip,
-      port: peer.port,
-    );
-
-    // Create a socket for this connection attempt
-    final connection = await _icePunch.punch(
-      localSocket: await _createSocket(),
-      ourCandidate: ourCandidate,
-      theirCandidate: theirCandidate,
-      capability: _capability,
-    );
-
-    if (connection != null) {
-      // Send identity handshake
-      final profile = ProfileService().getProfile();
-      await _icePunch.sendHandshake(
-        connection,
-        deviceId: ConfigService().deviceId,
-        deviceName: ConfigService().get('device_name') as String? ?? '',
-        callsign: profile.callsign,
-        npub: profile.npub,
-      );
-    }
-
-    return connection;
-  }
-
-  /// Get a direct connection to a device by callsign (if one exists).
-  DirectConnection? getConnectionByCallsign(String callsign) {
-    return _icePunch.getConnectionByCallsign(callsign);
-  }
-
-  /// Get all active direct connections.
-  List<DirectConnection> get activeConnections => _icePunch.activeConnections;
-
-  /// Manually add a DHT node (for testing / direct peering).
+  /// Add a DHT node manually.
   Future<void> addNode(String ip, int port) async {
-    if (!_dht.isRunning) return;
-    // Send a find_node to the peer — this will add them to our routing table
-    // and trigger them to add us to theirs.
-    _dht.pingNode(ip, port);
+    _commandPort?.send(jsonEncode({'action': 'add_node', 'ip': ip, 'port': port}));
   }
 
-  /// Get comprehensive status for API/UI.
+  /// Get full status.
   Map<String, dynamic> getStatus() {
     return {
       'enabled': _enabled,
-      'running': _dht.isRunning,
-      'dht_port': _dht.isRunning ? _dht.localPort : null,
-      'node_type': _capability.type.name,
-      'public_ip': _capability.publicIp,
-      'public_port': _capability.publicPort,
-      'dht_nodes': _dht.routingTableSize,
-      'stored_peers': _dht.storedPeerCount,
-      'direct_connections': _icePunch.connectionCount,
-      'connections': _icePunch.getStatus(),
-      'capability': _capability.getStatus(),
+      'running': _running,
+      'dht_port': _dhtPort,
+      'node_type': _nodeType.name,
+      'public_ip': _publicIp,
+      'public_port': _publicPort,
+      'dht_nodes': _dhtNodes,
+      'stored_peers': _storedPeers,
+      'direct_connections': 0,
+      'connections': {'connections': 0, 'peers': []},
+      'capability': {
+        'node_type': _nodeType.name,
+        'public_ip': _publicIp,
+        'public_port': _publicPort,
+        'can_hole_punch': _nodeType == NodeType.typeA || _nodeType == NodeType.typeB,
+      },
     };
   }
 
-  // ─── Internal ──────────────────────────────────────────────────
+  // ─── Isolate Message Handling ──────────────────────────────────
 
-  /// Heavy work scheduled after start() returns.
-  /// Each phase is separated by Timer to give the HTTP server time to breathe.
-  Future<void> _bootstrapAndAnnounce(int announcePort) async {
-    if (!_dht.isRunning) return;
-
-    try {
-      // Load cached peers from previous session
-      await _loadAndProbeCachedPeers();
-
-      // Bootstrap DHT
-      final cachedNodes = await _loadCachedNodes();
-      await _dht.bootstrap(cachedNodes: cachedNodes);
-      LogService().log('P2P: bootstrap complete (${_dht.routingTableSize} nodes)');
-
-      // Schedule announce after a pause
-      Timer(const Duration(seconds: 3), () => _announcePhase(announcePort));
-    } catch (e) {
-      _taskHandle?.markError(e);
-      LogService().log('P2P bootstrap failed: $e');
+  void _handleIsolateMessage(dynamic message) {
+    // The isolate sends both JSON strings and SendPort objects
+    if (message is SendPort) {
+      _commandPort = message;
+      return;
     }
-  }
+    if (message is! String) return;
 
-  Future<void> _announcePhase(int port) async {
-    if (!_dht.isRunning) return;
+    Map<String, dynamic> msg;
     try {
-      await _dht.announce(_geogramHash, port);
-      await Future.delayed(const Duration(seconds: 1));
-      if (_npubHash != null && _dht.isRunning) {
-        await _dht.announce(_npubHash!, port);
-      }
-      _dht.startPeriodicAnnounce();
-      LogService().log('P2P: announced on DHT');
-
-      // Schedule detection after another pause
-      Timer(const Duration(seconds: 5), () => _detectAndScan());
-    } catch (e) {
-      LogService().log('P2P announce failed: $e');
+      msg = jsonDecode(message) as Map<String, dynamic>;
+    } catch (_) {
+      return;
     }
-  }
 
-  Future<void> _detectAndScan() async {
-    if (!_dht.isRunning) return;
-    try {
-      await _capability.detectFromDht(_dht);
+    final type = msg['type'] as String?;
+    switch (type) {
+      case 'log':
+        LogService().log(msg['message'] as String? ?? '');
+        break;
 
-      // Check cached peers first (no network)
-      final cachedGlobal = _dht.getCachedPeers(_geogramHash);
-      for (final peer in cachedGlobal) {
-        _addDiscoveredPeer(peer);
-      }
-
-      _stunRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
-        if (!_dht.isRunning) return;
-        _taskHandle?.markRunning();
-        await _capability.detectFromDht(_dht);
-        // Light scan: check cached peers only (populated by fire-and-forget responses)
-        final peers = _dht.getCachedPeers(_geogramHash);
-        for (final peer in peers) {
-          _addDiscoveredPeer(peer);
+      case 'node_id':
+        final idHex = msg['id'] as String?;
+        if (idHex != null) {
+          _saveNodeId(_fromHex(idHex));
         }
-        if (_npubHash != null) {
-          final npubPeers = _dht.getCachedPeers(_npubHash!);
-          for (final peer in npubPeers) {
-            _addDiscoveredPeer(peer);
-          }
-        }
+        break;
+
+      case 'started':
+        _dhtPort = msg['dht_port'] as int? ?? 0;
+        _dhtNodes = msg['dht_nodes'] as int? ?? 0;
+        _updateCapability(msg);
         _taskHandle?.markIdle();
-      });
+        LogService().log('P2P service started '
+            '(type: ${_nodeType.name}, dht: $_dhtNodes nodes)');
+        break;
 
-      _peersController.add(discoveredPeers.toList());
-      _taskHandle?.markIdle();
-      LogService().log('P2P service started '
-          '(type: ${_capability.type.name}, '
-          'dht: ${_dht.routingTableSize} nodes)');
-    } catch (e) {
-      _taskHandle?.markError(e);
-      LogService().log('P2P detect/scan failed: $e');
+      case 'status':
+        _dhtNodes = msg['dht_nodes'] as int? ?? _dhtNodes;
+        _storedPeers = msg['stored_peers'] as int? ?? _storedPeers;
+        _updateCapability(msg);
+        break;
+
+      case 'peer_found':
+        final ip = msg['ip'] as String?;
+        final port = msg['port'] as int?;
+        if (ip != null && port != null) {
+          _addDiscoveredPeer(PeerInfo(ip: ip, port: port));
+        }
+        break;
+
+      case 'find_result':
+        final npub = msg['npub'] as String?;
+        final devices = msg['devices'] as List<dynamic>?;
+        if (npub != null && _findCompleters.containsKey(npub)) {
+          _findCompleters[npub]!.complete(
+            devices?.cast<Map<String, dynamic>>() ?? [],
+          );
+        }
+        break;
+
+      case 'cache':
+        final nodes = msg['nodes'] as List<dynamic>?;
+        if (nodes != null) {
+          _saveCachedNodes(nodes.cast<Map<String, dynamic>>());
+        }
+        break;
+
+      case 'stopped':
+        _cleanup();
+        break;
+
+      case 'error':
+        final error = msg['message'] as String? ?? 'unknown';
+        _taskHandle?.markError(error);
+        LogService().log('P2P isolate error: $error');
+        break;
     }
   }
 
-  void _onPeerFound((Uint8List infoHash, PeerInfo peer) event) {
-    final (infoHash, peer) = event;
-    _addDiscoveredPeer(peer);
-  }
-
-  /// Scan the DHT for devices on the geogram global topic and our npub topic.
-  Future<void> _scanForOwnDevices() async {
-    if (!_dht.isRunning) return;
-
-    // Check locally cached peers first (fast, no network)
-    final cachedGlobal = _dht.getCachedPeers(_geogramHash);
-    for (final peer in cachedGlobal) {
-      _addDiscoveredPeer(peer);
+  void _updateCapability(Map<String, dynamic> msg) {
+    final nodeType = msg['node_type'] as String?;
+    if (nodeType != null) {
+      _nodeType = NodeType.values.firstWhere(
+        (t) => t.name == nodeType,
+        orElse: () => NodeType.unknown,
+      );
     }
-    if (_npubHash != null) {
-      final cachedNpub = _dht.getCachedPeers(_npubHash!);
-      for (final peer in cachedNpub) {
-        _addDiscoveredPeer(peer);
-      }
-    }
-
-    // Then do a network lookup (heavy but deferred)
-    final globalPeers = await _dht.getPeers(_geogramHash);
-    for (final peer in globalPeers) {
-      _addDiscoveredPeer(peer);
-    }
-    await Future.delayed(const Duration(milliseconds: 200));
-
-    if (_npubHash != null && _dht.isRunning) {
-      final npubPeers = await _dht.getPeers(_npubHash!);
-      for (final peer in npubPeers) {
-        _addDiscoveredPeer(peer);
-      }
+    _publicIp = msg['public_ip'] as String?;
+    _publicPort = msg['public_port'] as int?;
+    if (msg.containsKey('dht_port')) {
+      _dhtPort = msg['dht_port'] as int? ?? _dhtPort;
     }
   }
 
-  /// Set of peers we already tried to probe (avoid repeated HTTP calls).
-  final Set<String> _probedPeers = {};
+  // ─── Peer Management ──────────────────────────────────────────
 
-  /// Add a DHT-discovered peer to Devices UI.
   void _addDiscoveredPeer(PeerInfo peer) {
     final myPort = AppArgs().port;
-    // Skip self
-    if (peer.ip == _capability.publicIp && peer.port == myPort) return;
+    if (peer.ip == _publicIp && peer.port == myPort) return;
     if ((peer.ip == '127.0.0.1' || peer.ip == '0.0.0.0') && peer.port == myPort) return;
 
     if (discoveredPeers.add(peer)) {
@@ -407,8 +308,6 @@ class P2PService {
     }
   }
 
-  /// Probe a DHT peer via HTTP to get its identity, then register in Devices UI.
-  /// Only registers peers whose identity can be confirmed.
   Future<void> _registerDhtPeer(PeerInfo peer) async {
     final peerUrl = 'http://${peer.ip}:${peer.port}';
     final myCallsign = ProfileService().getProfile().callsign;
@@ -418,7 +317,7 @@ class P2PService {
           .timeout(const Duration(seconds: 5));
       if (response.statusCode != 200) return;
 
-      final data = json.decode(response.body) as Map<String, dynamic>;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
       final callsign = data['callsign'] as String?;
       if (callsign == null || callsign.isEmpty) return;
       if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
@@ -444,13 +343,8 @@ class P2PService {
       ));
       LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
     } catch (_) {
-      // HTTP probe failed (peer behind NAT) — don't show unidentified peers
-      LogService().log('P2P: peer ${peer.ip}:${peer.port} not reachable via HTTP');
+      // HTTP probe failed — peer behind NAT
     }
-  }
-
-  Future<RawDatagramSocket> _createSocket() async {
-    return RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
   }
 
   // ─── Persistence ───────────────────────────────────────────────
@@ -474,50 +368,39 @@ class P2PService {
     } catch (_) {}
   }
 
-  Future<List<DhtContact>?> _loadCachedNodes() async {
+  Future<List<Map<String, dynamic>>?> _loadCachedNodesRaw() async {
     try {
       final storage = AppService().profileStorage;
       if (storage == null) return null;
       final json = await storage.readJson(_kNodeCachePath);
       if (json == null) return null;
-
-      final nodes = <DhtContact>[];
-      final list = json['nodes'] as List<dynamic>? ?? [];
-      for (final entry in list) {
-        if (entry is! Map<String, dynamic>) continue;
-        final idHex = entry['id'] as String?;
-        final ip = entry['ip'] as String?;
-        final port = entry['port'] as int?;
-        if (idHex == null || ip == null || port == null) continue;
-        nodes.add(DhtContact(
-          nodeId: _fromHex(idHex),
-          ip: ip,
-          port: port,
-        ));
-      }
-      return nodes.isEmpty ? null : nodes;
+      return (json['nodes'] as List<dynamic>?)?.cast<Map<String, dynamic>>();
     } catch (_) {
       return null;
     }
   }
 
-  Future<void> _saveCachedNodes(List<DhtContact> nodes) async {
+  Future<void> _saveCachedNodes(List<Map<String, dynamic>> nodes) async {
     try {
       final storage = AppService().profileStorage;
       if (storage == null) return;
       await storage.createDirectory('p2p');
-      final list = nodes
-          .map((n) => {
-                'id': _toHex(n.nodeId),
-                'ip': n.ip,
-                'port': n.port,
-              })
-          .toList();
-      await storage.writeJson(_kNodeCachePath, {'nodes': list});
+      await storage.writeJson(_kNodeCachePath, {'nodes': nodes});
     } catch (_) {}
   }
 
-  /// Save discovered peers to disk for fast restart.
+  Future<List<Map<String, dynamic>>?> _loadCachedPeersRaw() async {
+    try {
+      final storage = AppService().profileStorage;
+      if (storage == null) return null;
+      final json = await storage.readJson(_kPeerCachePath);
+      if (json == null) return null;
+      return (json['peers'] as List<dynamic>?)?.cast<Map<String, dynamic>>();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _saveDiscoveredPeers() async {
     try {
       final storage = AppService().profileStorage;
@@ -531,33 +414,7 @@ class P2PService {
     } catch (_) {}
   }
 
-  /// Load cached discovered peers from disk and re-probe them.
-  Future<void> _loadAndProbeCachedPeers() async {
-    try {
-      final storage = AppService().profileStorage;
-      if (storage == null) return;
-      final data = await storage.readJson(_kPeerCachePath);
-      if (data == null) return;
-
-      final peers = data['peers'] as List<dynamic>? ?? [];
-      for (final entry in peers) {
-        if (entry is! Map<String, dynamic>) continue;
-        final ip = entry['ip'] as String?;
-        final port = entry['port'] as int?;
-        if (ip == null || port == null) continue;
-        _addDiscoveredPeer(PeerInfo(ip: ip, port: port));
-      }
-      if (peers.isNotEmpty) {
-        LogService().log('P2P: loaded ${peers.length} cached peer(s)');
-      }
-    } catch (_) {}
-  }
-
   // ─── Utilities ─────────────────────────────────────────────────
-
-  static String _toHex(Uint8List bytes) {
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  }
 
   static Uint8List _fromHex(String hex) {
     final bytes = Uint8List(hex.length ~/ 2);
@@ -565,10 +422,5 @@ class P2PService {
       bytes[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
     }
     return bytes;
-  }
-
-  static String _hexPrefix(Uint8List bytes) {
-    if (bytes.length < 4) return _toHex(bytes);
-    return _toHex(bytes).substring(0, 8);
   }
 }
