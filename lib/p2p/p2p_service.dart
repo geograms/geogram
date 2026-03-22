@@ -14,14 +14,13 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import '../models/monitored_task.dart';
 import '../services/app_args.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/app_service.dart';
 import '../services/stun_server_service.dart';
-import '../services/task_monitor_service.dart';
+import '../util/task_monitor_helpers.dart';
 import 'dht_node.dart';
 import 'ice_punch.dart';
 import 'k_bucket.dart';
@@ -95,6 +94,9 @@ class P2PService {
   /// Stream subscriptions.
   StreamSubscription? _peerFoundSub;
 
+  /// Task monitor handle.
+  MonitoredIsolateHandle? _taskHandle;
+
   /// Peers discovered via DHT for our own npub (our other devices).
   final Set<PeerInfo> discoveredPeers = {};
 
@@ -123,16 +125,13 @@ class P2PService {
     _npubHash = sha1Hash(npub);
 
     // Register as a monitored task
-    TaskMonitorService().register(MonitoredTask(
+    _taskHandle = MonitoredIsolateHandle(
       id: _kTaskId,
       name: 'P2P Discovery',
       description: 'BitTorrent DHT peer discovery',
       serviceName: 'P2PService',
-      priority: TaskPriority.low,
-      type: TaskType.periodic,
-      interval: const Duration(minutes: 5),
-    ));
-    TaskMonitorService().reportStart(_kTaskId);
+    );
+    _taskHandle!.markRunning();
 
     try {
       // Load persisted node ID
@@ -184,22 +183,22 @@ class P2PService {
       // Periodically re-check STUN and scan for own devices (every 5 min)
       _stunRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
         if (!_dht.isRunning) return;
-        TaskMonitorService().reportStart(_kTaskId);
+        _taskHandle?.markRunning();
         final peers = _dht.getCachedPeers(_geogramHash);
         await _capability.detect(_dht, peers);
         _scanForOwnDevices();
-        TaskMonitorService().reportSuccess(_kTaskId);
+        _taskHandle?.markIdle();
       });
 
       // Notify listeners
       _peersController.add(discoveredPeers.toList());
 
-      TaskMonitorService().reportSuccess(_kTaskId);
+      _taskHandle?.markIdle();
       LogService().log('P2P service started '
           '(type: ${_capability.type.name}, '
           'dht: ${_dht.routingTableSize} nodes)');
     } catch (e) {
-      TaskMonitorService().reportFailure(_kTaskId, e);
+      _taskHandle?.markError(e);
       LogService().log('P2P service failed: $e');
     }
   }
@@ -217,7 +216,8 @@ class P2PService {
     _icePunch.closeAll();
     await _dht.stop();
     discoveredPeers.clear();
-    TaskMonitorService().unregister(_kTaskId);
+    _taskHandle?.dispose();
+    _taskHandle = null;
 
     LogService().log('P2P service stopped');
   }
