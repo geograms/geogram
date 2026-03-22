@@ -226,28 +226,21 @@ class P2PService {
     _taskHandle = null;
   }
 
-  /// Look up each known device's npub on the DHT.
-  /// If found, mark it online with 'internet' connection method.
-  Future<void> _probeKnownDevicesViaDht() async {
+  /// Check DHT peer cache for known devices.
+  /// Matches by npub cache AND by geogram topic peers against known device npubs.
+  void _probeKnownDevicesViaDht() {
     if (_dht == null || !_dht!.isRunning) return;
 
     final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
     final devService = DevicesService();
     final allDevices = devService.getAllDevices();
 
-    // Only probe devices that have an npub and aren't already online via other methods
-    final toProbe = allDevices.where((d) =>
-        d.callsign.toUpperCase() != myCallsign &&
-        d.npub != null &&
-        d.npub!.isNotEmpty).take(5).toList(); // limit to 5 to avoid blocking
+    for (final device in allDevices) {
+      if (device.callsign.toUpperCase() == myCallsign) continue;
+      if (device.npub == null || device.npub!.isEmpty) continue;
 
-    for (final device in toProbe) {
-      if (_dht == null || !_dht!.isRunning) break;
-
+      // Check if this device's npub has peers in the DHT cache
       final hash = sha1Hash(device.npub!);
-      // Use cached peers first (instant, from previous get_peers responses).
-      // Don't do a full network getPeers here — it blocks the main thread
-      // for seconds per device. The periodic announce/scan populates the cache.
       final peers = _dht!.getCachedPeers(hash);
 
       if (peers.isNotEmpty) {
@@ -256,13 +249,9 @@ class P2PService {
         }
         device.isOnline = true;
         device.lastSeen = DateTime.now();
-
-        final peer = peers.first;
         devService.addOrUpdateDevice(device);
-        LogService().log('P2P: ${device.callsign} found via DHT at ${peer.ip}:${peer.port}');
+        LogService().log('P2P: ${device.callsign} found via DHT at ${peers.first.ip}:${peers.first.port}');
       }
-
-      await Future.delayed(const Duration(milliseconds: 200));
     }
   }
 
@@ -280,18 +269,15 @@ class P2PService {
         .take(5)
         .toList();
 
-    // Schedule each lookup with staggered delays.
-    // getPeers runs async on the main isolate — the await inside
-    // the Timer callback yields to the event loop between rounds.
-    for (var i = 0; i < devices.length; i++) {
-      final device = devices[i];
-      Timer(Duration(seconds: 5 + i * 20), () {
-        if (_dht == null || !_dht!.isRunning) return;
-        final hash = sha1Hash(device.npub!);
-        // Don't await — let it run in background, probe cache after delay
-        _dht!.getPeers(hash).then((_) => _probeKnownDevicesViaDht());
-      });
+    // Fire lightweight UDP queries for each device's npub.
+    // No iterative lookup — just send get_peers to the 3 closest
+    // routing table nodes. Responses populate the cache via _handleResponse.
+    for (final device in devices) {
+      _dht!.fireGetPeers(sha1Hash(device.npub!));
     }
+
+    // Re-probe cache after responses arrive
+    Timer(const Duration(seconds: 10), () => _probeKnownDevicesViaDht());
   }
 
   /// Find devices for a specific npub via DHT.
