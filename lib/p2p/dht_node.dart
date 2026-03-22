@@ -33,7 +33,7 @@ const List<(String host, int port)> kBootstrapNodes = [
 const int kReannounceMinutes = 25;
 
 /// How often to refresh stale routing table entries (minutes).
-const int kRefreshMinutes = 15;
+const int kRefreshMinutes = 2;
 
 /// Max peers to store per info_hash topic.
 const int kMaxPeersPerTopic = 100;
