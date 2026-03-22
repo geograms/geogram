@@ -400,11 +400,11 @@ void main() async {
     await MirrorConfigService.instance.setStorage(AppService().profileStorage);
     MirrorSyncService.instance.loadAllowedPeersFromConfig();
 
-    // Start background file indexing (hourly, only changed folders)
-    FileIndexService.startBackgroundIndexing(
-      dbPath: StorageConfig().getFileIndexPath(profile.callsign),
-      storage: AppService().profileStorage,
-    );
+    // Background file indexing disabled — runs on demand via mirror sync
+    // FileIndexService.startBackgroundIndexing(
+    //   dbPath: StorageConfig().getFileIndexPath(profile.callsign),
+    //   storage: AppService().profileStorage,
+    // );
 
     // Wire up serialized mirror peer auto-registration callback
     MirrorDiscoveryService.onMirrorsChanged = (mirrors) async {
@@ -496,8 +496,9 @@ void main() async {
     await MessageAttentionService().initialize();
     LogService().log('MessageAttentionService initialized');
 
-    MeetingTranscriptionService().startBackgroundAutoTranscription();
-    LogService().log('MeetingTranscriptionService background auto-transcription wired');
+    // Auto-transcription disabled at startup — runs on demand from meeting UI
+    // MeetingTranscriptionService().startBackgroundAutoTranscription();
+    // LogService().log('MeetingTranscriptionService background auto-transcription wired');
 
     await TrayService().initialize();
     LogService().log('TrayService initialized');
