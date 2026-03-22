@@ -194,7 +194,7 @@ class _TeleportBrowserPageState extends State<TeleportBrowserPage> {
       case 'nostr':
         return NostrClientService().isAnyConnected;
       case 'bluesky':
-        return AtprotoClientService().isAuthenticated;
+        return AtprotoClientService().config.enabled && AtprotoClientService().isAuthenticated;
       case 'meshcore':
         return MeshCoreService().isConnected;
       case 'bitchat':
