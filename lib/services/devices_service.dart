@@ -6,6 +6,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -1913,6 +1914,33 @@ class DevicesService {
   }
 
   /// Check device via station proxy
+  /// Run an HTTP GET probe in a background isolate to avoid OOM on main thread.
+  /// Returns a fake http.Response with statusCode and body, or throws.
+  Future<http.Response> _httpProbeInIsolate(String url) async {
+    final result = await Isolate.run(() async {
+      final client = http.Client();
+      try {
+        final response = await client.get(Uri.parse(url))
+            .timeout(const Duration(seconds: 5));
+        // Limit body size to 50KB to prevent OOM
+        final body = response.body.length > 50000
+            ? response.body.substring(0, 50000)
+            : response.body;
+        return {
+          'statusCode': response.statusCode,
+          'body': body,
+        };
+      } finally {
+        client.close();
+      }
+    }).timeout(const Duration(seconds: 8));
+
+    return http.Response(
+      result['body'] as String,
+      result['statusCode'] as int,
+    );
+  }
+
   Future<bool> _checkViaRelayProxy(RemoteDevice device) async {
     // Get connected station
     final station = _stationService.getConnectedStation();
@@ -1928,9 +1956,8 @@ class DevicesService {
       final baseUrl = station.url
           .replaceFirst('ws://', 'http://')
           .replaceFirst('wss://', 'https://');
-      final response = await http
-          .get(Uri.parse('$baseUrl/device/${device.callsign}'))
-          .timeout(const Duration(seconds: 5));
+      final probeUrl = '$baseUrl/device/${device.callsign}';
+      final response = await _httpProbeInIsolate(probeUrl);
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -2015,9 +2042,7 @@ class DevicesService {
 
       final stopwatch = Stopwatch()..start();
 
-      final response = await http
-          .get(Uri.parse('$baseUrl/api/status'))
-          .timeout(const Duration(seconds: 5));
+      final response = await _httpProbeInIsolate('$baseUrl/api/status');
 
       stopwatch.stop();
 
@@ -2568,9 +2593,7 @@ class DevicesService {
       List<dynamic>? devices;
 
       try {
-        final response = await http
-            .get(Uri.parse(url))
-            .timeout(const Duration(seconds: 10));
+        final response = await _httpProbeInIsolate(url);
 
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
