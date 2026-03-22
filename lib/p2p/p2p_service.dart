@@ -98,13 +98,17 @@ class P2PService {
       }
     }
 
+    // Skip DHT on Android — iterative lookups cause OOM on low-memory devices.
+    // Android devices are discoverable by other platforms (laptop finds Android
+    // via npub lookup) but Android can't run its own DHT lookups yet.
+    if (Platform.isAndroid) {
+      LogService().log('P2P: DHT disabled on Android (memory constraints)');
+      return;
+    }
+
     _running = true;
     _taskHandle?.markRunning();
 
-    // Run DHT directly on the main isolate (no Isolate.spawn —
-    // a second isolate doubles memory and causes OOM on Android).
-    // The iterative lookups use await Future.wait which yields to the
-    // event loop between rounds, keeping the HTTP server responsive.
     Timer(const Duration(seconds: 2), () =>
         _runDht(localPort!, npub));
 
