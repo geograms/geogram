@@ -307,25 +307,7 @@ class P2PService {
       // Phase 4: Scan for own devices
       await _scanForOwnDevices();
 
-      // Phase 5: Schedule aggressive table growth + rescan after 30s
-      // The initial bootstrap may not find enough nodes near SHA1("geogram")
-      Timer(const Duration(seconds: 30), () async {
-        if (!_dht.isRunning) return;
-        LogService().log('P2P: growing routing table...');
-        // Search for nodes near the geogram hash to improve coverage
-        await _dht.getPeers(_geogramHash);
-        await Future.delayed(const Duration(milliseconds: 200));
-        // Re-announce with better table coverage
-        final port = AppArgs().port;
-        await _dht.announce(_geogramHash, port);
-        if (_npubHash != null) {
-          await _dht.announce(_npubHash!, port);
-        }
-        await _scanForOwnDevices();
-        LogService().log('P2P: table grown to ${_dht.routingTableSize} nodes');
-      });
-
-      // Phase 6: Start periodic refresh (every 5 min)
+      // Phase 5: Start periodic refresh (every 5 min)
       _stunRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
         if (!_dht.isRunning) return;
         _taskHandle?.markRunning();
@@ -354,14 +336,26 @@ class P2PService {
   Future<void> _scanForOwnDevices() async {
     if (!_dht.isRunning) return;
 
-    // Scan global geogram topic
+    // Check locally cached peers first (fast, no network)
+    final cachedGlobal = _dht.getCachedPeers(_geogramHash);
+    for (final peer in cachedGlobal) {
+      _addDiscoveredPeer(peer);
+    }
+    if (_npubHash != null) {
+      final cachedNpub = _dht.getCachedPeers(_npubHash!);
+      for (final peer in cachedNpub) {
+        _addDiscoveredPeer(peer);
+      }
+    }
+
+    // Then do a network lookup (heavy but deferred)
     final globalPeers = await _dht.getPeers(_geogramHash);
     for (final peer in globalPeers) {
       _addDiscoveredPeer(peer);
     }
+    await Future.delayed(const Duration(milliseconds: 200));
 
-    // Scan our npub topic
-    if (_npubHash != null) {
+    if (_npubHash != null && _dht.isRunning) {
       final npubPeers = await _dht.getPeers(_npubHash!);
       for (final peer in npubPeers) {
         _addDiscoveredPeer(peer);
