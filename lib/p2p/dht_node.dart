@@ -642,6 +642,16 @@ class DhtNode {
     _sendPing(ip, port);
   }
 
+  /// Fire get_peers queries to closest nodes for an info_hash.
+  /// Non-blocking: just sends UDP queries, responses arrive via _handleResponse
+  /// and populate _peerStore + _routingTable automatically.
+  void fireGetPeers(Uint8List infoHash) {
+    final closest = _routingTable.findClosest(infoHash, count: 3);
+    for (final node in closest) {
+      _sendGetPeers(node.ip, node.port, infoHash);
+    }
+  }
+
   /// Get external (non-localhost, non-LAN) nodes from routing table.
   List<DhtContact> getExternalNodes({int count = 6}) {
     final all = _routingTable.getAllNodes();
