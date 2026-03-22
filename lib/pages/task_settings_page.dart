@@ -4,12 +4,15 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import '../models/monitored_task.dart';
 import '../services/i18n_service.dart';
 import '../services/task_monitor_service.dart';
+
+enum _ViewMode { service, priority, performance }
 
 class TaskSettingsPage extends StatefulWidget {
   const TaskSettingsPage({super.key});
@@ -22,7 +25,7 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   final TaskMonitorService _monitor = TaskMonitorService();
   final I18nService _i18n = I18nService();
   StreamSubscription<TaskStateChangedEvent>? _sub;
-  bool _groupByService = true; // false = group by priority
+  _ViewMode _viewMode = _ViewMode.service;
 
   @override
   void initState() {
@@ -50,10 +53,12 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
         children: [
           _buildSummaryCard(theme, tasks),
           const SizedBox(height: 16),
-          _buildGroupToggle(theme),
+          _buildViewToggle(theme),
           const SizedBox(height: 8),
           if (tasks.isEmpty)
             _buildEmptyState(theme)
+          else if (_viewMode == _ViewMode.performance)
+            ..._buildPerformanceView(theme, tasks)
           else
             ..._buildGroupedList(theme, tasks),
         ],
@@ -130,18 +135,203 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   }
 
   // ------------------------------------------------------------------
-  // Group toggle
+  // View toggle (3-way)
   // ------------------------------------------------------------------
 
-  Widget _buildGroupToggle(ThemeData theme) {
-    return SegmentedButton<bool>(
+  Widget _buildViewToggle(ThemeData theme) {
+    return SegmentedButton<_ViewMode>(
       segments: [
-        ButtonSegment(value: true, label: Text(_i18n.t('task_group_by_service'))),
-        ButtonSegment(value: false, label: Text(_i18n.t('task_group_by_priority'))),
+        ButtonSegment(value: _ViewMode.service, label: Text(_i18n.t('task_group_by_service'))),
+        ButtonSegment(value: _ViewMode.priority, label: Text(_i18n.t('task_group_by_priority'))),
+        const ButtonSegment(value: _ViewMode.performance, label: Text('Performance')),
       ],
-      selected: {_groupByService},
-      onSelectionChanged: (v) => setState(() => _groupByService = v.first),
+      selected: {_viewMode},
+      onSelectionChanged: (v) => setState(() => _viewMode = v.first),
     );
+  }
+
+  // ------------------------------------------------------------------
+  // Performance view
+  // ------------------------------------------------------------------
+
+  List<Widget> _buildPerformanceView(ThemeData theme, List<MonitoredTask> tasks) {
+    final rssMB = (ProcessInfo.currentRss / 1024 / 1024).toStringAsFixed(1);
+    final maxRssMB = (ProcessInfo.maxRss / 1024 / 1024).toStringAsFixed(1);
+
+    final startupTasks = tasks
+        .where((t) => t.id.startsWith('startup.'))
+        .toList()
+      ..sort((a, b) => b.initCpuMs.compareTo(a.initCpuMs));
+
+    final runtimeTasks = tasks
+        .where((t) => !t.id.startsWith('startup.') && t.totalCpuMs > 0)
+        .toList()
+      ..sort((a, b) => b.totalCpuMs.compareTo(a.totalCpuMs));
+
+    return [
+      // Memory summary
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Icon(Icons.memory, color: theme.colorScheme.primary),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('RSS: $rssMB MB', style: theme.textTheme.titleSmall),
+                  Text('Peak: $maxRssMB MB', style: theme.textTheme.bodySmall),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+      const SizedBox(height: 16),
+
+      // Startup section
+      if (startupTasks.isNotEmpty) ...[
+        _sectionHeader(theme, 'STARTUP'),
+        ..._buildStartupRows(theme, startupTasks),
+        _buildStartupTotal(theme, startupTasks),
+        const SizedBox(height: 16),
+      ],
+
+      // Runtime section
+      if (runtimeTasks.isNotEmpty) ...[
+        _sectionHeader(theme, 'RUNTIME'),
+        ..._buildRuntimeRows(theme, runtimeTasks),
+      ],
+
+      if (startupTasks.isEmpty && runtimeTasks.isEmpty)
+        Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: Text(
+              'No profiling data yet. Restart the app to collect startup timings.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+          ),
+        ),
+    ];
+  }
+
+  List<Widget> _buildStartupRows(ThemeData theme, List<MonitoredTask> tasks) {
+    return tasks.map((t) {
+      final rssMB = t.rssDeltaBytes / 1024 / 1024;
+      final rssStr = '${rssMB >= 0 ? "+" : ""}${rssMB.toStringAsFixed(1)}';
+      final cpuPct = tasks.first.initCpuMs > 0
+          ? (t.initCpuMs / tasks.first.initCpuMs).clamp(0.0, 1.0)
+          : 0.0;
+
+      return ListTile(
+        dense: true,
+        visualDensity: VisualDensity.compact,
+        leading: SizedBox(
+          width: 60,
+          child: Text(
+            '${t.initCpuMs}ms',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontFamily: 'monospace',
+              fontWeight: t == tasks.first ? FontWeight.bold : null,
+              color: t.initCpuMs > 100 ? Colors.red : null,
+            ),
+          ),
+        ),
+        title: Row(
+          children: [
+            Expanded(
+              flex: 3,
+              child: Text(t.name, style: theme.textTheme.bodySmall),
+            ),
+            SizedBox(
+              width: 60,
+              child: Text(
+                '${t.initWallMs}ms',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+                textAlign: TextAlign.right,
+              ),
+            ),
+            SizedBox(
+              width: 60,
+              child: Text(
+                '${rssStr}MB',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: rssMB > 5 ? Colors.orange : theme.colorScheme.outline,
+                ),
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        ),
+        subtitle: LinearProgressIndicator(
+          value: cpuPct,
+          minHeight: 3,
+          backgroundColor: theme.colorScheme.surfaceContainerHighest,
+          valueColor: AlwaysStoppedAnimation(
+            t.initCpuMs > 100 ? Colors.red : theme.colorScheme.primary,
+          ),
+        ),
+      );
+    }).toList();
+  }
+
+  Widget _buildStartupTotal(ThemeData theme, List<MonitoredTask> tasks) {
+    final totalCpu = tasks.fold<int>(0, (s, t) => s + t.initCpuMs);
+    final totalWall = tasks.fold<int>(0, (s, t) => s + t.initWallMs);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        children: [
+          Text(
+            'Total: ${totalCpu}ms cpu, ${totalWall}ms wall',
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _buildRuntimeRows(ThemeData theme, List<MonitoredTask> tasks) {
+    return tasks.map((t) {
+      final avgMs = t.runCount > 0 ? t.totalCpuMs ~/ t.runCount : 0;
+
+      return ListTile(
+        dense: true,
+        visualDensity: VisualDensity.compact,
+        leading: SizedBox(
+          width: 60,
+          child: Text(
+            _formatMs(t.totalCpuMs),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              fontFamily: 'monospace',
+              color: t.totalCpuMs > 5000 ? Colors.red : null,
+            ),
+          ),
+        ),
+        title: Text(t.name, style: theme.textTheme.bodySmall),
+        subtitle: Text(
+          '${t.runCount} runs, avg ${avgMs}ms',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.outline,
+          ),
+        ),
+        trailing: t.interval != null
+            ? Text(
+                _formatDuration(t.interval!),
+                style: theme.textTheme.bodySmall,
+              )
+            : null,
+      );
+    }).toList();
   }
 
   // ------------------------------------------------------------------
@@ -176,11 +366,11 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   }
 
   // ------------------------------------------------------------------
-  // Grouped list
+  // Grouped list (service / priority views)
   // ------------------------------------------------------------------
 
   List<Widget> _buildGroupedList(ThemeData theme, List<MonitoredTask> tasks) {
-    if (_groupByService) {
+    if (_viewMode == _ViewMode.service) {
       final groups = _monitor.tasksByService;
       final keys = groups.keys.toList()..sort();
       return [
@@ -341,5 +531,11 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
     if (d.inMilliseconds < 1000) return '${d.inMilliseconds}ms';
     if (d.inSeconds < 60) return '${d.inSeconds}.${(d.inMilliseconds % 1000) ~/ 100}s';
     return '${d.inMinutes}m ${d.inSeconds % 60}s';
+  }
+
+  String _formatMs(int ms) {
+    if (ms < 1000) return '${ms}ms';
+    if (ms < 60000) return '${(ms / 1000).toStringAsFixed(1)}s';
+    return '${ms ~/ 60000}m${(ms % 60000) ~/ 1000}s';
   }
 }
