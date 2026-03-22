@@ -483,28 +483,30 @@ class DhtNode {
       _receivedTokens['$fromIp:$fromPort'] = Uint8List.fromList(token);
     }
 
-    // Extract peers from get_peers responses (handles fire-and-forget queries)
-    if (pending.method == 'get_peers') {
-      if (body.containsKey('values') && pending.infoHash != null) {
-        try {
-          final values = Bencode.asList(body['values']);
-          final hexHash = _toHex(pending.infoHash!);
-          _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
-          for (final v in values) {
-            final bytes = Bencode.asBytes(v);
-            if (bytes.length == 6) {
-              final (ip, port) = DhtContact.parseCompactPeer(bytes);
-              final peer = PeerInfo(ip: ip, port: port);
-              _peerStore[hexHash]!.add(peer);
-              _peerFoundController.add((pending.infoHash!, peer));
-            }
+    // Process nodes from ANY response type (find_node, get_peers)
+    // This is how the routing table grows
+    if (body.containsKey('nodes')) {
+      _processNodes(body);
+    }
+
+    // Extract peers from get_peers responses
+    if (pending.method == 'get_peers' &&
+        body.containsKey('values') &&
+        pending.infoHash != null) {
+      try {
+        final values = Bencode.asList(body['values']);
+        final hexHash = _toHex(pending.infoHash!);
+        _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
+        for (final v in values) {
+          final bytes = Bencode.asBytes(v);
+          if (bytes.length == 6) {
+            final (ip, port) = DhtContact.parseCompactPeer(bytes);
+            final peer = PeerInfo(ip: ip, port: port);
+            _peerStore[hexHash]!.add(peer);
+            _peerFoundController.add((pending.infoHash!, peer));
           }
-        } catch (_) {}
-      }
-      // Process closer nodes from response
-      if (body.containsKey('nodes')) {
-        _processNodes(body);
-      }
+        }
+      } catch (_) {}
     }
 
     // Complete the query
