@@ -643,9 +643,9 @@ class DhtNode {
       'a': args,
     }, ip, port);
 
-    // Timeout (short to avoid blocking the event loop)
+    // Short timeout to avoid blocking the event loop
     return completer.future.timeout(
-      const Duration(seconds: 4),
+      const Duration(seconds: 3),
       onTimeout: () {
         _pendingQueries.remove(txKey);
         return null;
@@ -680,7 +680,7 @@ class DhtNode {
     final queried = <String>{};
     var closest = _routingTable.findClosest(target);
 
-    for (var round = 0; round < 3 && _running; round++) {
+    for (var round = 0; round < 2 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
@@ -716,7 +716,7 @@ class DhtNode {
     final foundPeers = <PeerInfo>{};
     var closest = _routingTable.findClosest(infoHash);
 
-    for (var round = 0; round < 3 && _running; round++) {
+    for (var round = 0; round < 2 && _running; round++) {
       final toQuery = <DhtContact>[];
       for (final node in closest) {
         final key = '${node.ip}:${node.port}';
