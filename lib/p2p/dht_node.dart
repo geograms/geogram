@@ -845,18 +845,26 @@ class DhtNode {
   }
 
   Future<void> _refreshRoutingTable() async {
-    // Ping stale nodes
-    final stale = _routingTable.getStaleNodes(const Duration(minutes: 15));
-    for (final node in stale.take(5)) {
-      final result = await _sendPing(node.ip, node.port);
-      if (result == null) {
-        _routingTable.markFailed(node.nodeId);
-      }
+    // Ping a few stale nodes (fire-and-forget)
+    final stale = _routingTable.getStaleNodes(const Duration(minutes: 5));
+    for (final node in stale.take(3)) {
+      _sendPing(node.ip, node.port);
     }
 
-    // Find random ID to discover new nodes
-    final randomId = _generateNodeId();
-    await _iterativeFindNode(randomId);
+    // Search for nodes near our announced topics (not random IDs)
+    // This grows the routing table in the keyspace that matters
+    final closest = _routingTable.findClosest(_generateNodeId());
+    for (final node in closest.take(3)) {
+      _sendFindNode(node.ip, node.port, _generateNodeId());
+    }
+    await Future.delayed(const Duration(seconds: 1));
+
+    // Also search near the geogram hash specifically
+    final geogramHash = sha1Hash('geogram');
+    final nearGeogram = _routingTable.findClosest(geogramHash);
+    for (final node in nearGeogram.take(3)) {
+      _sendFindNode(node.ip, node.port, geogramHash);
+    }
   }
 
   // ─── Utilities ─────────────────────────────────────────────────
