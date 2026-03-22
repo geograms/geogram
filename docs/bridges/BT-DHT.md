@@ -1,7 +1,7 @@
 # BitTorrent DHT Bridge for P2P Discovery
 
-**Version**: 1.1
-**Status**: In Development — same-network works, cross-network convergence pending
+**Version**: 1.2
+**Status**: Cross-network discovery working. Android memory optimization pending.
 **Last Updated**: 2026-03-22
 
 ## Table of Contents
@@ -11,27 +11,25 @@
 - [DHT Topics](#dht-topics)
 - [Node Types](#node-types)
 - [Connection Flow](#connection-flow)
+- [Iterative Lookup](#iterative-lookup)
 - [Implementation](#implementation)
-- [Background Isolate](#background-isolate)
+- [Devices UI Integration](#devices-ui-integration)
 - [Same-Household Devices](#same-household-devices)
 - [Privacy](#privacy)
 - [Debug API](#debug-api)
+- [Testing](#testing)
 - [Current Status](#current-status)
 - [Known Issues](#known-issues)
-- [Next Steps](#next-steps)
 
 ## Overview
 
-Geogram uses the BitTorrent Mainline DHT (BEP 5) to discover devices without depending on the central station server (p2p.radio). When the station is down or unreachable, devices can still find each other by announcing and querying the global DHT network — a distributed hash table with millions of active nodes maintained by BitTorrent clients worldwide.
-
-This is purely a **client-side enhancement**. Station servers are not modified. The existing station connection, LAN discovery, and BLE discovery continue to work as before. DHT adds an internet-based discovery path.
+Geogram uses the BitTorrent Mainline DHT (BEP 5) to discover devices without depending on the central station server. When the station is down or unreachable, devices find each other by announcing and querying the global DHT network — a distributed hash table with millions of active nodes maintained by BitTorrent clients worldwide.
 
 **Key capabilities:**
-- Discover Geogram nodes on the internet
+- Discover Geogram nodes on the internet across different networks
 - Find all devices belonging to a specific NOSTR identity (npub)
-- Detect public IP via BEP 42 DHT responses
-- Detect NAT type (A/B/C) for hole punching viability
-- No external infrastructure — public IP learned from DHT peers, not STUN servers
+- Detect public IP via BEP 42 DHT responses (no STUN needed)
+- Show discovered peers in the Devices UI with "internet" tag
 
 ## Architecture
 
@@ -48,21 +46,17 @@ This is purely a **client-side enhancement**. Station servers are not modified. 
               |                                         |
     +---------v---------+                     +---------v---------+
     |   Geogram Node A  |                     |   Geogram Node B  |
+    |   (laptop/WiFi)   |                     |   (phone/mobile)  |
     |                   |                     |                   |
-    | DHT Isolate       |                     | DHT Isolate       |
-    | (background)      |                     | (background)      |
-    |   UDP socket      |                     |   UDP socket      |
+    |   DHT UDP socket  |                     |   DHT UDP socket  |
     |   (random port)   |                     |   (random port)   |
     |                   |                     |                   |
-    | Main Isolate      |                     | Main Isolate      |
-    |   Shelf HTTP      |                     |   Shelf HTTP      |
+    |   Shelf HTTP 3456 |                     |   Shelf HTTP 3456 |
     |   Flutter UI      |                     |   Flutter UI      |
     +-------------------+                     +-------------------+
 ```
 
-### How It Fits Into Geogram
-
-The DHT transport sits at priority 25 in the ConnectionManager, between WebRTC (15) and Station (30):
+### Transport Priority
 
 | Priority | Transport | Scope |
 |----------|-----------|-------|
@@ -76,87 +70,109 @@ The DHT transport sits at priority 25 in the ConnectionManager, between WebRTC (
 
 ## DHT Topics
 
-Each Geogram device announces itself under two info_hashes in the DHT:
+Each device announces under two info_hashes:
 
 ### 1. Global Topic: `SHA1("geogram")`
 
-Every Geogram node announces on this topic. Querying it returns online Geogram devices visible to the DHT. Used to:
-- Find other Geogram peers
-- Learn public IP via BEP 42 responses from DHT nodes near this hash
-- Find relay candidates (future)
-
-The info_hash is `a8a1245e...` (first bytes of SHA1 of the string "geogram").
+Every Geogram node announces here. Used to find other Geogram peers and learn public IP via BEP 42.
 
 ### 2. Per-User Topic: `SHA1(npub)`
 
-Each device announces on the SHA1 hash of its NOSTR public key (npub). Since the same npub can have multiple devices (phone, laptop, tablet), querying `SHA1(npub)` returns **all online devices for that identity**.
+Each device announces on the SHA1 of its NOSTR public key. Querying `SHA1(npub)` returns all online devices for that identity. This is how the Devices UI discovers specific peers.
 
 ### Announce Details
 
-- **Re-announce interval**: every 25 minutes (DHT peer entries expire after ~30 min)
-- **Announced port**: the device's HTTP API port (from `--port` flag or default 3456)
-- **Token validation**: BEP 5 token exchange prevents announce spoofing
+- **Re-announce interval**: every 25 minutes
+- **Announced port**: the device's HTTP API port (default 3456)
+- **Token validation**: BEP 5 token exchange prevents spoofing
+- **Announce target**: the K-closest nodes found by the iterative lookup (not routing table nodes)
 
 ## Node Types
 
-Public IP is learned from BEP 42 `ip` field in DHT responses — no separate STUN infrastructure needed. Each DHT response from an external node includes our public IP:port as they see it.
+Public IP learned from BEP 42 `ip` field in DHT responses.
 
 | Type | Detection | Capabilities |
 |------|-----------|-------------|
-| **A** | Public IP matches a local interface | Full peer, hole punching trivial |
-| **B** | BEP 42 reports a public IP different from local | Behind NAT, hole punching likely works |
-| **unknown** | No BEP 42 data received yet | Detection deferred |
+| **A** | Public IP matches a local interface | Full peer |
+| **B** | BEP 42 reports a different public IP | Behind NAT |
+| **unknown** | No BEP 42 data received yet | Deferred |
 
 ## Connection Flow
 
 ```
 1. App starts → P2PService.start()
-2. Spawn DHT background isolate (Isolate.spawn)
-3. Isolate: load persisted node ID + cached routing table
-4. Isolate: bootstrap DHT (cached nodes first, then public BT routers)
-5. Isolate: announce(SHA1("geogram"), apiPort) + announce(SHA1(myNpub), apiPort)
-6. Isolate: learn public IP from BEP 42 responses → detect NAT type
-7. Isolate: get_peers(SHA1("geogram")) → find other Geogram nodes
-8. Main isolate: receive peer_found events → probe via HTTP → register in DevicesService
-9. Periodic: re-announce every 25 min, refresh routing table every 2 min
-10. Discovered peers appear in Devices UI with "internet" connection tag
+2. Timer(2s) → _runDht()
+3. Load persisted node ID + cached routing table
+4. Bootstrap DHT (cached nodes, then public BT routers)
+5. Iterative announce on SHA1("geogram") and SHA1(npub)
+6. Learn public IP from BEP 42 responses
+7. Scan geogram topic for peers → register in DevicesService
+8. For each known device with npub: fire lightweight get_peers
+9. Periodic: re-announce every 25 min, refresh table every 2 min
+10. Discovered peers appear in Devices UI with "internet" tag (green)
 ```
 
-### Persistence Across Sessions
+### Persistence
 
-The DHT node persists three things via `ProfileStorage`:
 - **Node ID** (`p2p/node_id.bin`): 20-byte random ID, reused across sessions
-- **Routing table cache** (`p2p/dht_cache.json`): best 30 nodes, saved on shutdown
-- **Discovered peers** (`p2p/peer_cache.json`): known peer IPs, re-probed on restart
+- **Routing table cache** (`p2p/dht_cache.json`): best 30 nodes
+- **Discovered peers** (`p2p/peer_cache.json`): known peer IPs
+
+## Iterative Lookup
+
+The core of BEP 5. Both `find_node` and `get_peers` use the same pattern:
+
+```
+candidates = SortedSet<Node>(by XOR distance to target)
+queried = Set<NodeId>()
+
+seed candidates from routing table (8 closest)
+
+loop (up to 10 rounds):
+  pick alpha=3 unqueried candidates closest to target
+  if none left → converged, stop
+
+  query all 3 in parallel (await Future.wait, 3s timeout each)
+
+  for each response:
+    if peers returned → collect them
+    if nodes returned → add to candidates (if new)
+
+  if peers found and no new candidates → stop
+```
+
+**Critical implementation details:**
+- The candidate set is **per-lookup**, NOT the global routing table. This is the most common BEP 5 implementation bug — using only routing table nodes means the lookup never reaches the K-closest nodes.
+- `announce_peer` must go to the nodes found at the END of the lookup (the K-closest that gave us tokens), not to routing table nodes.
+- Responses from `find_node` must be processed too — not just `get_peers`. Otherwise the routing table can't grow.
+- The lookup must NOT exit early just because no new candidates were added in one round — there may still be unqueried candidates closer than those already queried.
+
+### Cross-Network Discovery
+
+Two devices on different networks (e.g., home WiFi and mobile data) find each other because:
+1. Both do iterative `announce_peer` on `SHA1("geogram")` → both converge on the same K-closest nodes in the 160-bit keyspace
+2. Both do iterative `get_peers` on the same hash → they traverse to the same K-closest nodes and find the other's announce
+
+This works regardless of routing table size — even with 9 nodes, a correct iterative lookup traverses through the DHT hop by hop until it converges. Verified in testing with laptop (178.202.105.29) finding Android on mobile data (47.64.113.206).
 
 ## Implementation
 
-### Core DHT (runs in background isolate)
+### Core DHT Library (pure Dart, no Flutter dependency)
 
 | File | Purpose |
 |------|---------|
-| `lib/p2p/bencode.dart` | Bencode encoder/decoder for DHT wire protocol |
-| `lib/p2p/k_bucket.dart` | Kademlia routing table (160 buckets, 8 nodes each) |
-| `lib/p2p/dht_node.dart` | BEP 5 DHT node (UDP, RPCs, iterative lookups, tokens) |
-| `lib/p2p/node_capability.dart` | BEP 42 IP detection, NAT type classification |
-| `lib/p2p/dht_isolate.dart` | Isolate entry point, runs DhtNode + NodeCapability |
+| `lib/p2p/bencode.dart` | Bencode encoder/decoder |
+| `lib/p2p/k_bucket.dart` | Kademlia routing table (160 buckets × 8 nodes) |
+| `lib/p2p/dht_node.dart` | BEP 5 DHT node (UDP, RPCs, iterative lookups) |
+| `lib/p2p/node_capability.dart` | BEP 42 IP detection, NAT type |
 
-### Orchestration (runs on main isolate)
+### Geogram Integration
 
 | File | Purpose |
 |------|---------|
-| `lib/p2p/p2p_service.dart` | Singleton, manages isolate lifecycle, SendPort/ReceivePort |
-| `lib/p2p/ice_punch.dart` | UDP hole punching (scaffolding, not yet active) |
-| `lib/connection/transports/dht_transport.dart` | ConnectionManager transport (discovery only for now) |
-
-### BEP 5 RPCs Implemented
-
-| RPC | Direction | Purpose |
-|-----|-----------|---------|
-| `ping` | Both | Liveness check, routing table maintenance |
-| `find_node` | Both | Iterative node lookup (Kademlia) |
-| `get_peers` | Both | Look up peers for an info_hash |
-| `announce_peer` | Both | Announce as a peer for an info_hash |
+| `lib/p2p/p2p_service.dart` | Singleton orchestrator, manages DHT lifecycle |
+| `lib/p2p/ice_punch.dart` | UDP hole punching (scaffolding) |
+| `lib/connection/transports/dht_transport.dart` | ConnectionManager transport |
 
 ### Bootstrap Nodes
 
@@ -168,167 +184,120 @@ dht.libtorrent.org:25401
 dht.aelitis.com:6881
 ```
 
-Port 25401 included because some mobile carriers block UDP port 6881. If first bootstrap round gets 0 responses, retries with a longer wait.
+Port 25401 included for mobile carriers that block 6881.
 
-## Background Isolate
+## Devices UI Integration
 
-All DHT work runs in a separate Dart isolate (`Isolate.spawn`) to prevent blocking the main thread's HTTP server and Flutter UI. This was critical for Android where any operation taking >5 seconds causes ANR (Application Not Responding).
+When a peer is found via DHT, it appears in the Devices panel:
 
-### Communication Protocol
+### Discovery via npub lookup
 
-Main isolate and DHT isolate communicate via `SendPort`/`ReceivePort` with JSON messages:
+For each known device with an npub, `P2PService` fires lightweight `get_peers(SHA1(npub))` queries. When a response contains peers, the device is marked online with `['internet']` connection method.
 
-**DHT → Main (events):**
-| type | Fields | When |
-|------|--------|------|
-| `log` | `message` | Debug logging |
-| `node_id` | `id` (hex) | After node ID generated/loaded |
-| `started` | `dht_port`, `node_type`, `public_ip`, `dht_nodes` | After bootstrap+announce+detect complete |
-| `status` | `dht_nodes`, `stored_peers`, `node_type`, `public_ip` | Periodic status update |
-| `peer_found` | `info_hash`, `ip`, `port` | When a peer is discovered |
-| `find_result` | `npub`, `devices[]` | Response to find_user command |
-| `cache` | `nodes[]` | Routing table cache on shutdown |
-| `error` | `message` | On failure |
+### Preserving the internet tag
 
-**Main → DHT (commands):**
-| action | Fields | Purpose |
-|--------|--------|---------|
-| `stop` | — | Shutdown, save cache, exit isolate |
-| `get_status` | — | Request current status |
-| `find_user` | `npub` | Search for a specific user's devices |
-| `add_node` | `ip`, `port` | Manually add a DHT node |
+`DevicesService.checkReachability()` checks direct HTTP and station proxy. Both can fail for NAT'd peers. The `internet` tag set by DHT is preserved if `lastSeen` is within 30 minutes — station checks don't override DHT-confirmed connectivity.
 
-### Station HTTP Probes
+### Display
 
-Device reachability checks (`_checkDirectConnection`, `_checkViaRelayProxy`, `_fetchStationClients`) also run in background isolates via `Isolate.run()` to prevent OOM from large TLS response buffering on the main thread. Response bodies are capped at 50KB.
+Devices found via DHT show:
+- **Green** online indicator
+- **`['internet']`** connection method tag
+- Identity from the device's profile (callsign, nickname)
 
 ## Same-Household Devices
 
-Multiple devices behind the same NAT share the same public IP. The DHT returns entries with the same IP but different ports. The self-filter only excludes `127.0.0.1` — same-public-IP peers are NOT filtered because they may be other devices in the household.
-
-After HTTP probe to get `/api/status`, the callsign comparison filters out self. Display format: `nickname (callsign)` if nickname is set, else just `callsign`.
+Multiple devices behind the same NAT share the same public IP. DHT returns entries with same IP, different ports. The self-filter only excludes `127.0.0.1` — same-public-IP peers are NOT filtered. The callsign comparison in the HTTP probe filters out self.
 
 ## Privacy
 
-- **No external STUN**: public IP learned from BEP 42 `ip` field in DHT responses
-- **No Google/Mozilla infrastructure**: only BT DHT nodes and other Geogram peers
-- **No IP logging**: the DHT node does not log remote IPs
-- **Identity not in DHT**: announces only contain IP:port. The info_hash is a SHA1 hash — knowing `SHA1(npub)` requires knowing the npub first
-
-### What Is Visible to DHT Observers
-
-An observer on the DHT can see:
-- That an IP:port announced on a specific 20-byte info_hash
-- The info_hash `SHA1("geogram")` is derivable if they know to hash "geogram"
-
-An observer **cannot** see:
-- Device names, callsigns, or any identity information
-- Message content
-- What the device is running
+- **No external STUN**: public IP from BEP 42 `ip` field in DHT responses
+- **No Google/Mozilla infrastructure**
+- **No IP logging**
+- **Identity not in DHT**: announces only contain IP:port
 
 ## Debug API
 
-Available via `POST /api/debug`:
+`POST /api/debug`:
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
 | `dht_status` | — | Full P2P status |
-| `dht_start` | — | Start the P2P DHT service |
-| `dht_stop` | — | Stop the P2P DHT service |
-| `dht_find_user` | `npub` | Find devices for a specific npub |
-| `dht_add_node` | `ip`, `port` | Manually add a DHT peer |
+| `dht_start` | — | Start DHT |
+| `dht_stop` | — | Stop DHT |
+| `dht_find_user` | `npub` | Find devices for npub |
+| `dht_add_node` | `ip`, `port` | Add a DHT peer |
 
-### Sample `dht_status` Response
+## Testing
 
-```json
-{
-  "success": true,
-  "enabled": true,
-  "running": true,
-  "dht_port": 47254,
-  "node_type": "typeB",
-  "public_ip": "178.202.105.29",
-  "public_port": 47254,
-  "dht_nodes": 45,
-  "stored_peers": 2,
-  "direct_connections": 0,
-  "capability": {
-    "node_type": "typeB",
-    "public_ip": "178.202.105.29",
-    "public_port": 47254,
-    "can_hole_punch": true
-  }
-}
+### Standalone Test
+
+```bash
+dart run tests/dht/dht_discovery_test.dart
 ```
+
+Spawns two `DhtNode` instances, bootstraps both into the real BT mainline DHT, announces on a test topic, and verifies both find each other via iterative `get_peers`.
+
+**Test results (2026-03-22):**
+```
+Node A: 9 nodes after bootstrap (6.5s)
+Node B: 14 nodes after bootstrap (12.9s)
+Node A announced (24s), Node B announced (31.6s)
+Node A found 2 peers (7s): 178.202.105.29:41331, 178.202.105.29:59920
+Node B found 2 peers (10.4s): 178.202.105.29:41331, 178.202.105.29:59920
+*** PASS: Both nodes found each other ***
+Memory: 174MB → 180MB peak → 152MB final (6MB DHT overhead)
+```
+
+Key findings:
+- **6MB memory overhead** — the DHT library itself is lightweight
+- Both nodes converge on the same K-closest nodes despite having only 9-14 routing table nodes
+- The iterative lookup correctly traverses ~15-18 nodes across ~82-94 candidates
+
+### Cross-Network Test (laptop + Android on different internet connections)
+
+```
+Laptop (178.202.105.29) → DHT → found Android (47.64.113.206:3456)
+Android on mobile data found laptop's announce on SHA1("geogram")
+```
+
+Verified via `dht_find_user` debug API. Both devices' iterative lookups converged on the same K-closest nodes in the global DHT.
 
 ## Current Status
 
-### What Works (tested 2026-03-22)
+### Working (tested 2026-03-22)
 
-- **DHT bootstrap**: nodes connect to BT mainline DHT and grow routing table to 30-50 nodes
-- **BEP 42 IP detection**: public IP learned from DHT response `ip` field — no STUN needed
-- **NAT type detection**: typeB detected correctly on both Linux and Android
-- **DHT announce**: both SHA1("geogram") and SHA1(npub) announces succeed
-- **Same-network discovery**: two instances on the same machine find each other via DHT (verified with `dht_find_user`)
-- **Background isolate**: all DHT work runs in separate Dart isolate, main thread stays responsive
-- **Station probe isolation**: HTTP probes for device reachability run in `Isolate.run()`, preventing OOM
-- **Android stability**: no ANR or OOM from DHT itself (earlier crashes were from station HTTP response buffering, now isolated)
-- **Peer cache persistence**: routing table and discovered peers saved/loaded across sessions
-- **Devices UI integration**: discovered peers probed via `/api/status` and registered in DevicesService with `internet` connection tag
+- **Iterative lookup**: proper BEP 5 convergence with own candidate set, parallel alpha=3 queries, converges in ~7-10s
+- **Cross-network discovery**: laptop on WiFi finds Android on mobile data via DHT
+- **Devices UI**: discovered peers show as ONLINE with `['internet']` tag
+- **BEP 42 IP detection**: public IP learned from DHT responses
+- **DHT announce**: announces reach the K-closest nodes (not just routing table nodes)
+- **Routing table growth**: nodes from ALL response types processed (find_node + get_peers)
+- **Persistence**: node ID, routing table, discovered peers cached across sessions
+- **Standalone test**: two nodes find each other — PASS
 
-### What Does NOT Work Yet
+### Pending
 
-- **Cross-network discovery**: two devices on different internet connections (different public IPs) have NOT successfully found each other via the global DHT in testing. The routing tables plateau at ~45 nodes, which is insufficient for the iterative lookups to converge on the same K-closest nodes to SHA1("geogram") in the 160-bit keyspace
-- **Direct data transport**: UDP hole punching (`ice_punch.dart`) is scaffolded but not active. The DHT transport in ConnectionManager currently returns "not implemented" for `send()`
+- **Android OOM**: the DHT iterative lookups combined with other Geogram services (BLE, Whisper, DM queue) exceed available memory on low-RAM Android devices. The DHT library itself uses only 6MB — the issue is total app memory pressure. Needs: either reduce other services' memory during DHT operations, or run DHT in a lighter mode on Android (fewer candidates, shorter lookups).
+- **Direct data transport**: UDP hole punching (`ice_punch.dart`) is scaffolded but not active.
 
 ## Known Issues
 
-### Routing Table Growth Bottleneck
+### Android Memory
 
-The core unsolved problem. Real BitTorrent clients grow routing tables to 300-1000+ nodes because they receive thousands of incoming queries from other BT clients downloading/sharing files. Our Geogram nodes only make outgoing queries and receive very few incoming ones (nobody is looking for our node IDs). This limits table growth to ~45 nodes.
+The OBLUE TANK2 (Android 14, limited RAM) OOMs when DHT runs alongside all other services. The OOM stack trace shows `new Uint8List` in HTTP stream buffering — the immediate trigger is station HTTP probes (TLS decompression), not DHT itself. The fix `_fetchStationClients` to only run when the station WebSocket is connected reduced the frequency, but the app still hits OOM during DHT announce phase (iterative lookup creates ~85 candidate objects).
 
-With 45 nodes and a 160-bit keyspace containing millions of BT nodes, the probability of two Geogram devices' iterative lookups reaching the same DHT nodes (the ones holding the other's announce) is very low.
+The standalone test proves the DHT library uses only 6MB. The Android issue is total app memory budget, not DHT efficiency.
 
-**Attempted mitigations:**
-- Reduced refresh interval from 15 min to 2 min
-- Targeted refresh: search for nodes near SHA1("geogram") specifically, not random IDs
-- Process nodes from ALL response types (was only processing get_peers responses — critical bug found and fixed)
-- 5 bootstrap nodes instead of 3 (added `dht.libtorrent.org:25401` for mobile carriers blocking port 6881)
+### Token Errors
 
-### Android Memory Pressure
-
-The Android device (OBLUE TANK2, API 34) has limited memory. The OOM crashes observed were from:
-1. Station HTTP responses buffered on the main thread (TLS decompression) — **fixed** by running probes in `Isolate.run()`
-2. DHT operations on the main thread blocking the event loop — **fixed** by moving DHT to a separate isolate
-3. General memory pressure from Whisper model loading + all services starting simultaneously
-
-### Mobile Carrier UDP Filtering
-
-Some mobile carriers block UDP on port 6881 (standard BT DHT port). Added `dht.libtorrent.org:25401` as alternative. Bootstrap retries if first round gets 0 responses.
-
-## Next Steps
-
-### Option A: Geogram Rendezvous Server
-
-Add a lightweight rendezvous endpoint (not a full station) where Geogram devices register their DHT node info. Each device posts `{npub, dht_ip, dht_port}` to the rendezvous. Other devices query it to find each other's DHT endpoints, then connect directly. This bootstraps the cross-network problem without needing the two devices' DHT routing tables to overlap.
-
-### Option B: Aggressive DHT Crawling
-
-On startup, crawl the DHT more aggressively — do 10+ rounds of find_node with parallel queries to grow the routing table to 200+ nodes before attempting peer lookups. This is CPU/network intensive but may improve convergence.
-
-### Option C: DHT Proxy via Existing Stations
-
-When a device connects to a station via WebSocket, the station could announce on the DHT on behalf of the device. Since stations have public IPs (Type A), their announces are more likely to be found. The station doesn't need to run a full DHT — just forward announce/get_peers requests from connected clients.
-
-### Option D: Multiple Info Hashes
-
-Instead of one global `SHA1("geogram")`, use multiple hashes (e.g., `SHA1("geogram-1")` through `SHA1("geogram-16")`). Each device announces on all of them. This increases the chances of two devices' lookups converging because the K-closest nodes are different for each hash — 16x the surface area.
+`DHT error 203: invalid token` and `Announce_peer with forbidden port number` are common during announces. Some DHT nodes reject announces with non-standard ports (3456 instead of typical BT ports). Tokens expire after 5-10 minutes, so re-announces may use stale tokens. These are non-fatal — the announce reaches enough nodes for discovery to work.
 
 ## What Does NOT Change
 
 - Station servers — no modifications
 - Station connections — still work, higher priority when available
 - LAN/BLE discovery — unchanged
-- Mirror sync protocol — unchanged, runs over any transport
+- Mirror sync protocol — unchanged
 - Identity — same npub/callsign/NOSTR keys
 - Content serving — same Shelf HTTP server
