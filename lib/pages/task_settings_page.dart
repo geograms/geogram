@@ -190,17 +190,35 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
       ),
       const SizedBox(height: 16),
 
-      // Startup section
+      // Startup section — one-time init costs
       if (startupTasks.isNotEmpty) ...[
-        _sectionHeader(theme, 'STARTUP'),
+        _sectionHeader(theme, 'STARTUP (one-time init)'),
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Text(
+            'CPU time consumed during app launch. Each service ran once and is now idle.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+        ),
         ..._buildStartupRows(theme, startupTasks),
         _buildStartupTotal(theme, startupTasks),
         const SizedBox(height: 16),
       ],
 
-      // Runtime section
+      // Runtime section — ongoing periodic tasks
       if (runtimeTasks.isNotEmpty) ...[
-        _sectionHeader(theme, 'RUNTIME'),
+        _sectionHeader(theme, 'CONTINUOUS (periodic tasks)'),
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Text(
+            'Cumulative CPU from tasks that run repeatedly while the app is open.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+        ),
         ..._buildRuntimeRows(theme, runtimeTasks),
       ],
 
