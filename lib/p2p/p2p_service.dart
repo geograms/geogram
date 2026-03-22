@@ -268,46 +268,51 @@ class P2PService {
 
   // ─── Internal ──────────────────────────────────────────────────
 
-  /// Heavy work scheduled after start() returns — runs in small chunks
-  /// with real delays so the UI thread stays responsive.
+  /// Heavy work scheduled after start() returns.
+  /// Each phase is separated by Timer to give the HTTP server time to breathe.
   Future<void> _bootstrapAndAnnounce(int announcePort) async {
     if (!_dht.isRunning) return;
 
     try {
-      // Phase 0: Load cached peers from previous session and re-probe
+      // Load cached peers from previous session
       await _loadAndProbeCachedPeers();
 
-      // Phase 1: Bootstrap
+      // Bootstrap DHT
       final cachedNodes = await _loadCachedNodes();
       await _dht.bootstrap(cachedNodes: cachedNodes);
       LogService().log('P2P: bootstrap complete (${_dht.routingTableSize} nodes)');
 
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (!_dht.isRunning) return;
+      // Schedule announce after a pause
+      Timer(const Duration(seconds: 3), () => _announcePhase(announcePort));
+    } catch (e) {
+      _taskHandle?.markError(e);
+      LogService().log('P2P bootstrap failed: $e');
+    }
+  }
 
-      // Phase 2: Announce on both topics
-      await _dht.announce(_geogramHash, announcePort);
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (_npubHash != null) {
-        await _dht.announce(_npubHash!, announcePort);
+  Future<void> _announcePhase(int port) async {
+    if (!_dht.isRunning) return;
+    try {
+      await _dht.announce(_geogramHash, port);
+      if (_npubHash != null && _dht.isRunning) {
+        await _dht.announce(_npubHash!, port);
       }
-
       _dht.startPeriodicAnnounce();
       LogService().log('P2P: announced on DHT');
 
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (!_dht.isRunning) return;
+      // Schedule detection after another pause
+      Timer(const Duration(seconds: 3), () => _detectAndScan());
+    } catch (e) {
+      LogService().log('P2P announce failed: $e');
+    }
+  }
 
-      // Phase 3: Detect public IP
+  Future<void> _detectAndScan() async {
+    if (!_dht.isRunning) return;
+    try {
       await _capability.detectFromDht(_dht);
-
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (!_dht.isRunning) return;
-
-      // Phase 4: Scan for own devices
       await _scanForOwnDevices();
 
-      // Phase 5: Start periodic refresh (every 5 min)
       _stunRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
         if (!_dht.isRunning) return;
         _taskHandle?.markRunning();
@@ -323,7 +328,7 @@ class P2PService {
           'dht: ${_dht.routingTableSize} nodes)');
     } catch (e) {
       _taskHandle?.markError(e);
-      LogService().log('P2P bootstrap failed: $e');
+      LogService().log('P2P detect/scan failed: $e');
     }
   }
 
