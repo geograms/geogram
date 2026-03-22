@@ -140,11 +140,7 @@ class P2PService {
     _taskHandle!.markRunning();
 
     try {
-      // On Android, delay DHT start significantly to avoid OOM during
-      // app startup when Whisper models and other services are loading
-      final delay = Platform.isAndroid
-          ? const Duration(seconds: 30)
-          : const Duration(seconds: 2);
+      final delay = const Duration(seconds: 2);
 
       final announcePort = localPort!;
       Timer(delay, () async {
