@@ -44,12 +44,17 @@ class _AtprotoSettingsPageState extends State<AtprotoSettingsPage> {
         padding: const EdgeInsets.all(16),
         children: [
           SwitchListTile(
-            value: true,
+            value: service.config.enabled,
             title: Text(I18nService().t('atproto_enable_bridge')),
             subtitle: Text(
               I18nService().t('atproto_enable_bridge_desc'),
             ),
-            onChanged: null,
+            onChanged: (enabled) async {
+              await service.saveConfig(
+                service.config.copyWith(enabled: enabled),
+              );
+              setState(() {});
+            },
           ),
           const SizedBox(height: 12),
           ListTile(

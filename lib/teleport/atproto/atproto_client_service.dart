@@ -92,8 +92,8 @@ class AtprotoClientService {
 
     await _ensureAutoCredentials();
     await AtprotoLocalPdsService().start(storage: storage, config: _config);
-    _startRecurringTasks();
     if (_config.enabled) {
+      _startRecurringTasks();
       final validSession = await _hasUsableSession();
       if (!validSession) {
         await login(
