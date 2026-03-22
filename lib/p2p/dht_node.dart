@@ -61,11 +61,13 @@ class _PendingQuery {
   final String method;
   final Completer<Map<String, dynamic>?> completer;
   final DateTime sentAt;
+  final Uint8List? infoHash; // For get_peers: the info_hash being queried
 
   _PendingQuery({
     required this.txId,
     required this.method,
     required this.completer,
+    this.infoHash,
   }) : sentAt = DateTime.now();
 
   bool get isExpired =>
@@ -481,6 +483,30 @@ class DhtNode {
       _receivedTokens['$fromIp:$fromPort'] = Uint8List.fromList(token);
     }
 
+    // Extract peers from get_peers responses (handles fire-and-forget queries)
+    if (pending.method == 'get_peers') {
+      if (body.containsKey('values') && pending.infoHash != null) {
+        try {
+          final values = Bencode.asList(body['values']);
+          final hexHash = _toHex(pending.infoHash!);
+          _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
+          for (final v in values) {
+            final bytes = Bencode.asBytes(v);
+            if (bytes.length == 6) {
+              final (ip, port) = DhtContact.parseCompactPeer(bytes);
+              final peer = PeerInfo(ip: ip, port: port);
+              _peerStore[hexHash]!.add(peer);
+              _peerFoundController.add((pending.infoHash!, peer));
+            }
+          }
+        } catch (_) {}
+      }
+      // Process closer nodes from response
+      if (body.containsKey('nodes')) {
+        _processNodes(body);
+      }
+    }
+
     // Complete the query
     if (!pending.completer.isCompleted) {
       pending.completer.complete(body);
@@ -640,7 +666,7 @@ class DhtNode {
     return _sendQuery('get_peers', {
       'id': nodeId,
       'info_hash': infoHash,
-    }, ip, port);
+    }, ip, port, infoHash: infoHash);
   }
 
   void _sendAnnouncePeer(
@@ -655,7 +681,8 @@ class DhtNode {
   }
 
   Future<Map<String, dynamic>?> _sendQuery(
-      String method, Map<String, dynamic> args, String ip, int port) {
+      String method, Map<String, dynamic> args, String ip, int port,
+      {Uint8List? infoHash}) {
     final txId = _nextTxId();
     final txKey = _toHex(txId);
 
@@ -664,6 +691,7 @@ class DhtNode {
       txId: txId,
       method: method,
       completer: completer,
+      infoHash: infoHash,
     );
 
     _sendMessage({
@@ -673,9 +701,9 @@ class DhtNode {
       'a': args,
     }, ip, port);
 
-    // Short timeout to avoid blocking the event loop
+    // Very short timeout — responses usually arrive within 500ms
     return completer.future.timeout(
-      const Duration(seconds: 3),
+      const Duration(seconds: 1),
       onTimeout: () {
         _pendingQueries.remove(txKey);
         return null;
@@ -721,13 +749,12 @@ class DhtNode {
       }
       if (toQuery.isEmpty) break;
 
-      // Fire 3 queries in parallel but don't wait long
+      // Fire 3 queries, wait briefly for responses
       final batch = toQuery.take(3).toList();
       for (final node in batch) {
-        _sendFindNode(node.ip, node.port, target); // fire-and-forget
+        _sendFindNode(node.ip, node.port, target);
       }
-      // Short wait for responses to arrive via UDP listener
-      await Future.delayed(const Duration(seconds: 2));
+      await Future.delayed(const Duration(seconds: 1));
 
       closest = _routingTable.findClosest(target);
     }
@@ -752,49 +779,18 @@ class DhtNode {
       }
       if (toQuery.isEmpty) break;
 
-      // Fire 3 queries — await only the first to get results
+      // Fire 3 queries, responses handled by _handleResponse
       final batch = toQuery.take(3).toList();
-      // Send all, await the first only
-      final firstResult = await _sendGetPeers(batch.first.ip, batch.first.port, infoHash);
-      for (var i = 1; i < batch.length; i++) {
-        _sendGetPeers(batch[i].ip, batch[i].port, infoHash); // fire remaining
+      for (final node in batch) {
+        _sendGetPeers(node.ip, node.port, infoHash);
       }
-      final results = [firstResult];
-      // Short wait for remaining responses
+      // Wait for responses to arrive and be processed
       await Future.delayed(const Duration(seconds: 1));
-
-      for (final result in results) {
-        if (result == null) continue;
-
-        // Process returned peers
-        if (result.containsKey('values')) {
-          final values = Bencode.asList(result['values']);
-          for (final v in values) {
-            final bytes = Bencode.asBytes(v);
-            if (bytes.length == 6) {
-              final (ip, port) = DhtContact.parseCompactPeer(bytes);
-              final peer = PeerInfo(ip: ip, port: port);
-              foundPeers.add(peer);
-              _peerFoundController.add((infoHash, peer));
-            }
-          }
-        }
-
-        // Process returned nodes (closer to target)
-        _processNodes(result);
-      }
-
       closest = _routingTable.findClosest(infoHash);
-      // Real pause to let the UI thread breathe on mobile
-      await Future.delayed(const Duration(milliseconds: 500));
     }
 
-    // Store found peers
-    final hexHash = _toHex(infoHash);
-    _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
-    _peerStore[hexHash]!.addAll(foundPeers);
-
-    return foundPeers.toList();
+    // Return peers from the store (populated by _handleResponse)
+    return getCachedPeers(infoHash);
   }
 
   /// Extract and insert nodes from a response's "nodes" field.
