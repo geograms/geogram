@@ -19,7 +19,6 @@ import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/app_service.dart';
-import '../services/stun_server_service.dart';
 import '../util/task_monitor_helpers.dart';
 import 'dht_node.dart';
 import 'ice_punch.dart';
@@ -162,17 +161,11 @@ class P2PService {
       // Start periodic re-announce
       _dht.startPeriodicAnnounce();
 
-      // Start STUN reflector on our API port so other peers can query us
-      if (!StunServerService().isRunning) {
-        await StunServerService().start(port: localPort!);
-      }
-
       // Yield before node type detection
       await Future.delayed(Duration.zero);
 
-      // Detect node type by querying other Geogram peers as STUN reflectors
-      final typeAPeers = await _dht.getPeers(_geogramHash);
-      await _capability.detect(_dht, typeAPeers);
+      // Detect node type — learn our public IP from DHT responses
+      await _capability.detectFromDht(_dht);
 
       // Listen for newly discovered peers
       _peerFoundSub = _dht.onPeerFound.listen(_onPeerFound);
@@ -184,8 +177,7 @@ class P2PService {
       _stunRefreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
         if (!_dht.isRunning) return;
         _taskHandle?.markRunning();
-        final peers = _dht.getCachedPeers(_geogramHash);
-        await _capability.detect(_dht, peers);
+        await _capability.detectFromDht(_dht);
         _scanForOwnDevices();
         _taskHandle?.markIdle();
       });

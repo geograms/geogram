@@ -405,12 +405,34 @@ class DhtNode {
     }
   }
 
+  /// Our external IP:port as reported by BEP 42 `ip` field in DHT responses.
+  String? _externalIp;
+  int? _externalPort;
+
+  /// Our external IP as reported by DHT peers (BEP 42).
+  String? get externalIp => _externalIp;
+  int? get externalPort => _externalPort;
+
   void _handleResponse(
       Map<String, dynamic> msg, String fromIp, int fromPort) {
     final txId = Bencode.asBytes(msg['t']);
     final txKey = _toHex(txId);
     final pending = _pendingQueries.remove(txKey);
     if (pending == null) return; // Unknown transaction
+
+    // BEP 42: extract 'ip' field (6-byte compact: 4 IP + 2 port)
+    if (msg.containsKey('ip')) {
+      try {
+        final ipBytes = Bencode.asBytes(msg['ip']);
+        if (ipBytes.length == 6) {
+          final (ip, port) = DhtContact.parseCompactPeer(ipBytes);
+          if (ip != '0.0.0.0' && !ip.startsWith('127.')) {
+            _externalIp = ip;
+            _externalPort = port;
+          }
+        }
+      } catch (_) {}
+    }
 
     final body = Bencode.asMap(msg['r']);
     final responderId = Bencode.asBytes(body['id']);
@@ -553,6 +575,20 @@ class DhtNode {
   void pingNode(String ip, int port) {
     _sendPing(ip, port);
   }
+
+  /// Get external (non-localhost, non-LAN) nodes from routing table.
+  List<DhtContact> getExternalNodes({int count = 6}) {
+    final all = _routingTable.getAllNodes();
+    final external = all.where((n) =>
+        !n.ip.startsWith('127.') &&
+        !n.ip.startsWith('192.168.') &&
+        !n.ip.startsWith('10.') &&
+        !n.ip.startsWith('172.') &&
+        n.ip != '0.0.0.0').toList();
+    external.sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
+    return external.take(count).toList();
+  }
+
 
   // ─── Sending Queries ────────────────────────────────────────────
 
