@@ -25,7 +25,7 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   final TaskMonitorService _monitor = TaskMonitorService();
   final I18nService _i18n = I18nService();
   StreamSubscription<TaskStateChangedEvent>? _sub;
-  _ViewMode _viewMode = _ViewMode.service;
+  _ViewMode _viewMode = _ViewMode.performance;
 
   @override
   void initState() {
@@ -141,9 +141,9 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   Widget _buildViewToggle(ThemeData theme) {
     return SegmentedButton<_ViewMode>(
       segments: [
+        const ButtonSegment(value: _ViewMode.performance, label: Text('Performance')),
         ButtonSegment(value: _ViewMode.service, label: Text(_i18n.t('task_group_by_service'))),
         ButtonSegment(value: _ViewMode.priority, label: Text(_i18n.t('task_group_by_priority'))),
-        const ButtonSegment(value: _ViewMode.performance, label: Text('Performance')),
       ],
       selected: {_viewMode},
       onSelectionChanged: (v) => setState(() => _viewMode = v.first),
@@ -190,6 +190,22 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
       ),
       const SizedBox(height: 16),
 
+      // Continuous section — ongoing periodic tasks (shown first)
+      if (runtimeTasks.isNotEmpty) ...[
+        _sectionHeader(theme, 'CONTINUOUS (periodic tasks)'),
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Text(
+            'Cumulative CPU from tasks that run repeatedly while the app is open.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
+          ),
+        ),
+        ..._buildRuntimeRows(theme, runtimeTasks),
+        const SizedBox(height: 16),
+      ],
+
       // Startup section — one-time init costs
       if (startupTasks.isNotEmpty) ...[
         _sectionHeader(theme, 'STARTUP (one-time init)'),
@@ -204,22 +220,6 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
         ),
         ..._buildStartupRows(theme, startupTasks),
         _buildStartupTotal(theme, startupTasks),
-        const SizedBox(height: 16),
-      ],
-
-      // Runtime section — ongoing periodic tasks
-      if (runtimeTasks.isNotEmpty) ...[
-        _sectionHeader(theme, 'CONTINUOUS (periodic tasks)'),
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 8),
-          child: Text(
-            'Cumulative CPU from tasks that run repeatedly while the app is open.',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.outline,
-            ),
-          ),
-        ),
-        ..._buildRuntimeRows(theme, runtimeTasks),
       ],
 
       if (startupTasks.isEmpty && runtimeTasks.isEmpty)
