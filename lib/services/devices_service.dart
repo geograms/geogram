@@ -38,6 +38,7 @@ import '../util/nostr_event.dart';
 import '../util/event_bus.dart';
 import '../models/profile.dart';
 import '../connection/connection_manager.dart';
+import '../connection/transports/dht_transport.dart';
 import '../connection/transports/lan_transport.dart';
 import '../tracker/services/proximity_detection_service.dart';
 import 'usb_aoa_service.dart';
@@ -1774,7 +1775,14 @@ class DevicesService {
       }
     }
 
-    // Station transport doesn't need device registration - it uses station proxy
+    // Register with DHT transport for internet-discovered devices
+    if (device.url != null && device.connectionMethods.contains('internet')) {
+      final dhtTransport =
+          connectionManager.getTransport('dht') as DhtTransport?;
+      if (dhtTransport != null) {
+        dhtTransport.registerDhtDevice(callsign, device.url!, npub: device.npub);
+      }
+    }
   }
 
   /// Internal HTTP request helper

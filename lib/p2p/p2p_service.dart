@@ -329,7 +329,8 @@ class P2PService {
           ? '$nickname ($callsign)'
           : callsign;
 
-      DevicesService().addOrUpdateDevice(RemoteDevice(
+      final devService = DevicesService();
+      devService.addOrUpdateDevice(RemoteDevice(
         callsign: callsign.toUpperCase(),
         name: displayName,
         nickname: nickname,
@@ -343,6 +344,7 @@ class P2PService {
         lastSeen: DateTime.now(),
         platform: data['platform'] as String?,
       ));
+      devService.syncDeviceToConnectionManager(callsign.toUpperCase());
       LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
     } catch (_) {
       // NAT — _probeKnownDevicesViaDht handles via npub
@@ -375,9 +377,12 @@ class P2PService {
             if (!device.connectionMethods.contains('internet')) {
               device.connectionMethods = [...device.connectionMethods, 'internet'];
             }
+            // Set the URL to the DHT-discovered address
+            device.url = 'http://${peers.first.ip}:${peers.first.port}';
             device.isOnline = true;
             device.lastSeen = DateTime.now();
             devService.addOrUpdateDevice(device);
+            devService.syncDeviceToConnectionManager(device.callsign);
             LogService().log('P2P: ${device.callsign} found via DHT at ${peers.first.ip}:${peers.first.port}');
           }
         } catch (_) {}
