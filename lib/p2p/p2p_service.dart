@@ -347,7 +347,7 @@ class P2PService {
   /// Set of peers we already tried to probe (avoid repeated HTTP calls).
   final Set<String> _probedPeers = {};
 
-  /// Add a DHT-discovered peer and probe it for identity.
+  /// Add a DHT-discovered peer to Devices UI.
   void _addDiscoveredPeer(PeerInfo peer) {
     final myPort = AppArgs().port;
     // Skip self
@@ -356,21 +356,39 @@ class P2PService {
 
     if (discoveredPeers.add(peer)) {
       _peersController.add(discoveredPeers.toList());
-      // Probe the peer in the background to get its identity
       final key = '${peer.ip}:${peer.port}';
       if (!_probedPeers.contains(key)) {
         _probedPeers.add(key);
-        _probePeer(peer);
+        _registerDhtPeer(peer);
       }
     }
   }
 
-  /// Probe a DHT-discovered peer's HTTP API to get its identity,
-  /// then register it in DevicesService so it appears in the Devices UI.
-  Future<void> _probePeer(PeerInfo peer) async {
+  /// Register a DHT peer in DevicesService immediately (shows in Devices UI),
+  /// then try HTTP probe to get the real callsign/name.
+  Future<void> _registerDhtPeer(PeerInfo peer) async {
+    // Use a temporary callsign from the IP until we can identify the peer
+    final tempCallsign = 'DHT-${peer.ip.replaceAll('.', '')}';
+    final peerUrl = 'http://${peer.ip}:${peer.port}';
+
+    // Register immediately so it shows in the Devices UI
+    DevicesService().addOrUpdateDevice(RemoteDevice(
+      callsign: tempCallsign,
+      name: '${peer.ip}:${peer.port}',
+      url: peerUrl,
+      isOnline: true,
+      hasCachedData: false,
+      apps: [],
+      connectionMethods: ['internet'],
+      source: DeviceSourceType.direct,
+      lastSeen: DateTime.now(),
+      platform: 'internet',
+    ));
+    LogService().log('P2P: registered DHT peer ${peer.ip}:${peer.port}');
+
+    // Try HTTP probe to get real identity (may fail for NAT'd peers)
     try {
-      final url = 'http://${peer.ip}:${peer.port}/api/status';
-      final response = await http.get(Uri.parse(url))
+      final response = await http.get(Uri.parse('$peerUrl/api/status'))
           .timeout(const Duration(seconds: 5));
       if (response.statusCode != 200) return;
 
@@ -378,17 +396,16 @@ class P2PService {
       final callsign = data['callsign'] as String?;
       if (callsign == null || callsign.isEmpty) return;
 
-      // Skip self
       final myCallsign = ProfileService().getProfile().callsign;
       if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
 
-      // Register in DevicesService (handles both add and update)
+      // Replace temp entry with real identity
       DevicesService().addOrUpdateDevice(RemoteDevice(
         callsign: callsign.toUpperCase(),
         name: data['name'] as String? ?? callsign,
         nickname: data['nickname'] as String?,
         npub: data['npub'] as String?,
-        url: 'http://${peer.ip}:${peer.port}',
+        url: peerUrl,
         isOnline: true,
         hasCachedData: false,
         apps: [],
@@ -397,10 +414,9 @@ class P2PService {
         lastSeen: DateTime.now(),
         platform: data['platform'] as String?,
       ));
-
-      LogService().log('P2P: probed ${peer.ip}:${peer.port} → $callsign (internet)');
-    } catch (e) {
-      // Peer not reachable via HTTP — expected for NAT'd peers
+      LogService().log('P2P: identified ${peer.ip}:${peer.port} as $callsign');
+    } catch (_) {
+      // HTTP probe failed — peer stays with temp callsign (behind NAT)
     }
   }
 
