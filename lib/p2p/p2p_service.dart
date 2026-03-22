@@ -294,8 +294,9 @@ class P2PService {
   // ─── Peer Management ──────────────────────────────────────────
 
   void _addDiscoveredPeer(PeerInfo peer) {
+    // Only skip localhost self — never skip by public IP because
+    // same-household devices share the same public IP and port
     final myPort = AppArgs().port;
-    if (peer.ip == _publicIp && peer.port == myPort) return;
     if ((peer.ip == '127.0.0.1' || peer.ip == '0.0.0.0') && peer.port == myPort) return;
 
     if (discoveredPeers.add(peer)) {
