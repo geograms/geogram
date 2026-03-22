@@ -140,22 +140,29 @@ class P2PService {
     _taskHandle!.markRunning();
 
     try {
-      // Load persisted node ID
-      final persistedId = await _loadNodeId();
+      // On Android, delay DHT start significantly to avoid OOM during
+      // app startup when Whisper models and other services are loading
+      final delay = Platform.isAndroid
+          ? const Duration(seconds: 30)
+          : const Duration(seconds: 2);
 
-      // Start DHT node (binds UDP socket — fast, non-blocking)
-      await _dht.start(persistedNodeId: persistedId);
-      await _saveNodeId(_dht.nodeId);
-
-      // Listen for newly discovered peers immediately
-      _peerFoundSub = _dht.onPeerFound.listen(_onPeerFound);
-
-      LogService().log('P2P: DHT socket open on port ${_dht.localPort}');
-
-      // Schedule ALL heavy work (bootstrap, announce, detect) on a timer
-      // so start() returns immediately and the HTTP server + UI stay responsive
       final announcePort = localPort!;
-      Timer(const Duration(seconds: 2), () => _bootstrapAndAnnounce(announcePort));
+      Timer(delay, () async {
+        if (!_enabled) return;
+        try {
+          final persistedId = await _loadNodeId();
+          await _dht.start(persistedNodeId: persistedId);
+          await _saveNodeId(_dht.nodeId);
+          _peerFoundSub = _dht.onPeerFound.listen(_onPeerFound);
+          LogService().log('P2P: DHT socket open on port ${_dht.localPort}');
+          _bootstrapAndAnnounce(announcePort);
+        } catch (e) {
+          _taskHandle?.markError(e);
+          LogService().log('P2P service failed: $e');
+        }
+      });
+
+      LogService().log('P2P: scheduled DHT start in ${delay.inSeconds}s');
     } catch (e) {
       _taskHandle?.markError(e);
       LogService().log('P2P service failed: $e');
