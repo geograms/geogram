@@ -795,7 +795,8 @@ class DhtNode {
         }
       }
 
-      if (!improved) break; // no new closer nodes found
+      // Don't break just because no NEW candidates — keep querying
+      // until all closest candidates are queried (true convergence)
       await Future.delayed(const Duration(milliseconds: 100));
     }
 
@@ -874,7 +875,8 @@ class DhtNode {
       }
 
       if (!improved && foundPeers.isNotEmpty) break;
-      if (!improved) break; // converged without peers
+      // Don't break just because no NEW candidates — keep querying
+      // unqueried ones until all closest are queried (true convergence)
       await Future.delayed(const Duration(milliseconds: 100));
     }
 
