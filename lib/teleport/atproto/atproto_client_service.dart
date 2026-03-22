@@ -128,6 +128,12 @@ class AtprotoClientService {
         config: normalized,
       );
     }
+    // Start or stop recurring tasks based on enabled state
+    if (normalized.enabled) {
+      _startRecurringTasks();
+    } else {
+      _stopRecurringTasks();
+    }
     await _storage?.registerBridge(enabled: normalized.enabled);
     await _storage?.saveStatus({
       'platform': 'bluesky',
@@ -1071,13 +1077,23 @@ class AtprotoClientService {
     );
   }
 
-  void dispose() {
+  void _stopRecurringTasks() {
     _sessionRefreshTimer?.cancel();
+    _sessionRefreshTimer = null;
     _feedSyncTimer?.cancel();
+    _feedSyncTimer = null;
     _notifyRelaysTimer?.cancel();
+    _notifyRelaysTimer = null;
     _queueFlushTimer?.cancel();
+    _queueFlushTimer = null;
     _cachePruneTimer?.cancel();
+    _cachePruneTimer = null;
     _repoCheckpointTimer?.cancel();
+    _repoCheckpointTimer = null;
+  }
+
+  void dispose() {
+    _stopRecurringTasks();
   }
 
   Future<void> _refreshSession() async {
