@@ -196,7 +196,7 @@ class P2PService {
         _probeKnownDevicesViaDht();
 
         // Schedule npub probes
-        Timer(const Duration(seconds: 15), () => _populateNpubCache());
+        Timer(const Duration(seconds: 15), () => _probeKnownDevicesViaDht());
       } catch (e) {
         _taskHandle?.markError(e);
         LogService().log('P2P: detect failed: $e');
@@ -229,9 +229,17 @@ class P2PService {
 
   // ─── Public API ───────────────────────────────────────────────
 
+  /// Find devices for a user. Checks cache first (instant).
+  /// Only does a full iterative lookup if cache is empty and caller awaits.
+  /// The iterative lookup WILL block the main thread for 10-30s.
   Future<List<PeerInfo>> findDevicesForUser(String npub) async {
     if (_dht == null || !_dht!.isRunning) return [];
-    return _dht!.getPeers(sha1Hash(npub));
+    final hash = sha1Hash(npub);
+    // Check cache first (instant, no blocking)
+    final cached = _dht!.getCachedPeers(hash);
+    if (cached.isNotEmpty) return cached;
+    // Full iterative lookup (blocks — only used by debug API)
+    return _dht!.getPeers(hash);
   }
 
   Future<void> addNode(String ip, int port) async {
@@ -317,6 +325,8 @@ class P2PService {
     } catch (_) {}
   }
 
+  /// Probe known devices using only cached DHT data + lightweight fire-and-forget queries.
+  /// NEVER calls getPeers (iterative lookup) — that blocks the main thread.
   void _probeKnownDevicesViaDht() {
     if (_dht == null || !_dht!.isRunning) return;
 
@@ -330,35 +340,43 @@ class P2PService {
         .take(5)
         .toList();
 
-    for (var i = 0; i < devices.length; i++) {
-      final device = devices[i];
-      Timer(Duration(seconds: i * 5), () async {
-        if (_dht == null || !_dht!.isRunning) return;
-        try {
-          final peers = await findDevicesForUser(device.npub!);
-          if (peers.isNotEmpty) {
-            if (!device.connectionMethods.contains('internet')) {
-              device.connectionMethods = [...device.connectionMethods, 'internet'];
-            }
-            device.url = 'http://${peers.first.ip}:${peers.first.port}';
-            device.isOnline = true;
-            device.lastSeen = DateTime.now();
-            devService.addOrUpdateDevice(device);
-            devService.syncDeviceToConnectionManager(device.callsign);
-            LogService().log('P2P: ${device.callsign} found via DHT at ${peers.first.ip}:${peers.first.port}');
-          }
-        } catch (_) {}
-      });
+    for (final device in devices) {
+      final hash = sha1Hash(device.npub!);
+
+      // 1. Check cached peers (instant, no network)
+      final cached = _dht!.getCachedPeers(hash);
+      if (cached.isNotEmpty) {
+        _markDeviceOnline(devService, device, cached.first);
+        continue;
+      }
+
+      // 2. Fire lightweight UDP queries (non-blocking, responses arrive later)
+      _dht!.fireGetPeers(hash);
     }
+
+    // Re-check cache after responses have had time to arrive
+    Timer(const Duration(seconds: 10), () {
+      if (_dht == null || !_dht!.isRunning) return;
+      for (final device in devices) {
+        final hash = sha1Hash(device.npub!);
+        final cached = _dht!.getCachedPeers(hash);
+        if (cached.isNotEmpty) {
+          _markDeviceOnline(devService, device, cached.first);
+        }
+      }
+    });
   }
 
-  void _populateNpubCache() {
-    if (_dht == null || !_dht!.isRunning) return;
-    _probeKnownDevicesViaDht();
-    Timer.periodic(const Duration(minutes: 5), (_) {
-      if (!_running) return;
-      _probeKnownDevicesViaDht();
-    });
+  void _markDeviceOnline(DevicesService devService, RemoteDevice device, PeerInfo peer) {
+    if (!device.connectionMethods.contains('internet')) {
+      device.connectionMethods = [...device.connectionMethods, 'internet'];
+    }
+    device.url = 'http://${peer.ip}:${peer.port}';
+    device.isOnline = true;
+    device.lastSeen = DateTime.now();
+    devService.addOrUpdateDevice(device);
+    devService.syncDeviceToConnectionManager(device.callsign);
+    LogService().log('P2P: ${device.callsign} found via DHT at ${peer.ip}:${peer.port}');
   }
 
   // ─── Persistence ───────────────────────────────────────────────
