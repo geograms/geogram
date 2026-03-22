@@ -266,29 +266,29 @@ class P2PService {
     }
   }
 
-  /// Fire lightweight get_peers queries for known devices' npubs.
-  /// Uses DhtNode.fireGetPeers (non-blocking, just sends UDP queries).
-  /// Responses arrive via _handleResponse and populate the peer store.
-  /// Re-probes from cache after a delay.
+  /// Look up known devices' npubs on the DHT one at a time.
+  /// Each lookup is scheduled via Timer so it never blocks the main thread
+  /// for more than one iterative lookup at a time.
   void _populateNpubCache() {
     if (_dht == null || !_dht!.isRunning) return;
     final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
-    final devices = DevicesService().getAllDevices();
+    final devices = DevicesService().getAllDevices()
+        .where((d) =>
+            d.callsign.toUpperCase() != myCallsign &&
+            d.npub != null &&
+            d.npub!.isNotEmpty)
+        .take(5)
+        .toList();
 
-    var count = 0;
-    for (final device in devices) {
-      if (device.callsign.toUpperCase() == myCallsign) continue;
-      if (device.npub == null || device.npub!.isEmpty) continue;
-      if (count >= 5) break;
-
-      // Fire queries to closest known nodes — non-blocking
-      _dht!.fireGetPeers(sha1Hash(device.npub!));
-      count++;
-    }
-
-    if (count > 0) {
-      // Re-probe from cache after responses have had time to arrive
-      Timer(const Duration(seconds: 10), () => _probeKnownDevicesViaDht());
+    // Schedule each lookup with staggered delays
+    for (var i = 0; i < devices.length; i++) {
+      final device = devices[i];
+      Timer(Duration(seconds: 3 + i * 15), () async {
+        if (_dht == null || !_dht!.isRunning) return;
+        final hash = sha1Hash(device.npub!);
+        await _dht!.getPeers(hash);
+        _probeKnownDevicesViaDht();
+      });
     }
   }
 
