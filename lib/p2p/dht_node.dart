@@ -778,27 +778,23 @@ class DhtNode {
       final toQuery = unqueried.take(3).toList();
       if (toQuery.isEmpty) break; // converged
 
-      // Parallel queries with await
-      final futures = toQuery.map((key) {
+      // Sequential queries — one at a time to minimize heap pressure.
+      // Future.wait holds all response objects simultaneously, preventing GC.
+      bool improved = false;
+      for (final key in toQuery) {
         queried.add(key);
         final node = candidates[key]!;
-        return _sendFindNode(node.ip, node.port, target);
-      }).toList();
-      final results = await Future.wait(futures);
-
-      bool improved = false;
-      for (final result in results) {
+        final result = await _sendFindNode(node.ip, node.port, target);
         if (result == null) continue;
-        // Extract nodes from response
         if (result.containsKey('nodes')) {
           final nodesBytes = Bencode.asBytes(result['nodes']);
           for (var i = 0; i + 26 <= nodesBytes.length; i += 26) {
             final contact = DhtContact.fromCompactNodeInfo(nodesBytes, i);
             if (contact.ip == '0.0.0.0' || contact.port == 0) continue;
-            final key = '${contact.ip}:${contact.port}';
-            if (!candidates.containsKey(key) && candidates.length < 50) {
-              candidates[key] = contact;
-              distances[key] = xorDistance(contact.nodeId, target);
+            final nkey = '${contact.ip}:${contact.port}';
+            if (!candidates.containsKey(nkey) && candidates.length < 50) {
+              candidates[nkey] = contact;
+              distances[nkey] = xorDistance(contact.nodeId, target);
               _routingTable.insertNode(contact);
               improved = true;
             }
@@ -807,7 +803,6 @@ class DhtNode {
       }
 
       if (!improved) break;
-      await Future.delayed(const Duration(milliseconds: 100));
     }
 
     // Return K-closest from candidates
@@ -842,18 +837,14 @@ class DhtNode {
       final toQuery = unqueried.take(3).toList();
       if (toQuery.isEmpty) break;
 
-      final futures = toQuery.map((key) {
+      // Sequential queries — one at a time to minimize heap pressure.
+      bool improved = false;
+      for (final key in toQuery) {
         queried.add(key);
         final node = candidates[key]!;
-        return _sendGetPeers(node.ip, node.port, infoHash);
-      }).toList();
-      final results = await Future.wait(futures);
-
-      bool improved = false;
-      for (final result in results) {
+        final result = await _sendGetPeers(node.ip, node.port, infoHash);
         if (result == null) continue;
 
-        // Peers found — collect them
         if (result.containsKey('values')) {
           try {
             final values = Bencode.asList(result['values']);
@@ -867,21 +858,22 @@ class DhtNode {
           } catch (_) {}
         }
 
-        // Closer nodes returned — add to candidates
         if (result.containsKey('nodes')) {
           final nodesBytes = Bencode.asBytes(result['nodes']);
           for (var i = 0; i + 26 <= nodesBytes.length; i += 26) {
             final contact = DhtContact.fromCompactNodeInfo(nodesBytes, i);
             if (contact.ip == '0.0.0.0' || contact.port == 0) continue;
-            final key = '${contact.ip}:${contact.port}';
-            if (!candidates.containsKey(key) && candidates.length < 50) {
-              candidates[key] = contact;
-              distances[key] = xorDistance(contact.nodeId, infoHash);
+            final nkey = '${contact.ip}:${contact.port}';
+            if (!candidates.containsKey(nkey) && candidates.length < 50) {
+              candidates[nkey] = contact;
+              distances[nkey] = xorDistance(contact.nodeId, infoHash);
               _routingTable.insertNode(contact);
               improved = true;
             }
           }
         }
+
+        if (foundPeers.isNotEmpty) break;
       }
 
       if (!improved || foundPeers.isNotEmpty) break;
