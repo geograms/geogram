@@ -107,6 +107,21 @@ class DhtNode {
   /// Callback for non-DHT UDP packets (used by IcePunch hole punching).
   void Function(Datagram datagram)? onNonDhtPacket;
 
+  /// Rate limiter for incoming queries from the BT network.
+  int _queryCount = 0;
+  DateTime _queryWindowStart = DateTime.now();
+  static const int _maxQueriesPerSecond = 10;
+
+  bool _shouldHandleQuery() {
+    final now = DateTime.now();
+    if (now.difference(_queryWindowStart).inMilliseconds > 1000) {
+      _queryCount = 0;
+      _queryWindowStart = now;
+    }
+    _queryCount++;
+    return _queryCount <= _maxQueriesPerSecond;
+  }
+
   /// Local UDP port.
   int _localPort = 0;
   int get localPort => _localPort;
@@ -466,7 +481,13 @@ class DhtNode {
 
       switch (type) {
         case 'q':
-          _handleQuery(dict, datagram.address.address, datagram.port);
+          // Rate-limit incoming queries to avoid GC pressure on Android.
+          // The DHT node receives hundreds of queries/sec from the global
+          // BT network. Each response allocates objects that the GC must
+          // collect, competing with the Flutter event loop.
+          if (_shouldHandleQuery()) {
+            _handleQuery(dict, datagram.address.address, datagram.port);
+          }
           break;
         case 'r':
           _handleResponse(dict, datagram.address.address, datagram.port);
