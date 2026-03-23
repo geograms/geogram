@@ -211,10 +211,19 @@ class P2PService {
         // Probe known devices after a delay (one iterative lookup, not at startup)
         Timer(const Duration(seconds: 30), () => _probeKnownDevicesByNpub());
 
-        // Periodic refresh — one npub probe per cycle
+        // Periodic refresh — re-announce UDP port + probe known devices
         _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
           if (_dht == null || !_dht!.isRunning) return;
           await _capability!.detectFromDht(_dht!);
+
+          // Re-announce UDP port (may have changed after NAT rebinding)
+          final refreshUdpPort = _capability!.publicPort ?? _dht!.localPort;
+          if (Platform.isAndroid) {
+            await _dht!.announceLight(sha1Hash('geogram-udp'), refreshUdpPort);
+          } else {
+            await _dht!.announce(sha1Hash('geogram-udp'), refreshUdpPort);
+          }
+
           final p = _dht!.getCachedPeers(sha1Hash('geogram'));
           for (final peer in p) {
             _addDiscoveredPeer(peer);
@@ -410,9 +419,11 @@ class P2PService {
       lastSeen: DateTime.now(),
       platform: platform,
       deviceId: deviceId,
+      udpIp: ip,
+      udpPort: udpPort,
     ));
     devService.syncDeviceToConnectionManager(callsign.toUpperCase());
-    LogService().log('P2P: registered geogram peer $callsign via DHT messaging');
+    LogService().log('P2P: registered geogram peer $callsign (http:$httpPort, udp:$udpPort)');
   }
 
   int _npubProbeIndex = 0;

@@ -1266,6 +1266,8 @@ class DevicesService {
       existing.npub ??= device.npub;
       existing.platform ??= device.platform;
       existing.deviceId ??= device.deviceId;
+      existing.udpIp ??= device.udpIp;
+      existing.udpPort ??= device.udpPort;
     } else {
       _devices[key] = device;
     }
@@ -1809,7 +1811,10 @@ class DevicesService {
       final dhtTransport =
           connectionManager.getTransport('dht') as DhtTransport?;
       if (dhtTransport != null) {
-        dhtTransport.registerDhtDevice(callsign, device.url!, npub: device.npub);
+        dhtTransport.registerDhtDevice(callsign, device.url!,
+            npub: device.npub,
+            udpIp: device.udpIp,
+            udpPort: device.udpPort);
       }
     }
   }
@@ -3309,6 +3314,10 @@ class RemoteDevice {
   /// Per-install UUID — distinguishes physical devices with the same callsign.
   String? deviceId;
 
+  /// DHT UDP contact info — for reaching NATted peers via geogram DHT messages.
+  String? udpIp;
+  int? udpPort;
+
   RemoteDevice({
     required this.callsign,
     required this.name,
@@ -3334,6 +3343,8 @@ class RemoteDevice {
     this.isPinned = false,
     this.folderId,
     this.deviceId,
+    this.udpIp,
+    this.udpPort,
   });
 
   /// Unique key for the _devices map. Uses deviceId when available to

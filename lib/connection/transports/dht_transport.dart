@@ -225,12 +225,17 @@ class DhtTransport extends Transport with TransportMixin {
   /// Register a device discovered via DHT.
   void registerDhtDevice(String callsign, String url, {
     String? npub,
+    String? udpIp,
+    int? udpPort,
   }) {
     registerDevice(callsign, url: url, metadata: {
       'source': 'dht',
       'npub': npub,
+      'udp_ip': udpIp,
+      'udp_port': udpPort,
       'registered_at': DateTime.now().toIso8601String(),
     });
-    LogService().log('DhtTransport: Registered $callsign at $url');
+    LogService().log('DhtTransport: Registered $callsign at $url'
+        '${udpPort != null ? " (udp: $udpIp:$udpPort)" : ""}');
   }
 }
