@@ -779,7 +779,6 @@ class DhtNode {
       if (toQuery.isEmpty) break; // converged
 
       // Sequential queries — one at a time to minimize heap pressure.
-      // Future.wait holds all response objects simultaneously, preventing GC.
       bool improved = false;
       for (final key in toQuery) {
         queried.add(key);
@@ -802,7 +801,8 @@ class DhtNode {
         }
       }
 
-      await Future.delayed(const Duration(milliseconds: 100));
+      // Allow early exit after 3 rounds if no new candidates discovered
+      if (!improved && round >= 2) break;
     }
 
     // Return K-closest from candidates
@@ -875,8 +875,9 @@ class DhtNode {
 
       }
 
-      if (!improved && foundPeers.isNotEmpty) break;
-      await Future.delayed(const Duration(milliseconds: 100));
+      // Exit if: peers found and no new candidates, or no progress after 3 rounds
+      if (foundPeers.isNotEmpty && !improved) break;
+      if (!improved && round >= 2) break;
     }
 
     // Store found peers
