@@ -152,9 +152,17 @@ class P2PService {
       try {
         final geogramHash = sha1Hash('geogram');
         final npubHash = sha1Hash(npub);
-        await _dht!.announce(geogramHash, port);
-        await _dht!.announce(npubHash, port);
-        _dht!.startPeriodicAnnounce();
+        // Use lightweight announce on Android to avoid 3GB+ Dart heap spike.
+        // The iterative lookup in announce() creates hundreds of temporary
+        // objects that get promoted to old-gen and the VM never releases pages.
+        if (Platform.isAndroid) {
+          await _dht!.announceLight(geogramHash, port);
+          await _dht!.announceLight(npubHash, port);
+        } else {
+          await _dht!.announce(geogramHash, port);
+          await _dht!.announce(npubHash, port);
+        }
+        _dht!.startPeriodicAnnounce(light: Platform.isAndroid);
         LogService().log('P2P: announced on DHT');
         _phase4_detect();
       } catch (e) {
@@ -352,8 +360,15 @@ class P2PService {
     // Check cache first (instant, no heap growth)
     var peers = _dht!.getCachedPeers(hash);
     if (peers.isEmpty) {
-      // Full iterative lookup — reaches the K-closest DHT nodes
-      peers = await _dht!.getPeers(hash);
+      // On Android: use announceLight which queries routing table nodes
+      // without creating the massive candidate maps that spike the heap.
+      // On desktop: full iterative lookup is fine.
+      if (Platform.isAndroid) {
+        await _dht!.announceLight(hash, AppArgs().port);
+        peers = _dht!.getCachedPeers(hash);
+      } else {
+        peers = await _dht!.getPeers(hash);
+      }
     }
 
     if (peers.isNotEmpty) {

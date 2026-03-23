@@ -312,6 +312,59 @@ class DhtNode {
         'to $announced nodes');
   }
 
+  /// Lightweight announce: send get_peers to closest routing table nodes ONE
+  /// AT A TIME, then announce to those that respond with tokens. No iterative
+  /// lookup — avoids the heap spike from processing hundreds of candidates.
+  Future<void> announceLight(Uint8List infoHash, int port) async {
+    if (!_running) return;
+
+    final hexHash = _toHex(infoHash);
+    _announcedTopics[hexHash] = port;
+    _receivedTokens.clear();
+
+    // Query closest routing table nodes sequentially (one at a time)
+    final closest = _routingTable.findClosest(infoHash, count: 8);
+    for (final node in closest) {
+      if (!_running) return;
+      final result = await _sendGetPeers(node.ip, node.port, infoHash);
+      if (result != null) {
+        // Process any peers found
+        if (result.containsKey('values')) {
+          try {
+            final values = Bencode.asList(result['values']);
+            for (final v in values) {
+              final bytes = Bencode.asBytes(v);
+              if (bytes.length == 6) {
+                final (ip, peerPort) = DhtContact.parseCompactPeer(bytes);
+                final peer = PeerInfo(ip: ip, port: peerPort);
+                _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
+                _peerStore[hexHash]!.add(peer);
+                _peerFoundController.add((infoHash, peer));
+              }
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    // Announce to nodes that gave us tokens
+    var announced = 0;
+    for (final entry in _receivedTokens.entries) {
+      final parts = entry.key.split(':');
+      if (parts.length == 2) {
+        final ip = parts[0];
+        final nodePort = int.tryParse(parts[1]);
+        if (nodePort != null) {
+          _sendAnnouncePeer(ip, nodePort, infoHash, port, entry.value);
+          announced++;
+        }
+      }
+    }
+
+    LogService().log('DHT announced (light) on ${_hexPrefix(infoHash)} port $port '
+        'to $announced nodes');
+  }
+
   /// Look up peers for an info_hash.
   ///
   /// Returns peers found from both the local peer store and remote DHT nodes.
@@ -326,14 +379,19 @@ class DhtNode {
   }
 
   /// Start periodic re-announce on all topics.
-  void startPeriodicAnnounce() {
+  /// [light] uses announceLight (routing table only) to avoid heap spikes.
+  void startPeriodicAnnounce({bool light = false}) {
     _reannounceTimer?.cancel();
     _reannounceTimer = Timer.periodic(
       const Duration(minutes: kReannounceMinutes),
       (_) {
         for (final entry in _announcedTopics.entries) {
           final infoHash = _fromHex(entry.key);
-          announce(infoHash, entry.value);
+          if (light) {
+            announceLight(infoHash, entry.value);
+          } else {
+            announce(infoHash, entry.value);
+          }
         }
       },
     );
