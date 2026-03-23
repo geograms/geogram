@@ -1925,7 +1925,7 @@ class DevicesService {
   /// Check device via station proxy
   /// HTTP GET with short timeout. Runs on main isolate (async, non-blocking).
   Future<http.Response> _httpProbe(String url) async {
-    return http.get(Uri.parse(url)).timeout(const Duration(seconds: 5));
+    return http.get(Uri.parse(url)).timeout(const Duration(seconds: 2));
   }
 
   Future<bool> _checkViaRelayProxy(RemoteDevice device) async {
@@ -2348,7 +2348,7 @@ class DevicesService {
               : '$httpUrl/api/status';
           final response = await http
               .get(Uri.parse(statusUrl))
-              .timeout(const Duration(seconds: 10));
+              .timeout(const Duration(seconds: 3));
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body);
             latitude = (data['latitude'] as num?)?.toDouble();
