@@ -322,6 +322,7 @@ class P2PService {
         source: DeviceSourceType.direct,
         lastSeen: DateTime.now(),
         platform: data['platform'] as String?,
+        deviceId: data['device_id'] as String?,
       ));
       devService.syncDeviceToConnectionManager(callsign.toUpperCase());
       LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');

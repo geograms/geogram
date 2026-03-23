@@ -1214,18 +1214,46 @@ class DevicesService {
   }
 
   /// Get a specific device by callsign
+  /// Get a device by callsign. When multiple devices share the same callsign
+  /// (different deviceIds), returns the first online match or first match.
   RemoteDevice? getDevice(String callsign) {
-    final device = _devices[callsign.toUpperCase()];
-    if (device != null) {
-      device.isPinned = _getPinnedDevices().contains(device.callsign);
+    final prefix = callsign.toUpperCase();
+    final pinned = _getPinnedDevices();
+
+    // Exact match first (legacy keys without deviceId)
+    final exact = _devices[prefix];
+    if (exact != null) {
+      exact.isPinned = pinned.contains(exact.callsign);
+      return exact;
     }
-    return device;
+
+    // Search for compound keys (CALLSIGN:deviceId)
+    RemoteDevice? best;
+    for (final entry in _devices.entries) {
+      if (entry.key.startsWith('$prefix:') || entry.key == prefix) {
+        final d = entry.value;
+        d.isPinned = pinned.contains(d.callsign);
+        if (best == null || (d.isOnline && !best.isOnline)) {
+          best = d;
+        }
+      }
+    }
+    return best;
+  }
+
+  /// Get ALL devices with a given callsign (may be multiple physical devices).
+  List<RemoteDevice> getDevicesByCallsign(String callsign) {
+    final prefix = callsign.toUpperCase();
+    return _devices.entries
+        .where((e) => e.key.startsWith('$prefix:') || e.key == prefix)
+        .map((e) => e.value)
+        .toList();
   }
 
   /// Add or update a device from external discovery (e.g., DHT P2P).
   void addOrUpdateDevice(RemoteDevice device) {
-    final key = device.callsign.toUpperCase();
-    if (_isDeviceRemoved(key)) return;
+    final key = device.uniqueKey;
+    if (_isDeviceRemoved(device.callsign.toUpperCase())) return;
 
     final existing = _devices[key];
     if (existing != null) {
@@ -1237,6 +1265,7 @@ class DevicesService {
       existing.url ??= device.url;
       existing.npub ??= device.npub;
       existing.platform ??= device.platform;
+      existing.deviceId ??= device.deviceId;
     } else {
       _devices[key] = device;
     }
@@ -2470,9 +2499,14 @@ class DevicesService {
       // Determine connection type based on discovery type
       final connectionType = result.type == 'station' ? 'lan' : 'wifi_local';
 
+      // Build unique key using deviceId when available
+      final deviceKey = result.deviceId != null && result.deviceId!.isNotEmpty
+          ? '$normalizedCallsign:${result.deviceId}'
+          : normalizedCallsign;
+
       // Update existing device or create new one
-      if (_devices.containsKey(normalizedCallsign)) {
-        final device = _devices[normalizedCallsign]!;
+      if (_devices.containsKey(deviceKey)) {
+        final device = _devices[deviceKey]!;
 
         // Add connection type if not already present
         if (!device.connectionMethods.contains(connectionType)) {
@@ -2496,7 +2530,7 @@ class DevicesService {
         );
       } else if (!_isDeviceRemoved(normalizedCallsign)) {
         // Create new device discovered on local network
-        _devices[normalizedCallsign] = RemoteDevice(
+        _devices[deviceKey] = RemoteDevice(
           callsign: normalizedCallsign,
           name: result.name ?? normalizedCallsign,
           nickname: result.name,
@@ -2509,6 +2543,7 @@ class DevicesService {
           connectionMethods: [connectionType],
           source: DeviceSourceType.local,
           lastSeen: DateTime.now(),
+          deviceId: result.deviceId,
         );
         LogService().log(
           'DevicesService: Added new ${result.type} from local network: $normalizedCallsign at $localUrl',
@@ -3271,6 +3306,9 @@ class RemoteDevice {
   /// Operating system: "linux", "macos", "windows", "android", "ios"
   String? platform;
 
+  /// Per-install UUID — distinguishes physical devices with the same callsign.
+  String? deviceId;
+
   RemoteDevice({
     required this.callsign,
     required this.name,
@@ -3295,7 +3333,14 @@ class RemoteDevice {
     this.platform,
     this.isPinned = false,
     this.folderId,
+    this.deviceId,
   });
+
+  /// Unique key for the _devices map. Uses deviceId when available to
+  /// allow multiple physical devices with the same callsign.
+  String get uniqueKey => deviceId != null && deviceId!.isNotEmpty
+      ? '${callsign.toUpperCase()}:$deviceId'
+      : callsign.toUpperCase();
 
   /// Get display name (nickname or callsign)
   String get displayName => nickname ?? name;
