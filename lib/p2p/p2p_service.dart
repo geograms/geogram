@@ -169,11 +169,14 @@ class P2PService {
       try {
         await _capability!.detectFromDht(_dht!);
 
-        // Initial scan
+        // Initial scan — global geogram topic
         final peers = await _dht!.getPeers(sha1Hash('geogram'));
         for (final p in peers) {
           _addDiscoveredPeer(p);
         }
+
+        // Iterative lookup for each known device's npub
+        await _probeKnownDevicesByNpub();
 
         _taskHandle?.markIdle();
         LogService().log('P2P service started '
@@ -187,14 +190,11 @@ class P2PService {
           for (final peer in p) {
             _addDiscoveredPeer(peer);
           }
-          _probeKnownDevicesViaDht();
+          await _probeKnownDevicesByNpub();
         });
 
-        // Probe known devices
-        _probeKnownDevicesViaDht();
-
-        // Schedule npub probes
-        Timer(const Duration(seconds: 15), () => _probeKnownDevicesViaDht());
+        // Schedule delayed npub probe (gives other device time to announce)
+        Timer(const Duration(seconds: 30), () => _probeKnownDevicesByNpub());
       } catch (e) {
         _taskHandle?.markError(e);
         LogService().log('P2P: detect failed: $e');
@@ -320,12 +320,15 @@ class P2PService {
       ));
       devService.syncDeviceToConnectionManager(callsign.toUpperCase());
       LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
-    } catch (_) {}
+    } catch (_) {
+      LogService().log('P2P: direct probe failed for ${peer.ip}:${peer.port} (NAT)');
+    }
   }
 
-  /// Probe known devices using only cached DHT data + lightweight fire-and-forget queries.
-  /// NEVER calls getPeers (iterative lookup) — that blocks the main thread.
-  void _probeKnownDevicesViaDht() {
+  /// Probe known devices by doing full iterative DHT lookups on their npub hashes.
+  /// This reaches the K-closest nodes where the device actually announced,
+  /// unlike fireGetPeers which only hits random routing table nodes.
+  Future<void> _probeKnownDevicesByNpub() async {
     if (_dht == null || !_dht!.isRunning) return;
 
     final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
@@ -335,34 +338,24 @@ class P2PService {
             d.callsign.toUpperCase() != myCallsign &&
             d.npub != null &&
             d.npub!.isNotEmpty)
-        .take(5)
+        .take(3) // limit to avoid excessive DHT queries
         .toList();
 
     for (final device in devices) {
+      if (!_running || _dht == null || !_dht!.isRunning) return;
       final hash = sha1Hash(device.npub!);
 
-      // 1. Check cached peers (instant, no network)
-      final cached = _dht!.getCachedPeers(hash);
-      if (cached.isNotEmpty) {
-        _markDeviceOnline(devService, device, cached.first);
-        continue;
+      // Check cache first (instant)
+      var peers = _dht!.getCachedPeers(hash);
+      if (peers.isEmpty) {
+        // Full iterative lookup — reaches the K-closest DHT nodes
+        peers = await _dht!.getPeers(hash);
       }
 
-      // 2. Fire lightweight UDP queries (non-blocking, responses arrive later)
-      _dht!.fireGetPeers(hash);
+      if (peers.isNotEmpty) {
+        _markDeviceOnline(devService, device, peers.first);
+      }
     }
-
-    // Re-check cache after responses have had time to arrive
-    Timer(const Duration(seconds: 10), () {
-      if (_dht == null || !_dht!.isRunning) return;
-      for (final device in devices) {
-        final hash = sha1Hash(device.npub!);
-        final cached = _dht!.getCachedPeers(hash);
-        if (cached.isNotEmpty) {
-          _markDeviceOnline(devService, device, cached.first);
-        }
-      }
-    });
   }
 
   void _markDeviceOnline(DevicesService devService, RemoteDevice device, PeerInfo peer) {
