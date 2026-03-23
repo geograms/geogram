@@ -497,8 +497,13 @@ class DhtNode {
           break;
       }
     } catch (e) {
-      // Bencode decode failed — likely a JSON punch/handshake packet
-      onNonDhtPacket?.call(datagram);
+      // Bencode decode failed. Only forward to punch handler if the data
+      // starts with '{' (JSON). Random BT traffic that fails bencode is
+      // silently dropped — forwarding it causes jsonDecode exceptions
+      // on every packet, spiking the Dart heap on Android.
+      if (datagram.data.isNotEmpty && datagram.data[0] == 0x7B) {
+        onNonDhtPacket?.call(datagram);
+      }
     }
   }
 
