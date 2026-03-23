@@ -20,7 +20,6 @@ import '../services/profile_service.dart';
 import '../services/app_service.dart';
 import '../util/task_monitor_helpers.dart';
 import 'dht_node.dart';
-import 'ice_punch.dart';
 import 'k_bucket.dart';
 import 'node_capability.dart';
 
@@ -44,8 +43,6 @@ class P2PService {
   MonitoredIsolateHandle? _taskHandle;
   DhtNode? _dht;
   NodeCapability? _capability;
-  IcePunch? _icePunch;
-  RawDatagramSocket? _punchSocket;
   Timer? _refreshTimer;
 
   bool _running = false;
@@ -56,7 +53,7 @@ class P2PService {
   NodeType get nodeType => _capability?.type ?? NodeType.unknown;
   String? get publicIp => _capability?.publicIp;
   int? get publicPort => _capability?.publicPort;
-  int get directConnectionCount => _icePunch?.connectionCount ?? 0;
+  int get directConnectionCount => 0;
 
   final Set<PeerInfo> discoveredPeers = {};
   final _peersController = StreamController<List<PeerInfo>>.broadcast();
@@ -113,11 +110,6 @@ class P2PService {
         _dhtPort = _dht!.localPort;
 
         _dht!.onPeerFound.listen((e) => _addDiscoveredPeer(e.$2));
-
-        // Start hole punch on a SEPARATE UDP socket (not the DHT socket).
-        // Sharing the DHT socket causes random BT traffic to be processed
-        // through exception handlers, spiking the Dart heap.
-        await _startPunchSocket();
 
         LogService().log('P2P: DHT socket on port $_dhtPort');
         _phase2_bootstrap(port, npub);
@@ -229,10 +221,6 @@ class P2PService {
       await _dht!.stop();
       _dht!.dispose();
     }
-    _icePunch?.closeAll();
-    _punchSocket?.close();
-    _icePunch = null;
-    _punchSocket = null;
     await _saveDiscoveredPeers();
     _dht = null;
     _capability = null;
@@ -339,127 +327,60 @@ class P2PService {
       devService.syncDeviceToConnectionManager(callsign.toUpperCase());
       LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
     } catch (_) {
-      LogService().log('P2P: direct probe failed for ${peer.ip}:${peer.port} (NAT), trying hole punch');
-      _attemptHolePunch(peer);
+      LogService().log('P2P: direct probe failed for ${peer.ip}:${peer.port} (NAT)');
+      // Register as a DHT-discovered peer even without HTTP probe.
+      // We know it's a geogram device (announced on geogram DHT topic).
+      // Match to known devices or register with IP as identifier.
+      _registerNattedPeer(peer);
     }
   }
 
-  // ─── Hole Punching (separate UDP socket) ───────────────────────
+  /// Register a peer that was discovered via DHT but can't be reached
+  /// directly (both behind NAT). The peer IS a geogram device (it
+  /// announced on SHA1("geogram")). Register it in DevicesService so
+  /// it appears in the Devices UI with "internet" tag.
+  void _registerNattedPeer(PeerInfo peer) {
+    final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
+    final devService = DevicesService();
 
-  /// Start a dedicated UDP socket for hole punching.
-  /// This is SEPARATE from the DHT socket to avoid processing random
-  /// BT traffic through the punch handler (which caused 3.8GB heap spikes).
-  Future<void> _startPunchSocket() async {
-    try {
-      _punchSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-      _icePunch = IcePunch();
+    // Try to match to an existing known device that's currently offline
+    final knownDevices = devService.getAllDevices()
+        .where((d) =>
+            d.callsign.toUpperCase() != myCallsign &&
+            !d.isOnline)
+        .toList();
 
-      _punchSocket!.listen((event) {
-        if (event != RawSocketEvent.read) return;
-        final dg = _punchSocket!.receive();
-        if (dg != null) {
-          _icePunch!.handleIncomingPacket(dg);
-          // Check if we got a hello handshake from a new peer
-          _checkPunchHandshake(dg);
-        }
-      });
-
-      LogService().log('P2P: punch socket on port ${_punchSocket!.port}');
-    } catch (e) {
-      LogService().log('P2P: punch socket failed: $e');
-    }
-  }
-
-  /// Attempt UDP hole punch to a NATted peer.
-  Future<void> _attemptHolePunch(PeerInfo peer) async {
-    if (_icePunch == null || _punchSocket == null || _capability == null) {
-      LogService().log('P2P: hole punch skipped - not initialized');
-      return;
-    }
-
-    final ourIp = _capability!.publicIp;
-    final ourPort = _capability!.publicPort;
-    if (ourIp == null || ourPort == null) {
-      LogService().log('P2P: hole punch skipped - no public IP (type: ${_capability!.type.name})');
-      return;
-    }
-
-    LogService().log('P2P: hole punch to ${peer.ip}:${peer.port} (us: $ourIp:$ourPort)');
-
-    final connection = await _icePunch!.punch(
-      sharedSocket: _punchSocket!,
-      ourCandidate: IceCandidate(ip: ourIp, port: ourPort),
-      theirCandidate: IceCandidate(ip: peer.ip, port: peer.port),
-      capability: _capability!,
-    );
-
-    if (connection != null) {
-      LogService().log('P2P: punch SUCCESS to ${peer.ip}:${peer.port}');
-      final profile = ProfileService().getProfile();
-      await _icePunch!.sendHandshake(connection,
-        deviceId: ConfigService().deviceId,
-        deviceName: profile.callsign,
-        callsign: profile.callsign,
-        npub: profile.npub,
-      );
-      connection.onData.listen((data) => _handlePunchData(connection, data));
-    } else {
-      LogService().log('P2P: punch FAILED to ${peer.ip}:${peer.port}');
-    }
-  }
-
-  /// Check incoming punch socket data for hello handshakes.
-  void _checkPunchHandshake(Datagram dg) {
-    if (dg.data.isEmpty || dg.data[0] != 0x7B) return; // not JSON
-    try {
-      final json = jsonDecode(utf8.decode(dg.data)) as Map<String, dynamic>;
-      if (json['type'] == 'hello') {
-        final key = '${dg.address.address}:${dg.port}';
-        final conn = _icePunch?.activeConnections
-            .where((c) => '${c.remoteIp}:${c.remotePort}' == key)
-            .firstOrNull;
-        if (conn != null) {
-          _handlePunchData(conn, dg.data);
-        }
+    if (knownDevices.isNotEmpty) {
+      // Mark the first offline known device as online via internet.
+      // With only one other device this is an exact match; with multiple
+      // we'll refine via npub probe later.
+      final device = knownDevices.first;
+      if (!device.connectionMethods.contains('internet')) {
+        device.connectionMethods = [...device.connectionMethods, 'internet'];
       }
-    } catch (_) {}
-  }
-
-  /// Handle data on a punched connection — register peer on hello.
-  void _handlePunchData(DirectConnection connection, Uint8List data) {
-    if (data.isEmpty || data[0] != 0x7B) return;
-    try {
-      final json = jsonDecode(utf8.decode(data)) as Map<String, dynamic>;
-      if (json['type'] != 'hello') return;
-
-      _icePunch?.handleHandshake(connection, json);
-      final callsign = connection.callsign;
-      if (callsign == null || callsign.isEmpty) return;
-
-      final myCallsign = ProfileService().getProfile().callsign;
-      if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
-
-      LogService().log('P2P: punch hello from $callsign at ${connection.remoteIp}:${connection.remotePort}');
-
-      final devService = DevicesService();
-      devService.addOrUpdateDevice(RemoteDevice(
-        callsign: callsign.toUpperCase(),
-        name: connection.deviceName ?? callsign,
-        npub: connection.npub,
-        url: 'http://${connection.remoteIp}:${connection.remotePort}',
-        isOnline: true,
-        hasCachedData: false,
-        apps: [],
-        connectionMethods: ['internet'],
-        source: DeviceSourceType.direct,
-        lastSeen: DateTime.now(),
-        deviceId: connection.deviceId,
-      ));
-      devService.syncDeviceToConnectionManager(callsign.toUpperCase());
-      LogService().log('P2P: registered punched peer $callsign');
-    } catch (e) {
-      LogService().log('P2P: punch data error: $e');
+      device.isOnline = true;
+      device.lastSeen = DateTime.now();
+      devService.addOrUpdateDevice(device);
+      devService.syncDeviceToConnectionManager(device.callsign);
+      LogService().log('P2P: NATted peer ${peer.ip}:${peer.port} matched to known device ${device.callsign}');
+      return;
     }
+
+    // No known offline device — register as new with IP-based name
+    final ipId = peer.ip.hashCode.abs().toRadixString(36).substring(0, 4).toUpperCase();
+    final callsign = 'DHT-$ipId';
+    devService.addOrUpdateDevice(RemoteDevice(
+      callsign: callsign,
+      name: '${peer.ip}:${peer.port}',
+      url: 'http://${peer.ip}:${peer.port}',
+      isOnline: true,
+      hasCachedData: false,
+      apps: [],
+      connectionMethods: ['internet'],
+      source: DeviceSourceType.direct,
+      lastSeen: DateTime.now(),
+    ));
+    LogService().log('P2P: registered NATted peer as $callsign at ${peer.ip}:${peer.port}');
   }
 
   int _npubProbeIndex = 0;
