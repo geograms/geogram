@@ -223,19 +223,30 @@ void _logStartupProfile() {
   LogService().log('');
 }
 
-bool _mainAlreadyRan = false;
-
 void main() async {
-  // Guard against double execution — Android's headless FlutterEngine +
-  // MainActivity can call main() twice in the same process, doubling all
-  // services and causing 2x memory usage (3.8GB → OOM on Android).
-  if (_mainAlreadyRan) {
-    print('MAIN: Skipping duplicate main() call');
-    return;
-  }
-  _mainAlreadyRan = true;
+  print('MAIN: Starting Geogram (kIsWeb: $kIsWeb)');
 
-  print('MAIN: Starting Geogram (kIsWeb: $kIsWeb)'); // Debug
+  // Use a cross-isolate lock file to prevent double initialization.
+  // The first main() creates the lock; the second sees it and exits.
+  if (!kIsWeb && Platform.isAndroid) {
+    try {
+      final lockPath = '${Directory.systemTemp.path}/geogram_main.lock';
+      final lockFile = File(lockPath);
+      final now = DateTime.now().millisecondsSinceEpoch;
+
+      if (lockFile.existsSync()) {
+        final lockTime = int.tryParse(lockFile.readAsStringSync().trim()) ?? 0;
+        // If lock was created less than 30s ago, another main() is running
+        if (now - lockTime < 30000) {
+          print('MAIN: Skipping duplicate main() (lock age: ${now - lockTime}ms)');
+          return;
+        }
+      }
+      lockFile.writeAsStringSync('$now');
+    } catch (e) {
+      print('MAIN: Lock check failed: $e');
+    }
+  }
 
   // Parse command line arguments early (before any other initialization)
   if (!kIsWeb) {
