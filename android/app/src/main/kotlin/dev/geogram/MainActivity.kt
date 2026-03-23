@@ -61,13 +61,21 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        // Wrap super call in try-catch: FlutterActivity.configureFlutterEngine() calls
-        // GeneratedPluginRegistrant.registerWith() which may throw UnsatisfiedLinkError
-        // from WebFPlugin (Linux-only) trying to load native libs that don't exist on Android
-        try {
-            super.configureFlutterEngine(flutterEngine)
-        } catch (e: Throwable) {
-            android.util.Log.w("MainActivity", "Plugin registration error (non-fatal): ${e.message}")
+        // Skip super.configureFlutterEngine() — it calls GeneratedPluginRegistrant
+        // which triggers FlutterEngineConnectionRegistry to create a SECOND
+        // FlutterEngine internally. The pre-warmed engine from
+        // GeogramApplication.ensureFlutterEngine() already has plugins registered.
+        // Calling super here doubles the Dart main() execution and all services,
+        // causing 2x memory usage (3.8GB → OOM on Android).
+        //
+        // Only register plugins manually if the engine wasn't pre-warmed.
+        val isPreWarmed = FlutterEngineCache.getInstance().get(GeogramApplication.ENGINE_ID) != null
+        if (!isPreWarmed) {
+            try {
+                super.configureFlutterEngine(flutterEngine)
+            } catch (e: Throwable) {
+                android.util.Log.w("MainActivity", "Plugin registration error (non-fatal): ${e.message}")
+            }
         }
 
         // Initialize Bluetooth Classic plugin for BLE+ functionality

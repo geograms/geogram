@@ -115,17 +115,14 @@ public class GeogramApplication extends Application {
             return;
         }
 
-        Log.d(TAG, "Creating headless FlutterEngine...");
-        // Disable automatic plugin registration so we can catch Throwable (not just Exception).
-        // WebFPlugin (Linux-only) throws UnsatisfiedLinkError (an Error, not Exception) on Android
-        // when it tries to load libwebf.so/libquickjs.so which don't exist on this platform.
-        // GeneratedPluginRegistrant only catches Exception, so the Error escapes and crashes the app.
+        Log.d(TAG, "Creating FlutterEngine...");
+        // Use automaticallyRegisterPlugins=false so we can catch Throwable (not just Exception).
+        // WebFPlugin (Linux-only) throws UnsatisfiedLinkError on Android.
         flutterEngine = new FlutterEngine(this, new String[]{}, false);
         try {
             io.flutter.plugins.GeneratedPluginRegistrant.registerWith(flutterEngine);
         } catch (Throwable t) {
             Log.w(TAG, "Plugin registration error (non-fatal, likely WebF on Android): " + t.getMessage());
-            // Ensure plugins registered after webf in GeneratedPluginRegistrant are still available
             try {
                 flutterEngine.getPlugins().add(new io.flutter.plugins.webviewflutter.WebViewFlutterPlugin());
             } catch (Throwable ignored) {}
