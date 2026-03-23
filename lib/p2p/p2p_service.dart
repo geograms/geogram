@@ -169,20 +169,20 @@ class P2PService {
       try {
         await _capability!.detectFromDht(_dht!);
 
-        // Initial scan — global geogram topic
-        final peers = await _dht!.getPeers(sha1Hash('geogram'));
-        for (final p in peers) {
+        // Initial scan — use cached peers only (no iterative lookup at startup)
+        final cached = _dht!.getCachedPeers(sha1Hash('geogram'));
+        for (final p in cached) {
           _addDiscoveredPeer(p);
         }
-
-        // Iterative lookup for each known device's npub
-        await _probeKnownDevicesByNpub();
 
         _taskHandle?.markIdle();
         LogService().log('P2P service started '
             '(type: ${_capability!.type.name}, dht: ${_dht!.routingTableSize} nodes)');
 
-        // Start periodic refresh
+        // Probe known devices after a delay (one iterative lookup, not at startup)
+        Timer(const Duration(seconds: 30), () => _probeKnownDevicesByNpub());
+
+        // Periodic refresh — one npub probe per cycle
         _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
           if (_dht == null || !_dht!.isRunning) return;
           await _capability!.detectFromDht(_dht!);
@@ -192,9 +192,6 @@ class P2PService {
           }
           await _probeKnownDevicesByNpub();
         });
-
-        // Schedule delayed npub probe (gives other device time to announce)
-        Timer(const Duration(seconds: 30), () => _probeKnownDevicesByNpub());
       } catch (e) {
         _taskHandle?.markError(e);
         LogService().log('P2P: detect failed: $e');
@@ -325,9 +322,12 @@ class P2PService {
     }
   }
 
-  /// Probe known devices by doing full iterative DHT lookups on their npub hashes.
-  /// This reaches the K-closest nodes where the device actually announced,
-  /// unlike fireGetPeers which only hits random routing table nodes.
+  int _npubProbeIndex = 0;
+
+  /// Probe ONE known device per call by doing a full iterative DHT lookup
+  /// on its npub hash. Rotates through known devices across calls.
+  /// Each iterative lookup grows the Dart VM heap (~50MB), and the VM
+  /// never shrinks it, so we limit to one lookup per cycle.
   Future<void> _probeKnownDevicesByNpub() async {
     if (_dht == null || !_dht!.isRunning) return;
 
@@ -338,23 +338,26 @@ class P2PService {
             d.callsign.toUpperCase() != myCallsign &&
             d.npub != null &&
             d.npub!.isNotEmpty)
-        .take(3) // limit to avoid excessive DHT queries
         .toList();
 
-    for (final device in devices) {
-      if (!_running || _dht == null || !_dht!.isRunning) return;
-      final hash = sha1Hash(device.npub!);
+    if (devices.isEmpty) return;
 
-      // Check cache first (instant)
-      var peers = _dht!.getCachedPeers(hash);
-      if (peers.isEmpty) {
-        // Full iterative lookup — reaches the K-closest DHT nodes
-        peers = await _dht!.getPeers(hash);
-      }
+    // Rotate through devices — one per call
+    _npubProbeIndex = _npubProbeIndex % devices.length;
+    final device = devices[_npubProbeIndex];
+    _npubProbeIndex++;
 
-      if (peers.isNotEmpty) {
-        _markDeviceOnline(devService, device, peers.first);
-      }
+    final hash = sha1Hash(device.npub!);
+
+    // Check cache first (instant, no heap growth)
+    var peers = _dht!.getCachedPeers(hash);
+    if (peers.isEmpty) {
+      // Full iterative lookup — reaches the K-closest DHT nodes
+      peers = await _dht!.getPeers(hash);
+    }
+
+    if (peers.isNotEmpty) {
+      _markDeviceOnline(devService, device, peers.first);
     }
   }
 
