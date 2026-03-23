@@ -888,17 +888,29 @@ void _setupCrashHandlers() {
   };
 
   // Handle async errors that escape zones (platform dispatcher errors)
+  // Rate-limit error handling to prevent OOM crash loops.
+  // During OOM, every allocation triggers another error, and logging
+  // the error allocates more memory — creating a death spiral.
+  DateTime? _lastErrorTime;
+  int _errorCount = 0;
+
   PlatformDispatcher.instance.onError = (error, stack) {
-    CrashService().logCrashSync('PlatformDispatcher', error, stack);
-    // Only notify native (which may restart the app) for fatal errors.
-    // Non-fatal errors like FormatException from media_kit should not
-    // trigger an app restart.
-    final isFatal = error is OutOfMemoryError ||
-        error.toString().contains('Out of Memory');
-    if (isFatal) {
-      CrashService().notifyNativeCrash(error.toString(), stackTrace: stack);
+    final now = DateTime.now();
+    if (_lastErrorTime != null &&
+        now.difference(_lastErrorTime!).inSeconds < 5) {
+      _errorCount++;
+      if (_errorCount > 5) {
+        // Too many errors in 5s — stop logging to break OOM death spiral
+        return true;
+      }
+    } else {
+      _errorCount = 1;
     }
-    // Return true to prevent the error from propagating
+    _lastErrorTime = now;
+
+    CrashService().logCrashSync('PlatformDispatcher', error, stack);
+    // Don't notify native during OOM — the crash log write allocates
+    // memory which triggers more OOM in a death spiral.
     return true;
   };
 }
