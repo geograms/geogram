@@ -20,6 +20,7 @@ import '../services/profile_service.dart';
 import '../services/app_service.dart';
 import '../util/task_monitor_helpers.dart';
 import 'dht_node.dart';
+import 'ice_punch.dart';
 import 'k_bucket.dart';
 import 'node_capability.dart';
 
@@ -43,6 +44,7 @@ class P2PService {
   MonitoredIsolateHandle? _taskHandle;
   DhtNode? _dht;
   NodeCapability? _capability;
+  IcePunch? _icePunch;
   Timer? _refreshTimer;
 
   bool _running = false;
@@ -110,6 +112,12 @@ class P2PService {
         _dhtPort = _dht!.localPort;
 
         _dht!.onPeerFound.listen((e) => _addDiscoveredPeer(e.$2));
+
+        // Initialize hole punching — route non-DHT UDP packets to IcePunch
+        _icePunch = IcePunch();
+        _dht!.onNonDhtPacket = (datagram) {
+          _icePunch?.handleIncomingPacket(datagram);
+        };
 
         LogService().log('P2P: DHT socket on port $_dhtPort');
         _phase2_bootstrap(port, npub);
@@ -221,9 +229,11 @@ class P2PService {
       await _dht!.stop();
       _dht!.dispose();
     }
+    _icePunch?.closeAll();
     await _saveDiscoveredPeers();
     _dht = null;
     _capability = null;
+    _icePunch = null;
     _running = false;
     _taskHandle?.dispose();
     _taskHandle = null;
@@ -327,7 +337,97 @@ class P2PService {
       devService.syncDeviceToConnectionManager(callsign.toUpperCase());
       LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
     } catch (_) {
-      LogService().log('P2P: direct probe failed for ${peer.ip}:${peer.port} (NAT)');
+      LogService().log('P2P: direct probe failed for ${peer.ip}:${peer.port} (NAT), attempting hole punch');
+      await _attemptHolePunch(peer);
+    }
+  }
+
+  /// Attempt UDP hole punch to a NATted peer using DHT-discovered public IP.
+  Future<void> _attemptHolePunch(PeerInfo peer) async {
+    if (_icePunch == null || _capability == null || _dht?.socket == null) {
+      LogService().log('P2P: hole punch skipped - ${_icePunch == null ? "no IcePunch" : _capability == null ? "no capability" : "no DHT socket"}');
+      return;
+    }
+
+    final ourIp = _capability!.publicIp;
+    final ourPort = _capability!.publicPort;
+    if (ourIp == null || ourPort == null) {
+      LogService().log('P2P: hole punch skipped - no public IP detected (capability: ${_capability!.type.name})');
+      return;
+    }
+
+    LogService().log('P2P: hole punch attempt to ${peer.ip}:${peer.port} (our public: $ourIp:$ourPort)');
+
+    final ourCandidate = IceCandidate(ip: ourIp, port: ourPort);
+    final theirCandidate = IceCandidate(ip: peer.ip, port: peer.port);
+
+    final connection = await _icePunch!.punch(
+      sharedSocket: _dht!.socket!,
+      ourCandidate: ourCandidate,
+      theirCandidate: theirCandidate,
+      capability: _capability!,
+    );
+
+    if (connection != null) {
+      LogService().log('P2P: hole punch SUCCESS to ${peer.ip}:${peer.port}, sending handshake');
+      // Send our identity
+      final profile = ProfileService().getProfile();
+      await _icePunch!.sendHandshake(connection,
+        deviceId: ConfigService().deviceId,
+        deviceName: profile.callsign,
+        callsign: profile.callsign,
+        npub: profile.npub,
+      );
+      LogService().log('P2P: punch handshake sent to ${peer.ip}:${peer.port}');
+
+      // Listen for their identity handshake
+      connection.onData.listen((data) {
+        _handlePunchData(connection, data);
+      });
+    } else {
+      LogService().log('P2P: hole punch FAILED to ${peer.ip}:${peer.port}');
+    }
+  }
+
+  /// Handle data received on a punched connection.
+  void _handlePunchData(DirectConnection connection, Uint8List data) {
+    try {
+      final json = jsonDecode(utf8.decode(data)) as Map<String, dynamic>;
+      final type = json['type'] as String?;
+
+      if (type == 'hello') {
+        _icePunch?.handleHandshake(connection, json);
+        final callsign = connection.callsign;
+        if (callsign != null && callsign.isNotEmpty) {
+          final myCallsign = ProfileService().getProfile().callsign;
+          if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
+
+          LogService().log('P2P: punch handshake received from $callsign at ${connection.remoteIp}:${connection.remotePort}');
+
+          // Register in DevicesService — device is reachable via punched UDP
+          final devService = DevicesService();
+          devService.addOrUpdateDevice(RemoteDevice(
+            callsign: callsign.toUpperCase(),
+            name: connection.deviceName ?? callsign,
+            npub: connection.npub,
+            url: 'http://${connection.remoteIp}:${connection.remotePort}',
+            isOnline: true,
+            hasCachedData: false,
+            apps: [],
+            connectionMethods: ['internet'],
+            source: DeviceSourceType.direct,
+            lastSeen: DateTime.now(),
+            deviceId: connection.deviceId,
+          ));
+          devService.syncDeviceToConnectionManager(callsign.toUpperCase());
+          LogService().log('P2P: registered punched peer $callsign at ${connection.remoteIp}:${connection.remotePort}');
+        }
+      } else if (type == 'punch') {
+        // Punch response — peer is acknowledging our punch
+        LogService().log('P2P: punch acknowledgment from ${connection.remoteIp}:${connection.remotePort}');
+      }
+    } catch (e) {
+      LogService().log('P2P: punch data parse error: $e');
     }
   }
 

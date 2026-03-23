@@ -164,14 +164,45 @@ class IcePunch {
   /// Get connection count.
   int get connectionCount => activeConnections.length;
 
+  /// Callback for incoming UDP data routed from DhtNode's socket.
+  /// Called when DhtNode receives a non-bencode packet.
+  void handleIncomingPacket(Datagram datagram) {
+    final key = '${datagram.address.address}:${datagram.port}';
+    final conn = _connections[key];
+    if (conn != null) {
+      if (conn._state == DirectConnectionState.punching) {
+        conn._state = DirectConnectionState.connected;
+        LogService().log('IcePunch: hole punch SUCCESS from $key');
+      }
+      conn._handleIncoming(datagram.data);
+      return;
+    }
+
+    // Check if this is a punch packet from an unknown peer (they punched first)
+    try {
+      final json = jsonDecode(utf8.decode(datagram.data));
+      if (json is Map && (json['type'] == 'punch' || json['type'] == 'hello')) {
+        LogService().log('IcePunch: incoming ${json['type']} from $key');
+        _pendingIncoming[key] = datagram;
+      }
+    } catch (_) {}
+  }
+
+  /// Pending incoming packets from unknown peers (they initiated punch).
+  final Map<String, Datagram> _pendingIncoming = {};
+
+  /// Check if we have a pending incoming punch from a peer.
+  bool hasPendingFrom(String ip, int port) =>
+      _pendingIncoming.containsKey('$ip:$port');
+
   /// Attempt to establish a direct connection to a peer.
   ///
-  /// [localSocket] — our UDP socket (from DhtNode).
-  /// [ourCandidate] — our public address (from STUN).
-  /// [theirCandidate] — peer's public address (received via signaling).
+  /// [sharedSocket] — the DHT node's UDP socket (shared, not owned by us).
+  /// [ourCandidate] — our public address (from BEP 42).
+  /// [theirCandidate] — peer's public address (from DHT discovery).
   /// [capability] — our node capability info.
   Future<DirectConnection?> punch({
-    required RawDatagramSocket localSocket,
+    required RawDatagramSocket sharedSocket,
     required IceCandidate ourCandidate,
     required IceCandidate theirCandidate,
     required NodeCapability capability,
@@ -180,71 +211,63 @@ class IcePunch {
 
     // Already connected?
     if (_connections.containsKey(key) && _connections[key]!.isAlive) {
+      LogService().log('IcePunch: already connected to $key');
       return _connections[key];
     }
 
-    LogService().log('IcePunch: punching to $key');
+    LogService().log('IcePunch: punching to $key '
+        '(our public: ${ourCandidate.ip}:${ourCandidate.port})');
 
-    // Create a dedicated socket for this connection
-    RawDatagramSocket punchSocket;
-    try {
-      punchSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-    } catch (e) {
-      LogService().log('IcePunch: failed to bind socket: $e');
-      return null;
-    }
-
+    // Use the shared DHT socket — incoming responses are routed via
+    // handleIncomingPacket() from DhtNode.onNonDhtPacket callback.
     final connection = DirectConnection(
       remoteIp: theirCandidate.ip,
       remotePort: theirCandidate.port,
-      socket: punchSocket,
+      socket: sharedSocket,
     );
     connection._state = DirectConnectionState.punching;
+    _connections[key] = connection;
 
-    // Listen for incoming data on the punch socket
-    final completer = Completer<bool>();
-    late StreamSubscription sub;
-    sub = punchSocket.listen((event) {
-      if (event == RawSocketEvent.read) {
-        final dg = punchSocket.receive();
-        if (dg != null) {
-          if (connection._state == DirectConnectionState.punching) {
-            // Hole punch succeeded!
-            connection._state = DirectConnectionState.connected;
-            if (!completer.isCompleted) completer.complete(true);
-          }
-          connection._handleIncoming(dg.data);
-        }
-      }
-    });
+    // Check if peer already punched us (they may have discovered us first)
+    final pending = _pendingIncoming.remove(key);
+    if (pending != null) {
+      connection._state = DirectConnectionState.connected;
+      connection._handleIncoming(pending.data);
+      connection.startKeepalive();
+      LogService().log('IcePunch: connected to $key (peer punched first)');
+      return connection;
+    }
 
     // Send punch packets (simultaneous open)
-    // Send several packets quickly to increase chances
     final remoteAddr = InternetAddress(theirCandidate.ip);
-    final punchPayload = Uint8List.fromList(
-        utf8.encode('{"type":"punch","ts":${DateTime.now().millisecondsSinceEpoch}}'));
+    final punchPayload = Uint8List.fromList(utf8.encode(
+        '{"type":"punch","ts":${DateTime.now().millisecondsSinceEpoch}}'));
 
     for (var i = 0; i < 5; i++) {
       try {
-        punchSocket.send(punchPayload, remoteAddr, theirCandidate.port);
-      } catch (_) {}
+        sharedSocket.send(punchPayload, remoteAddr, theirCandidate.port);
+        LogService().log('IcePunch: sent punch packet $i to $key');
+      } catch (e) {
+        LogService().log('IcePunch: send error to $key: $e');
+      }
       await Future.delayed(const Duration(milliseconds: 200));
     }
 
     // Wait for response (up to 5 seconds)
-    final success = await completer.future
-        .timeout(const Duration(seconds: 5), onTimeout: () => false);
+    // The response arrives via handleIncomingPacket → sets state to connected
+    for (var i = 0; i < 25; i++) {
+      if (connection._state == DirectConnectionState.connected) break;
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
 
-    if (success) {
+    if (connection._state == DirectConnectionState.connected) {
       connection.startKeepalive();
-      _connections[key] = connection;
       LogService().log('IcePunch: connected to $key');
       return connection;
     } else {
-      sub.cancel();
-      punchSocket.close();
+      _connections.remove(key);
       connection._state = DirectConnectionState.disconnected;
-      LogService().log('IcePunch: failed to connect to $key');
+      LogService().log('IcePunch: FAILED to connect to $key (no response after 5s)');
       return null;
     }
   }

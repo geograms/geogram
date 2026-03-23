@@ -102,6 +102,10 @@ class DhtNode {
 
   /// UDP socket.
   RawDatagramSocket? _socket;
+  RawDatagramSocket? get socket => _socket;
+
+  /// Callback for non-DHT UDP packets (used by IcePunch hole punching).
+  void Function(Datagram datagram)? onNonDhtPacket;
 
   /// Local UDP port.
   int _localPort = 0;
@@ -452,7 +456,11 @@ class DhtNode {
 
     try {
       final msg = Bencode.decode(datagram.data);
-      if (msg is! Map) return;
+      if (msg is! Map) {
+        // Non-bencode packet — forward to hole punch handler
+        onNonDhtPacket?.call(datagram);
+        return;
+      }
       final dict = Bencode.asMap(msg);
       final type = Bencode.asString(dict['y']);
 
@@ -468,7 +476,8 @@ class DhtNode {
           break;
       }
     } catch (e) {
-      // Silently ignore malformed messages
+      // Bencode decode failed — likely a JSON punch/handshake packet
+      onNonDhtPacket?.call(datagram);
     }
   }
 
