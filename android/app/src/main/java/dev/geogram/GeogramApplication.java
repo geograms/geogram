@@ -287,6 +287,7 @@ public class GeogramApplication extends Application {
             fos.close();
 
             Log.d(TAG, "Crash logged to: " + crashFile.getAbsolutePath());
+            truncateCrashLog();
         } catch (Exception e) {
             Log.e(TAG, "Failed to write crash log", e);
         }
@@ -351,8 +352,47 @@ public class GeogramApplication extends Application {
             fos.close();
 
             Log.d(TAG, "Flutter crash logged to: " + crashFile.getAbsolutePath());
+            truncateCrashLog();
         } catch (Exception e) {
             Log.e(TAG, "Failed to write Flutter crash log", e);
+        }
+    }
+
+    /**
+     * Truncate crash log to keep only the last MAX_CRASH_REPORTS reports.
+     * Prevents the crash file from growing unbounded during OOM crash loops.
+     */
+    private static final int MAX_CRASH_REPORTS = 50;
+
+    private void truncateCrashLog() {
+        try {
+            File crashFile = new File(getFilesDir(), "geogram/logs/crashes.txt");
+            if (!crashFile.exists()) return;
+
+            // Only truncate if file is larger than 200KB
+            if (crashFile.length() < 200 * 1024) return;
+
+            String content = new String(java.nio.file.Files.readAllBytes(crashFile.toPath()));
+            String[] reports = content.split("=== CRASH REPORT ===");
+
+            if (reports.length <= MAX_CRASH_REPORTS) return;
+
+            // Keep only the last MAX_CRASH_REPORTS
+            StringBuilder sb = new StringBuilder();
+            int start = reports.length - MAX_CRASH_REPORTS;
+            for (int i = start; i < reports.length; i++) {
+                if (reports[i].trim().isEmpty()) continue;
+                sb.append("=== CRASH REPORT ===").append(reports[i]);
+            }
+
+            FileOutputStream fos = new FileOutputStream(crashFile, false);
+            fos.write(sb.toString().getBytes());
+            fos.flush();
+            fos.close();
+
+            Log.d(TAG, "Crash log truncated to " + MAX_CRASH_REPORTS + " reports");
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to truncate crash log", e);
         }
     }
 

@@ -158,9 +158,9 @@ class CrashService {
   String _getRecentLogs() {
     try {
       final logs = LogService().messages;
-      // Get last 20 log entries
-      final recentLogs = logs.length > 20
-          ? logs.sublist(logs.length - 20)
+      // Get last 10 log entries
+      final recentLogs = logs.length > 10
+          ? logs.sublist(logs.length - 10)
           : logs;
       return recentLogs.join('\n');
     } catch (e) {
