@@ -94,6 +94,12 @@ class P2PService {
 
     LogService().log('P2P: scheduled DHT start');
 
+    // TEMP: Skip DHT to test if memory leak is from DHT or elsewhere
+    if (Platform.isAndroid) {
+      LogService().log('P2P: DHT temporarily disabled on Android for memory investigation');
+      return;
+    }
+
     // Schedule each phase with Timer gaps so the event loop stays free
     _phase1_startNode(localPort!, profile.npub);
   }
