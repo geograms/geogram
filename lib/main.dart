@@ -890,7 +890,14 @@ void _setupCrashHandlers() {
   // Handle async errors that escape zones (platform dispatcher errors)
   PlatformDispatcher.instance.onError = (error, stack) {
     CrashService().logCrashSync('PlatformDispatcher', error, stack);
-    CrashService().notifyNativeCrash(error.toString(), stackTrace: stack);
+    // Only notify native (which may restart the app) for fatal errors.
+    // Non-fatal errors like FormatException from media_kit should not
+    // trigger an app restart.
+    final isFatal = error is OutOfMemoryError ||
+        error.toString().contains('Out of Memory');
+    if (isFatal) {
+      CrashService().notifyNativeCrash(error.toString(), stackTrace: stack);
+    }
     // Return true to prevent the error from propagating
     return true;
   };
@@ -1041,7 +1048,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     }
 
     if (state == AppLifecycleState.resumed) {
-      // Verify native channel is working (may be stale after Android killed the engine)
+      // Stagger resume actions to avoid thundering herd OOM on low-memory devices.
+      // Each action gets a delay so they don't all fire on the same event loop tick.
+
       if (!kIsWeb && Platform.isAndroid) {
         BLEForegroundService().verifyChannelReady().then((isReady) {
           if (!isReady) {
@@ -1050,17 +1059,18 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
         });
       }
 
-      // Verify WebSocket connection is still alive (Android background may have broken it)
-      WebSocketService().onAppResumed();
+      // WebSocket verify after 200ms
+      Timer(const Duration(milliseconds: 200), () {
+        WebSocketService().onAppResumed();
+      });
 
-      // Refresh BLE advertising (Android may have throttled it while screen was off)
-      BLEIdentityService().refreshAdvertising();
+      // BLE refresh after 500ms
+      Timer(const Duration(milliseconds: 500), () {
+        BLEIdentityService().refreshAdvertising();
+      });
 
-      // Delay check to allow SharedPreferences write to complete in background isolate
-      Future.delayed(const Duration(milliseconds: 500), () {
-        print(
-          'NOTIFICATION_DEBUG: ${DateTime.now()} delayed _checkPendingNotification',
-        );
+      // Notification check after 1s
+      Timer(const Duration(seconds: 1), () {
         _checkPendingNotification();
       });
     }

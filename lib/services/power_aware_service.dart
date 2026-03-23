@@ -110,11 +110,24 @@ class PowerAwareService {
   // Internal
   // ------------------------------------------------------------------
 
+  Timer? _debounceTimer;
+
   void _transitionTo(PowerMode newMode, {bool force = false}) {
     // Cancel pending doze timer on any transition
     _dozeTimer?.cancel();
     _dozeTimer = null;
 
+    if (newMode == _mode && !force) return;
+
+    // Debounce rapid transitions (e.g., background→foreground within ms)
+    // to prevent thundering herd of timer re-registrations
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      _executeTransition(newMode, force: force);
+    });
+  }
+
+  void _executeTransition(PowerMode newMode, {bool force = false}) {
     if (newMode == _mode && !force) return;
 
     final oldMode = _mode;
