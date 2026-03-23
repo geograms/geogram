@@ -116,17 +116,13 @@ public class GeogramApplication extends Application {
         }
 
         Log.d(TAG, "Creating FlutterEngine...");
-        // Use automaticallyRegisterPlugins=false so we can catch Throwable (not just Exception).
-        // WebFPlugin (Linux-only) throws UnsatisfiedLinkError on Android.
+        // IMPORTANT: automaticallyRegisterPlugins=false AND skip manual
+        // GeneratedPluginRegistrant.registerWith() here.
+        // Plugin registration happens later in MainActivity.configureFlutterEngine()
+        // when the Activity context is available.
+        // Registering here causes AudioServicePlugin to create a SECOND
+        // FlutterEngine that runs main() again, doubling memory to 3.8GB.
         flutterEngine = new FlutterEngine(this, new String[]{}, false);
-        try {
-            io.flutter.plugins.GeneratedPluginRegistrant.registerWith(flutterEngine);
-        } catch (Throwable t) {
-            Log.w(TAG, "Plugin registration error (non-fatal, likely WebF on Android): " + t.getMessage());
-            try {
-                flutterEngine.getPlugins().add(new io.flutter.plugins.webviewflutter.WebViewFlutterPlugin());
-            } catch (Throwable ignored) {}
-        }
 
         // Execute the default Dart entrypoint (main())
         flutterEngine.getDartExecutor().executeDartEntrypoint(
