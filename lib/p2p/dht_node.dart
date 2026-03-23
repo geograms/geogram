@@ -802,7 +802,7 @@ class DhtNode {
         }
       }
 
-      if (!improved) break;
+      await Future.delayed(const Duration(milliseconds: 100));
     }
 
     // Return K-closest from candidates
@@ -873,10 +873,9 @@ class DhtNode {
           }
         }
 
-        if (foundPeers.isNotEmpty) break;
       }
 
-      if (!improved || foundPeers.isNotEmpty) break;
+      if (!improved && foundPeers.isNotEmpty) break;
       await Future.delayed(const Duration(milliseconds: 100));
     }
 
