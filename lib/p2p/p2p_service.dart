@@ -111,6 +111,17 @@ class P2PService {
 
         _dht!.onPeerFound.listen((e) => _addDiscoveredPeer(e.$2));
 
+        // Set geogram identity on the DHT node for custom queries
+        final profile = ProfileService().getProfile();
+        _dht!.geogramCallsign = profile.callsign;
+        _dht!.geogramNpub = profile.npub;
+        _dht!.geogramDeviceId = ConfigService().deviceId;
+        _dht!.geogramPlatform = Platform.operatingSystem;
+        _dht!.geogramHttpPort = AppArgs().port;
+
+        // Handle geogram peer discoveries (from queries AND responses)
+        _dht!.onGeogramPeer = _handleGeogramPeer;
+
         LogService().log('P2P: DHT socket on port $_dhtPort');
         _phase2_bootstrap(port, npub);
       } catch (e) {
@@ -176,6 +187,16 @@ class P2PService {
       if (!_running || _dht == null) return;
       try {
         await _capability!.detectFromDht(_dht!);
+
+        // Announce our DHT external port on a dedicated topic so other
+        // geogram peers can send us custom DHT messages directly.
+        final udpPort = _capability!.publicPort ?? _dht!.localPort;
+        if (Platform.isAndroid) {
+          await _dht!.announceLight(sha1Hash('geogram-udp'), udpPort);
+        } else {
+          await _dht!.announce(sha1Hash('geogram-udp'), udpPort);
+        }
+        LogService().log('P2P: announced DHT UDP port $udpPort on geogram-udp topic');
 
         // Initial scan — use cached peers only (no iterative lookup at startup)
         final cached = _dht!.getCachedPeers(sha1Hash('geogram'));
@@ -328,59 +349,70 @@ class P2PService {
       LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
     } catch (_) {
       LogService().log('P2P: direct probe failed for ${peer.ip}:${peer.port} (NAT)');
-      // Register as a DHT-discovered peer even without HTTP probe.
-      // We know it's a geogram device (announced on geogram DHT topic).
-      // Match to known devices or register with IP as identifier.
-      _registerNattedPeer(peer);
+      // Look up peer's DHT UDP port from geogram-udp topic and send
+      // a geogram identity query via the DHT socket (bencode-encoded,
+      // no catch-block issues).
+      _contactViaDht(peer);
     }
   }
 
-  /// Register a peer that was discovered via DHT but can't be reached
-  /// directly (both behind NAT). The peer IS a geogram device (it
-  /// announced on SHA1("geogram")). Register it in DevicesService so
-  /// it appears in the Devices UI with "internet" tag.
-  void _registerNattedPeer(PeerInfo peer) {
-    final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
-    final devService = DevicesService();
+  /// Contact a NATted peer via custom DHT message.
+  /// Looks up the peer's DHT external port from the geogram-udp topic,
+  /// then sends a geogram identity query directly to that port.
+  Future<void> _contactViaDht(PeerInfo peer) async {
+    if (_dht == null || !_dht!.isRunning) return;
 
-    // Try to match to an existing known device that's currently offline
-    final knownDevices = devService.getAllDevices()
-        .where((d) =>
-            d.callsign.toUpperCase() != myCallsign &&
-            !d.isOnline)
-        .toList();
-
-    if (knownDevices.isNotEmpty) {
-      // Mark the first offline known device as online via internet.
-      // With only one other device this is an exact match; with multiple
-      // we'll refine via npub probe later.
-      final device = knownDevices.first;
-      if (!device.connectionMethods.contains('internet')) {
-        device.connectionMethods = [...device.connectionMethods, 'internet'];
+    // Get UDP peers from geogram-udp topic — these have DHT external ports
+    var udpPeers = _dht!.getCachedPeers(sha1Hash('geogram-udp'));
+    if (udpPeers.isEmpty) {
+      // Try a lightweight lookup
+      if (Platform.isAndroid) {
+        await _dht!.announceLight(sha1Hash('geogram-udp'), _capability?.publicPort ?? _dht!.localPort);
+      } else {
+        udpPeers = await _dht!.getPeers(sha1Hash('geogram-udp'));
       }
-      device.isOnline = true;
-      device.lastSeen = DateTime.now();
-      devService.addOrUpdateDevice(device);
-      devService.syncDeviceToConnectionManager(device.callsign);
-      LogService().log('P2P: NATted peer ${peer.ip}:${peer.port} matched to known device ${device.callsign}');
-      return;
+      udpPeers = _dht!.getCachedPeers(sha1Hash('geogram-udp'));
     }
 
-    // No known offline device — register as new with IP-based name
-    final ipId = peer.ip.hashCode.abs().toRadixString(36).substring(0, 4).toUpperCase();
-    final callsign = 'DHT-$ipId';
+    // Find a UDP peer matching the HTTP peer's IP
+    final udpPeer = udpPeers.where((p) => p.ip == peer.ip).firstOrNull;
+    if (udpPeer != null) {
+      LogService().log('P2P: sending geogram query to ${udpPeer.ip}:${udpPeer.port} (UDP port for ${peer.ip})');
+      _dht!.sendGeogramQuery(udpPeer.ip, udpPeer.port);
+    } else {
+      // No UDP port found — try the HTTP port anyway (might work if peer
+      // is on the same port or has UPnP)
+      LogService().log('P2P: no UDP port for ${peer.ip}, trying geogram query on port ${peer.port}');
+      _dht!.sendGeogramQuery(peer.ip, peer.port);
+    }
+  }
+
+  /// Called when a geogram peer is discovered (via query or response).
+  /// Registers the peer in DevicesService with full identity info.
+  void _handleGeogramPeer(String callsign, String? npub, String? deviceId,
+      String? platform, int httpPort, String ip, int udpPort) {
+    final myCallsign = ProfileService().getProfile().callsign;
+    if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
+
+    LogService().log('P2P: geogram peer $callsign at $ip (http:$httpPort, udp:$udpPort)');
+
+    final devService = DevicesService();
     devService.addOrUpdateDevice(RemoteDevice(
-      callsign: callsign,
-      name: '${peer.ip}:${peer.port}',
-      url: 'http://${peer.ip}:${peer.port}',
+      callsign: callsign.toUpperCase(),
+      name: callsign,
+      npub: npub,
+      url: 'http://$ip:$httpPort',
       isOnline: true,
       hasCachedData: false,
       apps: [],
       connectionMethods: ['internet'],
       source: DeviceSourceType.direct,
       lastSeen: DateTime.now(),
+      platform: platform,
+      deviceId: deviceId,
     ));
-    LogService().log('P2P: registered NATted peer as $callsign at ${peer.ip}:${peer.port}');
+    devService.syncDeviceToConnectionManager(callsign.toUpperCase());
+    LogService().log('P2P: registered geogram peer $callsign via DHT messaging');
   }
 
   int _npubProbeIndex = 0;

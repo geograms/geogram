@@ -501,7 +501,94 @@ class DhtNode {
       case 'announce_peer':
         _handleAnnouncePeer(args, txId, fromIp, fromPort);
         break;
+      case 'geogram':
+        _handleGeogramQuery(args, txId, fromIp, fromPort);
+        break;
     }
+  }
+
+  // ─── Geogram Custom DHT Messaging ──────────────────────────────
+
+  /// Our identity fields for geogram queries (set by P2PService).
+  String? geogramCallsign;
+  String? geogramNpub;
+  String? geogramDeviceId;
+  String? geogramPlatform;
+  int geogramHttpPort = 3456;
+
+  /// Callback when a geogram query or response is received from a peer.
+  void Function(String callsign, String? npub, String? deviceId,
+      String? platform, int httpPort, String ip, int udpPort)? onGeogramPeer;
+
+  void _handleGeogramQuery(
+      Map<String, dynamic> args, Uint8List txId, String fromIp, int fromPort) {
+    // Extract peer identity from the query
+    final peerCallsign = Bencode.asString(args['callsign']);
+    final peerNpub = args.containsKey('npub') ? Bencode.asString(args['npub']) : null;
+    final peerDeviceId = args.containsKey('device_id') ? Bencode.asString(args['device_id']) : null;
+    final peerPlatform = args.containsKey('platform') ? Bencode.asString(args['platform']) : null;
+    final peerHttpPort = args.containsKey('http_port')
+        ? (args['http_port'] as int? ?? 3456)
+        : 3456;
+
+    LogService().log('DHT: geogram query from $peerCallsign at $fromIp:$fromPort');
+
+    // Respond with our identity
+    _sendMessage({
+      't': txId,
+      'y': 'r',
+      'r': {
+        'id': nodeId,
+        'callsign': geogramCallsign ?? '',
+        'npub': geogramNpub ?? '',
+        'device_id': geogramDeviceId ?? '',
+        'platform': geogramPlatform ?? '',
+        'http_port': geogramHttpPort,
+      },
+    }, fromIp, fromPort);
+
+    // Notify P2PService about this peer
+    if (peerCallsign.isNotEmpty) {
+      onGeogramPeer?.call(
+          peerCallsign, peerNpub, peerDeviceId, peerPlatform,
+          peerHttpPort, fromIp, fromPort);
+    }
+  }
+
+  /// Send a geogram identity query to a peer's DHT socket.
+  Future<Map<String, dynamic>?> sendGeogramQuery(String ip, int port) async {
+    final txId = _nextTxId();
+    final completer = Completer<Map<String, dynamic>?>();
+
+    _pendingQueries[_toHex(txId)] = _PendingQuery(
+      txId: txId,
+      method: 'geogram',
+      completer: completer,
+    );
+
+    _sendMessage({
+      't': txId,
+      'y': 'q',
+      'q': 'geogram',
+      'a': {
+        'id': nodeId,
+        'callsign': geogramCallsign ?? '',
+        'npub': geogramNpub ?? '',
+        'device_id': geogramDeviceId ?? '',
+        'platform': geogramPlatform ?? '',
+        'http_port': geogramHttpPort,
+      },
+    }, ip, port);
+
+    LogService().log('DHT: sent geogram query to $ip:$port');
+
+    return completer.future.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        _pendingQueries.remove(_toHex(txId));
+        return null;
+      },
+    );
   }
 
   /// Our external IP:port as reported by BEP 42 `ip` field in DHT responses.
@@ -571,6 +658,23 @@ class DhtNode {
             _peerStore[hexHash]!.add(peer);
             _peerFoundController.add((pending.infoHash!, peer));
           }
+        }
+      } catch (_) {}
+    }
+
+    // Handle geogram responses — extract peer identity
+    if (body.containsKey('callsign')) {
+      try {
+        final peerCallsign = Bencode.asString(body['callsign']);
+        if (peerCallsign.isNotEmpty) {
+          final peerNpub = body.containsKey('npub') ? Bencode.asString(body['npub']) : null;
+          final peerDeviceId = body.containsKey('device_id') ? Bencode.asString(body['device_id']) : null;
+          final peerPlatform = body.containsKey('platform') ? Bencode.asString(body['platform']) : null;
+          final peerHttpPort = body.containsKey('http_port') ? (body['http_port'] as int? ?? 3456) : 3456;
+          LogService().log('DHT: geogram response from $peerCallsign at $fromIp:$fromPort (http:$peerHttpPort)');
+          onGeogramPeer?.call(
+              peerCallsign, peerNpub, peerDeviceId, peerPlatform,
+              peerHttpPort, fromIp, fromPort);
         }
       } catch (_) {}
     }
