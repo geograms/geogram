@@ -288,12 +288,13 @@ class DhtNode {
     final hexHash = _toHex(infoHash);
     _announcedTopics[hexHash] = port;
 
+    // Clear stale tokens before lookup to prevent unbounded growth
+    _receivedTokens.clear();
+
     // Iterative get_peers finds K-closest nodes and collects tokens
     await _iterativeGetPeers(infoHash);
 
-    // Announce to ALL nodes that gave us tokens during the lookup
-    // These are the nodes closest to the info_hash — exactly where
-    // other peers will look when they do get_peers for the same hash
+    // Announce to nodes that gave us tokens during the lookup
     var announced = 0;
     for (final entry in _receivedTokens.entries) {
       final parts = entry.key.split(':');
@@ -768,7 +769,7 @@ class DhtNode {
       distances[key] = xorDistance(node.nodeId, target);
     }
 
-    for (var round = 0; round < 10 && _running; round++) {
+    for (var round = 0; round < 5 && _running; round++) {
       // Pick alpha=3 unqueried candidates closest to target
       final unqueried = candidates.keys
           .where((k) => !queried.contains(k))
@@ -795,7 +796,7 @@ class DhtNode {
             final contact = DhtContact.fromCompactNodeInfo(nodesBytes, i);
             if (contact.ip == '0.0.0.0' || contact.port == 0) continue;
             final key = '${contact.ip}:${contact.port}';
-            if (!candidates.containsKey(key)) {
+            if (!candidates.containsKey(key) && candidates.length < 50) {
               candidates[key] = contact;
               distances[key] = xorDistance(contact.nodeId, target);
               _routingTable.insertNode(contact);
@@ -805,8 +806,7 @@ class DhtNode {
         }
       }
 
-      // Don't break just because no NEW candidates — keep querying
-      // until all closest candidates are queried (true convergence)
+      if (!improved) break;
       await Future.delayed(const Duration(milliseconds: 100));
     }
 
@@ -834,7 +834,7 @@ class DhtNode {
       distances[key] = xorDistance(node.nodeId, infoHash);
     }
 
-    for (var round = 0; round < 10 && _running; round++) {
+    for (var round = 0; round < 5 && _running; round++) {
       final unqueried = candidates.keys
           .where((k) => !queried.contains(k))
           .toList()
@@ -874,7 +874,7 @@ class DhtNode {
             final contact = DhtContact.fromCompactNodeInfo(nodesBytes, i);
             if (contact.ip == '0.0.0.0' || contact.port == 0) continue;
             final key = '${contact.ip}:${contact.port}';
-            if (!candidates.containsKey(key)) {
+            if (!candidates.containsKey(key) && candidates.length < 50) {
               candidates[key] = contact;
               distances[key] = xorDistance(contact.nodeId, infoHash);
               _routingTable.insertNode(contact);
@@ -884,9 +884,7 @@ class DhtNode {
         }
       }
 
-      if (!improved && foundPeers.isNotEmpty) break;
-      // Don't break just because no NEW candidates — keep querying
-      // unqueried ones until all closest are queried (true convergence)
+      if (!improved || foundPeers.isNotEmpty) break;
       await Future.delayed(const Duration(milliseconds: 100));
     }
 
