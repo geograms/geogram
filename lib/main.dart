@@ -223,7 +223,18 @@ void _logStartupProfile() {
   LogService().log('');
 }
 
+bool _mainAlreadyRan = false;
+
 void main() async {
+  // Guard against double execution — Android's headless FlutterEngine +
+  // MainActivity can call main() twice in the same process, doubling all
+  // services and causing 2x memory usage (3.8GB → OOM on Android).
+  if (_mainAlreadyRan) {
+    print('MAIN: Skipping duplicate main() call');
+    return;
+  }
+  _mainAlreadyRan = true;
+
   print('MAIN: Starting Geogram (kIsWeb: $kIsWeb)'); // Debug
 
   // Parse command line arguments early (before any other initialization)
