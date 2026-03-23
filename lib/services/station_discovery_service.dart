@@ -84,10 +84,10 @@ class StationDiscoveryService {
   MonitoredAsyncPeriodicTimer? _discoveryTimer;
   bool _isScanning = false;
   DateTime? _scanStartedAt;
-  // Primary ports scanned first (most common station ports)
-  final List<int> _primaryPorts = [3456, 8080];
-  // Secondary ports scanned after primary phase
-  final List<int> _secondaryPorts = [80, 8081, 3000, 5000];
+  // Primary port — only Geogram's default port for LAN scan
+  final List<int> _primaryPorts = [3456];
+  // Secondary ports scanned after primary phase (includes 8080)
+  final List<int> _secondaryPorts = [8080, 80, 8081, 3000, 5000];
   final Duration _scanInterval = const Duration(minutes: 5);
   final Duration _requestTimeout = const Duration(
     milliseconds: 400,
@@ -97,8 +97,7 @@ class StationDiscoveryService {
     seconds: 10,
   ); // Longer delay when scanning localhost for other instances
   static const Duration _staleScanTimeout = Duration(minutes: 2);
-  static const int _maxConcurrentConnections =
-      50; // Increased for faster scanning
+  static const int _maxConcurrentConnections = 15; // Conservative for mobile
 
   /// Start automatic discovery
   void start() {

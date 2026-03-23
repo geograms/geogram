@@ -8,6 +8,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart' as io_client;
 
 /// Exception thrown when the circuit breaker is open (too many consecutive errors).
 class HttpCircuitOpenException implements Exception {
@@ -186,10 +187,14 @@ class _SingleDigestSink implements Sink<Digest> {
 Future<T> withHttpClient<T>(
   Future<T> Function(http.Client client) operation,
 ) async {
-  final client = http.Client();
+  // Use IOClient with a raw HttpClient so we can force-close connections
+  final rawClient = HttpClient();
+  rawClient.connectionTimeout = const Duration(seconds: 3);
+  rawClient.idleTimeout = const Duration(seconds: 2);
+  final client = io_client.IOClient(rawClient);
   try {
     return await operation(client);
   } finally {
-    client.close();
+    rawClient.close(force: true); // Kill pending connections immediately
   }
 }

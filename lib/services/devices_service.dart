@@ -2699,7 +2699,13 @@ class DevicesService {
     final device = _devices[callsign.toUpperCase()];
     if (device == null) return [];
 
-    // First check if device is reachable
+    // If device is already online (from DHT, BLE, or previous check),
+    // skip the blocking reachability check and fetch directly.
+    if (device.isOnline) {
+      return await _fetchAppsOnline(device);
+    }
+
+    // Device not known to be online — do a quick reachability check
     final isOnline = await checkReachability(callsign);
 
     if (isOnline) {
