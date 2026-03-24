@@ -375,6 +375,7 @@ class _CliUiState {
     final screen = currentScreen!;
     if (screen.tip != null) {
       stdout.writeln('$_dim${screen.tip}$_reset');
+      stdout.writeln();
     }
     for (var i = 0; i < screen.groups.length; i++) {
       final group = screen.groups[i];
