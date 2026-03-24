@@ -116,13 +116,16 @@ public class GeogramApplication extends Application {
         }
 
         Log.d(TAG, "Creating FlutterEngine...");
-        // IMPORTANT: automaticallyRegisterPlugins=false AND skip manual
-        // GeneratedPluginRegistrant.registerWith() here.
-        // Plugin registration happens later in MainActivity.configureFlutterEngine()
-        // when the Activity context is available.
-        // Registering here causes AudioServicePlugin to create a SECOND
-        // FlutterEngine that runs main() again, doubling memory to 3.8GB.
+        // Use automaticallyRegisterPlugins=false so we can catch Throwable.
+        // We MUST register plugins here (before main() runs) because main()
+        // uses path_provider, shared_preferences, etc. immediately.
+        // Without plugins, main() hangs waiting for plugin responses.
         flutterEngine = new FlutterEngine(this, new String[]{}, false);
+        try {
+            io.flutter.plugins.GeneratedPluginRegistrant.registerWith(flutterEngine);
+        } catch (Throwable t) {
+            Log.w(TAG, "Plugin registration error (non-fatal): " + t.getMessage());
+        }
 
         // Execute the default Dart entrypoint (main())
         flutterEngine.getDartExecutor().executeDartEntrypoint(

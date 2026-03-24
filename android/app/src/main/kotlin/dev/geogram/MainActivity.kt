@@ -61,15 +61,20 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-        // Register plugins here (not in GeogramApplication.ensureFlutterEngine)
-        // because AudioServicePlugin requires an Activity context and creates
-        // a second FlutterEngine if registered without one — doubling main()
-        // and causing 3.8GB OOM. By registering here, AudioServicePlugin gets
-        // the Activity context it needs and doesn't create a separate engine.
-        try {
-            super.configureFlutterEngine(flutterEngine)
-        } catch (e: Throwable) {
-            android.util.Log.w("MainActivity", "Plugin registration error (non-fatal): ${e.message}")
+        // Skip super.configureFlutterEngine() for pre-warmed engines.
+        // Plugins were already registered in ensureFlutterEngine().
+        // Calling super here causes AudioServicePlugin to create a SECOND
+        // FlutterEngine via FlutterEngineConnectionRegistry.attachToActivityInternal,
+        // running main() again and doubling memory to 3.8GB.
+        val isPreWarmed = FlutterEngineCache.getInstance().get(GeogramApplication.ENGINE_ID) === flutterEngine
+        if (!isPreWarmed) {
+            try {
+                super.configureFlutterEngine(flutterEngine)
+            } catch (e: Throwable) {
+                android.util.Log.w("MainActivity", "Plugin registration error (non-fatal): ${e.message}")
+            }
+        } else {
+            android.util.Log.d("MainActivity", "Skipping plugin re-registration for pre-warmed engine")
         }
 
         // Initialize Bluetooth Classic plugin for BLE+ functionality
