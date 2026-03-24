@@ -858,7 +858,7 @@ class DhtNode {
       'info_hash': infoHash,
       'port': announcePort,
       'token': token,
-      'implied_port': 0,
+      'implied_port': 1,
     }, ip, port);
   }
 

@@ -161,25 +161,23 @@ class P2PService {
     Timer(const Duration(seconds: 2), () async {
       if (!_running || _dht == null) return;
       try {
-        // Detect public IP:port FIRST (BEP 42) so we announce the
-        // correct NAT-mapped external port, not the local port.
-        // With symmetric NAT, the local port differs from the external port.
-        await _capability!.detectFromDht(_dht!);
-
         final geogramHash = sha1Hash('geogram');
         final npubHash = sha1Hash(npub);
 
-        // Announce the BEP 42 external port (NAT-mapped), falling back
-        // to local port if BEP 42 detection failed.
-        final announcePort = _capability!.publicPort ?? _dht!.localPort;
-        await _dht!.announce(geogramHash, announcePort);
+        // Announce with implied_port=1 (set in dht_node.dart). The DHT
+        // node stores the UDP source port (NAT-mapped external port),
+        // not the declared port. This means get_peers returns the actual
+        // reachable address through NAT. The declared port value doesn't
+        // matter but we pass the local DHT port for consistency.
+        final dhtPort = _dht!.localPort;
+        await _dht!.announce(geogramHash, dhtPort);
         if (Platform.isAndroid) {
-          await _dht!.announceLight(npubHash, announcePort);
+          await _dht!.announceLight(npubHash, dhtPort);
         } else {
-          await _dht!.announce(npubHash, announcePort);
+          await _dht!.announce(npubHash, dhtPort);
         }
         _dht!.startPeriodicAnnounce(light: Platform.isAndroid);
-        LogService().log('P2P: announced on DHT (external port: $announcePort, local: ${_dht!.localPort}, http: $port)');
+        LogService().log('P2P: announced on DHT (implied_port=1, local: $dhtPort, http: $port)');
         _phase4_detect();
       } catch (e) {
         LogService().log('P2P: announce failed: $e');
@@ -191,6 +189,7 @@ class P2PService {
     Timer(const Duration(seconds: 2), () async {
       if (!_running || _dht == null) return;
       try {
+        await _capability!.detectFromDht(_dht!);
 
         // Initial peer scan — fresh lookup on desktop, cached on Android
         if (Platform.isAndroid) {
