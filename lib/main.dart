@@ -224,6 +224,29 @@ void _logStartupProfile() {
 }
 
 void main() async {
+  // On Android, AudioServicePlugin creates a second FlutterEngine that
+  // runs main() in a separate Dart isolate. Detect this by checking if
+  // the BLE channel exists (only registered on the primary engine by
+  // GeogramApplication.ensureFlutterEngine). The secondary engine has
+  // no BLE channel, so the call returns MissingPluginException.
+  if (!kIsWeb && Platform.isAndroid) {
+    try {
+      WidgetsFlutterBinding.ensureInitialized();
+      const channel = MethodChannel('dev.geogram/ble_service');
+      final ok = await channel.invokeMethod<bool>('verifyChannel');
+      if (ok != true) {
+        print('MAIN: Secondary engine detected, skipping');
+        return;
+      }
+    } on MissingPluginException {
+      print('MAIN: Secondary engine (no BLE channel), skipping');
+      return;
+    } catch (e) {
+      print('MAIN: Engine check error: $e, skipping');
+      return;
+    }
+  }
+
   print('MAIN: Starting Geogram (kIsWeb: $kIsWeb)');
 
   // Parse command line arguments early (before any other initialization)
