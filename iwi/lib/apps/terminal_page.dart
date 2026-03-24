@@ -5,6 +5,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../geoui/geoui_ast.dart';
+import '../geoui/geoui_parser.dart';
+import '../geoui/geoui_renderer.dart';
 import '../services/preferences_service.dart';
 
 // ── Color schemes ──────────────────────────────────────────────────────
@@ -70,8 +73,6 @@ class _TermColors {
       };
 }
 
-const _availableFonts = ['RobotoMono', 'Courier', 'monospace'];
-
 // ── Terminal page ──────────────────────────────────────────────────────
 
 class TerminalPage extends StatefulWidget {
@@ -90,6 +91,7 @@ class _TerminalPageState extends State<TerminalPage> {
   int _historyIndex = -1;
   late String _cwd;
   PreferencesService? _prefs;
+  GeoUiBlock? _settingsScreen;
 
   // Settings (loaded from prefs)
   double _fontSize = 16.0;
@@ -108,6 +110,12 @@ class _TerminalPageState extends State<TerminalPage> {
 
   Future<void> _loadPrefs() async {
     _prefs = await PreferencesService.instance();
+
+    // Load and parse the settings .ui file
+    final uiSource = await rootBundle.loadString('assets/terminal_settings.ui');
+    final parsed = GeoUiParser(uiSource).parse();
+    _settingsScreen = parsed.firstScreen;
+
     setState(() {
       _fontSize = _prefs!.terminalFontSize;
       _fontFamily = _prefs!.terminalFontFamily;
@@ -1165,27 +1173,37 @@ Network:
   // ── Settings dialog ─────────────────────────────────────────────────
 
   void _openSettings() {
-    showDialog(
+    if (_settingsScreen == null) return;
+
+    // Snapshot current values so cancel can restore them
+    final snapshot = {
+      'fontSize': _fontSize,
+      'fontFamily': _fontFamily,
+      'lineHeight': _lineHeight,
+      'colorScheme': _colorScheme,
+      'showTimestamps': _showTimestamps,
+      'maxLines': _maxLines,
+    };
+
+    showGeoUiDialog(
       context: context,
-      builder: (ctx) => _SettingsDialog(
-        fontSize: _fontSize,
-        fontFamily: _fontFamily,
-        lineHeight: _lineHeight,
-        colorScheme: _colorScheme,
-        showTimestamps: _showTimestamps,
-        maxLines: _maxLines,
-        onSave: (fs, ff, lh, cs, ts, ml) {
-          setState(() {
-            _fontSize = fs;
-            _fontFamily = ff;
-            _lineHeight = lh;
-            _colorScheme = cs;
-            _showTimestamps = ts;
-            _maxLines = ml;
-          });
+      screen: _settingsScreen!,
+      bindings: _TerminalSettingsBindings(this),
+      onAction: (action) {
+        if (action == 'save') {
           _savePrefs();
-        },
-      ),
+        } else if (action == 'cancel') {
+          // Restore snapshot
+          setState(() {
+            _fontSize = snapshot['fontSize'] as double;
+            _fontFamily = snapshot['fontFamily'] as String;
+            _lineHeight = snapshot['lineHeight'] as double;
+            _colorScheme = snapshot['colorScheme'] as String;
+            _showTimestamps = snapshot['showTimestamps'] as bool;
+            _maxLines = snapshot['maxLines'] as int;
+          });
+        }
+      },
     );
   }
 
@@ -1292,196 +1310,42 @@ Network:
   }
 }
 
-// ── Settings dialog ───────────────────────────────────────────────────
+// ── GeoUI bindings for terminal settings ──────────────────────────────
 
-class _SettingsDialog extends StatefulWidget {
-  final double fontSize;
-  final String fontFamily;
-  final double lineHeight;
-  final String colorScheme;
-  final bool showTimestamps;
-  final int maxLines;
-  final void Function(double, String, double, String, bool, int) onSave;
+class _TerminalSettingsBindings implements GeoUiBindings {
+  final _TerminalPageState _state;
 
-  const _SettingsDialog({
-    required this.fontSize,
-    required this.fontFamily,
-    required this.lineHeight,
-    required this.colorScheme,
-    required this.showTimestamps,
-    required this.maxLines,
-    required this.onSave,
-  });
+  _TerminalSettingsBindings(this._state);
 
   @override
-  State<_SettingsDialog> createState() => _SettingsDialogState();
-}
-
-class _SettingsDialogState extends State<_SettingsDialog> {
-  late double _fontSize;
-  late String _fontFamily;
-  late double _lineHeight;
-  late String _colorScheme;
-  late bool _showTimestamps;
-  late int _maxLines;
-
-  @override
-  void initState() {
-    super.initState();
-    _fontSize = widget.fontSize;
-    _fontFamily = widget.fontFamily;
-    _lineHeight = widget.lineHeight;
-    _colorScheme = widget.colorScheme;
-    _showTimestamps = widget.showTimestamps;
-    _maxLines = widget.maxLines;
-  }
+  dynamic getValue(String fieldName) => switch (fieldName) {
+        'fontSize' => _state._fontSize,
+        'fontFamily' => _state._fontFamily,
+        'lineHeight' => _state._lineHeight,
+        'colorScheme' => _state._colorScheme,
+        'showTimestamps' => _state._showTimestamps,
+        'maxLines' => _state._maxLines,
+        _ => null,
+      };
 
   @override
-  Widget build(BuildContext context) {
-    final previewColors = _TermColors.fromName(_colorScheme);
-
-    return AlertDialog(
-      title: const Text('Terminal Settings'),
-      content: SizedBox(
-        width: 400,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Font size
-              Text('Font size: ${_fontSize.round()}px'),
-              Slider(
-                value: _fontSize,
-                min: 10,
-                max: 32,
-                divisions: 22,
-                label: '${_fontSize.round()}',
-                onChanged: (v) => setState(() => _fontSize = v),
-              ),
-
-              const SizedBox(height: 8),
-
-              // Font family
-              const Text('Font family:'),
-              const SizedBox(height: 4),
-              SegmentedButton<String>(
-                segments: _availableFonts
-                    .map((f) => ButtonSegment(value: f, label: Text(f, style: TextStyle(fontFamily: f, fontSize: 12))))
-                    .toList(),
-                selected: {_fontFamily},
-                onSelectionChanged: (v) => setState(() => _fontFamily = v.first),
-              ),
-
-              const SizedBox(height: 12),
-
-              // Line height
-              Text('Line height: ${_lineHeight.toStringAsFixed(1)}'),
-              Slider(
-                value: _lineHeight,
-                min: 1.0,
-                max: 2.5,
-                divisions: 15,
-                label: _lineHeight.toStringAsFixed(1),
-                onChanged: (v) => setState(() => _lineHeight = v),
-              ),
-
-              const SizedBox(height: 8),
-
-              // Color scheme
-              const Text('Color scheme:'),
-              const SizedBox(height: 4),
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(value: 'dark', label: Text('Dark')),
-                  ButtonSegment(value: 'light', label: Text('Light')),
-                  ButtonSegment(value: 'solarized', label: Text('Solarized')),
-                ],
-                selected: {_colorScheme},
-                onSelectionChanged: (v) => setState(() => _colorScheme = v.first),
-              ),
-
-              const SizedBox(height: 12),
-
-              // Show timestamps
-              SwitchListTile(
-                title: const Text('Show timestamps'),
-                value: _showTimestamps,
-                onChanged: (v) => setState(() => _showTimestamps = v),
-                contentPadding: EdgeInsets.zero,
-              ),
-
-              // Max lines
-              Text('Buffer size: $_maxLines lines'),
-              Slider(
-                value: _maxLines.toDouble(),
-                min: 500,
-                max: 20000,
-                divisions: 39,
-                label: '$_maxLines',
-                onChanged: (v) => setState(() => _maxLines = v.round()),
-              ),
-
-              // Preview
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: previewColors.bg,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '~/projects \$ ls -la',
-                      style: TextStyle(
-                        fontFamily: _fontFamily,
-                        fontSize: _fontSize,
-                        height: _lineHeight,
-                        color: previewColors.command,
-                      ),
-                    ),
-                    Text(
-                      'd    4.0 KB  2026-03-24  src/',
-                      style: TextStyle(
-                        fontFamily: _fontFamily,
-                        fontSize: _fontSize,
-                        height: _lineHeight,
-                        color: previewColors.text,
-                      ),
-                    ),
-                    Text(
-                      'rm: permission denied',
-                      style: TextStyle(
-                        fontFamily: _fontFamily,
-                        fontSize: _fontSize,
-                        height: _lineHeight,
-                        color: previewColors.error,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () {
-            widget.onSave(
-                _fontSize, _fontFamily, _lineHeight, _colorScheme, _showTimestamps, _maxLines);
-            Navigator.of(context).pop();
-          },
-          child: const Text('Save'),
-        ),
-      ],
-    );
+  void setValue(String fieldName, dynamic value) {
+    _state.setState(() {
+      switch (fieldName) {
+        case 'fontSize':
+          _state._fontSize = (value as num).toDouble();
+        case 'fontFamily':
+          _state._fontFamily = value as String;
+        case 'lineHeight':
+          _state._lineHeight = (value as num).toDouble();
+        case 'colorScheme':
+          _state._colorScheme = value as String;
+        case 'showTimestamps':
+          _state._showTimestamps = value as bool;
+        case 'maxLines':
+          _state._maxLines = (value as num).toInt();
+      }
+    });
   }
 }
 

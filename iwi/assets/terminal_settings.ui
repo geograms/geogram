@@ -1,0 +1,74 @@
+screen "Terminal Settings" {
+  tip: "Configure terminal appearance and behavior.";
+
+  group "Appearance" {
+    tip: "Font and display settings.";
+
+    field fontSize : float {
+      label:   "Font Size";
+      default: 16.0;
+      min:     10;
+      max:     32;
+      step:    1;
+      tip:     "Size of the terminal font in pixels.";
+    }
+
+    field fontFamily : enum {
+      label:   "Font Family";
+      default: RobotoMono;
+
+      option RobotoMono  { label: "Roboto Mono"; }
+      option Courier     { label: "Courier"; }
+      option monospace   { label: "Monospace"; }
+    }
+
+    field lineHeight : float {
+      label:   "Line Height";
+      default: 1.5;
+      min:     1.0;
+      max:     2.5;
+      step:    0.1;
+      tip:     "Vertical spacing between lines.";
+    }
+
+    field colorScheme : enum {
+      label:   "Color Scheme";
+      default: dark;
+
+      option dark      { label: "Dark"; }
+      option light     { label: "Light"; }
+      option solarized { label: "Solarized"; }
+    }
+  }
+
+  group "Behavior" {
+    tip: "Terminal output settings.";
+
+    field showTimestamps : bool {
+      label:   "Show Timestamps";
+      default: false;
+      tip:     "Display time next to each output line.";
+    }
+
+    field maxLines : int {
+      label:   "Buffer Size";
+      default: 5000;
+      min:     500;
+      max:     20000;
+      step:    500;
+      tip:     "Maximum number of lines kept in the terminal buffer.";
+    }
+  }
+
+  action save {
+    label: "Save";
+    style: primary;
+    tip:   "Apply and save settings.";
+  }
+
+  action cancel {
+    label: "Cancel";
+    style: secondary;
+    tip:   "Discard changes.";
+  }
+}
