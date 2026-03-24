@@ -192,26 +192,60 @@ class P2PService {
       try {
         await _capability!.detectFromDht(_dht!);
 
-        // Initial scan — use cached peers only (no iterative lookup at startup)
-        final cached = _dht!.getCachedPeers(sha1Hash('geogram'));
-        for (final p in cached) {
-          _addDiscoveredPeer(p);
+        // Initial peer scan — fresh lookup on desktop, cached on Android
+        if (Platform.isAndroid) {
+          final cached = _dht!.getCachedPeers(sha1Hash('geogram'));
+          for (final p in cached) {
+            _addDiscoveredPeer(p);
+          }
+        } else {
+          final peers = await _dht!.getPeers(sha1Hash('geogram'));
+          for (final p in peers) {
+            _addDiscoveredPeer(p);
+          }
         }
 
         _taskHandle?.markIdle();
         LogService().log('P2P service started '
             '(type: ${_capability!.type.name}, dht: ${_dht!.routingTableSize} nodes)');
 
-        // Probe known devices after a delay
-        Timer(const Duration(seconds: 30), () => _probeKnownDevicesByNpub());
+        // After 30s: fresh peer scan + probe known devices
+        // (gives the other device time to announce)
+        Timer(const Duration(seconds: 30), () async {
+          if (_dht == null || !_dht!.isRunning) return;
+          if (Platform.isAndroid) {
+            _dht!.fireGetPeers(sha1Hash('geogram'));
+            await Future.delayed(const Duration(seconds: 5));
+            final p = _dht!.getCachedPeers(sha1Hash('geogram'));
+            for (final peer in p) {
+              _addDiscoveredPeer(peer);
+            }
+          } else {
+            final p = await _dht!.getPeers(sha1Hash('geogram'));
+            for (final peer in p) {
+              _addDiscoveredPeer(peer);
+            }
+          }
+          await _probeKnownDevicesByNpub();
+        });
 
-        // Periodic refresh — probe known devices
+        // Periodic refresh — fresh getPeers to discover new peers
         _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
           if (_dht == null || !_dht!.isRunning) return;
           await _capability!.detectFromDht(_dht!);
-          final p = _dht!.getCachedPeers(sha1Hash('geogram'));
-          for (final peer in p) {
-            _addDiscoveredPeer(peer);
+          // Fresh iterative lookup on desktop; lightweight on Android
+          if (Platform.isAndroid) {
+            _dht!.fireGetPeers(sha1Hash('geogram'));
+            await Future.delayed(const Duration(seconds: 5));
+            final p = _dht!.getCachedPeers(sha1Hash('geogram'));
+            for (final peer in p) {
+              _addDiscoveredPeer(peer);
+            }
+          } else {
+            final p = await _dht!.getPeers(sha1Hash('geogram'));
+            for (final peer in p) {
+              _addDiscoveredPeer(peer);
+            }
           }
           await _probeKnownDevicesByNpub();
         });
