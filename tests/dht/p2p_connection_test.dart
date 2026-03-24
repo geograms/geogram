@@ -128,16 +128,16 @@ class GeogramInstance {
     print('  [$callsign] Bootstrap done: ${dht.routingTableSize} nodes');
   }
 
-  /// Announce on geogram + geogram-udp topics.
+  /// Announce on geogram topics with DHT port (not HTTP port).
+  /// The DHT port is NAT-mapped from bootstrap. The HTTP port is
+  /// exchanged inside the geogram query payload.
   Future<void> announce() async {
     final geogramHash = sha1Hash('geogram');
     final npubHash = sha1Hash(npub);
-    final udpHash = sha1Hash('geogram-udp');
 
-    await dht.announceLight(geogramHash, httpPort);
-    await dht.announceLight(npubHash, httpPort);
-    await dht.announceLight(udpHash, dht.localPort);
-    print('  [$callsign] Announced (http:$httpPort, udp:${dht.localPort})');
+    await dht.announceLight(geogramHash, dht.localPort);
+    await dht.announceLight(npubHash, dht.localPort);
+    print('  [$callsign] Announced DHT port ${dht.localPort} (http:$httpPort)');
   }
 
   /// Discover peers on the geogram topic.
@@ -172,15 +172,12 @@ class GeogramInstance {
       print('  [$callsign] HTTP probe to ${peer.ip}:${peer.port} failed');
     }
 
-    // Step 2: Look up peer's UDP port from geogram-udp topic
-    final udpPeers = dht.getCachedPeers(sha1Hash('geogram-udp'));
-    final udpPeer = udpPeers.where((p) => p.ip == peer.ip).firstOrNull;
+    // Step 2: peer.port IS the DHT port (we announce DHT port on geogram topic)
+    // Send geogram query directly — no need for separate UDP topic lookup
+    print('  [$callsign] Sending geogram query to ${peer.ip}:${peer.port}');
 
-    final targetPort = udpPeer?.port ?? peer.port;
-    print('  [$callsign] Sending geogram query to ${peer.ip}:$targetPort');
-
-    // Step 3: Send geogram identity query via DHT socket
-    final response = await dht.sendGeogramQuery(peer.ip, targetPort);
+    // Step 3: Send geogram identity query via DHT socket (peer.port = DHT port)
+    final response = await dht.sendGeogramQuery(peer.ip, peer.port);
     if (response != null && response.containsKey('callsign')) {
       return true; // onGeogramPeer callback handles registration
     }

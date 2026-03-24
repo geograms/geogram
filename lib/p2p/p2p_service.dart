@@ -163,18 +163,22 @@ class P2PService {
       try {
         final geogramHash = sha1Hash('geogram');
         final npubHash = sha1Hash(npub);
-        // Use lightweight announce on Android to avoid 3GB+ Dart heap spike.
-        // The iterative lookup in announce() creates hundreds of temporary
-        // objects that get promoted to old-gen and the VM never releases pages.
+        // Announce DHT LOCAL PORT (not HTTP port) on the geogram topic.
+        // The DHT port is already NAT-mapped from bootstrap traffic.
+        // When other peers find us via get_peers, they get our
+        // public_ip:dht_port — and can send geogram queries directly
+        // to our DHT socket. HTTP port is exchanged inside the
+        // geogram query payload (http_port field).
+        final dhtPort = _dht!.localPort;
         if (Platform.isAndroid) {
-          await _dht!.announceLight(geogramHash, port);
-          await _dht!.announceLight(npubHash, port);
+          await _dht!.announceLight(geogramHash, dhtPort);
+          await _dht!.announceLight(npubHash, dhtPort);
         } else {
-          await _dht!.announce(geogramHash, port);
-          await _dht!.announce(npubHash, port);
+          await _dht!.announce(geogramHash, dhtPort);
+          await _dht!.announce(npubHash, dhtPort);
         }
         _dht!.startPeriodicAnnounce(light: Platform.isAndroid);
-        LogService().log('P2P: announced on DHT');
+        LogService().log('P2P: announced on DHT (dht port: $dhtPort, http port: $port)');
         _phase4_detect();
       } catch (e) {
         LogService().log('P2P: announce failed: $e');
@@ -188,16 +192,6 @@ class P2PService {
       try {
         await _capability!.detectFromDht(_dht!);
 
-        // Announce our DHT external port on a dedicated topic so other
-        // geogram peers can send us custom DHT messages directly.
-        final udpPort = _capability!.publicPort ?? _dht!.localPort;
-        if (Platform.isAndroid) {
-          await _dht!.announceLight(sha1Hash('geogram-udp'), udpPort);
-        } else {
-          await _dht!.announce(sha1Hash('geogram-udp'), udpPort);
-        }
-        LogService().log('P2P: announced DHT UDP port $udpPort on geogram-udp topic');
-
         // Initial scan — use cached peers only (no iterative lookup at startup)
         final cached = _dht!.getCachedPeers(sha1Hash('geogram'));
         for (final p in cached) {
@@ -208,22 +202,13 @@ class P2PService {
         LogService().log('P2P service started '
             '(type: ${_capability!.type.name}, dht: ${_dht!.routingTableSize} nodes)');
 
-        // Probe known devices after a delay (one iterative lookup, not at startup)
+        // Probe known devices after a delay
         Timer(const Duration(seconds: 30), () => _probeKnownDevicesByNpub());
 
-        // Periodic refresh — re-announce UDP port + probe known devices
+        // Periodic refresh — probe known devices
         _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
           if (_dht == null || !_dht!.isRunning) return;
           await _capability!.detectFromDht(_dht!);
-
-          // Re-announce UDP port (may have changed after NAT rebinding)
-          final refreshUdpPort = _capability!.publicPort ?? _dht!.localPort;
-          if (Platform.isAndroid) {
-            await _dht!.announceLight(sha1Hash('geogram-udp'), refreshUdpPort);
-          } else {
-            await _dht!.announce(sha1Hash('geogram-udp'), refreshUdpPort);
-          }
-
           final p = _dht!.getCachedPeers(sha1Hash('geogram'));
           for (final peer in p) {
             _addDiscoveredPeer(peer);
@@ -357,42 +342,13 @@ class P2PService {
       devService.syncDeviceToConnectionManager(callsign.toUpperCase());
       LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
     } catch (_) {
-      LogService().log('P2P: direct probe failed for ${peer.ip}:${peer.port} (NAT)');
-      // Look up peer's DHT UDP port from geogram-udp topic and send
-      // a geogram identity query via the DHT socket (bencode-encoded,
-      // no catch-block issues).
-      _contactViaDht(peer);
-    }
-  }
-
-  /// Contact a NATted peer via custom DHT message.
-  /// Looks up the peer's DHT external port from the geogram-udp topic,
-  /// then sends a geogram identity query directly to that port.
-  Future<void> _contactViaDht(PeerInfo peer) async {
-    if (_dht == null || !_dht!.isRunning) return;
-
-    // Get UDP peers from geogram-udp topic — these have DHT external ports
-    var udpPeers = _dht!.getCachedPeers(sha1Hash('geogram-udp'));
-    if (udpPeers.isEmpty) {
-      // Try a lightweight lookup
-      if (Platform.isAndroid) {
-        await _dht!.announceLight(sha1Hash('geogram-udp'), _capability?.publicPort ?? _dht!.localPort);
-      } else {
-        udpPeers = await _dht!.getPeers(sha1Hash('geogram-udp'));
+      // peer.port is the DHT port (we announce DHT port on geogram topic).
+      // Send geogram identity query directly — the peer's DHT socket is
+      // listening on this port and it's NAT-mapped from bootstrap.
+      LogService().log('P2P: HTTP probe failed for ${peer.ip}:${peer.port}, sending geogram query');
+      if (_dht != null && _dht!.isRunning) {
+        _dht!.sendGeogramQuery(peer.ip, peer.port);
       }
-      udpPeers = _dht!.getCachedPeers(sha1Hash('geogram-udp'));
-    }
-
-    // Find a UDP peer matching the HTTP peer's IP
-    final udpPeer = udpPeers.where((p) => p.ip == peer.ip).firstOrNull;
-    if (udpPeer != null) {
-      LogService().log('P2P: sending geogram query to ${udpPeer.ip}:${udpPeer.port} (UDP port for ${peer.ip})');
-      _dht!.sendGeogramQuery(udpPeer.ip, udpPeer.port);
-    } else {
-      // No UDP port found — try the HTTP port anyway (might work if peer
-      // is on the same port or has UPnP)
-      LogService().log('P2P: no UDP port for ${peer.ip}, trying geogram query on port ${peer.port}');
-      _dht!.sendGeogramQuery(peer.ip, peer.port);
     }
   }
 
