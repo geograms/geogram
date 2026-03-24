@@ -453,21 +453,19 @@ class P2PService {
 
     final hash = sha1Hash(device.npub!);
 
-    // Check cache first (instant, no heap growth)
+    // Check cache first, then do full iterative lookup
     var peers = _dht!.getCachedPeers(hash);
     if (peers.isEmpty) {
-      // On Android: use announceLight which queries routing table nodes
-      // without creating the massive candidate maps that spike the heap.
-      // On desktop: full iterative lookup is fine.
-      if (Platform.isAndroid) {
-        await _dht!.announceLight(hash, AppArgs().port);
-        peers = _dht!.getCachedPeers(hash);
-      } else {
-        peers = await _dht!.getPeers(hash);
-      }
+      peers = await _dht!.getPeers(hash);
     }
 
     if (peers.isNotEmpty) {
+      // Found peer via npub lookup — try geogram query to get identity
+      for (final peer in peers) {
+        LogService().log('P2P: npub probe found ${device.callsign} at ${peer.ip}:${peer.port}');
+        // Send geogram query — if peer's NAT allows, we get identity back
+        _dht!.sendGeogramQuery(peer.ip, peer.port);
+      }
       _markDeviceOnline(devService, device, peers.first);
     }
   }
