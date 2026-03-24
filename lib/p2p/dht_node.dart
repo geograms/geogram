@@ -931,7 +931,7 @@ class DhtNode {
       distances[key] = xorDistance(node.nodeId, target);
     }
 
-    for (var round = 0; round < 5 && _running; round++) {
+    for (var round = 0; round < 10 && _running; round++) {
       // Pick alpha=3 unqueried candidates closest to target
       final unqueried = candidates.keys
           .where((k) => !queried.contains(k))
@@ -964,7 +964,7 @@ class DhtNode {
       }
 
       // Allow early exit after 3 rounds if no new candidates discovered
-      if (!improved && round >= 2) break;
+      await Future.delayed(const Duration(milliseconds: 100));
     }
 
     // Return K-closest from candidates
@@ -991,7 +991,7 @@ class DhtNode {
       distances[key] = xorDistance(node.nodeId, infoHash);
     }
 
-    for (var round = 0; round < 5 && _running; round++) {
+    for (var round = 0; round < 10 && _running; round++) {
       final unqueried = candidates.keys
           .where((k) => !queried.contains(k))
           .toList()
@@ -1038,8 +1038,7 @@ class DhtNode {
       }
 
       // Exit if: peers found and no new candidates, or no progress after 3 rounds
-      if (foundPeers.isNotEmpty && !improved) break;
-      if (!improved && round >= 2) break;
+      await Future.delayed(const Duration(milliseconds: 100));
     }
 
     // Store found peers
