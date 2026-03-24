@@ -957,7 +957,7 @@ class DhtNode {
             final contact = DhtContact.fromCompactNodeInfo(nodesBytes, i);
             if (contact.ip == '0.0.0.0' || contact.port == 0) continue;
             final nkey = '${contact.ip}:${contact.port}';
-            if (!candidates.containsKey(nkey) && candidates.length < 50) {
+            if (!candidates.containsKey(nkey)) {
               candidates[nkey] = contact;
               distances[nkey] = xorDistance(contact.nodeId, target);
               _routingTable.insertNode(contact);
@@ -1033,7 +1033,7 @@ class DhtNode {
             final contact = DhtContact.fromCompactNodeInfo(nodesBytes, i);
             if (contact.ip == '0.0.0.0' || contact.port == 0) continue;
             final nkey = '${contact.ip}:${contact.port}';
-            if (!candidates.containsKey(nkey) && candidates.length < 50) {
+            if (!candidates.containsKey(nkey)) {
               candidates[nkey] = contact;
               distances[nkey] = xorDistance(contact.nodeId, infoHash);
               _routingTable.insertNode(contact);
