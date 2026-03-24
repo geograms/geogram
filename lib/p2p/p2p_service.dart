@@ -161,29 +161,25 @@ class P2PService {
     Timer(const Duration(seconds: 2), () async {
       if (!_running || _dht == null) return;
       try {
+        // Detect public IP:port FIRST (BEP 42) so we announce the
+        // correct NAT-mapped external port, not the local port.
+        // With symmetric NAT, the local port differs from the external port.
+        await _capability!.detectFromDht(_dht!);
+
         final geogramHash = sha1Hash('geogram');
         final npubHash = sha1Hash(npub);
-        // Announce DHT LOCAL PORT (not HTTP port) on the geogram topic.
-        // The DHT port is already NAT-mapped from bootstrap traffic.
-        // When other peers find us via get_peers, they get our
-        // public_ip:dht_port — and can send geogram queries directly
-        // to our DHT socket. HTTP port is exchanged inside the
-        // geogram query payload (http_port field).
-        //
-        // MUST use full announce() (not announceLight) for the geogram
-        // topic — announceLight only hits random routing table nodes,
-        // but get_peers iterates to the K-closest nodes. They don't
-        // overlap, so announceLight peers are never found.
-        // Use announceLight for npub only (less critical).
-        final dhtPort = _dht!.localPort;
-        await _dht!.announce(geogramHash, dhtPort);
+
+        // Announce the BEP 42 external port (NAT-mapped), falling back
+        // to local port if BEP 42 detection failed.
+        final announcePort = _capability!.publicPort ?? _dht!.localPort;
+        await _dht!.announce(geogramHash, announcePort);
         if (Platform.isAndroid) {
-          await _dht!.announceLight(npubHash, dhtPort);
+          await _dht!.announceLight(npubHash, announcePort);
         } else {
-          await _dht!.announce(npubHash, dhtPort);
+          await _dht!.announce(npubHash, announcePort);
         }
         _dht!.startPeriodicAnnounce(light: Platform.isAndroid);
-        LogService().log('P2P: announced on DHT (dht port: $dhtPort, http port: $port)');
+        LogService().log('P2P: announced on DHT (external port: $announcePort, local: ${_dht!.localPort}, http: $port)');
         _phase4_detect();
       } catch (e) {
         LogService().log('P2P: announce failed: $e');
@@ -195,7 +191,6 @@ class P2PService {
     Timer(const Duration(seconds: 2), () async {
       if (!_running || _dht == null) return;
       try {
-        await _capability!.detectFromDht(_dht!);
 
         // Initial peer scan — fresh lookup on desktop, cached on Android
         if (Platform.isAndroid) {
