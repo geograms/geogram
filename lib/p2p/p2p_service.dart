@@ -19,6 +19,8 @@ import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/app_service.dart';
 import '../util/task_monitor_helpers.dart';
+import '../connection/connection_manager.dart';
+import '../connection/transports/dht_transport.dart';
 import 'dht_node.dart';
 import 'k_bucket.dart';
 import 'node_capability.dart';
@@ -121,6 +123,15 @@ class P2PService {
 
         // Handle geogram peer discoveries (from queries AND responses)
         _dht!.onGeogramPeer = _handleGeogramPeer;
+
+        // Give DhtTransport a reference to the DHT node for UDP fallback
+        try {
+          final cm = ConnectionManager();
+          if (cm.isInitialized) {
+            final dt = cm.getTransport('dht') as DhtTransport?;
+            if (dt != null) dt.dhtNode = _dht;
+          }
+        } catch (_) {}
 
         LogService().log('P2P: DHT socket on port $_dhtPort');
         _phase2_bootstrap(port, npub);

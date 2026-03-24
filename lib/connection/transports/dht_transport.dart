@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import '../../p2p/dht_node.dart';
 import '../../services/log_service.dart';
 import '../../services/app_args.dart';
 import '../../services/security_service.dart';
@@ -27,6 +28,10 @@ class DhtTransport extends Transport with TransportMixin {
   int get priority => 25;
 
   final ManagedHttpClient _client = ManagedHttpClient();
+
+  /// Reference to the DHT node for sending geogram messages via UDP.
+  /// Set by P2PService after DHT starts.
+  DhtNode? dhtNode;
 
   @override
   bool get isAvailable {
@@ -54,10 +59,16 @@ class DhtTransport extends Transport with TransportMixin {
   @override
   Future<bool> canReach(String callsign) async {
     final info = getDeviceInfo(callsign);
-    if (info?.url == null) return false;
+    if (info == null) return false;
 
+    // If device has a UDP port from geogram DHT messaging, it's reachable
+    // via the DHT socket even when HTTP fails through NAT.
+    final udpPort = info.metadata['udp_port'];
+    if (udpPort != null && udpPort is int && udpPort > 0) return true;
+
+    if (info.url == null) return false;
     try {
-      final uri = Uri.parse('${info!.url}/api/status');
+      final uri = Uri.parse('${info.url}/api/status');
       final response = await _client.get(uri).timeout(
         const Duration(seconds: 3),
       );
@@ -83,31 +94,58 @@ class DhtTransport extends Transport with TransportMixin {
 
     try {
       final info = getDeviceInfo(message.targetCallsign);
-      if (info?.url == null) {
+      if (info == null) {
         return TransportResult.failure(
-          error: 'No URL for ${message.targetCallsign}',
+          error: 'No device info for ${message.targetCallsign}',
           transportUsed: id,
         );
       }
 
-      switch (message.type) {
-        case TransportMessageType.apiRequest:
-          return await _handleApiRequest(
-            message, info!.url!, effectiveTimeout, stopwatch,
-          );
-
-        case TransportMessageType.directMessage:
-        case TransportMessageType.chatMessage:
-          return await _handleMessagePost(
-            message, info!.url!, effectiveTimeout, stopwatch,
-          );
-
-        default:
-          return TransportResult.failure(
-            error: 'Unsupported message type for DHT: ${message.type}',
-            transportUsed: id,
-          );
+      // Try HTTP first (works on LAN / direct connections)
+      if (info.url != null) {
+        try {
+          switch (message.type) {
+            case TransportMessageType.apiRequest:
+              return await _handleApiRequest(
+                message, info.url!, effectiveTimeout, stopwatch,
+              );
+            case TransportMessageType.directMessage:
+            case TransportMessageType.chatMessage:
+              return await _handleMessagePost(
+                message, info.url!, effectiveTimeout, stopwatch,
+              );
+            default:
+              break;
+          }
+        } catch (httpError) {
+          LogService().log('DhtTransport: HTTP failed for ${message.targetCallsign}, trying UDP');
+        }
       }
+
+      // Fall back to UDP geogram message via DHT socket
+      final udpIp = info.metadata['udp_ip'] as String?;
+      final udpPort = info.metadata['udp_port'] as int?;
+      if (dhtNode != null && udpIp != null && udpPort != null && udpPort > 0) {
+        LogService().log('DhtTransport: sending via UDP to ${message.targetCallsign} at $udpIp:$udpPort');
+        final response = await dhtNode!.sendGeogramQuery(udpIp, udpPort);
+        stopwatch.stop();
+        if (response != null) {
+          final result = TransportResult.success(
+            statusCode: 200,
+            responseData: '{"status":"delivered_via_dht"}',
+            transportUsed: id,
+            latency: stopwatch.elapsed,
+          );
+          recordMetrics(result);
+          return result;
+        }
+      }
+
+      stopwatch.stop();
+      return TransportResult.failure(
+        error: 'No reachable path for ${message.targetCallsign}',
+        transportUsed: id,
+      );
     } catch (e) {
       stopwatch.stop();
       final result = TransportResult.failure(
