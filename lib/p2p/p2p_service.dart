@@ -169,12 +169,17 @@ class P2PService {
         // public_ip:dht_port — and can send geogram queries directly
         // to our DHT socket. HTTP port is exchanged inside the
         // geogram query payload (http_port field).
+        //
+        // MUST use full announce() (not announceLight) for the geogram
+        // topic — announceLight only hits random routing table nodes,
+        // but get_peers iterates to the K-closest nodes. They don't
+        // overlap, so announceLight peers are never found.
+        // Use announceLight for npub only (less critical).
         final dhtPort = _dht!.localPort;
+        await _dht!.announce(geogramHash, dhtPort);
         if (Platform.isAndroid) {
-          await _dht!.announceLight(geogramHash, dhtPort);
           await _dht!.announceLight(npubHash, dhtPort);
         } else {
-          await _dht!.announce(geogramHash, dhtPort);
           await _dht!.announce(npubHash, dhtPort);
         }
         _dht!.startPeriodicAnnounce(light: Platform.isAndroid);
