@@ -1070,6 +1070,20 @@ class DevicesService {
     _notifyListeners();
   }
 
+  void updateDhtRendezvous(
+    String callsign, {
+    required String udpIp,
+    required int udpPort,
+  }) {
+    final device = getDevice(callsign);
+    if (device == null) return;
+
+    device.udpIp = udpIp;
+    device.udpPort = udpPort;
+    device.lastSeen = DateTime.now();
+    _devicesController.add(getAllDevices());
+  }
+
   /// Load devices from cache
   Future<void> _loadCachedDevices() async {
     try {
