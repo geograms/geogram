@@ -376,22 +376,15 @@ class _CliUiState {
     if (screen.tip != null) {
       stdout.writeln('$_dim${screen.tip}$_reset');
     }
-    stdout.writeln();
-
     for (final group in screen.groups) {
-      stdout.writeln('$_bold${group.name}$_reset');
-      if (group.tip != null) {
-        stdout.writeln('  $_dim${group.tip}$_reset');
-      }
+      stdout.writeln('$_bold${group.name}$_reset  $_dim${group.tip ?? ''}$_reset');
       for (final field in group.fields) {
         final val = fieldValues[field.name] ?? field.defaultValue ?? '';
         final typeHint = _fieldTypeHint(field);
         stdout.writeln(
             '  $_cyan${field.name}$_reset = $val  $typeHint');
       }
-      stdout.writeln();
     }
-
     if (screen.actions.isNotEmpty) {
       stdout.writeln('${_bold}Actions:$_reset');
       for (final action in screen.actions) {
