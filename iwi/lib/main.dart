@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'apps/terminal_page.dart';
 import 'wapp/wapp_engine.dart';
 
 void main() {
@@ -18,19 +19,139 @@ class IwiApp extends StatelessWidget {
       title: 'Iwi',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark(useMaterial3: true),
-      home: const HomePage(),
+      home: const LauncherPage(),
     );
   }
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+// ── Launcher ──────────────────────────────────────────────────────────
 
-  @override
-  State<HomePage> createState() => _HomePageState();
+class _AppEntry {
+  final String name;
+  final IconData icon;
+  final Color color;
+  final Widget Function() builder;
+
+  const _AppEntry({
+    required this.name,
+    required this.icon,
+    required this.color,
+    required this.builder,
+  });
 }
 
-class _HomePageState extends State<HomePage> {
+class LauncherPage extends StatelessWidget {
+  const LauncherPage({super.key});
+
+  static final _apps = <_AppEntry>[
+    _AppEntry(
+      name: 'Terminal',
+      icon: Icons.terminal,
+      color: const Color(0xFF0F3460),
+      builder: () => const TerminalPage(),
+    ),
+    _AppEntry(
+      name: 'Wapp Runner',
+      icon: Icons.memory,
+      color: const Color(0xFF533483),
+      builder: () => const WappRunnerPage(),
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Iwi'),
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.menu),
+            onSelected: (value) {},
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'settings', child: Text('Settings')),
+              const PopupMenuItem(value: 'about', child: Text('About')),
+            ],
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: GridView.builder(
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 120,
+            mainAxisSpacing: 20,
+            crossAxisSpacing: 20,
+          ),
+          itemCount: _apps.length,
+          itemBuilder: (context, index) {
+            final app = _apps[index];
+            return _AppIcon(
+              name: app.name,
+              icon: app.icon,
+              color: app.color,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => app.builder()),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _AppIcon extends StatelessWidget {
+  final String name;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _AppIcon({
+    required this.name,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, size: 28, color: Colors.white),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            name,
+            style: const TextStyle(fontSize: 12),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Wapp Runner (moved from old HomePage) ─────────────────────────────
+
+class WappRunnerPage extends StatefulWidget {
+  const WappRunnerPage({super.key});
+
+  @override
+  State<WappRunnerPage> createState() => _WappRunnerPageState();
+}
+
+class _WappRunnerPageState extends State<WappRunnerPage> {
   final _engine = WappEngine();
   final _msgController = TextEditingController();
   final _scrollController = ScrollController();
@@ -106,21 +227,10 @@ class _HomePageState extends State<HomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Iwi — Wapp Runner'),
-        actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.menu),
-            onSelected: (value) {},
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'settings', child: Text('Settings')),
-              const PopupMenuItem(value: 'about', child: Text('About')),
-            ],
-          ),
-        ],
+        title: const Text('Wapp Runner'),
       ),
       body: Column(
         children: [
-          // Status bar
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -144,8 +254,6 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
-
-          // Log output
           Expanded(
             child: ListView.builder(
               controller: _scrollController,
@@ -191,8 +299,6 @@ class _HomePageState extends State<HomePage> {
               },
             ),
           ),
-
-          // Message input
           if (_engine.isLoaded)
             Container(
               padding: const EdgeInsets.all(12),
