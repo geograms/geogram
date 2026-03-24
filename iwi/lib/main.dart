@@ -27,6 +27,7 @@ class HomePage extends StatelessWidget {
       appBar: AppBar(
         actions: [
           PopupMenuButton<String>(
+            icon: const Icon(Icons.menu),
             onSelected: (value) {},
             itemBuilder: (context) => [
               const PopupMenuItem(value: 'settings', child: Text('Settings')),
