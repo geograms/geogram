@@ -940,12 +940,16 @@ class DhtNode {
       final toQuery = unqueried.take(3).toList();
       if (toQuery.isEmpty) break; // converged
 
-      // Sequential queries — one at a time to minimize heap pressure.
-      bool improved = false;
-      for (final key in toQuery) {
+      // Parallel queries (alpha=3) — lets the event loop process UI frames
+      final futures = toQuery.map((key) {
         queried.add(key);
         final node = candidates[key]!;
-        final result = await _sendFindNode(node.ip, node.port, target);
+        return _sendFindNode(node.ip, node.port, target);
+      }).toList();
+      final results = await Future.wait(futures);
+
+      bool improved = false;
+      for (final result in results) {
         if (result == null) continue;
         if (result.containsKey('nodes')) {
           final nodesBytes = Bencode.asBytes(result['nodes']);
@@ -963,8 +967,7 @@ class DhtNode {
         }
       }
 
-      // Allow early exit after 3 rounds if no new candidates discovered
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 50));
     }
 
     // Return K-closest from candidates
@@ -999,12 +1002,16 @@ class DhtNode {
       final toQuery = unqueried.take(3).toList();
       if (toQuery.isEmpty) break;
 
-      // Sequential queries — one at a time to minimize heap pressure.
-      bool improved = false;
-      for (final key in toQuery) {
+      // Parallel queries (alpha=3) — lets the event loop process UI frames
+      final futures = toQuery.map((key) {
         queried.add(key);
         final node = candidates[key]!;
-        final result = await _sendGetPeers(node.ip, node.port, infoHash);
+        return _sendGetPeers(node.ip, node.port, infoHash);
+      }).toList();
+      final results = await Future.wait(futures);
+
+      bool improved = false;
+      for (final result in results) {
         if (result == null) continue;
 
         if (result.containsKey('values')) {
@@ -1034,11 +1041,9 @@ class DhtNode {
             }
           }
         }
-
       }
 
-      // Exit if: peers found and no new candidates, or no progress after 3 rounds
-      await Future.delayed(const Duration(milliseconds: 100));
+      await Future.delayed(const Duration(milliseconds: 50));
     }
 
     // Store found peers
