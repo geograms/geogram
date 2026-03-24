@@ -25,13 +25,6 @@ class GeoUiBool extends GeoUiValue {
   String toString() => value.toString();
 }
 
-class GeoUiBareWord extends GeoUiValue {
-  final String value;
-  const GeoUiBareWord(this.value);
-  @override
-  String toString() => value;
-}
-
 class GeoUiFuncCall extends GeoUiValue {
   final String name;
   final List<GeoUiValue> args;
@@ -67,7 +60,6 @@ class GeoUiBlock {
   String? getString(String key) {
     final v = decls[key];
     if (v is GeoUiString) return v.value;
-    if (v is GeoUiBareWord) return v.value;
     return null;
   }
 

@@ -112,7 +112,7 @@ class _TerminalPageState extends State<TerminalPage> {
     _prefs = await PreferencesService.instance();
 
     // Load and parse the settings .ui file
-    final uiSource = await rootBundle.loadString('assets/terminal_settings.ui');
+    final uiSource = await rootBundle.loadString('assets/terminal_settings.ui.json');
     final parsed = GeoUiParser(uiSource).parse();
     _settingsScreen = parsed.firstScreen;
 

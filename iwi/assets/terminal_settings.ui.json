@@ -1,0 +1,102 @@
+[
+  {
+    "$": "screen",
+    "name": "Terminal Settings",
+    "tip": "Configure terminal appearance and behavior.",
+    "children": [
+      {
+        "$": "group",
+        "name": "Appearance",
+        "tip": "Font and display settings.",
+        "children": [
+          {
+            "$": "field",
+            "name": "fontSize",
+            "$type": "float",
+            "label": "Font Size",
+            "default": 16.0,
+            "min": 10,
+            "max": 32,
+            "step": 1,
+            "tip": "Size of the terminal font in pixels."
+          },
+          {
+            "$": "field",
+            "name": "fontFamily",
+            "$type": "enum",
+            "label": "Font Family",
+            "default": "RobotoMono",
+            "children": [
+              { "$": "option", "name": "RobotoMono", "label": "Roboto Mono" },
+              { "$": "option", "name": "Courier", "label": "Courier" },
+              { "$": "option", "name": "monospace", "label": "Monospace" }
+            ]
+          },
+          {
+            "$": "field",
+            "name": "lineHeight",
+            "$type": "float",
+            "label": "Line Height",
+            "default": 1.5,
+            "min": 1.0,
+            "max": 2.5,
+            "step": 0.1,
+            "tip": "Vertical spacing between lines."
+          },
+          {
+            "$": "field",
+            "name": "colorScheme",
+            "$type": "enum",
+            "label": "Color Scheme",
+            "default": "dark",
+            "children": [
+              { "$": "option", "name": "dark", "label": "Dark" },
+              { "$": "option", "name": "light", "label": "Light" },
+              { "$": "option", "name": "solarized", "label": "Solarized" }
+            ]
+          }
+        ]
+      },
+      {
+        "$": "group",
+        "name": "Behavior",
+        "tip": "Terminal output settings.",
+        "children": [
+          {
+            "$": "field",
+            "name": "showTimestamps",
+            "$type": "bool",
+            "label": "Show Timestamps",
+            "default": false,
+            "tip": "Display time next to each output line."
+          },
+          {
+            "$": "field",
+            "name": "maxLines",
+            "$type": "int",
+            "label": "Buffer Size",
+            "default": 5000,
+            "min": 500,
+            "max": 20000,
+            "step": 500,
+            "tip": "Maximum number of lines kept in the terminal buffer."
+          }
+        ]
+      },
+      {
+        "$": "action",
+        "name": "save",
+        "label": "Save",
+        "style": "primary",
+        "tip": "Apply and save settings."
+      },
+      {
+        "$": "action",
+        "name": "cancel",
+        "label": "Cancel",
+        "style": "secondary",
+        "tip": "Discard changes."
+      }
+    ]
+  }
+]

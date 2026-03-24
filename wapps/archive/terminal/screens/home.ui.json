@@ -1,0 +1,234 @@
+[
+  {
+    "$": "app",
+    "name": "Terminal",
+    "version": 0.8,
+    "base-url": "/api",
+    "tip": "Self-contained terminal. All commands run in the WASM sandbox.",
+    "children": [
+      {
+        "$": "icons",
+        "children": [
+          { "$": "set", "name": "file", "for": ["web", "lvgl", "email"] },
+          { "$": "set", "name": "emoji", "for": ["web", "cli", "email", "lvgl"] },
+          { "$": "set", "name": "text", "for": ["cli", "email"] }
+        ]
+      },
+      {
+        "$": "include",
+        "name": "screens/settings.ui.json"
+      },
+      {
+        "$": "screen",
+        "name": "Terminal",
+        "tip": "Execute commands and view output.",
+        "children": [
+          {
+            "$": "group",
+            "name": "Output",
+            "tip": "Command output appears here.",
+            "children": [
+              {
+                "$": "watch",
+                "endpoint": "/output",
+                "interval": "500ms",
+                "children": [
+                  {
+                    "$": "params",
+                    "after": { "$fn": "state", "args": ["last_output_id"] }
+                  },
+                  {
+                    "$": "result",
+                    "type": "list",
+                    "id": "output-list",
+                    "empty": "Type a command below to get started.",
+                    "children": [
+                      {
+                        "$": "200",
+                        "strategy": "append-new",
+                        "track-by": { "$fn": "response", "args": ["id"] },
+                        "scroll": "bottom",
+                        "update": "state(last_output_id) <- response(last_id)"
+                      },
+                      {
+                        "$": "4xx",
+                        "type": "toast",
+                        "message": { "$fn": "response", "args": ["error"] },
+                        "level": "warning"
+                      },
+                      {
+                        "$": "5xx",
+                        "type": "toast",
+                        "message": "Output fetch failed.",
+                        "level": "error"
+                      },
+                      {
+                        "$": "item",
+                        "title": { "$fn": "response", "args": ["text"] },
+                        "subtitle": { "$fn": "response", "args": ["level"] },
+                        "children": [
+                          {
+                            "$": "icon",
+                            "from": { "$fn": "response", "args": ["level"] },
+                            "emoji": [">", "!", "*"],
+                            "text": ["[out]", "[err]", "[cmd]"]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "$": "group",
+            "name": "Input",
+            "tip": "Enter commands here.",
+            "children": [
+              {
+                "$": "label",
+                "name": "prompt",
+                "text": "$ ",
+                "style": "meta"
+              },
+              {
+                "$": "field",
+                "name": "command",
+                "$type": "string",
+                "label": "Command",
+                "default": "",
+                "required": true,
+                "hint": "ls, cd, cat, ping, curl, help ...",
+                "children": [
+                  {
+                    "$": "icon",
+                    "file": { "$fn": "media", "args": ["terminal.svg"] },
+                    "emoji": ">",
+                    "text": "[$]"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "$": "action",
+            "name": "run",
+            "label": "Run",
+            "style": "primary",
+            "confirm": false,
+            "tip": "Execute the command.",
+            "children": [
+              {
+                "$": "icon",
+                "file": { "$fn": "media", "args": ["terminal.svg"] },
+                "emoji": ">",
+                "text": "[run]"
+              },
+              {
+                "$": "request",
+                "method": "POST",
+                "endpoint": "/exec",
+                "children": [
+                  {
+                    "$": "body",
+                    "command": { "$fn": "field", "args": ["command"] }
+                  }
+                ]
+              },
+              {
+                "$": "result",
+                "children": [
+                  {
+                    "$": "optimistic",
+                    "type": "mutation",
+                    "target": "output-list",
+                    "op": "append",
+                    "children": [
+                      {
+                        "$": "item",
+                        "text": { "$fn": "field", "args": ["command"] },
+                        "level": "cmd",
+                        "pending": true
+                      }
+                    ]
+                  },
+                  {
+                    "$": "200",
+                    "type": "mutation",
+                    "target": "output-list",
+                    "op": "append",
+                    "children": [
+                      {
+                        "$": "item",
+                        "text": { "$fn": "response", "args": ["output"] },
+                        "level": { "$fn": "response", "args": ["level"] }
+                      }
+                    ],
+                    "then": "clear(field(command))"
+                  },
+                  {
+                    "$": "4xx",
+                    "type": "mutation",
+                    "target": "output-list",
+                    "op": "append",
+                    "children": [
+                      {
+                        "$": "item",
+                        "text": { "$fn": "response", "args": ["error"] },
+                        "level": "err"
+                      }
+                    ]
+                  },
+                  {
+                    "$": "5xx",
+                    "type": "mutation",
+                    "target": "output-list",
+                    "op": "append",
+                    "children": [
+                      {
+                        "$": "item",
+                        "text": "Command failed.",
+                        "level": "err"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "$": "action",
+            "name": "clear-screen",
+            "label": "Clear",
+            "style": "secondary",
+            "tip": "Clear the output buffer.",
+            "children": [
+              {
+                "$": "icon",
+                "emoji": "X",
+                "text": "[clr]"
+              },
+              {
+                "$": "request",
+                "method": "POST",
+                "endpoint": "/clear"
+              },
+              {
+                "$": "result",
+                "children": [
+                  {
+                    "$": "200",
+                    "type": "mutation",
+                    "target": "output-list",
+                    "op": "clear"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-A **wapp** is a self-contained application package that runs identically on ESP32 (Wasm3), Android/Desktop Flutter (Wasmer), CLI (Wasmer), and web browsers. Business logic lives in a single compiled WebAssembly binary. User interfaces are declared in `.ui` files using the GeoUI language — a renderer-agnostic description of screens, fields, actions, and reactive behaviours that each host platform translates into its own native widgets.
+A **wapp** is a self-contained application package that runs identically on ESP32 (Wasm3), Android/Desktop Flutter (Wasmer), CLI (Wasmer), and web browsers. Business logic lives in a single compiled WebAssembly binary. User interfaces are declared in `.ui.json` files using the GeoUI JSON schema — a renderer-agnostic description of screens, fields, actions, and reactive behaviours that each host platform translates into its own native widgets. Because GeoUI uses plain JSON, any language's built-in JSON decoder can read the files (Dart `jsonDecode`, C `cJSON`, Python `json.load`, JS `JSON.parse`).
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -14,10 +14,10 @@ A **wapp** is a self-contained application package that runs identically on ESP3
 │                                                      │
 │  app.wasm          ← business logic (required)       │
 │  manifest.json     ← metadata, deps, permissions     │
-│  screens/          ← UI definitions (.ui files)      │
-│    home.ui                                           │
-│    settings.ui                                       │
-│    chat.ui                                           │
+│  screens/          ← UI definitions (.ui.json)       │
+│    home.ui.json                                      │
+│    settings.ui.json                                  │
+│    chat.ui.json                                      │
 │  media/            ← all assets (default root)       │
 │    icons/                                            │
 │      send.svg                                        │
@@ -30,7 +30,7 @@ A **wapp** is a self-contained application package that runs identically on ESP3
 └─────────────────────────────────────────────────────┘
 ```
 
-The WASM binary is the single source of truth for logic. The `.ui` files are data — they can be updated, propagated over the mesh, and rendered by any conforming host without recompiling `app.wasm`.
+The WASM binary is the single source of truth for logic. The `.ui.json` files are data — they can be updated, propagated over the mesh, and rendered by any conforming host without recompiling `app.wasm`.
 
 ---
 
@@ -42,7 +42,7 @@ A `.wapp` file is a standard ZIP archive with the following layout:
 app.wasm              ← required, must be at archive root
 manifest.json         ← required, must be at archive root
 screens/              ← required if the app has a UI
-  *.ui
+  *.ui.json
 media/                ← optional, all assets live here
   icons/              ← SVG preferred, PNG acceptable
   images/
@@ -54,9 +54,9 @@ media/                ← optional, all assets live here
 
 - `app.wasm` **must** be at the archive root. No subdirectory.
 - `manifest.json` **must** be at the archive root.
-- `.ui` files **must** live inside `screens/`.
+- `.ui.json` files **must** live inside `screens/`.
 - Media assets **must** live inside `media/`. Subdirectory structure is free-form; the renderer searches recursively.
-- Paths in `.ui` files reference assets relative to `media/` by name alone when unambiguous, or by subpath when needed: `media(send.svg)` or `media(icons/send.svg)`.
+- Paths in `.ui.json` files reference assets relative to `media/` using function-call syntax: `{"$fn":"media","args":["send.svg"]}` or `{"$fn":"media","args":["icons/send.svg"]}`.
 - The archive **must not** contain symlinks, absolute paths, or path traversal (`..`).
 - Total uncompressed size on ESP32 is constrained by available flash (~900KB after firmware + OTA + NVS). Individual `.wasm` targets 2–10KB; full packages including media should stay under 512KB for reliable mesh propagation.
 
@@ -72,7 +72,7 @@ media/                ← optional, all assets live here
   "icon":            "media/icons/app-icon.svg",
   "screenshots":     ["media/images/screen-home.png", "media/images/screen-settings.png"],
   "tags":            ["messaging", "radio", "mesh"],
-  "entry_ui":        "screens/home.ui",
+  "entry_ui":        "screens/home.ui.json",
   "tick_interval_ms": 2000,
   "permissions":     ["microphone", "network", "storage", "ble", "radio"],
   "provides": {
@@ -99,7 +99,7 @@ media/                ← optional, all assets live here
 | `icon` | string | no | Path within archive to icon (SVG preferred) |
 | `screenshots` | string[] | no | Paths within archive to screenshots |
 | `tags` | string[] | no | Category tags for discovery |
-| `entry_ui` | string | no | First `.ui` file to display on launch |
+| `entry_ui` | string | no | First `.ui.json` file to display on launch |
 | `tick_interval_ms` | int\|null | no | WASM tick rate; null for libraries |
 | `permissions` | string[] | no | Declared capabilities the host must grant |
 | `provides` | object | no | Events, functions, variables this wapp exports |
@@ -107,52 +107,76 @@ media/                ← optional, all assets live here
 
 ---
 
-## 3. UI Language — GeoUI (.ui files)
+## 3. UI Language — GeoUI (.ui.json files)
 
-GeoUI is a brace-delimited declarative language for describing user interfaces. It is:
+GeoUI uses plain JSON to describe user interfaces. It is:
 
-- **Not indentation-sensitive.** The parser only cares about `{` and `}`. Formatting is cosmetic.
+- **Standard JSON.** Any language's built-in JSON decoder can read the files — no custom parser needed.
 - **Not a stylesheet.** It describes interactive menus and screens, not visual presentation.
 - **Renderer-agnostic.** Each host translates GeoUI primitives into its own native widgets.
-- **Trivially parseable on ESP32.** The grammar is one recursive function, ~60 lines in C.
+- **Trivially parseable on ESP32.** `cJSON` handles it; ~30 lines of C to walk blocks.
 
-### 3.1 Grammar
+### 3.1 JSON Schema
 
-```
-file     :=  block*
-block    :=  keyword  name?  type?  "{"  ( declaration | block )*  "}"
-decl     :=  key  ":"  value  ";"
-value    :=  bare_word | quoted_string | number | bool | func_call | list
-func_call:=  name "(" args ")"
-```
+Every `.ui.json` file is a **JSON array** of block objects at the root.
 
-Comments use `/* ... */`. Semicolons terminate every declaration. Maximum nesting depth is 6: `app → screen → group → field → option → icon`.
+**Block structure:**
 
-### 3.2 Structure
-
-```
-app "Label" {
-  version:  0.8;
-  base-url: /api;           /* prefix for all endpoint paths */
-  tip:      "...";
-
-  /* icon sets available to this app */
-  icons {
-    set file  { for: web, lvgl, email; }
-    set emoji { for: web, cli, email, lvgl; }
-    set text  { for: cli, email; }
-  }
-
-  screen "Name" { ... }
-  screen "Name" { ... }
+```json
+{
+  "$": "keyword",
+  "name": "optional name",
+  "$type": "optional block type",
+  "children": [ ... ],
+  "anyDecl": "value"
 }
 ```
 
-A `.ui` file may contain a single `app` block (full definition) or one or more bare `screen` blocks (screen-only file, referenced from a parent app). The `entry_ui` in `manifest.json` points to the app-level file; additional screens may be split into separate `.ui` files and included:
+| Key | Type | Description |
+|---|---|---|
+| `$` | string | Block keyword (`screen`, `group`, `field`, `action`, etc.) |
+| `name` | string | Optional block name |
+| `$type` | string | Optional block type (e.g. `"float"` on a field). Uses `$` prefix to avoid collision with `type` declarations in result blocks. |
+| `children` | array | Nested blocks (omit when empty) |
+| *(other keys)* | any | Declarations — values are strings, numbers, booleans, arrays, or function calls |
 
+**Function calls** use `{"$fn": "name", "args": [...]}`:
+
+```json
+{ "$fn": "field", "args": ["command"] }
+{ "$fn": "response", "args": ["error"] }
+{ "$fn": "media", "args": ["send.svg"] }
 ```
-include "screens/settings.ui";
-include "screens/chat.ui";
+
+### 3.2 Structure
+
+```json
+[{
+  "$": "app",
+  "name": "Label",
+  "version": 0.8,
+  "base-url": "/api",
+  "tip": "...",
+  "children": [
+    {
+      "$": "icons",
+      "children": [
+        { "$": "set", "name": "file", "for": ["web", "lvgl", "email"] },
+        { "$": "set", "name": "emoji", "for": ["web", "cli", "email", "lvgl"] },
+        { "$": "set", "name": "text", "for": ["cli", "email"] }
+      ]
+    },
+    { "$": "screen", "name": "Name", "children": [ ] },
+    { "$": "screen", "name": "Name", "children": [ ] }
+  ]
+}]
+```
+
+A `.ui.json` file may contain a single `app` block (full definition) or one or more bare `screen` blocks (screen-only file, referenced from a parent app). The `entry_ui` in `manifest.json` points to the app-level file; additional screens may be split into separate `.ui.json` files and included:
+
+```json
+{ "$": "include", "name": "screens/settings.ui.json" }
+{ "$": "include", "name": "screens/chat.ui.json" }
 ```
 
 ### 3.3 Field Types
@@ -204,208 +228,206 @@ Generated images fall back to text on renderers that cannot produce them: `qr()`
 
 ---
 
-## 4. Complete .ui Syntax Reference
+## 4. Complete .ui.json Syntax Reference
 
 ### 4.1 Screens, Groups, Fields
 
-```
-screen "Home" {
-  tip: "Compose and send a message over the available transport.";
-
-  /* Optional screen-level banner image */
-  image {
-    source: media(home-banner.png);
-    alt:    "Mesh network";
-    size:   medium;
-    role:   banner;
-  }
-
-  group "Identity" {
-    tip: "Who you are on the mesh. Shared with peers on transmit.";
-
-    field nickname : string {
-      label:   "Nickname";
-      default: "";
-      tip:     "Your human-readable name. Does not need to be unique.";
-      hint:    "e.g. Ritu";
-      icon {
-        file:  media(person.svg);
-        emoji: 👤;
-        text:  [user];
-      }
+```json
+[{
+  "$": "screen",
+  "name": "Home",
+  "tip": "Compose and send a message over the available transport.",
+  "children": [
+    {
+      "$": "image",
+      "source": { "$fn": "media", "args": ["home-banner.png"] },
+      "alt": "Mesh network",
+      "size": "medium",
+      "role": "banner"
+    },
+    {
+      "$": "group",
+      "name": "Identity",
+      "tip": "Who you are on the mesh. Shared with peers on transmit.",
+      "children": [
+        {
+          "$": "field", "name": "nickname", "$type": "string",
+          "label": "Nickname", "default": "",
+          "tip": "Your human-readable name. Does not need to be unique.",
+          "hint": "e.g. Ritu",
+          "children": [{
+            "$": "icon",
+            "file": { "$fn": "media", "args": ["person.svg"] },
+            "emoji": "\ud83d\udc64", "text": "[user]"
+          }]
+        },
+        {
+          "$": "field", "name": "callsign", "$type": "string",
+          "label": "Callsign", "default": "",
+          "tip": "Amateur radio callsign. Used in APRS frames.",
+          "hint": "e.g. CT1ABC",
+          "validate": { "$fn": "regex", "args": ["[A-Z0-9]{3,8}"] }
+        },
+        {
+          "$": "field", "name": "private", "$type": "bool",
+          "label": "Private mode", "default": false,
+          "tip": "Omits your identity from unencrypted broadcast frames.",
+          "children": [{
+            "$": "icon",
+            "file": { "$fn": "media", "args": ["lock.svg"] },
+            "emoji": "\ud83d\udd12", "text": "[lock]"
+          }]
+        },
+        {
+          "$": "field", "name": "avatar", "$type": "image",
+          "label": "Avatar",
+          "tip": "Profile image shared with peers over NOSTR.",
+          "accept": ["jpg", "png", "webp"],
+          "max-size": "64kb", "role": "avatar",
+          "fallback": { "$fn": "initials", "args": [{ "$fn": "field", "args": ["nickname"] }] }
+        }
+      ]
+    },
+    {
+      "$": "group",
+      "name": "Compose",
+      "children": [
+        {
+          "$": "field", "name": "body", "$type": "text",
+          "label": "Message", "required": true,
+          "tip": "Free-form message. Signed with your NOSTR key before sending.",
+          "hint": "Keep under 256 chars for reliable radio transport.",
+          "children": [{
+            "$": "bind", "name": "char-counter",
+            "source": { "$fn": "local", "args": [{ "$fn": "length", "args": [{ "$fn": "field", "args": ["body"] }] }] },
+            "target": { "$fn": "label", "args": ["char-counter"] },
+            "format": "{value}/256",
+            "level": { "$fn": "if", "args": ["value > 240", "warning", "normal"] }
+          }]
+        },
+        { "$": "label", "name": "char-counter", "text": "0/256", "style": "meta" },
+        {
+          "$": "field", "name": "channel", "$type": "enum",
+          "label": "Transport", "default": "mesh",
+          "tip": "Which physical layer carries your message.",
+          "hint": "Mesh=local,  Radio=100km,  NOSTR=store-and-forward.",
+          "children": [
+            {
+              "$": "option", "name": "mesh",
+              "label": "Mesh (BLE / WiFi)",
+              "tip": "Short-range. BLE beacons and WiFi Direct. No license needed.",
+              "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["mesh.svg"] }, "emoji": "\ud83d\udce1", "text": "[mesh]" }]
+            },
+            {
+              "$": "option", "name": "radio",
+              "label": "Radio (APRS)",
+              "tip": "Medium-range ~100km. Requires amateur radio license.",
+              "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["radio.svg"] }, "emoji": "\ud83d\udcfb", "text": "[radio]" }]
+            },
+            {
+              "$": "option", "name": "nostr",
+              "label": "NOSTR Relay",
+              "tip": "Store-and-forward. Syncs when a relay is reachable.",
+              "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["nostr.svg"] }, "emoji": "\u26a1", "text": "[nostr]" }]
+            }
+          ]
+        },
+        {
+          "$": "field", "name": "attachment", "$type": "file",
+          "label": "Attachment",
+          "tip": "Optional file sent alongside the message.",
+          "accept": ["jpg", "png", "pdf"],
+          "max-size": "512kb", "required": false,
+          "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["attach.svg"] }, "emoji": "\ud83d\udcce", "text": "[attach]" }]
+        }
+      ]
     }
-
-    field callsign : string {
-      label:    "Callsign";
-      default:  "";
-      tip:      "Amateur radio callsign. Used in APRS frames.";
-      hint:     "e.g. CT1ABC";
-      validate: regex("[A-Z0-9]{3,8}");
-    }
-
-    field private : bool {
-      label:   "Private mode";
-      default: false;
-      tip:     "Omits your identity from unencrypted broadcast frames.";
-      icon {
-        file:  media(lock.svg);
-        emoji: 🔒;
-        text:  [lock];
-      }
-    }
-
-    /* Image field — user-uploadable avatar */
-    field avatar : image {
-      label:    "Avatar";
-      tip:      "Profile image shared with peers over NOSTR.";
-      accept:   jpg, png, webp;
-      max-size: 64kb;
-      role:     avatar;
-      fallback: initials(field(nickname));
-    }
-  }
-
-  group "Compose" {
-
-    field body : text {
-      label:    "Message";
-      required: true;
-      tip:      "Free-form message. Signed with your NOSTR key before sending.";
-      hint:     "Keep under 256 chars for reliable radio transport.";
-
-      /* Live character counter — purely local, no network call */
-      bind char-counter {
-        source:  local(length(field(body)));
-        target:  label(char-counter);
-        format:  "{value}/256";
-        level:   if(value > 240, warning, normal);
-      }
-    }
-
-    label char-counter {
-      text:  "0/256";
-      style: meta;
-    }
-
-    field channel : enum {
-      label:   "Transport";
-      default: mesh;
-      tip:     "Which physical layer carries your message.";
-      hint:    "Mesh=local,  Radio=100km,  NOSTR=store-and-forward.";
-
-      option mesh {
-        label: "Mesh (BLE / WiFi)";
-        tip:   "Short-range. BLE beacons and WiFi Direct. No license needed.";
-        icon { file: media(mesh.svg);  emoji: 📡; text: [mesh];  }
-      }
-      option radio {
-        label: "Radio (APRS)";
-        tip:   "Medium-range ~100km. Requires amateur radio license.";
-        icon { file: media(radio.svg); emoji: 📻; text: [radio]; }
-      }
-      option nostr {
-        label: "NOSTR Relay";
-        tip:   "Store-and-forward. Syncs when a relay is reachable.";
-        icon { file: media(nostr.svg); emoji: ⚡; text: [nostr]; }
-      }
-    }
-
-    /* Binary file attachment */
-    field attachment : file {
-      label:    "Attachment";
-      tip:      "Optional file sent alongside the message.";
-      accept:   jpg, png, pdf;
-      max-size: 512kb;
-      required: false;
-      icon { file: media(attach.svg); emoji: 📎; text: [attach]; }
-    }
-  }
-}
+  ]
+}]
 ```
 
 ### 4.2 Actions with API Binding
 
 Actions connect directly to `app.wasm` via the module's internal HTTP API. The `endpoint` path is relative to `base-url`.
 
-```
-action send {
-  label:   "Send";
-  style:   primary;          /* primary | secondary | danger | ghost */
-  confirm: false;
-  tip:     "Sign and transmit on the selected transport.";
-
-  icon {
-    file:  media(send.svg);
-    emoji: 📤;
-    text:  [send];
-  }
-
-  request {
-    method:   POST;
-    endpoint: /send;
-
-    body {
-      /* field(id)   — reads a field value from the current screen      */
-      /* state(key)  — reads a runtime variable maintained by renderer  */
-      /* literal     — a constant value                                  */
-      nickname:   field(nickname);
-      private:    field(private);
-      message:    field(body);
-      channel:    field(channel);
-      attachment: field(attachment);
+```json
+{
+  "$": "action", "name": "send",
+  "label": "Send",
+  "style": "primary",
+  "confirm": false,
+  "tip": "Sign and transmit on the selected transport.",
+  "children": [
+    {
+      "$": "icon",
+      "file": { "$fn": "media", "args": ["send.svg"] },
+      "emoji": "\ud83d\udce4", "text": "[send]"
+    },
+    {
+      "$": "request",
+      "method": "POST",
+      "endpoint": "/send",
+      "children": [{
+        "$": "body",
+        "nickname": { "$fn": "field", "args": ["nickname"] },
+        "private": { "$fn": "field", "args": ["private"] },
+        "message": { "$fn": "field", "args": ["body"] },
+        "channel": { "$fn": "field", "args": ["channel"] },
+        "attachment": { "$fn": "field", "args": ["attachment"] }
+      }]
+    },
+    {
+      "$": "result",
+      "children": [
+        { "$": "200", "type": "toast", "message": { "$fn": "response", "args": ["status_message"] }, "level": "success", "then": "clear-form" },
+        { "$": "4xx", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" },
+        { "$": "5xx", "type": "toast", "message": "Server error. Try again.", "level": "error" }
+      ]
     }
-  }
-
-  result {
-    200 {
-      type:    toast;
-      message: response(status_message);
-      level:   success;
-      then:    clear-form;
-    }
-    4xx {
-      type:    toast;
-      message: response(error);
-      level:   warning;
-    }
-    5xx {
-      type:    toast;
-      message: "Server error. Try again.";
-      level:   error;
-    }
-  }
+  ]
 }
+```
 
-action clear {
-  label:         "Clear";
-  style:         danger;
-  tip:           "Discard all fields and reset to defaults.";
-  confirm:       true;
-  confirm-label: "Clear everything?";
-  icon { file: media(trash.svg); emoji: 🗑️; text: [del]; }
-  /* No request block — purely local action handled by renderer */
+A purely local action (no request block):
+
+```json
+{
+  "$": "action", "name": "clear",
+  "label": "Clear",
+  "style": "danger",
+  "tip": "Discard all fields and reset to defaults.",
+  "confirm": true,
+  "confirm-label": "Clear everything?",
+  "children": [{
+    "$": "icon",
+    "file": { "$fn": "media", "args": ["trash.svg"] },
+    "emoji": "\ud83d\uddd1\ufe0f", "text": "[del]"
+  }]
 }
 ```
 
 ### 4.3 Result Status Codes
 
-Every `result` block contains one or more **status matchers**. Matchers are tested top to bottom; the first match wins.
+Every `result` block contains one or more **status matchers** as child blocks. Matchers are tested top to bottom; the first match wins.
 
-```
-result {
-  optimistic { ... }   /* fires immediately, before the request is sent  */
-  200        { ... }   /* exact match                                     */
-  201        { ... }   /* exact match                                     */
-  404        { ... }   /* exact match                                     */
-  4xx        { ... }   /* range: any 400–499                             */
-  5xx        { ... }   /* range: any 500–599                             */
-  *          { ... }   /* catch-all — matches anything not already caught */
+```json
+{
+  "$": "result",
+  "children": [
+    { "$": "optimistic" },
+    { "$": "200" },
+    { "$": "201" },
+    { "$": "404" },
+    { "$": "4xx" },
+    { "$": "5xx" },
+    { "$": "*" }
+  ]
 }
 ```
 
 **Supported matcher forms:**
 
-| Matcher | Matches |
+| Matcher (`$`) | Matches |
 |---|---|
 | `200` | Exactly HTTP 200 |
 | `201` | Exactly HTTP 201 |
@@ -423,61 +445,65 @@ On renderers with no HTTP (pure local actions), the wapp runtime returns `200` o
 
 **`toast`** — ephemeral notification
 
-```
-200 {
-  type:    toast;
-  message: response(status_message);  /* or a literal string */
-  level:   success | warning | error | info;
-  then:    clear-form | reload | redirect(screen-id) | nothing;
+```json
+{
+  "$": "200",
+  "type": "toast",
+  "message": { "$fn": "response", "args": ["status_message"] },
+  "level": "success",
+  "then": "clear-form"
 }
 ```
 
 **`inline`** — rendered beneath the button
 
-```
-200 {
-  type:    inline;
-  title:   "Your export key";
-  display: qr(response(bunker_uri)) {
-    size:     large;
-    alt:      "NOSTR bunker URI QR code";
-    fallback: text(response(bunker_uri));
-  }
+```json
+{
+  "$": "200",
+  "type": "inline",
+  "title": "Your export key",
+  "display": { "$fn": "qr", "args": [{ "$fn": "response", "args": ["bunker_uri"] }] },
+  "children": [{
+    "$": "display",
+    "size": "large",
+    "alt": "NOSTR bunker URI QR code",
+    "fallback": { "$fn": "text", "args": [{ "$fn": "response", "args": ["bunker_uri"] }] }
+  }]
 }
 ```
 
 **`field`** — write a response value back into a named field
 
-```
-200 {
-  type:  field;
-  write: pubkey <- response(npub);
-  then:  toast("New keypair generated.");
+```json
+{
+  "$": "200",
+  "type": "field",
+  "write": "pubkey <- response(npub)",
+  "then": "toast(\"New keypair generated.\")"
 }
 ```
 
 **`mutation`** — modify a live list without full re-render
 
-```
-200 {
-  type:   mutation;
-  target: messages-list;     /* id of the list to modify */
-  op:     append | prepend | remove | update | clear;
-  where:  id == response(id);
-  set {
-    pending: false;
-    id:      response(id);
-  }
+```json
+{
+  "$": "200",
+  "type": "mutation",
+  "target": "messages-list",
+  "op": "update",
+  "where": "id == response(id)",
+  "children": [{
+    "$": "set",
+    "pending": false,
+    "id": { "$fn": "response", "args": ["id"] }
+  }]
 }
 ```
 
 **`redirect`** — navigate to another screen
 
-```
-200 {
-  type:   redirect;
-  screen: inbox;
-}
+```json
+{ "$": "200", "type": "redirect", "screen": "inbox" }
 ```
 
 ---
@@ -486,84 +512,75 @@ On renderers with no HTTP (pure local actions), the wapp runtime returns `200` o
 
 #### `watch` — polling (Tier 1, works on all renderers)
 
-```
-group "Messages" {
-
-  watch {
-    endpoint: /messages;
-    interval: 5s;
-    params {
-      limit: 20;
-      after: state(last_message_id);
-    }
-
-    result {
-      type:  list;
-      id:    messages-list;
-      empty: "No messages yet.";
-
-      200 {
-        strategy: append-new;       /* append | prepend | replace | diff */
-        track-by: response(id);     /* stable ID for deduplication */
-        scroll:   bottom;
-        update:   state(last_message_id) <- response(last_id);
-      }
-      4xx { type: toast; message: response(error); level: warning; }
-      5xx { type: toast; message: "Could not fetch messages."; level: error; }
-
-      item {
-        image {
-          source:   response(avatar_url);
-          alt:      response(nickname);
-          size:     small;
-          role:     avatar;
-          fallback: initials(response(nickname));
-        }
-
-        title:     response(nickname);
-        subtitle:  response(message);
-        timestamp: response(sent_at);
-
-        icon {
-          from:  response(channel);
-          file:  media(mesh.svg), media(radio.svg), media(nostr.svg);
-          emoji: 📡, 📻, ⚡;
-          text:  [mesh], [radio], [nostr];
-        }
-
-        /* Per-item action */
-        action delete-message {
-          label:   "Delete";
-          style:   danger;
-          visible: if(response(own) == true);
-          icon { file: media(trash.svg); emoji: 🗑️; text: [del]; }
-
-          request {
-            method:   DELETE;
-            endpoint: /messages/{response(id)};
+```json
+{
+  "$": "group", "name": "Messages",
+  "children": [{
+    "$": "watch",
+    "endpoint": "/messages",
+    "interval": "5s",
+    "children": [
+      {
+        "$": "params",
+        "limit": 20,
+        "after": { "$fn": "state", "args": ["last_message_id"] }
+      },
+      {
+        "$": "result",
+        "type": "list", "id": "messages-list", "empty": "No messages yet.",
+        "children": [
+          {
+            "$": "200",
+            "strategy": "append-new",
+            "track-by": { "$fn": "response", "args": ["id"] },
+            "scroll": "bottom",
+            "update": "state(last_message_id) <- response(last_id)"
+          },
+          { "$": "4xx", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" },
+          { "$": "5xx", "type": "toast", "message": "Could not fetch messages.", "level": "error" },
+          {
+            "$": "item",
+            "title": { "$fn": "response", "args": ["nickname"] },
+            "subtitle": { "$fn": "response", "args": ["message"] },
+            "timestamp": { "$fn": "response", "args": ["sent_at"] },
+            "children": [
+              {
+                "$": "image",
+                "source": { "$fn": "response", "args": ["avatar_url"] },
+                "alt": { "$fn": "response", "args": ["nickname"] },
+                "size": "small", "role": "avatar",
+                "fallback": { "$fn": "initials", "args": [{ "$fn": "response", "args": ["nickname"] }] }
+              },
+              {
+                "$": "icon",
+                "from": { "$fn": "response", "args": ["channel"] },
+                "file": [{ "$fn": "media", "args": ["mesh.svg"] }, { "$fn": "media", "args": ["radio.svg"] }, { "$fn": "media", "args": ["nostr.svg"] }],
+                "emoji": ["\ud83d\udce1", "\ud83d\udcfb", "\u26a1"],
+                "text": ["[mesh]", "[radio]", "[nostr]"]
+              },
+              {
+                "$": "action", "name": "delete-message",
+                "label": "Delete", "style": "danger",
+                "visible": "if(response(own) == true)",
+                "children": [
+                  { "$": "icon", "file": { "$fn": "media", "args": ["trash.svg"] }, "emoji": "\ud83d\uddd1\ufe0f", "text": "[del]" },
+                  { "$": "request", "method": "DELETE", "endpoint": "/messages/{response(id)}" },
+                  {
+                    "$": "result", "children": [
+                      { "$": "200", "type": "mutation", "target": "messages-list", "op": "remove", "where": "id == response(id)" },
+                      { "$": "404", "type": "mutation", "target": "messages-list", "op": "remove", "where": "id == response(id)" },
+                      { "$": "4xx", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" },
+                      { "$": "5xx", "type": "toast", "message": "Could not delete message.", "level": "error" }
+                    ]
+                  }
+                ]
+              }
+            ]
           }
-
-          result {
-            200 {
-              type:   mutation;
-              target: messages-list;
-              op:     remove;
-              where:  id == response(id);
-            }
-            404 {
-              /* Message already gone — silently remove from local list too */
-              type:   mutation;
-              target: messages-list;
-              op:     remove;
-              where:  id == response(id);
-            }
-            4xx { type: toast; message: response(error); level: warning; }
-            5xx { type: toast; message: "Could not delete message."; level: error; }
-          }
-        }
+        ]
       }
-    }
-  }
+    ]
+  }]
 }
 ```
 
@@ -571,155 +588,91 @@ group "Messages" {
 
 `bind` uses named change events rather than status codes, because local binds have no HTTP round-trip. Only endpoint-backed binds use status matchers for their outgoing PATCH/POST:
 
-```
-/* Local bind: no network, purely reactive to field state */
-bind char-counter {
-  source:    local(length(field(body)));
-  target:    label(char-counter);
-  format:    "{value}/256";
-  level:     if(value > 240, warning, normal);
+```json
+{
+  "$": "bind", "name": "char-counter",
+  "source": { "$fn": "local", "args": [{ "$fn": "length", "args": [{ "$fn": "field", "args": ["body"] }] }] },
+  "target": { "$fn": "label", "args": ["char-counter"] },
+  "format": "{value}/256",
+  "level": { "$fn": "if", "args": ["value > 240", "warning", "normal"] }
 }
+```
 
-/* Two-way endpoint bind: collaborative shared text field */
-field notes : text {
-  label: "Shared Notes";
+Two-way endpoint bind (collaborative shared text field):
 
-  bind live-notes {
-    source:    endpoint(/notes/live);
-    direction: both;                   /* in | out | both */
-    transport: sse;                    /* poll | sse | websocket */
-    debounce:  500ms;
-
-    on-local-change {
-      method:   PATCH;
-      endpoint: /notes;
-      body { delta: diff(field(notes)); }
-
-      result {
-        2xx { /* silent — no UI feedback on successful sync */ }
-        4xx { type: toast; message: response(error); level: warning; }
-        5xx { type: toast; message: "Sync failed."; level: error; }
+```json
+{
+  "$": "field", "name": "notes", "$type": "text",
+  "label": "Shared Notes",
+  "children": [{
+    "$": "bind", "name": "live-notes",
+    "source": "endpoint(/notes/live)",
+    "direction": "both",
+    "transport": "sse",
+    "debounce": "500ms",
+    "children": [
+      {
+        "$": "on-local-change",
+        "method": "PATCH", "endpoint": "/notes",
+        "children": [
+          { "$": "body", "delta": { "$fn": "diff", "args": [{ "$fn": "field", "args": ["notes"] }] } },
+          {
+            "$": "result", "children": [
+              { "$": "2xx" },
+              { "$": "4xx", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" },
+              { "$": "5xx", "type": "toast", "message": "Sync failed.", "level": "error" }
+            ]
+          }
+        ]
+      },
+      {
+        "$": "on-remote-change",
+        "op": "merge-diff",
+        "then": "update(field(notes))"
       }
-    }
-
-    on-remote-change {
-      op:   merge-diff;
-      then: update(field(notes));
-    }
-  }
+    ]
+  }]
 }
 ```
 
 #### `stream` — persistent connection for continuous data (Tier 3)
 
-```
-group "Audio" {
-  tip: "Send and receive audio over the mesh.";
-
-  /* Receive stream */
-  stream audio-out {
-    type:      audio;
-    direction: receive;
-    transport: mesh-socket;
-    endpoint:  /stream/audio;
-    codec:     opus;
-    fallback:  wav;
-    requires:  speaker;
-
-    indicator {
-      type:  waveform;
-      label: "Receiving audio";
+```json
+{
+  "$": "group", "name": "Audio",
+  "tip": "Send and receive audio over the mesh.",
+  "children": [
+    {
+      "$": "stream", "name": "audio-out",
+      "type": "audio", "direction": "receive", "transport": "mesh-socket",
+      "endpoint": "/stream/audio", "codec": "opus", "fallback": "wav", "requires": "speaker",
+      "children": [
+        { "$": "indicator", "type": "waveform", "label": "Receiving audio" },
+        {
+          "$": "controls", "children": [
+            { "$": "action", "name": "play-audio", "label": "Play", "style": "primary",
+              "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["play.svg"] }, "emoji": "\u25b6\ufe0f", "text": "[play]" }] },
+            { "$": "action", "name": "stop-audio", "label": "Stop", "style": "secondary",
+              "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["stop.svg"] }, "emoji": "\u23f9\ufe0f", "text": "[stop]" }] }
+          ]
+        }
+      ]
+    },
+    {
+      "$": "stream", "name": "audio-in",
+      "type": "audio", "direction": "send", "transport": "mesh-socket",
+      "endpoint": "/stream/audio/publish", "codec": "opus", "requires": "microphone",
+      "children": [
+        { "$": "indicator", "type": "level", "label": "Microphone level" },
+        {
+          "$": "controls", "children": [
+            { "$": "action", "name": "transmit", "label": "Transmit", "style": "primary", "hold": true,
+              "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["mic.svg"] }, "emoji": "\ud83c\udf99\ufe0f", "text": "[tx]" }] }
+          ]
+        }
+      ]
     }
-
-    controls {
-      action play-audio {
-        label: "Play";
-        style: primary;
-        icon { file: media(play.svg); emoji: ▶️; text: [play]; }
-      }
-      action stop-audio {
-        label: "Stop";
-        style: secondary;
-        icon { file: media(stop.svg); emoji: ⏹️; text: [stop]; }
-      }
-    }
-  }
-
-  /* Send stream — PTT (press-and-hold) */
-  stream audio-in {
-    type:      audio;
-    direction: send;
-    transport: mesh-socket;
-    endpoint:  /stream/audio/publish;
-    codec:     opus;
-    requires:  microphone;
-
-    indicator {
-      type:  level;
-      label: "Microphone level";
-    }
-
-    controls {
-      action transmit {
-        label: "Transmit";
-        style: primary;
-        hold:  true;            /* press-and-hold, not toggle */
-        icon { file: media(mic.svg); emoji: 🎙️; text: [tx]; }
-      }
-    }
-  }
-}
-
-group "Screen Share" {
-  tip: "Share your screen over the mesh at low framerate.";
-
-  stream screen-share {
-    type:      screen;
-    direction: send;
-    transport: websocket;
-    endpoint:  /stream/screen;
-    codec:     mjpeg;
-    quality:   low;
-    fps:       2;
-    requires:  screen-capture;    /* renderer skips this group if absent */
-
-    controls {
-      action share-screen {
-        label: "Share Screen";
-        style: primary;
-        icon { file: media(screen.svg); emoji: 🖥️; text: [share]; }
-      }
-      action stop-share {
-        label:   "Stop";
-        style:   danger;
-        visible: if(state(screen-share.active) == true);
-        icon { file: media(stop.svg); emoji: ⏹️; text: [stop]; }
-      }
-    }
-  }
-
-  stream screen-view {
-    type:      screen;
-    direction: receive;
-    transport: websocket;
-    endpoint:  /stream/screen/watch;
-    codec:     mjpeg;
-    requires:  screen-capture;
-
-    display {
-      role:  screen-view;
-      size:  full;
-      label: "Remote screen";
-    }
-
-    controls {
-      action watch-screen {
-        label: "Watch";
-        style: primary;
-        icon { file: media(eye.svg); emoji: 👁️; text: [watch]; }
-      }
-    }
-  }
+  ]
 }
 ```
 
@@ -727,64 +680,41 @@ group "Screen Share" {
 
 `optimistic` is a special matcher that fires **before** the request is sent. If the request fails, the renderer automatically rolls back any mutations made in the `optimistic` block — unless an explicit rollback handler is defined.
 
-```
-action send {
-  ...
-  result {
-
-    /* Fires immediately — item appears in list before server confirms */
-    optimistic {
-      type:   mutation;
-      target: messages-list;
-      op:     append;
-      item {
-        nickname: state(my_nickname);
-        message:  field(body);
-        sent_at:  now();
-        own:      true;
-        pending:  true;         /* renderer marks item as pending */
-      }
+```json
+{
+  "$": "result",
+  "children": [
+    {
+      "$": "optimistic",
+      "type": "mutation", "target": "messages-list", "op": "append",
+      "children": [{
+        "$": "item",
+        "nickname": { "$fn": "state", "args": ["my_nickname"] },
+        "message": { "$fn": "field", "args": ["body"] },
+        "sent_at": { "$fn": "now", "args": [] },
+        "own": true, "pending": true
+      }]
+    },
+    {
+      "$": "200",
+      "type": "mutation", "target": "messages-list", "op": "update",
+      "where": "pending == true",
+      "then": "clear(field(body))",
+      "children": [{ "$": "set", "pending": false, "id": { "$fn": "response", "args": ["id"] } }]
+    },
+    {
+      "$": "4xx",
+      "type": "mutation", "target": "messages-list", "op": "remove",
+      "where": "pending == true",
+      "children": [{ "$": "then", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" }]
+    },
+    {
+      "$": "5xx",
+      "type": "mutation", "target": "messages-list", "op": "remove",
+      "where": "pending == true",
+      "children": [{ "$": "then", "type": "toast", "message": "Failed to send. Message discarded.", "level": "error" }]
     }
-
-    /* Server confirmed — replace pending item with real one */
-    200 {
-      type:   mutation;
-      target: messages-list;
-      op:     update;
-      where:  pending == true;
-      set {
-        pending: false;
-        id:      response(id);
-      }
-      then: clear(field(body));
-    }
-
-    /* Server rejected — roll back pending item and show reason */
-    4xx {
-      type:   mutation;
-      target: messages-list;
-      op:     remove;
-      where:  pending == true;
-      then {
-        type:    toast;
-        message: response(error);
-        level:   warning;
-      }
-    }
-
-    /* Server error — roll back and suggest retry */
-    5xx {
-      type:   mutation;
-      target: messages-list;
-      op:     remove;
-      where:  pending == true;
-      then {
-        type:    toast;
-        message: "Failed to send. Message discarded.";
-        level:   error;
-      }
-    }
-  }
+  ]
 }
 ```
 
@@ -792,13 +722,13 @@ action send {
 
 ## 5. WASM ↔ UI Communication
 
-The `.ui` actions call the module's internal HTTP API, which the wapp runtime exposes on localhost. This is the same HTTP API used by `wasm_library_server.dart` — the UI renderer is just another HTTP client.
+The `.ui.json` actions call the module's internal HTTP API, which the wapp runtime exposes on localhost. This is the same HTTP API used by `wasm_library_server.dart` — the UI renderer is just another HTTP client.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Renderer (web / Flutter / CLI / LVGL)                  │
 │                                                         │
-│   .ui file parsed → screen rendered                     │
+│   .ui.json parsed → screen rendered                     │
 │   action fired   → HTTP POST /api/send                  │
 │                         ↓                               │
 │  ┌──────────────────────────────────────────────────┐   │
@@ -872,10 +802,10 @@ geogram-chat.wapp
 ├── app.wasm
 ├── manifest.json
 ├── screens/
-│   ├── home.ui
-│   ├── chat.ui
-│   ├── live.ui
-│   └── settings.ui
+│   ├── home.ui.json
+│   ├── chat.ui.json
+│   ├── live.ui.json
+│   └── settings.ui.json
 └── media/
     ├── icons/
     │   ├── app-icon.svg
@@ -895,324 +825,266 @@ geogram-chat.wapp
         └── logo.png
 ```
 
-### screens/home.ui
+### screens/home.ui.json
 
-```
-app "Geogram Chat" {
-  version:  0.8;
-  base-url: /api;
-  tip:      "Offline-first mesh communication. Works without internet.";
-
-  icons {
-    set file  { for: web, lvgl, email; }
-    set emoji { for: web, cli, email, lvgl; }
-    set text  { for: cli, email; }
-  }
-
-  include "screens/chat.ui";
-  include "screens/live.ui";
-  include "screens/settings.ui";
-
-  screen "Home" {
-    tip: "Compose and send a message over the available transport.";
-
-    image {
-      source: media(home-banner.png);
-      alt:    "Mesh network visualisation";
-      size:   medium;
-      role:   banner;
+```json
+[{
+  "$": "app", "name": "Geogram Chat",
+  "version": 0.8, "base-url": "/api",
+  "tip": "Offline-first mesh communication. Works without internet.",
+  "children": [
+    {
+      "$": "icons", "children": [
+        { "$": "set", "name": "file", "for": ["web", "lvgl", "email"] },
+        { "$": "set", "name": "emoji", "for": ["web", "cli", "email", "lvgl"] },
+        { "$": "set", "name": "text", "for": ["cli", "email"] }
+      ]
+    },
+    { "$": "include", "name": "screens/chat.ui.json" },
+    { "$": "include", "name": "screens/live.ui.json" },
+    { "$": "include", "name": "screens/settings.ui.json" },
+    {
+      "$": "screen", "name": "Home",
+      "tip": "Compose and send a message over the available transport.",
+      "children": [
+        {
+          "$": "image",
+          "source": { "$fn": "media", "args": ["home-banner.png"] },
+          "alt": "Mesh network visualisation", "size": "medium", "role": "banner"
+        },
+        {
+          "$": "group", "name": "Identity",
+          "tip": "Who you are on the mesh. Shared with peers on transmit.",
+          "children": [
+            {
+              "$": "field", "name": "nickname", "$type": "string",
+              "label": "Nickname", "default": "",
+              "tip": "Your human-readable name. Does not need to be unique.",
+              "hint": "e.g. Ritu",
+              "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["person.svg"] }, "emoji": "\ud83d\udc64", "text": "[user]" }]
+            },
+            {
+              "$": "field", "name": "callsign", "$type": "string",
+              "label": "Callsign", "default": "",
+              "tip": "Your amateur radio callsign. Used in APRS frames.",
+              "hint": "e.g. CT1ABC",
+              "validate": { "$fn": "regex", "args": ["[A-Z0-9]{3,8}"] }
+            },
+            {
+              "$": "field", "name": "private", "$type": "bool",
+              "label": "Private mode", "default": false,
+              "tip": "Omits your identity from unencrypted broadcast frames.",
+              "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["lock.svg"] }, "emoji": "\ud83d\udd12", "text": "[lock]" }]
+            },
+            {
+              "$": "field", "name": "avatar", "$type": "image",
+              "label": "Avatar", "tip": "Profile image shared with peers over NOSTR.",
+              "accept": ["jpg", "png", "webp"], "max-size": "64kb", "role": "avatar",
+              "fallback": { "$fn": "initials", "args": [{ "$fn": "field", "args": ["nickname"] }] }
+            }
+          ]
+        },
+        {
+          "$": "group", "name": "Compose",
+          "tip": "Your message. Signed and encrypted before sending.",
+          "children": [
+            {
+              "$": "field", "name": "body", "$type": "text",
+              "label": "Message", "required": true,
+              "tip": "Free-form message body. Signed with your NOSTR key.",
+              "hint": "Keep under 256 chars for reliable radio transport.",
+              "children": [{
+                "$": "bind", "name": "char-counter",
+                "source": { "$fn": "local", "args": [{ "$fn": "length", "args": [{ "$fn": "field", "args": ["body"] }] }] },
+                "target": { "$fn": "label", "args": ["char-counter"] },
+                "format": "{value}/256",
+                "level": { "$fn": "if", "args": ["value > 240", "warning", "normal"] }
+              }]
+            },
+            { "$": "label", "name": "char-counter", "text": "0/256", "style": "meta" },
+            {
+              "$": "field", "name": "channel", "$type": "enum",
+              "label": "Transport", "default": "mesh",
+              "tip": "Which physical layer carries your message.",
+              "children": [
+                { "$": "option", "name": "mesh", "label": "Mesh (BLE / WiFi)",
+                  "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["mesh.svg"] }, "emoji": "\ud83d\udce1", "text": "[mesh]" }] },
+                { "$": "option", "name": "radio", "label": "Radio (APRS)",
+                  "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["radio.svg"] }, "emoji": "\ud83d\udcfb", "text": "[radio]" }] },
+                { "$": "option", "name": "nostr", "label": "NOSTR Relay",
+                  "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["nostr.svg"] }, "emoji": "\u26a1", "text": "[nostr]" }] }
+              ]
+            },
+            {
+              "$": "field", "name": "attachment", "$type": "file",
+              "label": "Attachment", "tip": "Optional file sent alongside the message.",
+              "accept": ["jpg", "png", "pdf"], "max-size": "512kb", "required": false,
+              "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["attach.svg"] }, "emoji": "\ud83d\udcce", "text": "[attach]" }]
+            }
+          ]
+        },
+        {
+          "$": "action", "name": "send",
+          "label": "Send", "style": "primary", "confirm": false,
+          "tip": "Sign and transmit on the selected transport.",
+          "children": [
+            { "$": "icon", "file": { "$fn": "media", "args": ["send.svg"] }, "emoji": "\ud83d\udce4", "text": "[send]" },
+            { "$": "request", "method": "POST", "endpoint": "/send",
+              "children": [{ "$": "body",
+                "nickname": { "$fn": "field", "args": ["nickname"] },
+                "private": { "$fn": "field", "args": ["private"] },
+                "message": { "$fn": "field", "args": ["body"] },
+                "channel": { "$fn": "field", "args": ["channel"] },
+                "attachment": { "$fn": "field", "args": ["attachment"] }
+              }]
+            },
+            { "$": "result", "children": [
+              { "$": "optimistic", "type": "mutation", "target": "messages-list", "op": "append",
+                "children": [{ "$": "item",
+                  "nickname": { "$fn": "state", "args": ["my_nickname"] },
+                  "message": { "$fn": "field", "args": ["body"] },
+                  "sent_at": { "$fn": "now", "args": [] }, "own": true, "pending": true
+                }]
+              },
+              { "$": "200", "type": "mutation", "target": "messages-list", "op": "update",
+                "where": "pending == true", "then": "clear(field(body))",
+                "children": [{ "$": "set", "pending": false, "id": { "$fn": "response", "args": ["id"] } }]
+              },
+              { "$": "4xx", "type": "mutation", "target": "messages-list", "op": "remove",
+                "where": "pending == true",
+                "children": [{ "$": "then", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" }]
+              },
+              { "$": "5xx", "type": "mutation", "target": "messages-list", "op": "remove",
+                "where": "pending == true",
+                "children": [{ "$": "then", "type": "toast", "message": "Send failed. Try again.", "level": "error" }]
+              }
+            ]}
+          ]
+        },
+        {
+          "$": "action", "name": "draft",
+          "label": "Save Draft", "style": "secondary",
+          "tip": "Save locally without transmitting.",
+          "children": [
+            { "$": "icon", "file": { "$fn": "media", "args": ["save.svg"] }, "emoji": "\ud83d\udcbe", "text": "[save]" },
+            { "$": "request", "method": "POST", "endpoint": "/drafts",
+              "children": [{ "$": "body",
+                "message": { "$fn": "field", "args": ["body"] },
+                "channel": { "$fn": "field", "args": ["channel"] }
+              }]
+            },
+            { "$": "result", "children": [
+              { "$": "200", "type": "toast", "message": "Draft saved.", "level": "success" },
+              { "$": "4xx", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" },
+              { "$": "5xx", "type": "toast", "message": "Could not save draft.", "level": "error" }
+            ]}
+          ]
+        },
+        {
+          "$": "action", "name": "clear",
+          "label": "Clear", "style": "danger", "confirm": true,
+          "confirm-label": "Clear everything?",
+          "tip": "Discard all fields and reset to defaults.",
+          "children": [{ "$": "icon", "file": { "$fn": "media", "args": ["trash.svg"] }, "emoji": "\ud83d\uddd1\ufe0f", "text": "[del]" }]
+        }
+      ]
     }
-
-    group "Identity" {
-      tip: "Who you are on the mesh. Shared with peers on transmit.";
-
-      field nickname : string {
-        label:   "Nickname";
-        default: "";
-        tip:     "Your human-readable name. Does not need to be unique.";
-        hint:    "e.g. Ritu";
-        icon { file: media(person.svg); emoji: 👤; text: [user]; }
-      }
-
-      field callsign : string {
-        label:    "Callsign";
-        default:  "";
-        tip:      "Your amateur radio callsign. Used in APRS frames.";
-        hint:     "e.g. CT1ABC";
-        validate: regex("[A-Z0-9]{3,8}");
-      }
-
-      field private : bool {
-        label:   "Private mode";
-        default: false;
-        tip:     "Omits your identity from unencrypted broadcast frames.";
-        icon { file: media(lock.svg); emoji: 🔒; text: [lock]; }
-      }
-
-      field avatar : image {
-        label:    "Avatar";
-        tip:      "Profile image shared with peers over NOSTR.";
-        accept:   jpg, png, webp;
-        max-size: 64kb;
-        role:     avatar;
-        fallback: initials(field(nickname));
-      }
-    }
-
-    group "Compose" {
-      tip: "Your message. Signed and encrypted before sending.";
-
-      field body : text {
-        label:    "Message";
-        required: true;
-        tip:      "Free-form message body. Signed with your NOSTR key.";
-        hint:     "Keep under 256 chars for reliable radio transport.";
-        bind char-counter {
-          source: local(length(field(body)));
-          target: label(char-counter);
-          format: "{value}/256";
-          level:  if(value > 240, warning, normal);
-        }
-      }
-
-      label char-counter { text: "0/256"; style: meta; }
-
-      field channel : enum {
-        label:   "Transport";
-        default: mesh;
-        tip:     "Which physical layer carries your message.";
-
-        option mesh  { label: "Mesh (BLE / WiFi)"; icon { file: media(mesh.svg);  emoji: 📡; text: [mesh];  } }
-        option radio { label: "Radio (APRS)";       icon { file: media(radio.svg); emoji: 📻; text: [radio]; } }
-        option nostr { label: "NOSTR Relay";        icon { file: media(nostr.svg); emoji: ⚡; text: [nostr]; } }
-      }
-
-      field attachment : file {
-        label:    "Attachment";
-        tip:      "Optional file sent alongside the message.";
-        accept:   jpg, png, pdf;
-        max-size: 512kb;
-        required: false;
-        icon { file: media(attach.svg); emoji: 📎; text: [attach]; }
-      }
-    }
-
-    action send {
-      label:   "Send";
-      style:   primary;
-      confirm: false;
-      tip:     "Sign and transmit on the selected transport.";
-      icon { file: media(send.svg); emoji: 📤; text: [send]; }
-
-      request {
-        method:   POST;
-        endpoint: /send;
-        body {
-          nickname:   field(nickname);
-          private:    field(private);
-          message:    field(body);
-          channel:    field(channel);
-          attachment: field(attachment);
-        }
-      }
-
-      result {
-        optimistic {
-          type:   mutation;
-          target: messages-list;
-          op:     append;
-          item {
-            nickname: state(my_nickname);
-            message:  field(body);
-            sent_at:  now();
-            own:      true;
-            pending:  true;
-          }
-        }
-        200 {
-          type:   mutation;
-          target: messages-list;
-          op:     update;
-          where:  pending == true;
-          set { pending: false; id: response(id); }
-          then: clear(field(body));
-        }
-        4xx {
-          type:   mutation;
-          target: messages-list;
-          op:     remove;
-          where:  pending == true;
-          then { type: toast; message: response(error); level: warning; }
-        }
-        5xx {
-          type:   mutation;
-          target: messages-list;
-          op:     remove;
-          where:  pending == true;
-          then { type: toast; message: "Send failed. Try again."; level: error; }
-        }
-      }
-    }
-
-    action draft {
-      label: "Save Draft";
-      style: secondary;
-      tip:   "Save locally without transmitting.";
-      icon { file: media(save.svg); emoji: 💾; text: [save]; }
-
-      request {
-        method:   POST;
-        endpoint: /drafts;
-        body {
-          message: field(body);
-          channel: field(channel);
-        }
-      }
-
-      result {
-        200 { type: toast; message: "Draft saved.";        level: success; }
-        4xx { type: toast; message: response(error);       level: warning; }
-        5xx { type: toast; message: "Could not save draft."; level: error; }
-      }
-    }
-
-    action clear {
-      label:         "Clear";
-      style:         danger;
-      confirm:       true;
-      confirm-label: "Clear everything?";
-      tip:           "Discard all fields and reset to defaults.";
-      icon { file: media(trash.svg); emoji: 🗑️; text: [del]; }
-    }
-  }
-}
+  ]
+}]
 ```
 
-### screens/settings.ui (excerpt — key regeneration)
+### screens/settings.ui.json (excerpt — key regeneration)
 
-```
-screen "Settings" {
-  tip: "Configure radio, network, and identity keys.";
-
-  group "Identity Keys" {
-    tip: "Your NOSTR keypair. The private key never leaves this device.";
-
-    field pubkey : string {
-      label:    "Public Key (npub)";
-      readonly: true;
-      tip:      "Your NOSTR public key. Safe to share.";
-      hint:     "Starts with npub1...";
-    }
-
-    action regen {
-      label:         "Regenerate Keys";
-      style:         danger;
-      icon           { file: media(key.svg); emoji: 🔑; text: [key]; }
-      tip:           "Creates a new keypair. Old messages become unreadable.";
-      confirm:       true;
-      confirm-label: "Regenerate? This cannot be undone.";
-
-      request {
-        method:   POST;
-        endpoint: /keys/regenerate;
-      }
-
-      result {
-        200 {
-          type:  field;
-          write: pubkey <- response(npub);
-          then:  toast("New keypair generated.");
+```json
+[{
+  "$": "screen", "name": "Settings",
+  "tip": "Configure radio, network, and identity keys.",
+  "children": [
+    {
+      "$": "group", "name": "Identity Keys",
+      "tip": "Your NOSTR keypair. The private key never leaves this device.",
+      "children": [
+        {
+          "$": "field", "name": "pubkey", "$type": "string",
+          "label": "Public Key (npub)", "readonly": true,
+          "tip": "Your NOSTR public key. Safe to share.",
+          "hint": "Starts with npub1..."
+        },
+        {
+          "$": "action", "name": "regen",
+          "label": "Regenerate Keys", "style": "danger",
+          "tip": "Creates a new keypair. Old messages become unreadable.",
+          "confirm": true, "confirm-label": "Regenerate? This cannot be undone.",
+          "children": [
+            { "$": "icon", "file": { "$fn": "media", "args": ["key.svg"] }, "emoji": "\ud83d\udd11", "text": "[key]" },
+            { "$": "request", "method": "POST", "endpoint": "/keys/regenerate" },
+            { "$": "result", "children": [
+              { "$": "200", "type": "field", "write": "pubkey <- response(npub)", "then": "toast(\"New keypair generated.\")" },
+              { "$": "409", "type": "toast", "message": "Key operation already in progress. Please wait.", "level": "warning" },
+              { "$": "4xx", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" },
+              { "$": "5xx", "type": "toast", "message": "Key generation failed. Hardware RNG may be unavailable.", "level": "error" }
+            ]}
+          ]
+        },
+        {
+          "$": "action", "name": "export",
+          "label": "Export Keys", "style": "secondary",
+          "tip": "Export keypair as QR code or NOSTR bunker URI.",
+          "children": [
+            { "$": "icon", "file": { "$fn": "media", "args": ["export.svg"] }, "emoji": "\ud83d\udcf7", "text": "[qr]" },
+            { "$": "request", "method": "GET", "endpoint": "/keys/export" },
+            { "$": "result", "children": [
+              { "$": "200", "type": "inline", "title": "Scan to import on another device",
+                "display": { "$fn": "qr", "args": [{ "$fn": "response", "args": ["bunker_uri"] }] },
+                "children": [{ "$": "display", "size": "large", "alt": "NOSTR bunker URI QR code",
+                  "fallback": { "$fn": "text", "args": [{ "$fn": "response", "args": ["bunker_uri"] }] }
+                }]
+              },
+              { "$": "4xx", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" },
+              { "$": "5xx", "type": "toast", "message": "Export failed.", "level": "error" }
+            ]}
+          ]
         }
-        409 {
-          /* Conflict — key operation already in progress */
-          type:    toast;
-          message: "Key operation already in progress. Please wait.";
-          level:   warning;
-        }
-        4xx {
-          type:    toast;
-          message: response(error);
-          level:   warning;
-        }
-        5xx {
-          type:    toast;
-          message: "Key generation failed. Hardware RNG may be unavailable.";
-          level:   error;
-        }
-      }
+      ]
+    },
+    {
+      "$": "action", "name": "save",
+      "label": "Save Settings", "style": "primary",
+      "tip": "Write all settings to persistent storage.",
+      "children": [
+        { "$": "icon", "file": { "$fn": "media", "args": ["check.svg"] }, "emoji": "\u2705", "text": "[save]" },
+        { "$": "request", "method": "POST", "endpoint": "/settings",
+          "children": [{ "$": "body",
+            "frequency": { "$fn": "field", "args": ["frequency"] },
+            "power": { "$fn": "field", "args": ["power"] },
+            "relay": { "$fn": "field", "args": ["relay"] },
+            "beacon": { "$fn": "field", "args": ["beacon"] }
+          }]
+        },
+        { "$": "result", "children": [
+          { "$": "200", "type": "toast", "message": "Settings saved.", "level": "success" },
+          { "$": "4xx", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" },
+          { "$": "5xx", "type": "toast", "message": "Could not save settings.", "level": "error" }
+        ]}
+      ]
+    },
+    {
+      "$": "action", "name": "reset",
+      "label": "Reset Defaults", "style": "danger",
+      "tip": "Restore all settings to factory defaults.",
+      "confirm": true, "confirm-label": "Reset all settings to defaults?",
+      "children": [
+        { "$": "icon", "file": { "$fn": "media", "args": ["reset.svg"] }, "emoji": "\ud83d\udd04", "text": "[reset]" },
+        { "$": "request", "method": "POST", "endpoint": "/settings/reset" },
+        { "$": "result", "children": [
+          { "$": "200", "type": "redirect", "screen": "settings" },
+          { "$": "4xx", "type": "toast", "message": { "$fn": "response", "args": ["error"] }, "level": "warning" },
+          { "$": "5xx", "type": "toast", "message": "Reset failed.", "level": "error" }
+        ]}
+      ]
     }
-
-    action export {
-      label: "Export Keys";
-      style: secondary;
-      tip:   "Export keypair as QR code or NOSTR bunker URI.";
-      icon   { file: media(export.svg); emoji: 📷; text: [qr]; }
-
-      request {
-        method:   GET;
-        endpoint: /keys/export;
-      }
-
-      result {
-        200 {
-          type:    inline;
-          title:   "Scan to import on another device";
-          display: qr(response(bunker_uri)) {
-            size:     large;
-            alt:      "NOSTR bunker URI QR code";
-            fallback: text(response(bunker_uri));
-          }
-        }
-        4xx { type: toast; message: response(error);           level: warning; }
-        5xx { type: toast; message: "Export failed.";          level: error;   }
-      }
-    }
-  }
-
-  action save {
-    label: "Save Settings";
-    style: primary;
-    tip:   "Write all settings to persistent storage.";
-    icon   { file: media(check.svg); emoji: ✅; text: [save]; }
-
-    request {
-      method:   POST;
-      endpoint: /settings;
-      body {
-        frequency: field(frequency);
-        power:     field(power);
-        relay:     field(relay);
-        beacon:    field(beacon);
-      }
-    }
-
-    result {
-      200 { type: toast; message: "Settings saved.";         level: success; }
-      4xx { type: toast; message: response(error);           level: warning; }
-      5xx { type: toast; message: "Could not save settings."; level: error;  }
-    }
-  }
-
-  action reset {
-    label:         "Reset Defaults";
-    style:         danger;
-    tip:           "Restore all settings to factory defaults.";
-    confirm:       true;
-    confirm-label: "Reset all settings to defaults?";
-    icon { file: media(reset.svg); emoji: 🔄; text: [reset]; }
-
-    request {
-      method:   POST;
-      endpoint: /settings/reset;
-    }
-
-    result {
-      200 { type: redirect; screen: settings; }
-      4xx { type: toast; message: response(error);    level: warning; }
-      5xx { type: toast; message: "Reset failed.";    level: error;   }
-    }
-  }
-}
+  ]
+}]
 ```
 
 ---
@@ -1268,7 +1140,7 @@ The WASM module is responsible for returning appropriate HTTP status codes from 
 }
 ```
 
-A node receiving kind `32200` can verify the BIP-340 signature, unpack the archive, validate `app.wasm` against the declared hash, and offer to install it — all without any prior knowledge of the app. The `.ui` files inside are rendered immediately; `app.wasm` is loaded into the Wasm3/Wasmer runtime on first launch.
+A node receiving kind `32200` can verify the BIP-340 signature, unpack the archive, validate `app.wasm` against the declared hash, and offer to install it — all without any prior knowledge of the app. The `.ui.json` files inside are rendered immediately; `app.wasm` is loaded into the Wasm3/Wasmer runtime on first launch.
 
 For large packages that exceed NOSTR event size limits, the `content` field carries a magnet-style content-addressed URI and the binary is fetched separately over mesh file transfer.
 
@@ -1282,7 +1154,7 @@ For large packages that exceed NOSTR event size limits, the `content` field carr
 | Manifests + events + KV | Done | JSON manifests, event bus, KV backends |
 | Library modules | Done | `hal_lib_call`, HTTP API server |
 | `.wapp` zip format | Specified | Loader implementation pending |
-| GeoUI parser (Dart) | Planned | Recursive descent, ~300 lines |
+| GeoUI parser (Dart) | Done | JSON-based, ~80 lines |
 | CLI renderer | Planned | Interactive + flag mode |
 | Web renderer | Planned | WASM → HTML form via GeoUI |
 | Flutter renderer | Planned | GeoUI → Widget tree |
