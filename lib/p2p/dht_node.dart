@@ -44,10 +44,7 @@ int _txIdCounter = 0;
 /// Generate a 2-byte transaction ID.
 Uint8List _nextTxId() {
   _txIdCounter = (_txIdCounter + 1) & 0xFFFF;
-  return Uint8List.fromList([
-    (_txIdCounter >> 8) & 0xFF,
-    _txIdCounter & 0xFF,
-  ]);
+  return Uint8List.fromList([(_txIdCounter >> 8) & 0xFF, _txIdCounter & 0xFF]);
 }
 
 /// Compute SHA1 hash of a string, returning 20 bytes.
@@ -72,6 +69,27 @@ class _PendingQuery {
 
   bool get isExpired =>
       DateTime.now().difference(sentAt) > const Duration(seconds: 10);
+}
+
+class _IncomingSignalBuffer {
+  final int totalChunks;
+  final Map<int, String> chunks = {};
+  DateTime updatedAt = DateTime.now();
+
+  _IncomingSignalBuffer({required this.totalChunks});
+
+  bool get isComplete => chunks.length == totalChunks;
+
+  String? assemble() {
+    if (!isComplete) return null;
+    final buffer = StringBuffer();
+    for (var i = 0; i < totalChunks; i++) {
+      final chunk = chunks[i];
+      if (chunk == null) return null;
+      buffer.write(chunk);
+    }
+    return buffer.toString();
+  }
 }
 
 /// Peer info returned by get_peers.
@@ -114,6 +132,9 @@ class DhtNode {
   /// Pending queries awaiting responses.
   final Map<String, _PendingQuery> _pendingQueries = {};
 
+  /// In-progress chunked signaling payloads keyed by "ip:port:messageId".
+  final Map<String, _IncomingSignalBuffer> _incomingSignalBuffers = {};
+
   /// Tokens we received from remote nodes (for our announces).
   /// Maps "ip:port" → token.
   final Map<String, Uint8List> _receivedTokens = {};
@@ -135,10 +156,12 @@ class DhtNode {
   Timer? _tokenRotationTimer;
 
   /// Stream controller for DHT events.
-  final _peerFoundController = StreamController<(Uint8List infoHash, PeerInfo peer)>.broadcast();
+  final _peerFoundController =
+      StreamController<(Uint8List infoHash, PeerInfo peer)>.broadcast();
 
   /// Stream of newly discovered peers.
-  Stream<(Uint8List infoHash, PeerInfo peer)> get onPeerFound => _peerFoundController.stream;
+  Stream<(Uint8List infoHash, PeerInfo peer)> get onPeerFound =>
+      _peerFoundController.stream;
 
   /// Node count in routing table.
   int get routingTableSize => _routingTable.nodeCount;
@@ -202,8 +225,10 @@ class DhtNode {
       _tokenSecret = _generateTokenSecret();
     });
 
-    LogService().log('DHT node started on port $_localPort '
-        '(id: ${_hexPrefix(nodeId)})');
+    LogService().log(
+      'DHT node started on port $_localPort '
+      '(id: ${_hexPrefix(nodeId)})',
+    );
   }
 
   /// Bootstrap the DHT by contacting well-known nodes.
@@ -229,10 +254,12 @@ class DhtNode {
     for (final (host, port) in kBootstrapNodes) {
       if (!_running) return;
       try {
-        final addresses = await InternetAddress.lookup(host)
-            .timeout(const Duration(seconds: 3), onTimeout: () => []);
-        final ipv4 = addresses.where(
-            (a) => a.type == InternetAddressType.IPv4).toList();
+        final addresses = await InternetAddress.lookup(
+          host,
+        ).timeout(const Duration(seconds: 3), onTimeout: () => []);
+        final ipv4 = addresses
+            .where((a) => a.type == InternetAddressType.IPv4)
+            .toList();
         if (ipv4.isNotEmpty) {
           _sendFindNode(ipv4.first.address, port, nodeId);
         }
@@ -252,10 +279,12 @@ class DhtNode {
       for (final (host, port) in kBootstrapNodes) {
         if (!_running) return;
         try {
-          final addresses = await InternetAddress.lookup(host)
-              .timeout(const Duration(seconds: 3), onTimeout: () => []);
-          final ipv4 = addresses.where(
-              (a) => a.type == InternetAddressType.IPv4).toList();
+          final addresses = await InternetAddress.lookup(
+            host,
+          ).timeout(const Duration(seconds: 3), onTimeout: () => []);
+          final ipv4 = addresses
+              .where((a) => a.type == InternetAddressType.IPv4)
+              .toList();
           if (ipv4.isNotEmpty) {
             _sendFindNode(ipv4.first.address, port, nodeId);
           }
@@ -275,7 +304,9 @@ class DhtNode {
       }
     }
 
-    LogService().log('DHT bootstrap complete: ${_routingTable.nodeCount} nodes');
+    LogService().log(
+      'DHT bootstrap complete: ${_routingTable.nodeCount} nodes',
+    );
   }
 
   /// Announce this node on a topic (info_hash).
@@ -308,8 +339,10 @@ class DhtNode {
       }
     }
 
-    LogService().log('DHT announced on ${_hexPrefix(infoHash)} port $port '
-        'to $announced nodes');
+    LogService().log(
+      'DHT announced on ${_hexPrefix(infoHash)} port $port '
+      'to $announced nodes',
+    );
   }
 
   /// Lightweight announce: send get_peers to closest routing table nodes ONE
@@ -361,8 +394,10 @@ class DhtNode {
       }
     }
 
-    LogService().log('DHT announced (light) on ${_hexPrefix(infoHash)} port $port '
-        'to $announced nodes');
+    LogService().log(
+      'DHT announced (light) on ${_hexPrefix(infoHash)} port $port '
+      'to $announced nodes',
+    );
   }
 
   /// Look up peers for an info_hash.
@@ -472,19 +507,20 @@ class DhtNode {
     }
   }
 
-  void _handleQuery(
-      Map<String, dynamic> msg, String fromIp, int fromPort) {
+  void _handleQuery(Map<String, dynamic> msg, String fromIp, int fromPort) {
     final txId = Bencode.asBytes(msg['t']);
     final method = Bencode.asString(msg['q']);
     final args = Bencode.asMap(msg['a']);
     final senderId = Bencode.asBytes(args['id']);
 
     // Update routing table with querying node
-    _routingTable.insertNode(DhtContact(
-      nodeId: Uint8List.fromList(senderId),
-      ip: fromIp,
-      port: fromPort,
-    ));
+    _routingTable.insertNode(
+      DhtContact(
+        nodeId: Uint8List.fromList(senderId),
+        ip: fromIp,
+        port: fromPort,
+      ),
+    );
 
     switch (method) {
       case 'ping':
@@ -504,6 +540,12 @@ class DhtNode {
       case 'geogram':
         _handleGeogramQuery(args, txId, fromIp, fromPort);
         break;
+      case 'geogram_signal':
+        _handleGeogramSignalQuery(args, txId, fromIp, fromPort);
+        break;
+      case 'geogram_signal_chunk':
+        _handleGeogramSignalChunkQuery(args, txId, fromIp, fromPort);
+        break;
     }
   }
 
@@ -517,41 +559,199 @@ class DhtNode {
   int geogramHttpPort = 3456;
 
   /// Callback when a geogram query or response is received from a peer.
-  void Function(String callsign, String? npub, String? deviceId,
-      String? platform, int httpPort, String ip, int udpPort)? onGeogramPeer;
+  void Function(
+    String callsign,
+    String? npub,
+    String? deviceId,
+    String? platform,
+    int httpPort,
+    String ip,
+    int udpPort,
+  )?
+  onGeogramPeer;
+
+  /// Callback when a geogram signaling message is received from a peer.
+  void Function(Map<String, dynamic> signal, String ip, int udpPort)?
+  onGeogramSignal;
 
   void _handleGeogramQuery(
-      Map<String, dynamic> args, Uint8List txId, String fromIp, int fromPort) {
+    Map<String, dynamic> args,
+    Uint8List txId,
+    String fromIp,
+    int fromPort,
+  ) {
     // Extract peer identity from the query
     final peerCallsign = Bencode.asString(args['callsign']);
-    final peerNpub = args.containsKey('npub') ? Bencode.asString(args['npub']) : null;
-    final peerDeviceId = args.containsKey('device_id') ? Bencode.asString(args['device_id']) : null;
-    final peerPlatform = args.containsKey('platform') ? Bencode.asString(args['platform']) : null;
+    final peerNpub = args.containsKey('npub')
+        ? Bencode.asString(args['npub'])
+        : null;
+    final peerDeviceId = args.containsKey('device_id')
+        ? Bencode.asString(args['device_id'])
+        : null;
+    final peerPlatform = args.containsKey('platform')
+        ? Bencode.asString(args['platform'])
+        : null;
     final peerHttpPort = args.containsKey('http_port')
         ? (args['http_port'] as int? ?? 3456)
         : 3456;
 
-    LogService().log('DHT: geogram query from $peerCallsign at $fromIp:$fromPort');
+    LogService().log(
+      'DHT: geogram query from $peerCallsign at $fromIp:$fromPort',
+    );
 
     // Respond with our identity
-    _sendMessage({
-      't': txId,
-      'y': 'r',
-      'r': {
-        'id': nodeId,
-        'callsign': geogramCallsign ?? '',
-        'npub': geogramNpub ?? '',
-        'device_id': geogramDeviceId ?? '',
-        'platform': geogramPlatform ?? '',
-        'http_port': geogramHttpPort,
+    _sendMessage(
+      {
+        't': txId,
+        'y': 'r',
+        'r': {
+          'id': nodeId,
+          'callsign': geogramCallsign ?? '',
+          'npub': geogramNpub ?? '',
+          'device_id': geogramDeviceId ?? '',
+          'platform': geogramPlatform ?? '',
+          'http_port': geogramHttpPort,
+        },
       },
-    }, fromIp, fromPort);
+      fromIp,
+      fromPort,
+    );
 
     // Notify P2PService about this peer
     if (peerCallsign.isNotEmpty) {
       onGeogramPeer?.call(
-          peerCallsign, peerNpub, peerDeviceId, peerPlatform,
-          peerHttpPort, fromIp, fromPort);
+        peerCallsign,
+        peerNpub,
+        peerDeviceId,
+        peerPlatform,
+        peerHttpPort,
+        fromIp,
+        fromPort,
+      );
+    }
+  }
+
+  void _handleGeogramSignalQuery(
+    Map<String, dynamic> args,
+    Uint8List txId,
+    String fromIp,
+    int fromPort,
+  ) {
+    final signal = <String, dynamic>{};
+    for (final entry in args.entries) {
+      if (entry.key == 'id') continue;
+      final normalized = _normalizeSignalValue(entry.value);
+      if (normalized != null) {
+        signal[entry.key] = normalized;
+      }
+    }
+
+    _sendMessage(
+      {
+        't': txId,
+        'y': 'r',
+        'r': {'id': nodeId, 'ok': 1},
+      },
+      fromIp,
+      fromPort,
+    );
+
+    final targetCallsign = signal['to_callsign'] as String?;
+    final myCallsign = geogramCallsign;
+    if (targetCallsign != null &&
+        myCallsign != null &&
+        targetCallsign.toUpperCase() != myCallsign.toUpperCase()) {
+      LogService().log(
+        'DHT: ignoring geogram signal for $targetCallsign from $fromIp:$fromPort',
+      );
+      return;
+    }
+
+    LogService().log(
+      'DHT: geogram signal ${signal['type'] ?? 'unknown'} from $fromIp:$fromPort',
+    );
+    onGeogramSignal?.call(signal, fromIp, fromPort);
+  }
+
+  void _handleGeogramSignalChunkQuery(
+    Map<String, dynamic> args,
+    Uint8List txId,
+    String fromIp,
+    int fromPort,
+  ) {
+    final messageId = Bencode.asString(args['message_id']);
+    final chunkIndex = Bencode.asInt(args['chunk_index']);
+    final chunkTotal = Bencode.asInt(args['chunk_total']);
+    final payload = Bencode.asString(args['payload']);
+
+    _sendMessage(
+      {
+        't': txId,
+        'y': 'r',
+        'r': {'id': nodeId, 'ok': 1},
+      },
+      fromIp,
+      fromPort,
+    );
+
+    final targetCallsign = args.containsKey('to_callsign')
+        ? Bencode.asString(args['to_callsign'])
+        : null;
+    final myCallsign = geogramCallsign;
+    if (targetCallsign != null &&
+        myCallsign != null &&
+        targetCallsign.toUpperCase() != myCallsign.toUpperCase()) {
+      LogService().log(
+        'DHT: ignoring geogram signal chunk for $targetCallsign from $fromIp:$fromPort',
+      );
+      return;
+    }
+
+    _discardExpiredSignalBuffers();
+
+    final bufferKey = '$fromIp:$fromPort:$messageId';
+    final existingBuffer = _incomingSignalBuffers[bufferKey];
+    final buffer =
+        existingBuffer != null && existingBuffer.totalChunks == chunkTotal
+        ? existingBuffer
+        : _incomingSignalBuffers[bufferKey] = _IncomingSignalBuffer(
+            totalChunks: chunkTotal,
+          );
+
+    buffer.updatedAt = DateTime.now();
+    buffer.chunks[chunkIndex] = payload;
+
+    if (!buffer.isComplete) return;
+
+    final assembled = buffer.assemble();
+    _incomingSignalBuffers.remove(bufferKey);
+    if (assembled == null) return;
+
+    try {
+      final decoded = jsonDecode(assembled);
+      if (decoded is! Map) {
+        LogService().log(
+          'DHT: ignoring chunked geogram signal with invalid payload from $fromIp:$fromPort',
+        );
+        return;
+      }
+
+      final signal = _normalizeJsonSignalValue(decoded);
+      if (signal is! Map<String, dynamic>) {
+        LogService().log(
+          'DHT: ignoring chunked geogram signal with invalid map from $fromIp:$fromPort',
+        );
+        return;
+      }
+
+      LogService().log(
+        'DHT: reassembled geogram signal ${signal['type'] ?? 'unknown'} from $fromIp:$fromPort',
+      );
+      onGeogramSignal?.call(signal, fromIp, fromPort);
+    } catch (e) {
+      LogService().log(
+        'DHT: failed to decode chunked geogram signal from $fromIp:$fromPort: $e',
+      );
     }
   }
 
@@ -566,19 +766,23 @@ class DhtNode {
       completer: completer,
     );
 
-    _sendMessage({
-      't': txId,
-      'y': 'q',
-      'q': 'geogram',
-      'a': {
-        'id': nodeId,
-        'callsign': geogramCallsign ?? '',
-        'npub': geogramNpub ?? '',
-        'device_id': geogramDeviceId ?? '',
-        'platform': geogramPlatform ?? '',
-        'http_port': geogramHttpPort,
+    _sendMessage(
+      {
+        't': txId,
+        'y': 'q',
+        'q': 'geogram',
+        'a': {
+          'id': nodeId,
+          'callsign': geogramCallsign ?? '',
+          'npub': geogramNpub ?? '',
+          'device_id': geogramDeviceId ?? '',
+          'platform': geogramPlatform ?? '',
+          'http_port': geogramHttpPort,
+        },
       },
-    }, ip, port);
+      ip,
+      port,
+    );
 
     LogService().log('DHT: sent geogram query to $ip:$port');
 
@@ -591,6 +795,84 @@ class DhtNode {
     );
   }
 
+  /// Send a geogram signaling message to a peer's DHT socket.
+  Future<bool> sendGeogramSignal(
+    String ip,
+    int port,
+    Map<String, dynamic> signal,
+  ) async {
+    final preparedSignal = <String, dynamic>{};
+    for (final entry in signal.entries) {
+      final prepared = _prepareSignalValue(entry.value);
+      if (prepared != null) {
+        preparedSignal[entry.key] = prepared;
+      }
+    }
+
+    final payload = jsonEncode(preparedSignal);
+    if (payload.length > 900) {
+      return _sendChunkedGeogramSignal(ip, port, preparedSignal, payload);
+    }
+
+    final response = await _sendQuery(
+      'geogram_signal',
+      {'id': nodeId, ...preparedSignal},
+      ip,
+      port,
+    );
+    if (response == null) {
+      LogService().log('DHT: geogram signal to $ip:$port timed out');
+      return false;
+    }
+
+    final ok = response['ok'];
+    return ok is int && ok == 1;
+  }
+
+  Future<bool> _sendChunkedGeogramSignal(
+    String ip,
+    int port,
+    Map<String, dynamic> signal,
+    String payload,
+  ) async {
+    const chunkSize = 700;
+    final messageId =
+        '${DateTime.now().microsecondsSinceEpoch}-${_toHex(_nextTxId())}';
+    final totalChunks = (payload.length / chunkSize).ceil();
+    final targetCallsign = signal['to_callsign'] as String?;
+
+    for (var i = 0; i < totalChunks; i++) {
+      final start = i * chunkSize;
+      final end = min(start + chunkSize, payload.length);
+      final response = await _sendQuery(
+        'geogram_signal_chunk',
+        {
+          'id': nodeId,
+          'message_id': messageId,
+          'chunk_index': i,
+          'chunk_total': totalChunks,
+          'payload': payload.substring(start, end),
+          if (targetCallsign != null) 'to_callsign': targetCallsign,
+        },
+        ip,
+        port,
+      );
+
+      final ok = response?['ok'];
+      if (ok is! int || ok != 1) {
+        LogService().log(
+          'DHT: geogram signal chunk ${i + 1}/$totalChunks to $ip:$port failed',
+        );
+        return false;
+      }
+    }
+
+    LogService().log(
+      'DHT: sent chunked geogram signal (${payload.length} bytes, $totalChunks chunk(s)) to $ip:$port',
+    );
+    return true;
+  }
+
   /// Our external IP:port as reported by BEP 42 `ip` field in DHT responses.
   String? _externalIp;
   int? _externalPort;
@@ -599,8 +881,7 @@ class DhtNode {
   String? get externalIp => _externalIp;
   int? get externalPort => _externalPort;
 
-  void _handleResponse(
-      Map<String, dynamic> msg, String fromIp, int fromPort) {
+  void _handleResponse(Map<String, dynamic> msg, String fromIp, int fromPort) {
     final txId = Bencode.asBytes(msg['t']);
     final txKey = _toHex(txId);
     final pending = _pendingQueries.remove(txKey);
@@ -624,11 +905,13 @@ class DhtNode {
     final responderId = Bencode.asBytes(body['id']);
 
     // Update routing table
-    _routingTable.insertNode(DhtContact(
-      nodeId: Uint8List.fromList(responderId),
-      ip: fromIp,
-      port: fromPort,
-    ));
+    _routingTable.insertNode(
+      DhtContact(
+        nodeId: Uint8List.fromList(responderId),
+        ip: fromIp,
+        port: fromPort,
+      ),
+    );
 
     // Store token if present
     if (body.containsKey('token')) {
@@ -667,14 +950,30 @@ class DhtNode {
       try {
         final peerCallsign = Bencode.asString(body['callsign']);
         if (peerCallsign.isNotEmpty) {
-          final peerNpub = body.containsKey('npub') ? Bencode.asString(body['npub']) : null;
-          final peerDeviceId = body.containsKey('device_id') ? Bencode.asString(body['device_id']) : null;
-          final peerPlatform = body.containsKey('platform') ? Bencode.asString(body['platform']) : null;
-          final peerHttpPort = body.containsKey('http_port') ? (body['http_port'] as int? ?? 3456) : 3456;
-          LogService().log('DHT: geogram response from $peerCallsign at $fromIp:$fromPort (http:$peerHttpPort)');
+          final peerNpub = body.containsKey('npub')
+              ? Bencode.asString(body['npub'])
+              : null;
+          final peerDeviceId = body.containsKey('device_id')
+              ? Bencode.asString(body['device_id'])
+              : null;
+          final peerPlatform = body.containsKey('platform')
+              ? Bencode.asString(body['platform'])
+              : null;
+          final peerHttpPort = body.containsKey('http_port')
+              ? (body['http_port'] as int? ?? 3456)
+              : 3456;
+          LogService().log(
+            'DHT: geogram response from $peerCallsign at $fromIp:$fromPort (http:$peerHttpPort)',
+          );
           onGeogramPeer?.call(
-              peerCallsign, peerNpub, peerDeviceId, peerPlatform,
-              peerHttpPort, fromIp, fromPort);
+            peerCallsign,
+            peerNpub,
+            peerDeviceId,
+            peerPlatform,
+            peerHttpPort,
+            fromIp,
+            fromPort,
+          );
         }
       } catch (_) {}
     }
@@ -697,37 +996,47 @@ class DhtNode {
   // ─── Query Responses ────────────────────────────────────────────
 
   void _respondPing(Uint8List txId, String toIp, int toPort) {
-    _sendMessage({
-      't': txId,
-      'y': 'r',
-      'r': {'id': nodeId},
-    }, toIp, toPort);
+    _sendMessage(
+      {
+        't': txId,
+        'y': 'r',
+        'r': {'id': nodeId},
+      },
+      toIp,
+      toPort,
+    );
   }
 
   void _respondFindNode(
-      Uint8List txId, Uint8List target, String toIp, int toPort) {
+    Uint8List txId,
+    Uint8List target,
+    String toIp,
+    int toPort,
+  ) {
     final closest = _routingTable.findClosest(target);
     final nodes = _packNodes(closest);
 
-    _sendMessage({
-      't': txId,
-      'y': 'r',
-      'r': {
-        'id': nodeId,
-        'nodes': nodes,
+    _sendMessage(
+      {
+        't': txId,
+        'y': 'r',
+        'r': {'id': nodeId, 'nodes': nodes},
       },
-    }, toIp, toPort);
+      toIp,
+      toPort,
+    );
   }
 
   void _respondGetPeers(
-      Uint8List txId, Uint8List infoHash, String toIp, int toPort) {
+    Uint8List txId,
+    Uint8List infoHash,
+    String toIp,
+    int toPort,
+  ) {
     final token = _generateToken(toIp);
     final hexHash = _toHex(infoHash);
 
-    final response = <String, dynamic>{
-      'id': nodeId,
-      'token': token,
-    };
+    final response = <String, dynamic>{'id': nodeId, 'token': token};
 
     // Do we have peers for this info_hash?
     final peers = _peerStore[hexHash];
@@ -752,15 +1061,15 @@ class DhtNode {
       response['nodes'] = _packNodes(closest);
     }
 
-    _sendMessage({
-      't': txId,
-      'y': 'r',
-      'r': response,
-    }, toIp, toPort);
+    _sendMessage({'t': txId, 'y': 'r', 'r': response}, toIp, toPort);
   }
 
   void _handleAnnouncePeer(
-      Map<String, dynamic> args, Uint8List txId, String fromIp, int fromPort) {
+    Map<String, dynamic> args,
+    Uint8List txId,
+    String fromIp,
+    int fromPort,
+  ) {
     final infoHash = Bencode.asBytes(args['info_hash']);
     final token = Bencode.asBytes(args['token']);
 
@@ -788,7 +1097,9 @@ class DhtNode {
     // Trim to max
     if (_peerStore[hexHash]!.length > kMaxPeersPerTopic) {
       final list = _peerStore[hexHash]!.toList();
-      _peerStore[hexHash] = list.sublist(list.length - kMaxPeersPerTopic).toSet();
+      _peerStore[hexHash] = list
+          .sublist(list.length - kMaxPeersPerTopic)
+          .toSet();
     }
 
     // Emit event
@@ -818,16 +1129,19 @@ class DhtNode {
   /// Get external (non-localhost, non-LAN) nodes from routing table.
   List<DhtContact> getExternalNodes({int count = 6}) {
     final all = _routingTable.getAllNodes();
-    final external = all.where((n) =>
-        !n.ip.startsWith('127.') &&
-        !n.ip.startsWith('192.168.') &&
-        !n.ip.startsWith('10.') &&
-        !n.ip.startsWith('172.') &&
-        n.ip != '0.0.0.0').toList();
+    final external = all
+        .where(
+          (n) =>
+              !n.ip.startsWith('127.') &&
+              !n.ip.startsWith('192.168.') &&
+              !n.ip.startsWith('10.') &&
+              !n.ip.startsWith('172.') &&
+              n.ip != '0.0.0.0',
+        )
+        .toList();
     external.sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
     return external.take(count).toList();
   }
-
 
   // ─── Sending Queries ────────────────────────────────────────────
 
@@ -836,35 +1150,55 @@ class DhtNode {
   }
 
   Future<Map<String, dynamic>?> _sendFindNode(
-      String ip, int port, Uint8List target) {
-    return _sendQuery('find_node', {
-      'id': nodeId,
-      'target': target,
-    }, ip, port);
+    String ip,
+    int port,
+    Uint8List target,
+  ) {
+    return _sendQuery('find_node', {'id': nodeId, 'target': target}, ip, port);
   }
 
   Future<Map<String, dynamic>?> _sendGetPeers(
-      String ip, int port, Uint8List infoHash) {
-    return _sendQuery('get_peers', {
-      'id': nodeId,
-      'info_hash': infoHash,
-    }, ip, port, infoHash: infoHash);
+    String ip,
+    int port,
+    Uint8List infoHash,
+  ) {
+    return _sendQuery(
+      'get_peers',
+      {'id': nodeId, 'info_hash': infoHash},
+      ip,
+      port,
+      infoHash: infoHash,
+    );
   }
 
   void _sendAnnouncePeer(
-      String ip, int port, Uint8List infoHash, int announcePort, Uint8List token) {
-    _sendQuery('announce_peer', {
-      'id': nodeId,
-      'info_hash': infoHash,
-      'port': announcePort,
-      'token': token,
-      'implied_port': 1,
-    }, ip, port);
+    String ip,
+    int port,
+    Uint8List infoHash,
+    int announcePort,
+    Uint8List token,
+  ) {
+    _sendQuery(
+      'announce_peer',
+      {
+        'id': nodeId,
+        'info_hash': infoHash,
+        'port': announcePort,
+        'token': token,
+        'implied_port': 1,
+      },
+      ip,
+      port,
+    );
   }
 
   Future<Map<String, dynamic>?> _sendQuery(
-      String method, Map<String, dynamic> args, String ip, int port,
-      {Uint8List? infoHash}) {
+    String method,
+    Map<String, dynamic> args,
+    String ip,
+    int port, {
+    Uint8List? infoHash,
+  }) {
     final txId = _nextTxId();
     final txKey = _toHex(txId);
 
@@ -876,12 +1210,7 @@ class DhtNode {
       infoHash: infoHash,
     );
 
-    _sendMessage({
-      't': txId,
-      'y': 'q',
-      'q': method,
-      'a': args,
-    }, ip, port);
+    _sendMessage({'t': txId, 'y': 'q', 'q': method, 'a': args}, ip, port);
 
     return completer.future.timeout(
       const Duration(seconds: 3),
@@ -892,12 +1221,22 @@ class DhtNode {
     );
   }
 
-  void _sendError(Uint8List txId, int code, String message, String ip, int port) {
-    _sendMessage({
-      't': txId,
-      'y': 'e',
-      'e': [code, message],
-    }, ip, port);
+  void _sendError(
+    Uint8List txId,
+    int code,
+    String message,
+    String ip,
+    int port,
+  ) {
+    _sendMessage(
+      {
+        't': txId,
+        'y': 'e',
+        'e': [code, message],
+      },
+      ip,
+      port,
+    );
   }
 
   void _sendMessage(Map<String, dynamic> msg, String ip, int port) {
@@ -912,6 +1251,71 @@ class DhtNode {
     }
   }
 
+  dynamic _prepareSignalValue(dynamic value) {
+    if (value == null) return null;
+    if (value is bool) return value ? 1 : 0;
+    if (value is int || value is String || value is Uint8List) return value;
+    if (value is List<int>) return Uint8List.fromList(value);
+    if (value is List) {
+      final result = <dynamic>[];
+      for (final item in value) {
+        final prepared = _prepareSignalValue(item);
+        if (prepared != null) {
+          result.add(prepared);
+        }
+      }
+      return result;
+    }
+    if (value is Map) {
+      final result = <String, dynamic>{};
+      for (final entry in value.entries) {
+        final prepared = _prepareSignalValue(entry.value);
+        if (prepared != null) {
+          result[entry.key.toString()] = prepared;
+        }
+      }
+      return result;
+    }
+    return value.toString();
+  }
+
+  dynamic _normalizeSignalValue(dynamic value) {
+    if (value is Uint8List) return String.fromCharCodes(value);
+    if (value is List) {
+      return value.map(_normalizeSignalValue).toList();
+    }
+    if (value is Map) {
+      final result = <String, dynamic>{};
+      for (final entry in value.entries) {
+        result[entry.key.toString()] = _normalizeSignalValue(entry.value);
+      }
+      return result;
+    }
+    return value;
+  }
+
+  dynamic _normalizeJsonSignalValue(dynamic value) {
+    if (value is Map) {
+      final result = <String, dynamic>{};
+      for (final entry in value.entries) {
+        result[entry.key.toString()] = _normalizeJsonSignalValue(entry.value);
+      }
+      return result;
+    }
+    if (value is List) {
+      return value.map(_normalizeJsonSignalValue).toList();
+    }
+    return value;
+  }
+
+  void _discardExpiredSignalBuffers() {
+    final now = DateTime.now();
+    _incomingSignalBuffers.removeWhere(
+      (_, buffer) =>
+          now.difference(buffer.updatedAt) > const Duration(seconds: 30),
+    );
+  }
+
   // ─── Iterative Operations ──────────────────────────────────────
 
   /// Proper BEP 5 iterative find_node.
@@ -920,8 +1324,8 @@ class DhtNode {
   /// Iterates until no closer nodes are found (converged).
   Future<List<DhtContact>> _iterativeFindNode(Uint8List target) async {
     // Candidate set: all nodes discovered during this lookup, sorted by distance
-    final candidates = <String, DhtContact>{};   // key → contact
-    final distances = <String, Uint8List>{};      // key → xor distance
+    final candidates = <String, DhtContact>{}; // key → contact
+    final distances = <String, Uint8List>{}; // key → xor distance
     final queried = <String>{};
 
     // Seed with closest nodes from routing table
@@ -933,10 +1337,9 @@ class DhtNode {
 
     for (var round = 0; round < 10 && _running; round++) {
       // Pick alpha=3 unqueried candidates closest to target
-      final unqueried = candidates.keys
-          .where((k) => !queried.contains(k))
-          .toList()
-        ..sort((a, b) => compareDistance(distances[a]!, distances[b]!));
+      final unqueried =
+          candidates.keys.where((k) => !queried.contains(k)).toList()
+            ..sort((a, b) => compareDistance(distances[a]!, distances[b]!));
       final toQuery = unqueried.take(3).toList();
       if (toQuery.isEmpty) break; // converged
 
@@ -995,10 +1398,9 @@ class DhtNode {
     }
 
     for (var round = 0; round < 10 && _running; round++) {
-      final unqueried = candidates.keys
-          .where((k) => !queried.contains(k))
-          .toList()
-        ..sort((a, b) => compareDistance(distances[a]!, distances[b]!));
+      final unqueried =
+          candidates.keys.where((k) => !queried.contains(k)).toList()
+            ..sort((a, b) => compareDistance(distances[a]!, distances[b]!));
       final toQuery = unqueried.take(3).toList();
       if (toQuery.isEmpty) break;
 
@@ -1056,9 +1458,11 @@ class DhtNode {
       _peerFoundController.add((infoHash, peer));
     }
 
-    LogService().log('DHT get_peers: ${queried.length} nodes queried, '
-        '${foundPeers.length} peers found, '
-        '${candidates.length} total candidates');
+    LogService().log(
+      'DHT get_peers: ${queried.length} nodes queried, '
+      '${foundPeers.length} peers found, '
+      '${candidates.length} total candidates',
+    );
 
     return foundPeers.toList();
   }

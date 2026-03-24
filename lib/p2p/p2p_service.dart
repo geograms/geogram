@@ -6,11 +6,9 @@
 library;
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:http/http.dart' as http;
 import '../models/device_source.dart';
 import '../services/app_args.dart';
 import '../services/config_service.dart';
@@ -59,7 +57,12 @@ class P2PService {
 
   final Set<PeerInfo> discoveredPeers = {};
   final _peersController = StreamController<List<PeerInfo>>.broadcast();
-  Stream<List<PeerInfo>> get onDiscoveredPeersChanged => _peersController.stream;
+  Stream<List<PeerInfo>> get onDiscoveredPeersChanged =>
+      _peersController.stream;
+  final _signalingController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onSignalingMessage =>
+      _signalingController.stream;
   final Set<String> _probedPeers = {};
   final Map<String, Completer<List<PeerInfo>>> _findCompleters = {};
 
@@ -123,8 +126,9 @@ class P2PService {
 
         // Handle geogram peer discoveries (from queries AND responses)
         _dht!.onGeogramPeer = _handleGeogramPeer;
+        _dht!.onGeogramSignal = _handleGeogramSignal;
 
-        // Give DhtTransport a reference to the DHT node for UDP fallback
+        // Give DhtTransport a reference to the DHT node for rendezvous refreshes.
         try {
           final cm = ConnectionManager();
           if (cm.isInitialized) {
@@ -160,7 +164,9 @@ class P2PService {
           }
         }
         await _dht!.bootstrap(cachedNodes: cached);
-        LogService().log('P2P: bootstrap done (${_dht!.routingTableSize} nodes)');
+        LogService().log(
+          'P2P: bootstrap done (${_dht!.routingTableSize} nodes)',
+        );
         _phase3_announce(port, npub);
       } catch (e) {
         LogService().log('P2P: bootstrap failed: $e');
@@ -188,7 +194,9 @@ class P2PService {
           await _dht!.announce(npubHash, dhtPort);
         }
         _dht!.startPeriodicAnnounce(light: Platform.isAndroid);
-        LogService().log('P2P: announced on DHT (implied_port=1, local: $dhtPort, http: $port)');
+        LogService().log(
+          'P2P: announced on DHT (implied_port=1, local: $dhtPort, http: $port)',
+        );
         _phase4_detect();
       } catch (e) {
         LogService().log('P2P: announce failed: $e');
@@ -216,8 +224,10 @@ class P2PService {
         }
 
         _taskHandle?.markIdle();
-        LogService().log('P2P service started '
-            '(type: ${_capability!.type.name}, dht: ${_dht!.routingTableSize} nodes)');
+        LogService().log(
+          'P2P service started '
+          '(type: ${_capability!.type.name}, dht: ${_dht!.routingTableSize} nodes)',
+        );
 
         // After 30s: fresh peer scan + probe known devices
         // (gives the other device time to announce)
@@ -272,14 +282,21 @@ class P2PService {
     _refreshTimer?.cancel();
     if (_dht != null && _dht!.isRunning) {
       final nodes = _dht!.getNodesForCache();
-      await _saveCachedNodes(nodes.map((n) => {
-        'id': _toHex(n.nodeId),
-        'ip': n.ip,
-        'port': n.port,
-      }).toList());
+      await _saveCachedNodes(
+        nodes
+            .map((n) => {'id': _toHex(n.nodeId), 'ip': n.ip, 'port': n.port})
+            .toList(),
+      );
       await _dht!.stop();
       _dht!.dispose();
     }
+    try {
+      final cm = ConnectionManager();
+      if (cm.isInitialized) {
+        final dt = cm.getTransport('dht') as DhtTransport?;
+        if (dt != null) dt.dhtNode = null;
+      }
+    } catch (_) {}
     await _saveDiscoveredPeers();
     _dht = null;
     _capability = null;
@@ -336,7 +353,10 @@ class P2PService {
 
   void _addDiscoveredPeer(PeerInfo peer) {
     final myPort = AppArgs().port;
-    if ((peer.ip == '127.0.0.1' || peer.ip == '0.0.0.0') && peer.port == myPort) return;
+    if ((peer.ip == '127.0.0.1' || peer.ip == '0.0.0.0') &&
+        peer.port == myPort) {
+      return;
+    }
 
     if (discoveredPeers.add(peer)) {
       _peersController.add(discoveredPeers.toList());
@@ -349,81 +369,146 @@ class P2PService {
   }
 
   Future<void> _registerDhtPeer(PeerInfo peer) async {
-    final peerUrl = 'http://${peer.ip}:${peer.port}';
+    // The geogram topic announces the peer's DHT rendezvous socket, not an HTTP
+    // API port. Resolve the real HTTP endpoint through the geogram identity
+    // exchange before trying direct API traffic.
+    LogService().log(
+      'P2P: discovered DHT peer ${peer.ip}:${peer.port}, sending geogram query',
+    );
+    if (_dht != null && _dht!.isRunning) {
+      await _dht!.sendGeogramQuery(peer.ip, peer.port);
+    }
+  }
+
+  /// Called when a geogram peer is discovered (via query or response).
+  /// Registers the peer in DevicesService with full identity info.
+  void _handleGeogramPeer(
+    String callsign,
+    String? npub,
+    String? deviceId,
+    String? platform,
+    int httpPort,
+    String ip,
+    int udpPort,
+  ) {
     final myCallsign = ProfileService().getProfile().callsign;
+    if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
 
-    try {
-      final response = await http.get(Uri.parse('$peerUrl/api/status'))
-          .timeout(const Duration(seconds: 3));
-      if (response.statusCode != 200) return;
+    LogService().log(
+      'P2P: geogram peer $callsign at $ip (http:$httpPort, udp:$udpPort)',
+    );
 
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final callsign = data['callsign'] as String?;
-      if (callsign == null || callsign.isEmpty) return;
-      if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
-
-      final nickname = data['nickname'] as String?;
-      final displayName = (nickname != null && nickname.isNotEmpty)
-          ? '$nickname ($callsign)'
-          : callsign;
-
-      final devService = DevicesService();
-      devService.addOrUpdateDevice(RemoteDevice(
+    final devService = DevicesService();
+    devService.addOrUpdateDevice(
+      RemoteDevice(
         callsign: callsign.toUpperCase(),
-        name: displayName,
-        nickname: nickname,
-        npub: data['npub'] as String?,
-        url: peerUrl,
+        name: callsign,
+        npub: npub,
+        url: 'http://$ip:$httpPort',
         isOnline: true,
         hasCachedData: false,
         apps: [],
         connectionMethods: ['internet'],
         source: DeviceSourceType.direct,
         lastSeen: DateTime.now(),
-        platform: data['platform'] as String?,
-        deviceId: data['device_id'] as String?,
-      ));
-      devService.syncDeviceToConnectionManager(callsign.toUpperCase());
-      LogService().log('P2P: found $displayName at ${peer.ip}:${peer.port} via DHT');
-    } catch (_) {
-      // peer.port is the DHT port (we announce DHT port on geogram topic).
-      // Send geogram identity query directly — the peer's DHT socket is
-      // listening on this port and it's NAT-mapped from bootstrap.
-      LogService().log('P2P: HTTP probe failed for ${peer.ip}:${peer.port}, sending geogram query');
-      if (_dht != null && _dht!.isRunning) {
-        _dht!.sendGeogramQuery(peer.ip, peer.port);
-      }
-    }
+        platform: platform,
+        deviceId: deviceId,
+        udpIp: ip,
+        udpPort: udpPort,
+      ),
+    );
+    devService.syncDeviceToConnectionManager(callsign.toUpperCase());
+    LogService().log(
+      'P2P: registered geogram peer $callsign (http:$httpPort, udp:$udpPort)',
+    );
   }
 
-  /// Called when a geogram peer is discovered (via query or response).
-  /// Registers the peer in DevicesService with full identity info.
-  void _handleGeogramPeer(String callsign, String? npub, String? deviceId,
-      String? platform, int httpPort, String ip, int udpPort) {
-    final myCallsign = ProfileService().getProfile().callsign;
-    if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
+  void _handleGeogramSignal(
+    Map<String, dynamic> signal,
+    String ip,
+    int udpPort,
+  ) {
+    final fromCallsign = signal['from_callsign'] as String?;
+    if (fromCallsign == null || fromCallsign.isEmpty) return;
 
-    LogService().log('P2P: geogram peer $callsign at $ip (http:$httpPort, udp:$udpPort)');
+    final normalizedCallsign = fromCallsign.toUpperCase();
+    final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
+    if (normalizedCallsign == myCallsign) return;
 
     final devService = DevicesService();
-    devService.addOrUpdateDevice(RemoteDevice(
-      callsign: callsign.toUpperCase(),
-      name: callsign,
-      npub: npub,
-      url: 'http://$ip:$httpPort',
-      isOnline: true,
-      hasCachedData: false,
-      apps: [],
-      connectionMethods: ['internet'],
-      source: DeviceSourceType.direct,
-      lastSeen: DateTime.now(),
-      platform: platform,
-      deviceId: deviceId,
-      udpIp: ip,
-      udpPort: udpPort,
-    ));
-    devService.syncDeviceToConnectionManager(callsign.toUpperCase());
-    LogService().log('P2P: registered geogram peer $callsign (http:$httpPort, udp:$udpPort)');
+    final existing = devService.getDevice(normalizedCallsign);
+    if (existing != null) {
+      if (!existing.connectionMethods.contains('internet')) {
+        existing.connectionMethods = [
+          ...existing.connectionMethods,
+          'internet',
+        ];
+      }
+      existing.udpIp = ip;
+      existing.udpPort = udpPort;
+      existing.isOnline = true;
+      existing.lastSeen = DateTime.now();
+      devService.addOrUpdateDevice(existing);
+      devService.syncDeviceToConnectionManager(normalizedCallsign);
+    } else {
+      devService.addOrUpdateDevice(
+        RemoteDevice(
+          callsign: normalizedCallsign,
+          name: normalizedCallsign,
+          isOnline: true,
+          hasCachedData: false,
+          apps: [],
+          connectionMethods: const ['internet'],
+          source: DeviceSourceType.direct,
+          lastSeen: DateTime.now(),
+          udpIp: ip,
+          udpPort: udpPort,
+        ),
+      );
+    }
+
+    if (!_signalingController.isClosed) {
+      _signalingController.add(signal);
+    }
+    LogService().log(
+      'P2P: received geogram signal ${signal['type'] ?? 'unknown'} from $normalizedCallsign at $ip:$udpPort',
+    );
+  }
+
+  bool canSignalPeer(String callsign) {
+    if (_dht == null || !_dht!.isRunning) return false;
+    final device = DevicesService().getDevice(callsign.toUpperCase());
+    return device?.udpIp != null &&
+        device?.udpPort != null &&
+        device!.udpPort! > 0;
+  }
+
+  Future<bool> sendSignalingMessage(
+    String callsign,
+    Map<String, dynamic> signal,
+  ) async {
+    if (_dht == null || !_dht!.isRunning) return false;
+
+    final normalizedCallsign = callsign.toUpperCase();
+    final device = DevicesService().getDevice(normalizedCallsign);
+    final udpIp = device?.udpIp;
+    final udpPort = device?.udpPort;
+    if (udpIp == null || udpPort == null || udpPort <= 0) {
+      LogService().log(
+        'P2P: no DHT signaling endpoint for $normalizedCallsign',
+      );
+      return false;
+    }
+
+    final payload = <String, dynamic>{
+      ...signal,
+      'to_callsign': normalizedCallsign,
+    };
+    final sent = await _dht!.sendGeogramSignal(udpIp, udpPort, payload);
+    LogService().log(
+      'P2P: ${sent ? "sent" : "failed"} geogram signal ${signal['type'] ?? 'unknown'} to $normalizedCallsign at $udpIp:$udpPort',
+    );
+    return sent;
   }
 
   int _npubProbeIndex = 0;
@@ -437,11 +522,14 @@ class P2PService {
 
     final myCallsign = ProfileService().getProfile().callsign.toUpperCase();
     final devService = DevicesService();
-    final devices = devService.getAllDevices()
-        .where((d) =>
-            d.callsign.toUpperCase() != myCallsign &&
-            d.npub != null &&
-            d.npub!.isNotEmpty)
+    final devices = devService
+        .getAllDevices()
+        .where(
+          (d) =>
+              d.callsign.toUpperCase() != myCallsign &&
+              d.npub != null &&
+              d.npub!.isNotEmpty,
+        )
         .toList();
 
     if (devices.isEmpty) return;
@@ -462,7 +550,9 @@ class P2PService {
     if (peers.isNotEmpty) {
       // Found peer via npub lookup — try geogram query to get identity
       for (final peer in peers) {
-        LogService().log('P2P: npub probe found ${device.callsign} at ${peer.ip}:${peer.port}');
+        LogService().log(
+          'P2P: npub probe found ${device.callsign} at ${peer.ip}:${peer.port}',
+        );
         // Send geogram query — if peer's NAT allows, we get identity back
         _dht!.sendGeogramQuery(peer.ip, peer.port);
       }
@@ -470,16 +560,23 @@ class P2PService {
     }
   }
 
-  void _markDeviceOnline(DevicesService devService, RemoteDevice device, PeerInfo peer) {
+  void _markDeviceOnline(
+    DevicesService devService,
+    RemoteDevice device,
+    PeerInfo peer,
+  ) {
     if (!device.connectionMethods.contains('internet')) {
       device.connectionMethods = [...device.connectionMethods, 'internet'];
     }
-    device.url = 'http://${peer.ip}:${peer.port}';
+    device.udpIp = peer.ip;
+    device.udpPort = peer.port;
     device.isOnline = true;
     device.lastSeen = DateTime.now();
     devService.addOrUpdateDevice(device);
     devService.syncDeviceToConnectionManager(device.callsign);
-    LogService().log('P2P: ${device.callsign} found via DHT at ${peer.ip}:${peer.port}');
+    LogService().log(
+      'P2P: ${device.callsign} found via DHT rendezvous at ${peer.ip}:${peer.port}',
+    );
   }
 
   // ─── Persistence ───────────────────────────────────────────────
@@ -541,10 +638,9 @@ class P2PService {
       final storage = AppService().profileStorage;
       if (storage == null) return;
       await storage.createDirectory('p2p');
-      final list = discoveredPeers.map((p) => {
-        'ip': p.ip,
-        'port': p.port,
-      }).toList();
+      final list = discoveredPeers
+          .map((p) => {'ip': p.ip, 'port': p.port})
+          .toList();
       await storage.writeJson(_kPeerCachePath, {'peers': list});
     } catch (_) {}
   }

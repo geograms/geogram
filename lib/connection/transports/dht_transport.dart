@@ -61,17 +61,12 @@ class DhtTransport extends Transport with TransportMixin {
     final info = getDeviceInfo(callsign);
     if (info == null) return false;
 
-    // If device has a UDP port from geogram DHT messaging, it's reachable
-    // via the DHT socket even when HTTP fails through NAT.
-    final udpPort = info.metadata['udp_port'];
-    if (udpPort != null && udpPort is int && udpPort > 0) return true;
-
     if (info.url == null) return false;
     try {
       final uri = Uri.parse('${info.url}/api/status');
-      final response = await _client.get(uri).timeout(
-        const Duration(seconds: 3),
-      );
+      final response = await _client
+          .get(uri)
+          .timeout(const Duration(seconds: 3));
       return response.statusCode == 200;
     } catch (_) {
       return false;
@@ -104,40 +99,49 @@ class DhtTransport extends Transport with TransportMixin {
       // Try HTTP first (works on LAN / direct connections)
       if (info.url != null) {
         try {
-          switch (message.type) {
-            case TransportMessageType.apiRequest:
-              return await _handleApiRequest(
-                message, info.url!, effectiveTimeout, stopwatch,
-              );
-            case TransportMessageType.directMessage:
-            case TransportMessageType.chatMessage:
-              return await _handleMessagePost(
-                message, info.url!, effectiveTimeout, stopwatch,
-              );
-            default:
-              break;
-          }
+          return await _sendViaHttp(
+            message,
+            info.url!,
+            effectiveTimeout,
+            stopwatch,
+          );
         } catch (httpError) {
-          LogService().log('DhtTransport: HTTP failed for ${message.targetCallsign}, trying UDP');
+          LogService().log(
+            'DhtTransport: HTTP failed for ${message.targetCallsign}, refreshing endpoint via DHT',
+          );
         }
       }
 
-      // Fall back to UDP geogram message via DHT socket
+      // Fall back to a geogram identity query on the peer's DHT rendezvous
+      // socket. This refreshes the peer's real HTTP port; it does not deliver
+      // the original payload over UDP.
       final udpIp = info.metadata['udp_ip'] as String?;
       final udpPort = info.metadata['udp_port'] as int?;
       if (dhtNode != null && udpIp != null && udpPort != null && udpPort > 0) {
-        LogService().log('DhtTransport: sending via UDP to ${message.targetCallsign} at $udpIp:$udpPort');
+        LogService().log(
+          'DhtTransport: refreshing ${message.targetCallsign} via DHT at $udpIp:$udpPort',
+        );
         final response = await dhtNode!.sendGeogramQuery(udpIp, udpPort);
-        stopwatch.stop();
         if (response != null) {
-          final result = TransportResult.success(
-            statusCode: 200,
-            responseData: '{"status":"delivered_via_dht"}',
-            transportUsed: id,
-            latency: stopwatch.elapsed,
+          final refreshedUrl = _resolveRefreshedUrl(
+            message.targetCallsign,
+            udpIp,
+            response,
           );
-          recordMetrics(result);
-          return result;
+          if (refreshedUrl != null) {
+            try {
+              return await _sendViaHttp(
+                message,
+                refreshedUrl,
+                effectiveTimeout,
+                stopwatch,
+              );
+            } catch (refreshError) {
+              LogService().log(
+                'DhtTransport: refreshed HTTP endpoint failed for ${message.targetCallsign}: $refreshError',
+              );
+            }
+          }
         }
       }
 
@@ -162,6 +166,25 @@ class DhtTransport extends Transport with TransportMixin {
     send(message);
   }
 
+  Future<TransportResult> _sendViaHttp(
+    TransportMessage message,
+    String baseUrl,
+    Duration timeout,
+    Stopwatch stopwatch,
+  ) {
+    switch (message.type) {
+      case TransportMessageType.apiRequest:
+        return _handleApiRequest(message, baseUrl, timeout, stopwatch);
+      case TransportMessageType.directMessage:
+      case TransportMessageType.chatMessage:
+        return _handleMessagePost(message, baseUrl, timeout, stopwatch);
+      default:
+        throw UnsupportedError(
+          'Unsupported DHT transport message type: ${message.type}',
+        );
+    }
+  }
+
   Future<TransportResult> _handleApiRequest(
     TransportMessage message,
     String baseUrl,
@@ -183,25 +206,27 @@ class DhtTransport extends Transport with TransportMixin {
       }
     }
 
-    LogService().log('DhtTransport: $method ${message.path} to ${message.targetCallsign}');
+    LogService().log(
+      'DhtTransport: $method ${message.path} to ${message.targetCallsign}',
+    );
 
     http.Response response;
     switch (method) {
       case 'POST':
-        response = await _client.post(uri, headers: headers, body: body)
+        response = await _client
+            .post(uri, headers: headers, body: body)
             .timeout(timeout);
         break;
       case 'PUT':
-        response = await _client.put(uri, headers: headers, body: body)
+        response = await _client
+            .put(uri, headers: headers, body: body)
             .timeout(timeout);
         break;
       case 'DELETE':
-        response = await _client.delete(uri, headers: headers)
-            .timeout(timeout);
+        response = await _client.delete(uri, headers: headers).timeout(timeout);
         break;
       default:
-        response = await _client.get(uri, headers: headers)
-            .timeout(timeout);
+        response = await _client.get(uri, headers: headers).timeout(timeout);
     }
 
     stopwatch.stop();
@@ -232,11 +257,9 @@ class DhtTransport extends Transport with TransportMixin {
         ? jsonEncode({'event': message.signedEvent})
         : jsonEncode(message.payload);
 
-    final response = await _client.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: body,
-    ).timeout(timeout);
+    final response = await _client
+        .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+        .timeout(timeout);
 
     stopwatch.stop();
 
@@ -260,20 +283,46 @@ class DhtTransport extends Transport with TransportMixin {
         normalized.startsWith('application/pdf');
   }
 
+  String? _resolveRefreshedUrl(
+    String callsign,
+    String fallbackIp,
+    Map<String, dynamic> response,
+  ) {
+    final refreshedInfo = getDeviceInfo(callsign);
+    if (refreshedInfo?.url != null) {
+      return refreshedInfo!.url;
+    }
+
+    final httpPort = response['http_port'];
+    if (httpPort is int && httpPort > 0) {
+      return 'http://$fallbackIp:$httpPort';
+    }
+
+    return null;
+  }
+
   /// Register a device discovered via DHT.
-  void registerDhtDevice(String callsign, String url, {
+  void registerDhtDevice(
+    String callsign,
+    String url, {
     String? npub,
     String? udpIp,
     int? udpPort,
   }) {
-    registerDevice(callsign, url: url, metadata: {
-      'source': 'dht',
-      'npub': npub,
-      'udp_ip': udpIp,
-      'udp_port': udpPort,
-      'registered_at': DateTime.now().toIso8601String(),
-    });
-    LogService().log('DhtTransport: Registered $callsign at $url'
-        '${udpPort != null ? " (udp: $udpIp:$udpPort)" : ""}');
+    registerDevice(
+      callsign,
+      url: url,
+      metadata: {
+        'source': 'dht',
+        'npub': npub,
+        'udp_ip': udpIp,
+        'udp_port': udpPort,
+        'registered_at': DateTime.now().toIso8601String(),
+      },
+    );
+    LogService().log(
+      'DhtTransport: Registered $callsign at $url'
+      '${udpPort != null ? " (udp: $udpIp:$udpPort)" : ""}',
+    );
   }
 }

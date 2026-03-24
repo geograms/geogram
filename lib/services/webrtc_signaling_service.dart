@@ -1,11 +1,12 @@
 /// WebRTC Signaling Service
 ///
-/// Handles offer/answer/ICE candidate exchange via the station WebSocket.
-/// Uses the existing WebSocketService for transport.
+/// Handles offer/answer/ICE candidate exchange via station WebSocket when
+/// available, with DHT rendezvous as the offline fallback.
 library;
 
 import 'dart:async';
 import 'dart:math';
+import '../p2p/p2p_service.dart';
 import 'webrtc_config.dart';
 import 'websocket_service.dart';
 import 'profile_service.dart';
@@ -17,7 +18,7 @@ typedef WebRTCSignalCallback = void Function(WebRTCSignal signal);
 /// WebRTC Signaling Service (Singleton)
 ///
 /// Responsible for:
-/// - Sending WebRTC offers, answers, and ICE candidates via WebSocket
+/// - Sending WebRTC offers, answers, and ICE candidates via WebSocket or DHT
 /// - Receiving and dispatching incoming signals to the peer manager
 /// - Managing session IDs for connection correlation
 class WebRTCSignalingService {
@@ -38,6 +39,9 @@ class WebRTCSignalingService {
   /// Subscription to WebSocket messages
   StreamSubscription<Map<String, dynamic>>? _wsSubscription;
 
+  /// Subscription to DHT rendezvous signaling messages
+  StreamSubscription<Map<String, dynamic>>? _dhtSubscription;
+
   /// Whether the service is initialized
   bool _initialized = false;
 
@@ -52,6 +56,9 @@ class WebRTCSignalingService {
 
     // Listen for WebRTC messages from WebSocket
     _wsSubscription = _wsService.messages.listen(_handleWebSocketMessage);
+    _dhtSubscription = P2PService().onSignalingMessage.listen(
+      _handleDhtMessage,
+    );
 
     _initialized = true;
     LogService().log('WebRTCSignalingService: Initialized');
@@ -60,13 +67,15 @@ class WebRTCSignalingService {
   /// Dispose resources
   void dispose() {
     _wsSubscription?.cancel();
+    _dhtSubscription?.cancel();
     _signalController.close();
 
     // Cancel any pending offers
     for (final completer in _pendingOffers.values) {
       if (!completer.isCompleted) {
         completer.completeError(
-            StateError('Signaling service disposed while waiting for answer'));
+          StateError('Signaling service disposed while waiting for answer'),
+        );
       }
     }
     _pendingOffers.clear();
@@ -78,7 +87,10 @@ class WebRTCSignalingService {
   /// Generate a new session ID for a WebRTC connection
   String generateSessionId() {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final randomPart = _random.nextInt(0xFFFFFF).toRadixString(16).padLeft(6, '0');
+    final randomPart = _random
+        .nextInt(0xFFFFFF)
+        .toRadixString(16)
+        .padLeft(6, '0');
     return '$timestamp-$randomPart';
   }
 
@@ -112,7 +124,8 @@ class WebRTCSignalingService {
       // Send the offer
       await _sendSignal(offer);
       LogService().log(
-          'WebRTCSignaling: Sent offer to $toCallsign (session: $sessionId)');
+        'WebRTCSignaling: Sent offer to $toCallsign (session: $sessionId)',
+      );
 
       // Wait for answer with timeout
       final answer = await completer.future.timeout(
@@ -120,7 +133,9 @@ class WebRTCSignalingService {
         onTimeout: () {
           _pendingOffers.remove(sessionId);
           throw TimeoutException(
-              'No answer received for offer to $toCallsign', timeout);
+            'No answer received for offer to $toCallsign',
+            timeout,
+          );
         },
       );
 
@@ -145,8 +160,9 @@ class WebRTCSignalingService {
     );
 
     await _sendSignal(answer);
-    LogService()
-        .log('WebRTCSignaling: Sent answer to $toCallsign (session: $sessionId)');
+    LogService().log(
+      'WebRTCSignaling: Sent answer to $toCallsign (session: $sessionId)',
+    );
   }
 
   /// Send an ICE candidate
@@ -164,7 +180,8 @@ class WebRTCSignalingService {
 
     await _sendSignal(signal);
     LogService().log(
-        'WebRTCSignaling: Sent ICE candidate to $toCallsign (session: $sessionId)');
+      'WebRTCSignaling: Sent ICE candidate to $toCallsign (session: $sessionId)',
+    );
   }
 
   /// Send a bye signal to close connection
@@ -179,30 +196,52 @@ class WebRTCSignalingService {
     );
 
     await _sendSignal(signal);
-    LogService()
-        .log('WebRTCSignaling: Sent bye to $toCallsign (session: $sessionId)');
+    LogService().log(
+      'WebRTCSignaling: Sent bye to $toCallsign (session: $sessionId)',
+    );
   }
 
-  /// Send a signal via WebSocket
+  /// Send a signal via WebSocket when connected, otherwise over DHT rendezvous.
   Future<void> _sendSignal(WebRTCSignal signal) async {
-    if (!_wsService.isConnected) {
-      LogService().log(
-        'WebRTCSignaling: Dropping ${signal.type.name} to ${signal.toCallsign} (WebSocket not connected)',
-      );
+    if (_wsService.isConnected) {
+      _wsService.sendWebRTCSignal(signal.toJson());
       return;
     }
 
-    // Use WebSocketService to send the signaling message
-    _wsService.sendWebRTCSignal(signal.toJson());
+    final sentViaDht = await P2PService().sendSignalingMessage(
+      signal.toCallsign,
+      signal.toJson(),
+    );
+    if (!sentViaDht) {
+      LogService().log(
+        'WebRTCSignaling: No signaling path for ${signal.type.name} to ${signal.toCallsign}',
+      );
+      throw StateError('No signaling path to ${signal.toCallsign}');
+    }
+
+    LogService().log(
+      'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via DHT rendezvous',
+    );
   }
 
-  /// Handle incoming WebSocket messages
+  /// Handle incoming WebSocket messages.
   void _handleWebSocketMessage(Map<String, dynamic> message) {
-    final type = message['type'] as String?;
-    if (type == null) return;
+    _handleIncomingSignal(message, source: 'WebSocket');
+  }
 
-    // Check if it's a WebRTC signaling message
-    if (!type.startsWith('webrtc_')) return;
+  /// Handle incoming DHT rendezvous messages.
+  void _handleDhtMessage(Map<String, dynamic> message) {
+    _handleIncomingSignal(message, source: 'DHT');
+  }
+
+  void _handleIncomingSignal(
+    Map<String, dynamic> message, {
+    required String source,
+  }) {
+    final type = message['type'] as String?;
+    if (type == null || !type.startsWith('webrtc_')) {
+      return;
+    }
 
     try {
       final signal = WebRTCSignal.fromJson(message);
@@ -213,7 +252,8 @@ class WebRTCSignalingService {
         if (completer != null && !completer.isCompleted) {
           completer.complete(signal);
           LogService().log(
-              'WebRTCSignaling: Received answer from ${signal.fromCallsign} (session: ${signal.sessionId})');
+            'WebRTCSignaling: Received answer from ${signal.fromCallsign} via $source (session: ${signal.sessionId})',
+          );
           return;
         }
       }
@@ -222,12 +262,18 @@ class WebRTCSignalingService {
       _signalController.add(signal);
 
       LogService().log(
-          'WebRTCSignaling: Received ${signal.type.name} from ${signal.fromCallsign} (session: ${signal.sessionId})');
+        'WebRTCSignaling: Received ${signal.type.name} from ${signal.fromCallsign} via $source (session: ${signal.sessionId})',
+      );
     } catch (e) {
-      LogService().log('WebRTCSignaling: Error parsing signal: $e');
+      LogService().log('WebRTCSignaling: Error parsing $source signal: $e');
     }
   }
 
   /// Check if we're connected to the station (can send signals)
   bool get isConnected => _wsService.isConnected;
+
+  /// Check whether there is any signaling path to a peer.
+  bool canSignalPeer(String callsign) {
+    return _wsService.isConnected || P2PService().canSignalPeer(callsign);
+  }
 }

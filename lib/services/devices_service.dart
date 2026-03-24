@@ -1258,16 +1258,35 @@ class DevicesService {
     final existing = _devices[key];
     if (existing != null) {
       // Merge connection methods
-      final methods = {...existing.connectionMethods, ...device.connectionMethods};
+      final methods = {
+        ...existing.connectionMethods,
+        ...device.connectionMethods,
+      };
       existing.connectionMethods = methods.toList();
       existing.isOnline = true;
       existing.lastSeen = DateTime.now();
-      existing.url ??= device.url;
-      existing.npub ??= device.npub;
-      existing.platform ??= device.platform;
-      existing.deviceId ??= device.deviceId;
-      existing.udpIp ??= device.udpIp;
-      existing.udpPort ??= device.udpPort;
+      if (device.url != null && device.url!.isNotEmpty) {
+        if (existing.url == null ||
+            device.source == DeviceSourceType.direct ||
+            existing.source == DeviceSourceType.direct) {
+          existing.url = device.url;
+        }
+      }
+      if (device.npub != null && device.npub!.isNotEmpty) {
+        existing.npub = device.npub;
+      }
+      if (device.platform != null && device.platform!.isNotEmpty) {
+        existing.platform = device.platform;
+      }
+      if (device.deviceId != null && device.deviceId!.isNotEmpty) {
+        existing.deviceId = device.deviceId;
+      }
+      if (device.udpIp != null && device.udpIp!.isNotEmpty) {
+        existing.udpIp = device.udpIp;
+      }
+      if (device.udpPort != null && device.udpPort! > 0) {
+        existing.udpPort = device.udpPort;
+      }
     } else {
       _devices[key] = device;
     }
@@ -1811,10 +1830,13 @@ class DevicesService {
       final dhtTransport =
           connectionManager.getTransport('dht') as DhtTransport?;
       if (dhtTransport != null) {
-        dhtTransport.registerDhtDevice(callsign, device.url!,
-            npub: device.npub,
-            udpIp: device.udpIp,
-            udpPort: device.udpPort);
+        dhtTransport.registerDhtDevice(
+          callsign,
+          device.url!,
+          npub: device.npub,
+          udpIp: device.udpIp,
+          udpPort: device.udpPort,
+        );
       }
     }
   }
@@ -1889,10 +1911,12 @@ class DevicesService {
     final hasBLEConnection =
         device.connectionMethods.contains('bluetooth') ||
         device.connectionMethods.contains('bluetooth_plus');
-    final hasDHTConnection = device.connectionMethods.contains('internet') &&
+    final hasDHTConnection =
+        device.connectionMethods.contains('internet') &&
         device.lastSeen != null &&
         DateTime.now().difference(device.lastSeen!).inMinutes < 30;
-    final isNowOnline = directOk || proxyOk || hasBLEConnection || hasDHTConnection;
+    final isNowOnline =
+        directOk || proxyOk || hasBLEConnection || hasDHTConnection;
     device.isOnline = isNowOnline;
     _notifyListeners();
 
@@ -1967,7 +1991,8 @@ class DevicesService {
     final station = _stationService.getConnectedStation();
     if (station == null || !station.isConnected) {
       // No active station — but don't remove 'internet' if DHT set it recently
-      final dhtFresh = device.lastSeen != null &&
+      final dhtFresh =
+          device.lastSeen != null &&
           DateTime.now().difference(device.lastSeen!).inMinutes < 30;
       if (!dhtFresh) {
         device.connectionMethods = device.connectionMethods
@@ -2001,7 +2026,8 @@ class DevicesService {
           }
         } else {
           // Device not connected via station — but keep 'internet' if DHT set it
-          final dhtFresh = device.lastSeen != null &&
+          final dhtFresh =
+              device.lastSeen != null &&
               DateTime.now().difference(device.lastSeen!).inMinutes < 30;
           if (!dhtFresh) {
             device.connectionMethods = device.connectionMethods
@@ -3394,10 +3420,23 @@ class RemoteDevice {
 
   /// Whether this device has any local/direct connection (not Internet)
   static const _localMethods = {
-    'wifi', 'wifi_local', 'wifi-local', 'lan',
-    'bluetooth', 'bluetooth_plus', 'ble_plus', 'ble+',
-    'lora', 'radio', 'esp32mesh', 'esp32_mesh',
-    'wifi_halow', 'wifi-halow', 'halow', 'usb', 'usb_aoa',
+    'wifi',
+    'wifi_local',
+    'wifi-local',
+    'lan',
+    'bluetooth',
+    'bluetooth_plus',
+    'ble_plus',
+    'ble+',
+    'lora',
+    'radio',
+    'esp32mesh',
+    'esp32_mesh',
+    'wifi_halow',
+    'wifi-halow',
+    'halow',
+    'usb',
+    'usb_aoa',
   };
 
   bool get hasLocalConnection =>

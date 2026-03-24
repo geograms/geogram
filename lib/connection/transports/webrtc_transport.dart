@@ -3,10 +3,10 @@ library;
 
 import 'dart:async';
 import '../../services/log_service.dart';
-import '../../services/station_service.dart';
 import '../../services/security_service.dart';
 import '../../services/devices_service.dart';
 import '../../services/webrtc_peer_manager.dart';
+import '../../services/webrtc_signaling_service.dart';
 import '../transport.dart';
 import '../transport_message.dart';
 
@@ -18,9 +18,9 @@ import '../transport_message.dart';
 /// - Works across NAT/firewalls (via STUN/ICE)
 ///
 /// But requires:
-/// - Both devices connected to same station (for signaling)
+/// - A signaling path (station WebSocket or DHT rendezvous)
 /// - Initial connection setup time
-/// - May fail for symmetric NAT
+/// - STUN/TURN or favorable NAT behavior for cross-network peers
 class WebRTCTransport extends Transport with TransportMixin {
   @override
   String get id => 'webrtc';
@@ -38,7 +38,7 @@ class WebRTCTransport extends Transport with TransportMixin {
   }
 
   final WebRTCPeerManager _peerManager = WebRTCPeerManager();
-  final StationService _stationService = StationService();
+  final WebRTCSignalingService _signalingService = WebRTCSignalingService();
   final DevicesService _devicesService = DevicesService();
 
   /// Timeout for connection establishment
@@ -94,16 +94,7 @@ class WebRTCTransport extends Transport with TransportMixin {
       return true;
     }
 
-    // WebRTC requires signaling through the station
-    // Check if we're connected to a station
-    final station = _stationService.getConnectedStation();
-    if (station == null) {
-      return false;
-    }
-
-    // We can attempt WebRTC if we're connected to a station
-    // The actual connection will be established on first send
-    return true;
+    return _signalingService.canSignalPeer(normalizedCallsign);
   }
 
   bool _isBleOnlyDevice(String callsign) {
@@ -156,12 +147,12 @@ class WebRTCTransport extends Transport with TransportMixin {
     try {
       final callsign = message.targetCallsign.toUpperCase();
 
-      // Avoid signaling when offline (no station connection and no active peer)
+      // Avoid signaling when there is no way to exchange offers/answers/ICE.
       if (!_peerManager.hasActiveConnection(callsign) &&
-          _stationService.getConnectedStation() == null) {
+          !_signalingService.canSignalPeer(callsign)) {
         stopwatch.stop();
         final result = TransportResult.failure(
-          error: 'WebRTC signaling unavailable (no station connection)',
+          error: 'WebRTC signaling unavailable for $callsign',
           transportUsed: id,
         );
         recordMetrics(result);

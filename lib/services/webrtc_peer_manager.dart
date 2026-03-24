@@ -118,13 +118,19 @@ class WebRTCPeerManager {
           stationHost: stationHost,
           stunPort: stunInfo.port,
         );
-        LogService().log('WebRTCPeerManager: Using station STUN at $stationHost:${stunInfo.port}');
+        LogService().log(
+          'WebRTCPeerManager: Using station STUN at $stationHost:${stunInfo.port}',
+        );
       } catch (e) {
-        LogService().log('WebRTCPeerManager: Failed to parse station URL, using default config');
+        LogService().log(
+          'WebRTCPeerManager: Failed to parse station URL, using default config',
+        );
       }
     } else {
       // No station STUN available - use empty config (host candidates only)
-      LogService().log('WebRTCPeerManager: No station STUN available (LAN connections only)');
+      LogService().log(
+        'WebRTCPeerManager: No station STUN available (LAN connections only)',
+      );
     }
   }
 
@@ -237,10 +243,7 @@ class WebRTCPeerManager {
       final answer = await _signalingService.sendOfferAndWaitForAnswer(
         toCallsign: callsign,
         sessionId: sessionId,
-        sdp: {
-          'type': offer.type,
-          'sdp': offer.sdp,
-        },
+        sdp: {'type': offer.type, 'sdp': offer.sdp},
         timeout: Duration(milliseconds: _config.offerTimeoutMs),
       );
 
@@ -250,7 +253,9 @@ class WebRTCPeerManager {
       );
 
       peer.state = WebRTCConnectionState.connecting;
-      LogService().log('WebRTCPeerManager: Set remote description for $callsign');
+      LogService().log(
+        'WebRTCPeerManager: Set remote description for $callsign',
+      );
 
       // Add any pending ICE candidates
       for (final candidate in peer.pendingIceCandidates) {
@@ -262,14 +267,18 @@ class WebRTCPeerManager {
       final connected = await peer.connectionCompleter!.future.timeout(
         Duration(milliseconds: _config.connectionTimeoutMs),
         onTimeout: () {
-          LogService().log('WebRTCPeerManager: Connection timeout for $callsign');
+          LogService().log(
+            'WebRTCPeerManager: Connection timeout for $callsign',
+          );
           return false;
         },
       );
 
       return connected;
     } catch (e) {
-      LogService().log('WebRTCPeerManager: Error initiating connection to $callsign: $e');
+      LogService().log(
+        'WebRTCPeerManager: Error initiating connection to $callsign: $e',
+      );
       peer.state = WebRTCConnectionState.failed;
       if (!peer.connectionCompleter!.isCompleted) {
         peer.connectionCompleter!.complete(false);
@@ -280,7 +289,9 @@ class WebRTCPeerManager {
 
   /// Handle incoming WebRTC signal
   void _handleSignal(WebRTCSignal signal) {
-    LogService().log('WebRTCPeerManager: Received signal ${signal.type.name} from ${signal.fromCallsign}');
+    LogService().log(
+      'WebRTCPeerManager: Received signal ${signal.type.name} from ${signal.fromCallsign}',
+    );
 
     switch (signal.type) {
       case WebRTCSignalType.offer:
@@ -307,7 +318,9 @@ class WebRTCPeerManager {
     if (_peers.containsKey(callsign)) {
       final existingPeer = _peers[callsign]!;
       if (existingPeer.isConnected) {
-        LogService().log('WebRTCPeerManager: Already connected to $callsign, ignoring offer');
+        LogService().log(
+          'WebRTCPeerManager: Already connected to $callsign, ignoring offer',
+        );
         return;
       }
       // Close existing failed/connecting connection
@@ -352,15 +365,14 @@ class WebRTCPeerManager {
       await _signalingService.sendAnswer(
         toCallsign: callsign,
         sessionId: signal.sessionId,
-        sdp: {
-          'type': answer.type,
-          'sdp': answer.sdp,
-        },
+        sdp: {'type': answer.type, 'sdp': answer.sdp},
       );
 
       LogService().log('WebRTCPeerManager: Sent answer to $callsign');
     } catch (e) {
-      LogService().log('WebRTCPeerManager: Error handling offer from $callsign: $e');
+      LogService().log(
+        'WebRTCPeerManager: Error handling offer from $callsign: $e',
+      );
       peer.state = WebRTCConnectionState.failed;
       if (!peer.connectionCompleter!.isCompleted) {
         peer.connectionCompleter!.complete(false);
@@ -374,7 +386,9 @@ class WebRTCPeerManager {
     final peer = _peers[callsign];
 
     if (peer == null) {
-      LogService().log('WebRTCPeerManager: ICE candidate for unknown peer $callsign');
+      LogService().log(
+        'WebRTCPeerManager: ICE candidate for unknown peer $callsign',
+      );
       return;
     }
 
@@ -402,7 +416,9 @@ class WebRTCPeerManager {
 
     if (peer != null) {
       await _closePeerConnection(peer);
-      LogService().log('WebRTCPeerManager: Closed connection to $callsign (bye received)');
+      LogService().log(
+        'WebRTCPeerManager: Closed connection to $callsign (bye received)',
+      );
     }
   }
 
@@ -412,13 +428,16 @@ class WebRTCPeerManager {
 
     // ICE connection state
     pc.onIceConnectionState = (state) {
-      LogService().log('WebRTCPeerManager: ICE state for ${peer.callsign}: $state');
+      LogService().log(
+        'WebRTCPeerManager: ICE state for ${peer.callsign}: $state',
+      );
 
       switch (state) {
         case RTCIceConnectionState.RTCIceConnectionStateConnected:
         case RTCIceConnectionState.RTCIceConnectionStateCompleted:
           if (peer.state != WebRTCConnectionState.ready &&
-              peer.dataChannel?.state == RTCDataChannelState.RTCDataChannelOpen) {
+              peer.dataChannel?.state ==
+                  RTCDataChannelState.RTCDataChannelOpen) {
             _markConnectionReady(peer);
           }
           break;
@@ -427,7 +446,8 @@ class WebRTCPeerManager {
         case RTCIceConnectionState.RTCIceConnectionStateClosed:
           if (peer.state != WebRTCConnectionState.closed) {
             peer.state = WebRTCConnectionState.failed;
-            if (peer.connectionCompleter != null && !peer.connectionCompleter!.isCompleted) {
+            if (peer.connectionCompleter != null &&
+                !peer.connectionCompleter!.isCompleted) {
               peer.connectionCompleter!.complete(false);
             }
           }
@@ -440,9 +460,9 @@ class WebRTCPeerManager {
     // ICE candidates - send to peer via signaling
     pc.onIceCandidate = (candidate) {
       if (candidate.candidate != null) {
-        if (!_signalingService.isConnected) {
+        if (!_signalingService.canSignalPeer(peer.callsign)) {
           LogService().log(
-            'WebRTCPeerManager: Skipping ICE candidate for ${peer.callsign} (signaling offline)',
+            'WebRTCPeerManager: Skipping ICE candidate for ${peer.callsign} (no signaling path)',
           );
           return;
         }
@@ -460,7 +480,9 @@ class WebRTCPeerManager {
 
     // Data channel (for answerer - offerer creates it)
     pc.onDataChannel = (channel) {
-      LogService().log('WebRTCPeerManager: Data channel received for ${peer.callsign}');
+      LogService().log(
+        'WebRTCPeerManager: Data channel received for ${peer.callsign}',
+      );
       peer.dataChannel = channel;
       _setupDataChannelHandlers(peer);
     };
@@ -471,7 +493,9 @@ class WebRTCPeerManager {
     final dc = peer.dataChannel!;
 
     dc.onDataChannelState = (state) {
-      LogService().log('WebRTCPeerManager: Data channel state for ${peer.callsign}: $state');
+      LogService().log(
+        'WebRTCPeerManager: Data channel state for ${peer.callsign}: $state',
+      );
 
       if (state == RTCDataChannelState.RTCDataChannelOpen) {
         _markConnectionReady(peer);
@@ -492,7 +516,8 @@ class WebRTCPeerManager {
     peer.state = WebRTCConnectionState.ready;
     peer.connectedAt = DateTime.now();
 
-    if (peer.connectionCompleter != null && !peer.connectionCompleter!.isCompleted) {
+    if (peer.connectionCompleter != null &&
+        !peer.connectionCompleter!.isCompleted) {
       peer.connectionCompleter!.complete(true);
     }
 
@@ -506,7 +531,10 @@ class WebRTCPeerManager {
   }
 
   /// Handle incoming data channel message
-  void _handleDataChannelMessage(WebRTCPeerConnection peer, RTCDataChannelMessage message) {
+  void _handleDataChannelMessage(
+    WebRTCPeerConnection peer,
+    RTCDataChannelMessage message,
+  ) {
     try {
       final data = message.text;
       final json = jsonDecode(data) as Map<String, dynamic>;
@@ -519,16 +547,25 @@ class WebRTCPeerManager {
       );
 
       _messageController.add(webrtcMessage);
-      LogService().log('WebRTCPeerManager: Received message from ${peer.callsign}: ${webrtcMessage.type}');
+      LogService().log(
+        'WebRTCPeerManager: Received message from ${peer.callsign}: ${webrtcMessage.type}',
+      );
     } catch (e) {
-      LogService().log('WebRTCPeerManager: Error parsing message from ${peer.callsign}: $e');
+      LogService().log(
+        'WebRTCPeerManager: Error parsing message from ${peer.callsign}: $e',
+      );
     }
   }
 
   /// Send a message to a peer
   ///
   /// Returns true if message was sent (or queued), false if connection not available.
-  Future<bool> sendMessage(String callsign, String type, dynamic payload, {String? messageId}) async {
+  Future<bool> sendMessage(
+    String callsign,
+    String type,
+    dynamic payload, {
+    String? messageId,
+  }) async {
     final normalizedCallsign = callsign.toUpperCase();
     final peer = _peers[normalizedCallsign];
 
@@ -539,7 +576,8 @@ class WebRTCPeerManager {
     final message = jsonEncode({
       'type': type,
       'payload': payload,
-      'message_id': messageId ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      'message_id':
+          messageId ?? DateTime.now().millisecondsSinceEpoch.toString(),
     });
 
     if (peer.dataChannel!.state == RTCDataChannelState.RTCDataChannelOpen) {
