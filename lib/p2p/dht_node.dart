@@ -37,6 +37,7 @@ const int kRefreshMinutes = 2;
 
 /// Max peers to store per info_hash topic.
 const int kMaxPeersPerTopic = 100;
+const Duration kPeerRetention = Duration(hours: 1);
 
 /// Transaction ID counter for DHT queries.
 int _txIdCounter = 0;
@@ -92,6 +93,28 @@ class _IncomingSignalBuffer {
   }
 }
 
+class _StoredPeer {
+  final PeerInfo peer;
+  DateTime lastSeen;
+  int observations;
+  bool announced;
+
+  _StoredPeer({
+    required this.peer,
+    DateTime? lastSeen,
+    this.observations = 1,
+    this.announced = false,
+  }) : lastSeen = lastSeen ?? DateTime.now();
+
+  void touch({int additionalObservations = 1, bool fromAnnounce = false}) {
+    lastSeen = DateTime.now();
+    observations += additionalObservations;
+    if (fromAnnounce) {
+      announced = true;
+    }
+  }
+}
+
 /// Peer info returned by get_peers.
 class PeerInfo {
   final String ip;
@@ -139,8 +162,8 @@ class DhtNode {
   /// Maps "ip:port" → token.
   final Map<String, Uint8List> _receivedTokens = {};
 
-  /// Peer store: info_hash → set of compact peers (6 bytes each).
-  final Map<String, Set<PeerInfo>> _peerStore = {};
+  /// Peer store: info_hash → "ip:port" → observed peer.
+  final Map<String, Map<String, _StoredPeer>> _peerStore = {};
 
   /// Timers for periodic tasks.
   Timer? _reannounceTimer;
@@ -168,6 +191,7 @@ class DhtNode {
 
   /// Number of peers stored.
   int get storedPeerCount {
+    _cleanupExpiredPeers();
     var count = 0;
     for (final peers in _peerStore.values) {
       count += peers.length;
@@ -217,6 +241,7 @@ class DhtNode {
     // Start periodic cleanup of expired queries
     _cleanupTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _cleanupExpiredQueries();
+      _cleanupExpiredPeers();
     });
 
     // Rotate token secret every 5 minutes
@@ -369,10 +394,7 @@ class DhtNode {
               final bytes = Bencode.asBytes(v);
               if (bytes.length == 6) {
                 final (ip, peerPort) = DhtContact.parseCompactPeer(bytes);
-                final peer = PeerInfo(ip: ip, port: peerPort);
-                _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
-                _peerStore[hexHash]!.add(peer);
-                _peerFoundController.add((infoHash, peer));
+                _recordPeer(infoHash, PeerInfo(ip: ip, port: peerPort));
               }
             }
           } catch (_) {}
@@ -402,15 +424,34 @@ class DhtNode {
 
   /// Look up peers for an info_hash.
   ///
-  /// Returns peers found from both the local peer store and remote DHT nodes.
+  /// By default returns peers found from both the local peer store and remote
+  /// DHT nodes. Callers can set [includeCached] to false to force a fresh
+  /// iterative lookup result without merging previously cached peers.
   /// Also available via [onPeerFound] stream.
-  Future<List<PeerInfo>> getPeers(Uint8List infoHash) async {
+  Future<List<PeerInfo>> getPeers(
+    Uint8List infoHash, {
+    bool includeCached = true,
+  }) async {
     if (!_running) return [];
     final remotePeers = await _iterativeGetPeers(infoHash);
-    // Merge with locally stored peers (from incoming announces)
-    final localPeers = getCachedPeers(infoHash);
-    final merged = <PeerInfo>{...remotePeers, ...localPeers};
-    return merged.toList();
+    if (!includeCached) {
+      return remotePeers;
+    }
+    final merged = <PeerInfo>[];
+    final seen = <String>{};
+
+    void append(List<PeerInfo> peers) {
+      for (final peer in peers) {
+        final key = '${peer.ip}:${peer.port}';
+        if (seen.add(key)) {
+          merged.add(peer);
+        }
+      }
+    }
+
+    append(remotePeers);
+    append(getCachedPeers(infoHash));
+    return merged;
   }
 
   /// Start periodic re-announce on all topics.
@@ -474,7 +515,16 @@ class DhtNode {
   /// Get the cached peers for a given info_hash.
   List<PeerInfo> getCachedPeers(Uint8List infoHash) {
     final key = _toHex(infoHash);
-    return _peerStore[key]?.toList() ?? [];
+    final stored = _peerStore[key];
+    if (stored == null || stored.isEmpty) return [];
+
+    final now = DateTime.now();
+    final peers =
+        stored.values
+            .where((entry) => now.difference(entry.lastSeen) < kPeerRetention)
+            .toList()
+          ..sort(_compareStoredPeers);
+    return peers.map((entry) => entry.peer).toList();
   }
 
   // ─── UDP Message Handling ───────────────────────────────────────
@@ -931,15 +981,11 @@ class DhtNode {
         pending.infoHash != null) {
       try {
         final values = Bencode.asList(body['values']);
-        final hexHash = _toHex(pending.infoHash!);
-        _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
         for (final v in values) {
           final bytes = Bencode.asBytes(v);
           if (bytes.length == 6) {
             final (ip, port) = DhtContact.parseCompactPeer(bytes);
-            final peer = PeerInfo(ip: ip, port: port);
-            _peerStore[hexHash]!.add(peer);
-            _peerFoundController.add((pending.infoHash!, peer));
+            _recordPeer(pending.infoHash!, PeerInfo(ip: ip, port: port));
           }
         }
       } catch (_) {}
@@ -1041,20 +1087,26 @@ class DhtNode {
     // Do we have peers for this info_hash?
     final peers = _peerStore[hexHash];
     if (peers != null && peers.isNotEmpty) {
-      // Return compact peer list
-      final values = <Uint8List>[];
-      for (final peer in peers) {
-        final parts = peer.ip.split('.');
-        if (parts.length != 4) continue;
-        final buf = Uint8List(6);
-        for (var i = 0; i < 4; i++) {
-          buf[i] = int.parse(parts[i]);
+      final freshPeers = getCachedPeers(infoHash);
+      if (freshPeers.isNotEmpty) {
+        // Return compact peer list
+        final values = <Uint8List>[];
+        for (final peer in freshPeers) {
+          final parts = peer.ip.split('.');
+          if (parts.length != 4) continue;
+          final buf = Uint8List(6);
+          for (var i = 0; i < 4; i++) {
+            buf[i] = int.parse(parts[i]);
+          }
+          buf[4] = (peer.port >> 8) & 0xFF;
+          buf[5] = peer.port & 0xFF;
+          values.add(buf);
         }
-        buf[4] = (peer.port >> 8) & 0xFF;
-        buf[5] = peer.port & 0xFF;
-        values.add(buf);
+        response['values'] = values;
+      } else {
+        final closest = _routingTable.findClosest(infoHash);
+        response['nodes'] = _packNodes(closest);
       }
-      response['values'] = values;
     } else {
       // Return closest nodes
       final closest = _routingTable.findClosest(infoHash);
@@ -1089,21 +1141,12 @@ class DhtNode {
     }
 
     // Store peer
-    final hexHash = _toHex(Uint8List.fromList(infoHash));
-    _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
-    final peer = PeerInfo(ip: fromIp, port: announcedPort);
-    _peerStore[hexHash]!.add(peer);
-
-    // Trim to max
-    if (_peerStore[hexHash]!.length > kMaxPeersPerTopic) {
-      final list = _peerStore[hexHash]!.toList();
-      _peerStore[hexHash] = list
-          .sublist(list.length - kMaxPeersPerTopic)
-          .toSet();
-    }
-
-    // Emit event
-    _peerFoundController.add((Uint8List.fromList(infoHash), peer));
+    _recordPeer(
+      Uint8List.fromList(infoHash),
+      PeerInfo(ip: fromIp, port: announcedPort),
+      observations: 2,
+      fromAnnounce: true,
+    );
 
     // Respond with ack
     _respondPing(txId, fromIp, fromPort);
@@ -1351,7 +1394,6 @@ class DhtNode {
       }).toList();
       final results = await Future.wait(futures);
 
-      bool improved = false;
       for (final result in results) {
         if (result == null) continue;
         if (result.containsKey('nodes')) {
@@ -1364,7 +1406,6 @@ class DhtNode {
               candidates[nkey] = contact;
               distances[nkey] = xorDistance(contact.nodeId, target);
               _routingTable.insertNode(contact);
-              improved = true;
             }
           }
         }
@@ -1388,7 +1429,8 @@ class DhtNode {
     final candidates = <String, DhtContact>{};
     final distances = <String, Uint8List>{};
     final queried = <String>{};
-    final foundPeers = <PeerInfo>{};
+    final foundPeers = <String, PeerInfo>{};
+    final peerSightings = <String, int>{};
 
     // Seed with closest nodes from routing table
     for (final node in _routingTable.findClosest(infoHash, count: 8)) {
@@ -1412,7 +1454,6 @@ class DhtNode {
       }).toList();
       final results = await Future.wait(futures);
 
-      bool improved = false;
       for (final result in results) {
         if (result == null) continue;
 
@@ -1423,7 +1464,11 @@ class DhtNode {
               final bytes = Bencode.asBytes(v);
               if (bytes.length == 6) {
                 final (ip, port) = DhtContact.parseCompactPeer(bytes);
-                foundPeers.add(PeerInfo(ip: ip, port: port));
+                final peer = PeerInfo(ip: ip, port: port);
+                if (!_isUsableDhtPeer(peer)) continue;
+                final key = '${peer.ip}:${peer.port}';
+                foundPeers[key] = peer;
+                peerSightings[key] = (peerSightings[key] ?? 0) + 1;
               }
             }
           } catch (_) {}
@@ -1439,7 +1484,6 @@ class DhtNode {
               candidates[nkey] = contact;
               distances[nkey] = xorDistance(contact.nodeId, infoHash);
               _routingTable.insertNode(contact);
-              improved = true;
             }
           }
         }
@@ -1448,23 +1492,21 @@ class DhtNode {
       await Future.delayed(const Duration(milliseconds: 50));
     }
 
-    // Store found peers
-    final hexHash = _toHex(infoHash);
-    _peerStore.putIfAbsent(hexHash, () => <PeerInfo>{});
-    _peerStore[hexHash]!.addAll(foundPeers);
-
-    // Emit events
-    for (final peer in foundPeers) {
-      _peerFoundController.add((infoHash, peer));
-    }
-
     LogService().log(
       'DHT get_peers: ${queried.length} nodes queried, '
       '${foundPeers.length} peers found, '
       '${candidates.length} total candidates',
     );
 
-    return foundPeers.toList();
+    final rankedKeys = foundPeers.keys.toList()
+      ..sort((a, b) {
+        final bySightings = (peerSightings[b] ?? 0).compareTo(
+          peerSightings[a] ?? 0,
+        );
+        if (bySightings != 0) return bySightings;
+        return a.compareTo(b);
+      });
+    return rankedKeys.map((key) => foundPeers[key]!).toList();
   }
 
   /// Extract and insert nodes from a response's "nodes" field.
@@ -1497,6 +1539,25 @@ class DhtNode {
     final prevHash = sha1.convert(prevInput);
     final prev = Uint8List.fromList(prevHash.bytes.sublist(0, 8));
     return _bytesEqual(token, prev);
+  }
+
+  void _cleanupExpiredPeers() {
+    final now = DateTime.now();
+    final emptyTopics = <String>[];
+
+    for (final entry in _peerStore.entries) {
+      entry.value.removeWhere(
+        (_, storedPeer) =>
+            now.difference(storedPeer.lastSeen) >= kPeerRetention,
+      );
+      if (entry.value.isEmpty) {
+        emptyTopics.add(entry.key);
+      }
+    }
+
+    for (final topic in emptyTopics) {
+      _peerStore.remove(topic);
+    }
   }
 
   // ─── Maintenance ───────────────────────────────────────────────
@@ -1581,6 +1642,84 @@ class DhtNode {
     for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;
     }
+    return true;
+  }
+
+  void _recordPeer(
+    Uint8List infoHash,
+    PeerInfo peer, {
+    int observations = 1,
+    bool fromAnnounce = false,
+  }) {
+    if (!_isUsableDhtPeer(peer)) return;
+
+    final hexHash = _toHex(infoHash);
+    final topicPeers = _peerStore.putIfAbsent(
+      hexHash,
+      () => <String, _StoredPeer>{},
+    );
+    final key = '${peer.ip}:${peer.port}';
+    final existing = topicPeers[key];
+    if (existing != null) {
+      existing.touch(
+        additionalObservations: observations,
+        fromAnnounce: fromAnnounce,
+      );
+      _peerFoundController.add((infoHash, existing.peer));
+    } else {
+      topicPeers[key] = _StoredPeer(
+        peer: peer,
+        observations: observations,
+        announced: fromAnnounce,
+      );
+      _peerFoundController.add((infoHash, peer));
+    }
+
+    if (topicPeers.length > kMaxPeersPerTopic) {
+      final sorted = topicPeers.values.toList()..sort(_compareStoredPeers);
+      final keepKeys = sorted
+          .take(kMaxPeersPerTopic)
+          .map((entry) => '${entry.peer.ip}:${entry.peer.port}')
+          .toSet();
+      topicPeers.removeWhere((peerKey, _) => !keepKeys.contains(peerKey));
+    }
+  }
+
+  int _compareStoredPeers(_StoredPeer a, _StoredPeer b) {
+    if (a.announced != b.announced) {
+      return a.announced ? -1 : 1;
+    }
+
+    final byObservations = b.observations.compareTo(a.observations);
+    if (byObservations != 0) return byObservations;
+
+    return b.lastSeen.compareTo(a.lastSeen);
+  }
+
+  bool _isUsableDhtPeer(PeerInfo peer) {
+    if (peer.port <= 1 || peer.port > 65535) {
+      return false;
+    }
+
+    if (peer.ip.isEmpty ||
+        peer.ip == '0.0.0.0' ||
+        peer.ip.startsWith('127.') ||
+        peer.ip.startsWith('10.') ||
+        peer.ip.startsWith('192.168.') ||
+        peer.ip.startsWith('169.254.')) {
+      return false;
+    }
+
+    if (peer.ip.startsWith('172.')) {
+      final parts = peer.ip.split('.');
+      if (parts.length == 4) {
+        final secondOctet = int.tryParse(parts[1]);
+        if (secondOctet != null && secondOctet >= 16 && secondOctet <= 31) {
+          return false;
+        }
+      }
+    }
+
     return true;
   }
 

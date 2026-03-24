@@ -28,12 +28,24 @@ const String _kNodeCachePath = 'p2p/dht_cache.json';
 const String _kNodeIdPath = 'p2p/node_id.bin';
 const String _kPeerCachePath = 'p2p/peer_cache.json';
 const String _kTaskId = 'p2p_discovery.dht';
+const Duration _kKnownPeerProbeInterval = Duration(seconds: 45);
+const int _kKnownPeerProbeBatchSize = 3;
+const Duration _kFailedDhtCandidateTtl = Duration(minutes: 10);
 
 class _KnownPeerTarget {
   final String callsign;
   final String npub;
+  final DateTime? lastSeen;
+  final bool needsBootstrap;
+  final bool hasReachableEndpoint;
 
-  const _KnownPeerTarget({required this.callsign, required this.npub});
+  const _KnownPeerTarget({
+    required this.callsign,
+    required this.npub,
+    this.lastSeen,
+    this.needsBootstrap = false,
+    this.hasReachableEndpoint = false,
+  });
 }
 
 class P2PService {
@@ -52,8 +64,10 @@ class P2PService {
   DhtNode? _dht;
   NodeCapability? _capability;
   Timer? _refreshTimer;
+  Timer? _knownPeerProbeTimer;
 
   bool _running = false;
+  bool _knownPeerProbeInFlight = false;
   bool get isRunning => _running;
   int _dhtPort = 0;
   int get dhtPort => _dhtPort;
@@ -72,6 +86,8 @@ class P2PService {
   Stream<Map<String, dynamic>> get onSignalingMessage =>
       _signalingController.stream;
   final Set<String> _probedPeers = {};
+  final Set<String> _selfRendezvousPeers = {};
+  final Map<String, DateTime> _failedDhtCandidates = {};
   final Map<String, Completer<List<PeerInfo>>> _findCompleters = {};
 
   Future<void> start({int? localPort}) async {
@@ -213,8 +229,12 @@ class P2PService {
       if (!_running || _dht == null) return;
       try {
         await _capability!.detectFromDht(_dht!);
+        await _probeExistingDiscoveredPeers();
 
-        final peers = await _dht!.getPeers(sha1Hash('geogram'));
+        final peers = await _dht!.getPeers(
+          sha1Hash('geogram'),
+          includeCached: false,
+        );
         for (final p in peers) {
           _addDiscoveredPeer(p);
         }
@@ -224,27 +244,34 @@ class P2PService {
           'P2P service started '
           '(type: ${_capability!.type.name}, dht: ${_dht!.routingTableSize} nodes)',
         );
+        _startKnownPeerProbeLoop();
 
         // After 30s: fresh peer scan + probe known devices
         // (gives the other device time to announce)
         Timer(const Duration(seconds: 30), () async {
           if (_dht == null || !_dht!.isRunning) return;
-          final p = await _dht!.getPeers(sha1Hash('geogram'));
+          final p = await _dht!.getPeers(
+            sha1Hash('geogram'),
+            includeCached: false,
+          );
           for (final peer in p) {
             _addDiscoveredPeer(peer);
           }
-          await _probeKnownDevicesByNpub();
+          await _runKnownPeerProbe();
         });
 
         // Periodic refresh — fresh getPeers to discover new peers
         _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
           if (_dht == null || !_dht!.isRunning) return;
           await _capability!.detectFromDht(_dht!);
-          final p = await _dht!.getPeers(sha1Hash('geogram'));
+          final p = await _dht!.getPeers(
+            sha1Hash('geogram'),
+            includeCached: false,
+          );
           for (final peer in p) {
             _addDiscoveredPeer(peer);
           }
-          await _probeKnownDevicesByNpub();
+          await _runKnownPeerProbe();
         });
       } catch (e) {
         _taskHandle?.markError(e);
@@ -257,6 +284,7 @@ class P2PService {
 
   Future<void> stop() async {
     _refreshTimer?.cancel();
+    _knownPeerProbeTimer?.cancel();
     if (_dht != null && _dht!.isRunning) {
       final nodes = _dht!.getNodesForCache();
       await _saveCachedNodes(
@@ -278,6 +306,7 @@ class P2PService {
     _dht = null;
     _capability = null;
     _running = false;
+    _knownPeerProbeInFlight = false;
     _taskHandle?.dispose();
     _taskHandle = null;
     LogService().log('P2P service stopped');
@@ -328,7 +357,19 @@ class P2PService {
 
   // ─── Peer Management ──────────────────────────────────────────
 
+  Future<void> _probeExistingDiscoveredPeers() async {
+    if (_dht == null || !_dht!.isRunning) return;
+    for (final peer in discoveredPeers.toList()) {
+      _addDiscoveredPeer(peer);
+    }
+  }
+
   void _addDiscoveredPeer(PeerInfo peer) {
+    final key = '${peer.ip}:${peer.port}';
+    if (_selfRendezvousPeers.contains(key)) {
+      return;
+    }
+
     final myPort = AppArgs().port;
     if ((peer.ip == '127.0.0.1' || peer.ip == '0.0.0.0') &&
         peer.port == myPort) {
@@ -344,13 +385,14 @@ class P2PService {
       return;
     }
 
-    if (discoveredPeers.add(peer)) {
+    final added = discoveredPeers.add(peer);
+    if (added) {
       _peersController.add(discoveredPeers.toList());
-      final key = '${peer.ip}:${peer.port}';
-      if (!_probedPeers.contains(key)) {
-        _probedPeers.add(key);
-        _registerDhtPeer(peer);
-      }
+    }
+
+    if (_dht != null && _dht!.isRunning && !_probedPeers.contains(key)) {
+      _probedPeers.add(key);
+      _registerDhtPeer(peer);
     }
   }
 
@@ -378,7 +420,14 @@ class P2PService {
     int udpPort,
   ) {
     final myCallsign = ProfileService().getProfile().callsign;
-    if (callsign.toUpperCase() == myCallsign.toUpperCase()) return;
+    if (callsign.toUpperCase() == myCallsign.toUpperCase()) {
+      final selfKey = '$ip:$udpPort';
+      _selfRendezvousPeers.add(selfKey);
+      _probedPeers.remove(selfKey);
+      discoveredPeers.remove(PeerInfo(ip: ip, port: udpPort));
+      LogService().log('P2P: ignoring self geogram peer at $selfKey');
+      return;
+    }
 
     LogService().log(
       'P2P: geogram peer $callsign at $ip (http:$httpPort, udp:$udpPort)',
@@ -515,45 +564,208 @@ class P2PService {
     final target = targets[_npubProbeIndex];
     _npubProbeIndex++;
 
-    final hash = sha1Hash(target.npub);
+    LogService().log(
+      'P2P: probing known peer ${target.callsign} via DHT npub lookup',
+    );
 
-    // Check cache first, then do full iterative lookup
-    var peers = _dht!.getCachedPeers(hash);
+    var peers = await _dht!.getPeers(
+      sha1Hash(target.npub),
+      includeCached: false,
+    );
     if (peers.isEmpty) {
-      peers = await _dht!.getPeers(hash);
+      peers = _dht!.getCachedPeers(sha1Hash(target.npub));
+    }
+    final candidates = _selectRendezvousCandidates(target, peers, devService);
+    if (candidates.isEmpty) {
+      LogService().log(
+        'P2P: npub lookup for ${target.callsign} returned no usable rendezvous candidates',
+      );
+      return;
     }
 
-    if (peers.isNotEmpty) {
-      // Found peer via npub lookup — try geogram query to get identity
-      for (final peer in peers) {
-        LogService().log(
-          'P2P: npub probe found ${target.callsign} at ${peer.ip}:${peer.port}',
-        );
-        // Send geogram query — if peer's NAT allows, we get identity back
-        _dht!.sendGeogramQuery(peer.ip, peer.port);
-      }
-      final device = devService.getDevice(target.callsign);
-      if (device != null) {
-        _updateDhtRendezvous(devService, device, peers.first);
-      } else {
-        devService.addOrUpdateDevice(
-          RemoteDevice(
-            callsign: target.callsign,
-            name: target.callsign,
-            npub: target.npub,
-            hasCachedData: false,
-            apps: [],
-            lastSeen: DateTime.now(),
-            source: DeviceSourceType.local,
-            udpIp: peers.first.ip,
-            udpPort: peers.first.port,
-          ),
-        );
-        LogService().log(
-          'P2P: seeded known DHT peer ${target.callsign} from stored npub at ${peers.first.ip}:${peers.first.port}; awaiting geogram identity',
-        );
+    LogService().log(
+      'P2P: npub lookup for ${target.callsign} returned ${peers.length} peer(s), trying ${candidates.length} candidate(s)',
+    );
+
+    for (var i = 0; i < candidates.length; i += _kKnownPeerProbeBatchSize) {
+      final batch = candidates.skip(i).take(_kKnownPeerProbeBatchSize).toList();
+      final verified = await Future.wait(
+        batch.map((peer) => _tryVerifyKnownPeerCandidate(target, peer)),
+      );
+      if (verified.any((ok) => ok)) {
+        return;
       }
     }
+
+    LogService().log(
+      'P2P: no verified DHT rendezvous responded for ${target.callsign}',
+    );
+  }
+
+  List<PeerInfo> _selectRendezvousCandidates(
+    _KnownPeerTarget target,
+    List<PeerInfo> peers,
+    DevicesService devService,
+  ) {
+    _purgeExpiredFailedDhtCandidates();
+
+    final preferred = <PeerInfo>[];
+    final sameIp = <PeerInfo>[];
+    final unprobed = <PeerInfo>[];
+    final remaining = <PeerInfo>[];
+    final seen = <String>{};
+
+    void addCandidate(
+      PeerInfo? peer, {
+      required bool isPreferred,
+      required String? preferredIp,
+      required int? preferredPort,
+    }) {
+      if (peer == null) return;
+      if (peer.port <= 1) return;
+
+      final key = '${peer.ip}:${peer.port}';
+      final myPublicIp = _capability?.publicIp;
+      final myPublicPort = _capability?.publicPort;
+      final myDhtPort = _dht?.localPort ?? _dhtPort;
+      if (peer.ip.isEmpty ||
+          peer.ip == '0.0.0.0' ||
+          peer.ip.startsWith('127.') ||
+          (myPublicIp != null &&
+              peer.ip == myPublicIp &&
+              (peer.port == myPublicPort || peer.port == myDhtPort)) ||
+          _selfRendezvousPeers.contains(key) ||
+          _isKnownPeerCandidateCoolingDown(target, peer) ||
+          !seen.add(key)) {
+        return;
+      }
+
+      if (isPreferred) {
+        preferred.add(peer);
+      } else if (preferredIp != null && peer.ip == preferredIp) {
+        sameIp.add(peer);
+      } else if (!_probedPeers.contains(key)) {
+        unprobed.add(peer);
+      } else {
+        remaining.add(peer);
+      }
+    }
+
+    final existingDevice = devService.getDevice(target.callsign);
+    final preferredIp = existingDevice?.udpIp;
+    final preferredPort = existingDevice?.udpPort;
+    if (existingDevice?.udpIp != null && existingDevice?.udpPort != null) {
+      addCandidate(
+        PeerInfo(ip: existingDevice!.udpIp!, port: existingDevice.udpPort!),
+        isPreferred: true,
+        preferredIp: preferredIp,
+        preferredPort: preferredPort,
+      );
+    }
+
+    for (final peer in peers) {
+      addCandidate(
+        peer,
+        isPreferred:
+            preferredIp != null &&
+            preferredPort != null &&
+            peer.ip == preferredIp &&
+            peer.port == preferredPort,
+        preferredIp: preferredIp,
+        preferredPort: preferredPort,
+      );
+    }
+
+    return [...preferred, ...sameIp, ...unprobed, ...remaining];
+  }
+
+  Future<bool> _tryVerifyKnownPeerCandidate(
+    _KnownPeerTarget target,
+    PeerInfo peer,
+  ) async {
+    if (_dht == null || !_dht!.isRunning) return false;
+
+    LogService().log(
+      'P2P: npub probe trying ${target.callsign} at ${peer.ip}:${peer.port}',
+    );
+
+    final response = await _dht!.sendGeogramQuery(peer.ip, peer.port);
+    if (response == null) {
+      _rememberFailedDhtCandidate(target, peer);
+      return false;
+    }
+
+    final responseNpub = (response['npub'] as String?)?.trim();
+    final responseCallsign = (response['callsign'] as String?)
+        ?.trim()
+        .toUpperCase();
+    final matchesNpub =
+        responseNpub != null &&
+        responseNpub.isNotEmpty &&
+        responseNpub == target.npub;
+    final matchesCallsign =
+        responseCallsign != null && responseCallsign == target.callsign;
+
+    if (!matchesNpub && !matchesCallsign) {
+      _rememberFailedDhtCandidate(target, peer);
+      LogService().log(
+        'P2P: DHT candidate ${peer.ip}:${peer.port} answered with ${responseCallsign ?? "unknown"} for ${target.callsign}, ignoring',
+      );
+      return false;
+    }
+
+    _failedDhtCandidates.remove(_failedDhtCandidateKey(target, peer));
+    final devService = DevicesService();
+    final device = devService.getDevice(target.callsign);
+    if (device != null) {
+      _updateDhtRendezvous(devService, device, peer);
+    }
+    LogService().log(
+      'P2P: verified DHT rendezvous for ${target.callsign} at ${peer.ip}:${peer.port}',
+    );
+    return true;
+  }
+
+  void _startKnownPeerProbeLoop() {
+    _knownPeerProbeTimer?.cancel();
+    _knownPeerProbeTimer = Timer.periodic(_kKnownPeerProbeInterval, (_) {
+      unawaited(_runKnownPeerProbe());
+    });
+  }
+
+  Future<void> _runKnownPeerProbe() async {
+    if (_knownPeerProbeInFlight) return;
+    _knownPeerProbeInFlight = true;
+    try {
+      await _probeKnownDevicesByNpub();
+    } catch (e) {
+      LogService().log('P2P: known-peer DHT probe failed: $e');
+    } finally {
+      _knownPeerProbeInFlight = false;
+    }
+  }
+
+  String _failedDhtCandidateKey(_KnownPeerTarget target, PeerInfo peer) =>
+      '${target.callsign}|${peer.ip}:${peer.port}';
+
+  bool _isKnownPeerCandidateCoolingDown(
+    _KnownPeerTarget target,
+    PeerInfo peer,
+  ) {
+    final failedAt = _failedDhtCandidates[_failedDhtCandidateKey(target, peer)];
+    if (failedAt == null) return false;
+    return DateTime.now().difference(failedAt) < _kFailedDhtCandidateTtl;
+  }
+
+  void _rememberFailedDhtCandidate(_KnownPeerTarget target, PeerInfo peer) {
+    _failedDhtCandidates[_failedDhtCandidateKey(target, peer)] = DateTime.now();
+  }
+
+  void _purgeExpiredFailedDhtCandidates() {
+    final now = DateTime.now();
+    _failedDhtCandidates.removeWhere(
+      (_, failedAt) => now.difference(failedAt) >= _kFailedDhtCandidateTtl,
+    );
   }
 
   Future<List<_KnownPeerTarget>> _loadKnownPeerTargets(
@@ -564,22 +776,57 @@ class P2PService {
     final myNpub = profile.npub;
     final targets = <String, _KnownPeerTarget>{};
 
-    void addTarget(String callsign, String npub) {
+    void addTarget(String callsign, String npub, {DateTime? lastSeen}) {
       final normalizedCallsign = callsign.trim().toUpperCase();
       final trimmedNpub = npub.trim();
       if (normalizedCallsign.isEmpty || trimmedNpub.isEmpty) return;
       if (normalizedCallsign == myCallsign) return;
       if (myNpub.isNotEmpty && trimmedNpub == myNpub) return;
-      targets.putIfAbsent(
-        normalizedCallsign,
-        () => _KnownPeerTarget(callsign: normalizedCallsign, npub: trimmedNpub),
+
+      final existingDevice = devService.getDevice(normalizedCallsign);
+      final hasReachableEndpoint =
+          existingDevice != null &&
+          (existingDevice.hasLocalConnection ||
+              (existingDevice.connectionMethods.contains('internet') &&
+                  existingDevice.url != null &&
+                  existingDevice.url!.isNotEmpty));
+      final needsBootstrap =
+          existingDevice == null ||
+          (!hasReachableEndpoint &&
+              (existingDevice.udpIp == null ||
+                  existingDevice.udpIp!.isEmpty ||
+                  existingDevice.udpPort == null ||
+                  existingDevice.udpPort! <= 0));
+
+      final previous = targets[normalizedCallsign];
+      final candidate = _KnownPeerTarget(
+        callsign: normalizedCallsign,
+        npub: trimmedNpub,
+        lastSeen: lastSeen ?? existingDevice?.lastSeen,
+        needsBootstrap: needsBootstrap,
+        hasReachableEndpoint: hasReachableEndpoint,
+      );
+
+      if (previous == null) {
+        targets[normalizedCallsign] = candidate;
+        return;
+      }
+
+      final mergedLastSeen = _latestTime(previous.lastSeen, candidate.lastSeen);
+      targets[normalizedCallsign] = _KnownPeerTarget(
+        callsign: normalizedCallsign,
+        npub: previous.npub.isNotEmpty ? previous.npub : candidate.npub,
+        lastSeen: mergedLastSeen,
+        needsBootstrap: previous.needsBootstrap || candidate.needsBootstrap,
+        hasReachableEndpoint:
+            previous.hasReachableEndpoint || candidate.hasReachableEndpoint,
       );
     }
 
     for (final device in devService.getAllDevices()) {
       final npub = device.npub;
       if (npub != null && npub.isNotEmpty) {
-        addTarget(device.callsign, npub);
+        addTarget(device.callsign, npub, lastSeen: device.lastSeen);
       }
     }
 
@@ -610,7 +857,10 @@ class P2PService {
               final callsign = track.callsign;
               final npub = track.npub;
               if (callsign == null || npub == null) continue;
-              addTarget(callsign, npub);
+              final trackerLastSeen = track.weekSummary.lastDetection != null
+                  ? DateTime.tryParse(track.weekSummary.lastDetection!)
+                  : null;
+              addTarget(callsign, npub, lastSeen: trackerLastSeen);
             } catch (_) {
               // Skip malformed tracker files and keep probing with the rest.
             }
@@ -623,8 +873,32 @@ class P2PService {
       );
     }
 
-    return targets.values.toList()
-      ..sort((a, b) => a.callsign.compareTo(b.callsign));
+    return targets.values.toList()..sort((a, b) {
+      if (a.needsBootstrap != b.needsBootstrap) {
+        return a.needsBootstrap ? -1 : 1;
+      }
+      if (a.hasReachableEndpoint != b.hasReachableEndpoint) {
+        return a.hasReachableEndpoint ? 1 : -1;
+      }
+      final byLastSeen = _compareDescendingTime(a.lastSeen, b.lastSeen);
+      if (byLastSeen != 0) return byLastSeen;
+      return a.callsign.compareTo(b.callsign);
+    });
+  }
+
+  DateTime? _latestTime(DateTime? a, DateTime? b) {
+    if (a == null) return b;
+    if (b == null) return a;
+    return a.isAfter(b) ? a : b;
+  }
+
+  int _compareDescendingTime(DateTime? a, DateTime? b) {
+    if (a != null && b != null) {
+      return b.compareTo(a);
+    }
+    if (a != null) return -1;
+    if (b != null) return 1;
+    return 0;
   }
 
   void _updateDhtRendezvous(
