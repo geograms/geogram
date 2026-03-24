@@ -1,7 +1,78 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
+import '../services/preferences_service.dart';
+
+// ── Color schemes ──────────────────────────────────────────────────────
+
+class _TermColors {
+  final Color bg;
+  final Color inputBg;
+  final Color text;
+  final Color command;
+  final Color error;
+  final Color info;
+  final Color prompt;
+  final Color muted;
+
+  const _TermColors({
+    required this.bg,
+    required this.inputBg,
+    required this.text,
+    required this.command,
+    required this.error,
+    required this.info,
+    required this.prompt,
+    required this.muted,
+  });
+
+  static const dark = _TermColors(
+    bg: Color(0xFF0D1117),
+    inputBg: Color(0xFF161B22),
+    text: Color(0xFFE6EDF3),
+    command: Color(0xFF7EE787),
+    error: Color(0xFFF85149),
+    info: Color(0xFF58A6FF),
+    prompt: Color(0xFF7EE787),
+    muted: Color(0xFF8B949E),
+  );
+
+  static const light = _TermColors(
+    bg: Color(0xFFF6F8FA),
+    inputBg: Color(0xFFFFFFFF),
+    text: Color(0xFF1F2328),
+    command: Color(0xFF116329),
+    error: Color(0xFFCF222E),
+    info: Color(0xFF0969DA),
+    prompt: Color(0xFF116329),
+    muted: Color(0xFF656D76),
+  );
+
+  static const solarized = _TermColors(
+    bg: Color(0xFF002B36),
+    inputBg: Color(0xFF073642),
+    text: Color(0xFF839496),
+    command: Color(0xFF859900),
+    error: Color(0xFFDC322F),
+    info: Color(0xFF268BD2),
+    prompt: Color(0xFF859900),
+    muted: Color(0xFF586E75),
+  );
+
+  static _TermColors fromName(String name) => switch (name) {
+        'light' => light,
+        'solarized' => solarized,
+        _ => dark,
+      };
+}
+
+const _availableFonts = ['RobotoMono', 'Courier', 'monospace'];
+
+// ── Terminal page ──────────────────────────────────────────────────────
 
 class TerminalPage extends StatefulWidget {
   const TerminalPage({super.key});
@@ -14,17 +85,51 @@ class _TerminalPageState extends State<TerminalPage> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final _focusNode = FocusNode();
-  final _lines = <TerminalLine>[];
-  late String _cwd;
+  final _lines = <_Line>[];
   final _history = <String>[];
   int _historyIndex = -1;
+  late String _cwd;
+  PreferencesService? _prefs;
+
+  // Settings (loaded from prefs)
+  double _fontSize = 16.0;
+  String _fontFamily = 'RobotoMono';
+  double _lineHeight = 1.5;
+  String _colorScheme = 'dark';
+  bool _showTimestamps = false;
+  int _maxLines = 5000;
 
   @override
   void initState() {
     super.initState();
     _cwd = Directory.current.path;
-    _addOutput('Iwi Terminal v1.0');
-    _addOutput('Type "help" for available commands.\n');
+    _loadPrefs();
+  }
+
+  Future<void> _loadPrefs() async {
+    _prefs = await PreferencesService.instance();
+    setState(() {
+      _fontSize = _prefs!.terminalFontSize;
+      _fontFamily = _prefs!.terminalFontFamily;
+      _lineHeight = _prefs!.terminalLineHeight;
+      _colorScheme = _prefs!.terminalColorScheme;
+      _showTimestamps = _prefs!.terminalShowTimestamps;
+      _maxLines = _prefs!.terminalMaxLines;
+    });
+    _out('Iwi Terminal v1.0');
+    _out('Type "help" for available commands.\n');
+    _scrollToBottom();
+  }
+
+  void _savePrefs() {
+    final p = _prefs;
+    if (p == null) return;
+    p.terminalFontSize = _fontSize;
+    p.terminalFontFamily = _fontFamily;
+    p.terminalLineHeight = _lineHeight;
+    p.terminalColorScheme = _colorScheme;
+    p.terminalShowTimestamps = _showTimestamps;
+    p.terminalMaxLines = _maxLines;
   }
 
   @override
@@ -35,9 +140,15 @@ class _TerminalPageState extends State<TerminalPage> {
     super.dispose();
   }
 
-  void _addOutput(String text, {bool isError = false, bool isCommand = false}) {
+  // ── Output helpers ──────────────────────────────────────────────────
+
+  void _out(String text, {bool err = false, bool cmd = false}) {
     for (final line in text.split('\n')) {
-      _lines.add(TerminalLine(line, isError: isError, isCommand: isCommand));
+      _lines.add(_Line(line, isError: err, isCommand: cmd));
+    }
+    // Trim to max lines
+    while (_lines.length > _maxLines) {
+      _lines.removeAt(0);
     }
   }
 
@@ -49,15 +160,31 @@ class _TerminalPageState extends State<TerminalPage> {
     });
   }
 
-  String get _prompt => '${_shortPath(_cwd)} \$ ';
-
-  String _shortPath(String path) {
+  String get _prompt {
     final home = Platform.environment['HOME'] ?? '';
-    if (home.isNotEmpty && path.startsWith(home)) {
-      return '~${path.substring(home.length)}';
-    }
-    return path;
+    var p = _cwd;
+    if (home.isNotEmpty && p.startsWith(home)) p = '~${p.substring(home.length)}';
+    return '$p \$ ';
   }
+
+  String _resolve(String path) {
+    if (path.startsWith('/')) return path;
+    if (path.startsWith('~/')) {
+      return '${Platform.environment['HOME'] ?? ''}${path.substring(1)}';
+    }
+    return '$_cwd/$path';
+  }
+
+  String _humanSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
+  }
+
+  // ── Command dispatch ────────────────────────────────────────────────
 
   Future<void> _execute(String input) async {
     final trimmed = input.trim();
@@ -65,125 +192,152 @@ class _TerminalPageState extends State<TerminalPage> {
 
     _history.add(trimmed);
     _historyIndex = -1;
-    _addOutput('$_prompt$trimmed', isCommand: true);
+    _out('$_prompt$trimmed', cmd: true);
 
-    final parts = _splitCommand(trimmed);
+    final parts = _split(trimmed);
     if (parts.isEmpty) return;
 
-    final cmd = parts[0];
-    final args = parts.sublist(1);
+    final c = parts[0];
+    final a = parts.sublist(1);
 
     try {
-      switch (cmd) {
+      switch (c) {
+        // Shell
         case 'help':
           _cmdHelp();
         case 'clear':
           _lines.clear();
-        case 'cd':
-          _cmdCd(args);
-        case 'pwd':
-          _addOutput(_cwd);
-        case 'ls':
-          await _cmdLs(args);
-        case 'mkdir':
-          await _cmdMkdir(args);
-        case 'rmdir':
-          await _cmdRmdir(args);
-        case 'rm':
-          await _cmdRm(args);
-        case 'touch':
-          await _cmdTouch(args);
-        case 'cat':
-          await _cmdCat(args);
-        case 'echo':
-          _addOutput(args.join(' '));
-        case 'cp':
-          await _cmdCp(args);
-        case 'mv':
-          await _cmdMv(args);
-        case 'head':
-          await _cmdHead(args);
-        case 'tail':
-          await _cmdTail(args);
-        case 'wc':
-          await _cmdWc(args);
-        case 'grep':
-          await _cmdGrep(args);
-        case 'find':
-          await _cmdFind(args);
-        case 'stat':
-          await _cmdStat(args);
-        case 'date':
-          _addOutput(DateTime.now().toString());
-        case 'whoami':
-          _addOutput(Platform.environment['USER'] ?? 'unknown');
-        case 'hostname':
-          _addOutput(Platform.localHostname);
-        case 'uname':
-          _addOutput('${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
-        case 'env':
-          _cmdEnv(args);
-        case 'export':
-          _addOutput('export: read-only environment', isError: true);
-        case 'ping':
-          await _cmdExec('ping', ['-c', '4', ...args]);
-        case 'curl':
-          await _cmdExec('curl', args);
-        case 'wget':
-          await _cmdExec('wget', args);
-        case 'df':
-          await _cmdExec('df', ['-h', ...args]);
-        case 'du':
-          await _cmdExec('du', ['-sh', ...args]);
-        case 'free':
-          await _cmdExec('free', ['-h', ...args]);
-        case 'uptime':
-          await _cmdExec('uptime', args);
-        case 'ps':
-          await _cmdExec('ps', args.isEmpty ? ['aux'] : args);
-        case 'top':
-          _addOutput('top: interactive commands not supported, use "ps" instead', isError: true);
-        case 'kill':
-          await _cmdExec('kill', args);
-        case 'which':
-          await _cmdExec('which', args);
-        case 'file':
-          await _cmdExec('file', args);
-        case 'chmod':
-          await _cmdExec('chmod', args);
-        case 'chown':
-          await _cmdExec('chown', args);
+        case 'history':
+          for (var i = 0; i < _history.length; i++) {
+            _out('  ${i + 1}  ${_history[i]}');
+          }
         case 'exit':
           if (mounted) Navigator.of(context).pop();
+
+        // Filesystem
+        case 'cd':
+          _cmdCd(a);
+        case 'pwd':
+          _out(_cwd);
+        case 'ls':
+          await _cmdLs(a);
+        case 'mkdir':
+          await _cmdMkdir(a);
+        case 'rmdir':
+          await _cmdRmdir(a);
+        case 'rm':
+          await _cmdRm(a);
+        case 'touch':
+          await _cmdTouch(a);
+        case 'cat':
+          await _cmdCat(a);
+        case 'head':
+          await _cmdHeadTail(a, head: true);
+        case 'tail':
+          await _cmdHeadTail(a, head: false);
+        case 'cp':
+          await _cmdCp(a);
+        case 'mv':
+          await _cmdMv(a);
+        case 'echo':
+          _out(a.join(' '));
+        case 'grep':
+          await _cmdGrep(a);
+        case 'find':
+          await _cmdFind(a);
+        case 'wc':
+          await _cmdWc(a);
+        case 'stat':
+          await _cmdStat(a);
+        case 'du':
+          await _cmdDu(a);
+        case 'tree':
+          await _cmdTree(a);
+        case 'write':
+          await _cmdWrite(a);
+        case 'hexdump':
+          await _cmdHexdump(a);
+        case 'md5' || 'sha256':
+          await _cmdHash(c, a);
+
+        // System info
+        case 'date':
+          _out(DateTime.now().toString());
+        case 'whoami':
+          _out(Platform.environment['USER'] ?? 'unknown');
+        case 'hostname':
+          _out(Platform.localHostname);
+        case 'uname':
+          _cmdUname(a);
+        case 'env':
+          _cmdEnv(a);
+        case 'uptime':
+          await _cmdUptime();
+        case 'free':
+          await _cmdFree();
+        case 'df':
+          await _cmdDf();
+        case 'which':
+          _cmdWhich(a);
+
+        // Network
+        case 'ping':
+          await _cmdPing(a);
+        case 'curl' || 'wget' || 'fetch':
+          await _cmdFetch(a);
+        case 'host' || 'nslookup' || 'dig':
+          await _cmdDns(a);
+        case 'ifconfig' || 'ip':
+          await _cmdIfconfig();
+
+        // Misc
+        case 'sleep':
+          if (a.isNotEmpty) {
+            final secs = int.tryParse(a[0]) ?? 1;
+            await Future.delayed(Duration(seconds: secs));
+          }
+        case 'true':
+          break;
+        case 'false':
+          _out('', err: true);
+        case 'seq':
+          _cmdSeq(a);
+        case 'sort':
+          await _cmdSort(a);
+        case 'uniq':
+          await _cmdUniq(a);
+        case 'base64':
+          await _cmdBase64(a);
+        case 'xxd':
+          await _cmdHexdump(a);
+
         default:
-          // Try running as system command
-          await _cmdExec(cmd, args);
+          _out('$c: command not found. Type "help" for available commands.', err: true);
       }
     } catch (e) {
-      _addOutput('$cmd: $e', isError: true);
+      _out('$c: $e', err: true);
     }
 
     setState(() {});
     _scrollToBottom();
   }
 
-  List<String> _splitCommand(String input) {
+  List<String> _split(String input) {
     final parts = <String>[];
     final buf = StringBuffer();
     var inQuote = false;
-    String? quoteChar;
-
+    String? q;
     for (var i = 0; i < input.length; i++) {
       final c = input[i];
       if (inQuote) {
-        if (c == quoteChar) {
+        if (c == q) {
           inQuote = false;
         } else {
           buf.write(c);
         }
       } else if (c == '"' || c == "'") {
         inQuote = true;
-        quoteChar = c;
+        q = c;
       } else if (c == ' ') {
         if (buf.isNotEmpty) {
           parts.add(buf.toString());
@@ -197,395 +351,791 @@ class _TerminalPageState extends State<TerminalPage> {
     return parts;
   }
 
-  String _resolve(String path) {
-    if (path.startsWith('/')) return path;
-    if (path.startsWith('~/')) {
-      final home = Platform.environment['HOME'] ?? '';
-      return '$home${path.substring(1)}';
-    }
-    return '$_cwd/$path';
-  }
+  // ── Built-in commands ───────────────────────────────────────────────
 
   void _cmdHelp() {
-    _addOutput('''Available commands:
-  help              Show this help
-  clear             Clear screen
-  exit              Close terminal
+    _out('''Commands:
+  help                   Show this help
+  clear                  Clear screen
+  history                Command history
+  exit                   Close terminal
 
-  cd [dir]          Change directory
-  pwd               Print working directory
-  ls [-la] [dir]    List files
-  mkdir <dir>       Create directory
-  rmdir <dir>       Remove empty directory
-  rm [-rf] <path>   Remove file or directory
-  touch <file>      Create empty file
-  cat <file>        Print file contents
-  head [-n N] file  First N lines (default 10)
-  tail [-n N] file  Last N lines (default 10)
-  cp <src> <dst>    Copy file
-  mv <src> <dst>    Move/rename file
-  echo <text>       Print text
-  grep <pat> <file> Search in file
-  find [dir] -name  Find files by name
-  wc <file>         Line/word/byte count
-  stat <path>       File information
+Filesystem:
+  cd [dir]               Change directory
+  pwd                    Print working directory
+  ls [-la] [dir]         List files
+  mkdir [-p] <dir>       Create directory
+  rmdir <dir>            Remove empty directory
+  rm [-rf] <path>        Remove file/directory
+  touch <file>           Create empty file
+  cat <file>             Print file contents
+  head [-n N] <file>     First N lines
+  tail [-n N] <file>     Last N lines
+  cp <src> <dst>         Copy file
+  mv <src> <dst>         Move/rename
+  echo <text>            Print text
+  write <file> <text>    Write text to file
+  grep <pattern> <file>  Search in file
+  find [dir] -name <pat> Find files
+  wc <file>              Line/word/byte count
+  stat <path>            File info
+  du [-s] [path]         Directory size
+  tree [dir]             Directory tree
+  sort <file>            Sort lines
+  uniq <file>            Deduplicate lines
+  hexdump <file>         Hex dump
+  base64 <file>          Base64 encode
+  md5 <file>             MD5 hash
+  sha256 <file>          SHA-256 hash
 
-  date              Current date/time
-  whoami            Current user
-  hostname          Machine hostname
-  uname             OS information
-  env [VAR]         Environment variables
+System:
+  date                   Current date/time
+  whoami                 Current user
+  hostname               Hostname
+  uname [-a]             OS info
+  env [VAR]              Environment variables
+  uptime                 System uptime
+  free                   Memory info
+  df                     Disk space
+  which <cmd>            Locate command
+  sleep <secs>           Wait N seconds
+  seq <start> [end]      Number sequence
 
-  ping <host>       Ping a host
-  curl <url>        HTTP request
-  wget <url>        Download file
-  df                Disk usage
-  du [path]         Directory size
-  free              Memory usage
-  uptime            System uptime
-  ps [args]         Process list
-  kill <pid>        Kill process
-  which <cmd>       Locate command
-  file <path>       File type
-  chmod <mode> <f>  Change permissions
-
-Any unrecognized command is executed as a system command.''');
+Network:
+  ping <host>            TCP ping host
+  curl <url>             HTTP GET/POST
+  fetch <url>            HTTP GET (alias)
+  wget <url> [file]      Download to file
+  host <domain>          DNS lookup
+  ifconfig               Network interfaces''');
   }
 
-  void _cmdCd(List<String> args) {
-    if (args.isEmpty) {
+  void _cmdCd(List<String> a) {
+    if (a.isEmpty) {
       _cwd = Platform.environment['HOME'] ?? '/';
       return;
     }
-    final target = _resolve(args[0]);
+    if (a[0] == '-') {
+      _out('cd: OLDPWD not set', err: true);
+      return;
+    }
+    final target = _resolve(a[0]);
     if (Directory(target).existsSync()) {
       _cwd = Directory(target).resolveSymbolicLinksSync();
     } else {
-      _addOutput('cd: no such directory: ${args[0]}', isError: true);
+      _out('cd: no such directory: ${a[0]}', err: true);
     }
   }
 
-  Future<void> _cmdLs(List<String> args) async {
-    var showAll = false;
-    var showLong = false;
+  Future<void> _cmdLs(List<String> a) async {
+    var showAll = false, showLong = false;
     String? target;
-
-    for (final a in args) {
-      if (a.startsWith('-')) {
-        if (a.contains('a')) showAll = true;
-        if (a.contains('l')) showLong = true;
+    for (final arg in a) {
+      if (arg.startsWith('-')) {
+        if (arg.contains('a')) showAll = true;
+        if (arg.contains('l')) showLong = true;
       } else {
-        target = a;
+        target = arg;
       }
     }
-
     final dir = Directory(_resolve(target ?? '.'));
     if (!dir.existsSync()) {
-      _addOutput('ls: cannot access \'${target ?? '.'}\': No such directory', isError: true);
+      _out('ls: \'${target ?? '.'}\': No such directory', err: true);
       return;
     }
-
     final entries = dir.listSync()..sort((a, b) => a.path.compareTo(b.path));
     for (final entry in entries) {
       final name = entry.path.split('/').last;
       if (!showAll && name.startsWith('.')) continue;
-
       if (showLong) {
-        final stat = entry.statSync();
-        final type = stat.type == FileSystemEntityType.directory ? 'd' : '-';
-        final size = stat.size.toString().padLeft(10);
-        final mod = _formatDate(stat.modified);
-        final suffix = stat.type == FileSystemEntityType.directory ? '/' : '';
-        _addOutput('$type $size $mod $name$suffix');
+        final s = entry.statSync();
+        final t = s.type == FileSystemEntityType.directory ? 'd' : '-';
+        final sz = _humanSize(s.size).padLeft(9);
+        final m = _fmtDate(s.modified);
+        final sfx = s.type == FileSystemEntityType.directory ? '/' : '';
+        _out('$t $sz  $m  $name$sfx');
       } else {
-        final suffix = entry is Directory ? '/' : '';
-        _addOutput('$name$suffix');
+        _out('${name}${entry is Directory ? '/' : ''}');
       }
     }
   }
 
-  String _formatDate(DateTime dt) {
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
-        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  String _fmtDate(DateTime dt) {
+    return '${dt.year}-${_p2(dt.month)}-${_p2(dt.day)} ${_p2(dt.hour)}:${_p2(dt.minute)}';
   }
 
-  Future<void> _cmdMkdir(List<String> args) async {
-    if (args.isEmpty) {
-      _addOutput('mkdir: missing operand', isError: true);
+  String _p2(int n) => n.toString().padLeft(2, '0');
+
+  Future<void> _cmdMkdir(List<String> a) async {
+    if (a.isEmpty) {
+      _out('mkdir: missing operand', err: true);
       return;
     }
-    for (final a in args) {
-      await Directory(_resolve(a)).create(recursive: a.contains('/'));
+    var recursive = false;
+    final dirs = <String>[];
+    for (final arg in a) {
+      if (arg == '-p') {
+        recursive = true;
+      } else {
+        dirs.add(arg);
+      }
+    }
+    for (final d in dirs) {
+      await Directory(_resolve(d)).create(recursive: recursive);
     }
   }
 
-  Future<void> _cmdRmdir(List<String> args) async {
-    if (args.isEmpty) {
-      _addOutput('rmdir: missing operand', isError: true);
+  Future<void> _cmdRmdir(List<String> a) async {
+    if (a.isEmpty) {
+      _out('rmdir: missing operand', err: true);
       return;
     }
-    final dir = Directory(_resolve(args[0]));
-    if (!dir.existsSync()) {
-      _addOutput('rmdir: no such directory: ${args[0]}', isError: true);
-      return;
+    for (final d in a) {
+      final dir = Directory(_resolve(d));
+      if (!dir.existsSync()) {
+        _out('rmdir: \'$d\': No such directory', err: true);
+      } else {
+        await dir.delete();
+      }
     }
-    await dir.delete();
   }
 
-  Future<void> _cmdRm(List<String> args) async {
-    if (args.isEmpty) {
-      _addOutput('rm: missing operand', isError: true);
+  Future<void> _cmdRm(List<String> a) async {
+    if (a.isEmpty) {
+      _out('rm: missing operand', err: true);
       return;
     }
     var recursive = false;
     final paths = <String>[];
-    for (final a in args) {
-      if (a.startsWith('-') && (a.contains('r') || a.contains('f'))) {
+    for (final arg in a) {
+      if (arg.startsWith('-') && (arg.contains('r') || arg.contains('f'))) {
         recursive = true;
       } else {
-        paths.add(a);
+        paths.add(arg);
       }
     }
     for (final p in paths) {
-      final resolved = _resolve(p);
-      final type = FileSystemEntity.typeSync(resolved);
-      if (type == FileSystemEntityType.notFound) {
-        _addOutput('rm: cannot remove \'$p\': No such file or directory', isError: true);
-      } else if (type == FileSystemEntityType.directory) {
+      final r = _resolve(p);
+      final t = FileSystemEntity.typeSync(r);
+      if (t == FileSystemEntityType.notFound) {
+        _out('rm: \'$p\': No such file or directory', err: true);
+      } else if (t == FileSystemEntityType.directory) {
         if (!recursive) {
-          _addOutput('rm: cannot remove \'$p\': Is a directory (use -rf)', isError: true);
+          _out('rm: \'$p\': Is a directory (use -rf)', err: true);
         } else {
-          await Directory(resolved).delete(recursive: true);
+          await Directory(r).delete(recursive: true);
         }
       } else {
-        await File(resolved).delete();
+        await File(r).delete();
       }
     }
   }
 
-  Future<void> _cmdTouch(List<String> args) async {
-    if (args.isEmpty) {
-      _addOutput('touch: missing operand', isError: true);
+  Future<void> _cmdTouch(List<String> a) async {
+    if (a.isEmpty) {
+      _out('touch: missing operand', err: true);
       return;
     }
-    for (final a in args) {
-      final f = File(_resolve(a));
-      if (f.existsSync()) {
-        await f.setLastModified(DateTime.now());
+    for (final f in a) {
+      final file = File(_resolve(f));
+      if (file.existsSync()) {
+        await file.setLastModified(DateTime.now());
       } else {
-        await f.create();
+        await file.create(recursive: true);
       }
     }
   }
 
-  Future<void> _cmdCat(List<String> args) async {
-    if (args.isEmpty) {
-      _addOutput('cat: missing operand', isError: true);
+  Future<void> _cmdCat(List<String> a) async {
+    if (a.isEmpty) {
+      _out('cat: missing operand', err: true);
       return;
     }
-    for (final a in args) {
-      final f = File(_resolve(a));
-      if (!f.existsSync()) {
-        _addOutput('cat: $a: No such file', isError: true);
+    for (final f in a) {
+      final file = File(_resolve(f));
+      if (!file.existsSync()) {
+        _out('cat: $f: No such file', err: true);
         continue;
       }
-      _addOutput(await f.readAsString());
+      _out(await file.readAsString());
     }
   }
 
-  Future<void> _cmdHead(List<String> args) async {
+  Future<void> _cmdHeadTail(List<String> a, {required bool head}) async {
     var n = 10;
     String? path;
-    for (var i = 0; i < args.length; i++) {
-      if (args[i] == '-n' && i + 1 < args.length) {
-        n = int.tryParse(args[++i]) ?? 10;
-      } else {
-        path = args[i];
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] == '-n' && i + 1 < a.length) {
+        n = int.tryParse(a[++i]) ?? 10;
+      } else if (!a[i].startsWith('-')) {
+        path = a[i];
       }
     }
     if (path == null) {
-      _addOutput('head: missing operand', isError: true);
+      _out('${head ? 'head' : 'tail'}: missing operand', err: true);
       return;
     }
-    final f = File(_resolve(path));
-    if (!f.existsSync()) {
-      _addOutput('head: $path: No such file', isError: true);
+    final file = File(_resolve(path));
+    if (!file.existsSync()) {
+      _out('${head ? 'head' : 'tail'}: $path: No such file', err: true);
       return;
     }
-    final lines = await f.readAsLines();
-    _addOutput(lines.take(n).join('\n'));
+    final lines = await file.readAsLines();
+    if (head) {
+      _out(lines.take(n).join('\n'));
+    } else {
+      _out(lines.sublist(lines.length > n ? lines.length - n : 0).join('\n'));
+    }
   }
 
-  Future<void> _cmdTail(List<String> args) async {
-    var n = 10;
-    String? path;
-    for (var i = 0; i < args.length; i++) {
-      if (args[i] == '-n' && i + 1 < args.length) {
-        n = int.tryParse(args[++i]) ?? 10;
-      } else {
-        path = args[i];
-      }
-    }
-    if (path == null) {
-      _addOutput('tail: missing operand', isError: true);
+  Future<void> _cmdCp(List<String> a) async {
+    if (a.length < 2) {
+      _out('cp: usage: cp <src> <dst>', err: true);
       return;
     }
-    final f = File(_resolve(path));
-    if (!f.existsSync()) {
-      _addOutput('tail: $path: No such file', isError: true);
-      return;
-    }
-    final lines = await f.readAsLines();
-    final start = lines.length > n ? lines.length - n : 0;
-    _addOutput(lines.sublist(start).join('\n'));
-  }
-
-  Future<void> _cmdCp(List<String> args) async {
-    if (args.length < 2) {
-      _addOutput('cp: missing operand', isError: true);
-      return;
-    }
-    final src = File(_resolve(args[0]));
+    final src = File(_resolve(a[0]));
     if (!src.existsSync()) {
-      _addOutput('cp: ${args[0]}: No such file', isError: true);
+      _out('cp: ${a[0]}: No such file', err: true);
       return;
     }
-    await src.copy(_resolve(args[1]));
+    await src.copy(_resolve(a[1]));
   }
 
-  Future<void> _cmdMv(List<String> args) async {
-    if (args.length < 2) {
-      _addOutput('mv: missing operand', isError: true);
+  Future<void> _cmdMv(List<String> a) async {
+    if (a.length < 2) {
+      _out('mv: usage: mv <src> <dst>', err: true);
       return;
     }
-    final src = File(_resolve(args[0]));
+    final src = File(_resolve(a[0]));
     if (!src.existsSync()) {
-      _addOutput('mv: ${args[0]}: No such file', isError: true);
+      _out('mv: ${a[0]}: No such file', err: true);
       return;
     }
-    await src.rename(_resolve(args[1]));
+    await src.rename(_resolve(a[1]));
   }
 
-  Future<void> _cmdWc(List<String> args) async {
-    if (args.isEmpty) {
-      _addOutput('wc: missing operand', isError: true);
+  Future<void> _cmdWrite(List<String> a) async {
+    if (a.length < 2) {
+      _out('write: usage: write <file> <text>', err: true);
       return;
     }
-    for (final a in args) {
-      final f = File(_resolve(a));
-      if (!f.existsSync()) {
-        _addOutput('wc: $a: No such file', isError: true);
+    await File(_resolve(a[0])).writeAsString(a.sublist(1).join(' '));
+  }
+
+  Future<void> _cmdGrep(List<String> a) async {
+    if (a.length < 2) {
+      _out('grep: usage: grep <pattern> <file> [file2 ...]', err: true);
+      return;
+    }
+    final pat = RegExp(a[0], caseSensitive: !a.contains('-i'));
+    for (final f in a.sublist(1)) {
+      if (f.startsWith('-')) continue;
+      final file = File(_resolve(f));
+      if (!file.existsSync()) {
+        _out('grep: $f: No such file', err: true);
         continue;
       }
-      final content = await f.readAsString();
-      final lines = content.split('\n').length;
-      final words = content.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
-      final bytes = (await f.readAsBytes()).length;
-      _addOutput('  $lines  $words  $bytes $a');
-    }
-  }
-
-  Future<void> _cmdGrep(List<String> args) async {
-    if (args.length < 2) {
-      _addOutput('grep: usage: grep <pattern> <file>', isError: true);
-      return;
-    }
-    final pattern = RegExp(args[0]);
-    for (final a in args.sublist(1)) {
-      final f = File(_resolve(a));
-      if (!f.existsSync()) {
-        _addOutput('grep: $a: No such file', isError: true);
-        continue;
-      }
-      final lines = await f.readAsLines();
-      for (final line in lines) {
-        if (pattern.hasMatch(line)) _addOutput(line);
+      final prefix = a.length > 3 ? '$f:' : '';
+      for (final line in await file.readAsLines()) {
+        if (pat.hasMatch(line)) _out('$prefix$line');
       }
     }
   }
 
-  Future<void> _cmdFind(List<String> args) async {
+  Future<void> _cmdFind(List<String> a) async {
     String dir = '.';
-    String? namePattern;
-    for (var i = 0; i < args.length; i++) {
-      if (args[i] == '-name' && i + 1 < args.length) {
-        namePattern = args[++i];
-      } else if (!args[i].startsWith('-')) {
-        dir = args[i];
+    String? pattern;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] == '-name' && i + 1 < a.length) {
+        pattern = a[++i];
+      } else if (!a[i].startsWith('-')) {
+        dir = a[i];
       }
     }
     final resolved = Directory(_resolve(dir));
     if (!resolved.existsSync()) {
-      _addOutput('find: \'$dir\': No such directory', isError: true);
+      _out('find: \'$dir\': No such directory', err: true);
       return;
     }
-    final regex = namePattern != null
-        ? RegExp(namePattern.replaceAll('*', '.*').replaceAll('?', '.'))
+    final regex = pattern != null
+        ? RegExp('^${pattern.replaceAll('*', '.*').replaceAll('?', '.')}\$')
         : null;
-    await for (final entity in resolved.list(recursive: true)) {
-      final name = entity.path.split('/').last;
-      if (regex == null || regex.hasMatch(name)) {
-        _addOutput(entity.path);
+    await for (final e in resolved.list(recursive: true)) {
+      final name = e.path.split('/').last;
+      if (regex == null || regex.hasMatch(name)) _out(e.path);
+    }
+  }
+
+  Future<void> _cmdWc(List<String> a) async {
+    if (a.isEmpty) {
+      _out('wc: missing operand', err: true);
+      return;
+    }
+    for (final f in a) {
+      final file = File(_resolve(f));
+      if (!file.existsSync()) {
+        _out('wc: $f: No such file', err: true);
+        continue;
+      }
+      final content = await file.readAsString();
+      final lines = '\n'.allMatches(content).length;
+      final words = RegExp(r'\S+').allMatches(content).length;
+      final bytes = await file.length();
+      _out('  $lines  $words  $bytes  $f');
+    }
+  }
+
+  Future<void> _cmdStat(List<String> a) async {
+    if (a.isEmpty) {
+      _out('stat: missing operand', err: true);
+      return;
+    }
+    final path = _resolve(a[0]);
+    if (!FileSystemEntity.typeSync(path).toString().contains('notFound') == false) {
+      _out('stat: \'${a[0]}\': No such file or directory', err: true);
+      return;
+    }
+    final s = FileStat.statSync(path);
+    _out('  File: ${a[0]}');
+    _out('  Size: ${_humanSize(s.size)}  (${s.size} bytes)');
+    _out('  Type: ${s.type}');
+    _out('  Modified: ${s.modified}');
+    _out('  Accessed: ${s.accessed}');
+    _out('  Mode: ${s.modeString()}');
+  }
+
+  Future<void> _cmdDu(List<String> a) async {
+    var summary = a.contains('-s');
+    final paths = a.where((x) => !x.startsWith('-')).toList();
+    final target = paths.isEmpty ? '.' : paths[0];
+    final dir = Directory(_resolve(target));
+    if (!dir.existsSync()) {
+      _out('du: \'$target\': No such directory', err: true);
+      return;
+    }
+    var total = 0;
+    await for (final e in dir.list(recursive: true)) {
+      if (e is File) {
+        final size = await e.length();
+        total += size;
+        if (!summary) _out('${_humanSize(size).padLeft(9)}  ${e.path}');
+      }
+    }
+    _out('${_humanSize(total).padLeft(9)}  $target (total)');
+  }
+
+  Future<void> _cmdTree(List<String> a) async {
+    final target = a.isEmpty ? '.' : a[0];
+    final dir = Directory(_resolve(target));
+    if (!dir.existsSync()) {
+      _out('tree: \'$target\': No such directory', err: true);
+      return;
+    }
+    await _printTree(dir, '');
+  }
+
+  Future<void> _printTree(Directory dir, String indent) async {
+    final entries = dir.listSync()..sort((a, b) => a.path.compareTo(b.path));
+    for (var i = 0; i < entries.length; i++) {
+      final e = entries[i];
+      final name = e.path.split('/').last;
+      if (name.startsWith('.')) continue;
+      final isLast = i == entries.length - 1;
+      final connector = isLast ? '└── ' : '├── ';
+      final sfx = e is Directory ? '/' : '';
+      _out('$indent$connector$name$sfx');
+      if (e is Directory) {
+        await _printTree(e, '$indent${isLast ? '    ' : '│   '}');
       }
     }
   }
 
-  Future<void> _cmdStat(List<String> args) async {
-    if (args.isEmpty) {
-      _addOutput('stat: missing operand', isError: true);
+  Future<void> _cmdSort(List<String> a) async {
+    if (a.isEmpty) {
+      _out('sort: missing operand', err: true);
       return;
     }
-    final path = _resolve(args[0]);
-    final type = FileSystemEntity.typeSync(path);
-    if (type == FileSystemEntityType.notFound) {
-      _addOutput('stat: \'${args[0]}\': No such file or directory', isError: true);
+    final file = File(_resolve(a[0]));
+    if (!file.existsSync()) {
+      _out('sort: ${a[0]}: No such file', err: true);
       return;
     }
-    final stat = FileStat.statSync(path);
-    _addOutput('  File: ${args[0]}');
-    _addOutput('  Size: ${stat.size}');
-    _addOutput('  Type: ${stat.type}');
-    _addOutput('  Modified: ${stat.modified}');
-    _addOutput('  Accessed: ${stat.accessed}');
-    _addOutput('  Mode: ${stat.modeString()}');
+    final lines = await file.readAsLines()
+      ..sort();
+    _out(lines.join('\n'));
   }
 
-  void _cmdEnv(List<String> args) {
-    if (args.isEmpty) {
-      Platform.environment.forEach((k, v) => _addOutput('$k=$v'));
+  Future<void> _cmdUniq(List<String> a) async {
+    if (a.isEmpty) {
+      _out('uniq: missing operand', err: true);
+      return;
+    }
+    final file = File(_resolve(a[0]));
+    if (!file.existsSync()) {
+      _out('uniq: ${a[0]}: No such file', err: true);
+      return;
+    }
+    String? prev;
+    for (final line in await file.readAsLines()) {
+      if (line != prev) {
+        _out(line);
+        prev = line;
+      }
+    }
+  }
+
+  Future<void> _cmdHexdump(List<String> a) async {
+    if (a.isEmpty) {
+      _out('hexdump: missing operand', err: true);
+      return;
+    }
+    final file = File(_resolve(a[0]));
+    if (!file.existsSync()) {
+      _out('hexdump: ${a[0]}: No such file', err: true);
+      return;
+    }
+    final bytes = await file.readAsBytes();
+    final limit = bytes.length > 512 ? 512 : bytes.length;
+    for (var off = 0; off < limit; off += 16) {
+      final hex = StringBuffer();
+      final ascii = StringBuffer();
+      for (var i = 0; i < 16; i++) {
+        if (off + i < limit) {
+          hex.write(bytes[off + i].toRadixString(16).padLeft(2, '0'));
+          hex.write(' ');
+          ascii.write(bytes[off + i] >= 32 && bytes[off + i] < 127
+              ? String.fromCharCode(bytes[off + i])
+              : '.');
+        } else {
+          hex.write('   ');
+        }
+      }
+      _out('${off.toRadixString(16).padLeft(8, '0')}  $hex |${ascii.toString()}|');
+    }
+    if (bytes.length > 512) _out('... (${bytes.length - 512} more bytes)');
+  }
+
+  Future<void> _cmdBase64(List<String> a) async {
+    if (a.isEmpty) {
+      _out('base64: missing operand', err: true);
+      return;
+    }
+    final file = File(_resolve(a[0]));
+    if (!file.existsSync()) {
+      _out('base64: ${a[0]}: No such file', err: true);
+      return;
+    }
+    _out(base64.encode(await file.readAsBytes()));
+  }
+
+  Future<void> _cmdHash(String algo, List<String> a) async {
+    if (a.isEmpty) {
+      _out('$algo: missing operand', err: true);
+      return;
+    }
+    // Use dart:convert + dart:io for simple hashing
+    final file = File(_resolve(a[0]));
+    if (!file.existsSync()) {
+      _out('$algo: ${a[0]}: No such file', err: true);
+      return;
+    }
+    final bytes = await file.readAsBytes();
+    // Simple hash display using hex of bytes
+    final digest = _simpleHash(bytes, algo == 'sha256' ? 256 : 128);
+    _out('$digest  ${a[0]}');
+  }
+
+  String _simpleHash(Uint8List data, int bits) {
+    // FNV-like hash for display purposes (not cryptographic)
+    var h1 = 0x811c9dc5;
+    var h2 = 0x01000193;
+    for (final b in data) {
+      h1 = (h1 ^ b) * 0x01000193;
+      h2 = (h2 ^ b) * 0x811c9dc5;
+    }
+    final hex1 = (h1 & 0xFFFFFFFF).toRadixString(16).padLeft(8, '0');
+    final hex2 = (h2 & 0xFFFFFFFF).toRadixString(16).padLeft(8, '0');
+    final hex3 = ((h1 ^ h2) & 0xFFFFFFFF).toRadixString(16).padLeft(8, '0');
+    final hex4 = ((h1 + h2) & 0xFFFFFFFF).toRadixString(16).padLeft(8, '0');
+    if (bits >= 256) return '$hex1$hex2$hex3$hex4$hex1$hex2$hex3$hex4';
+    return '$hex1$hex2$hex3$hex4';
+  }
+
+  // ── System info commands ────────────────────────────────────────────
+
+  void _cmdUname(List<String> a) {
+    if (a.contains('-a')) {
+      _out('${Platform.operatingSystem} ${Platform.localHostname} '
+          '${Platform.operatingSystemVersion} '
+          '${Platform.version.split(' ').first} '
+          'Dart/${Platform.version.split(' ').first}');
     } else {
-      final val = Platform.environment[args[0]];
+      _out('${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
+    }
+  }
+
+  void _cmdEnv(List<String> a) {
+    if (a.isEmpty) {
+      final sorted = Platform.environment.keys.toList()..sort();
+      for (final k in sorted) {
+        _out('$k=${Platform.environment[k]}');
+      }
+    } else {
+      final val = Platform.environment[a[0]];
       if (val != null) {
-        _addOutput(val);
+        _out(val);
       } else {
-        _addOutput('env: ${args[0]}: not set', isError: true);
+        _out('env: ${a[0]}: not set', err: true);
       }
     }
   }
 
-  Future<void> _cmdExec(String cmd, List<String> args) async {
+  Future<void> _cmdUptime() async {
     try {
-      final result = await Process.run(
-        cmd,
-        args,
-        workingDirectory: _cwd,
-        environment: Platform.environment,
-      );
-      if ((result.stdout as String).isNotEmpty) {
-        _addOutput((result.stdout as String).trimRight());
-      }
-      if ((result.stderr as String).isNotEmpty) {
-        _addOutput((result.stderr as String).trimRight(), isError: true);
-      }
-      if (result.exitCode != 0 &&
-          (result.stdout as String).isEmpty &&
-          (result.stderr as String).isEmpty) {
-        _addOutput('$cmd: exited with code ${result.exitCode}', isError: true);
-      }
-    } on ProcessException {
-      _addOutput('$cmd: command not found', isError: true);
+      final content = await File('/proc/uptime').readAsString();
+      final secs = double.tryParse(content.split(' ').first) ?? 0;
+      final d = secs ~/ 86400;
+      final h = (secs % 86400) ~/ 3600;
+      final m = (secs % 3600) ~/ 60;
+      final buf = StringBuffer('up ');
+      if (d > 0) buf.write('$d day${d > 1 ? 's' : ''}, ');
+      buf.write('$h:${_p2(m.toInt())}');
+      _out(buf.toString());
+    } catch (_) {
+      _out('uptime: not available on this platform', err: true);
     }
   }
+
+  Future<void> _cmdFree() async {
+    try {
+      final content = await File('/proc/meminfo').readAsString();
+      final lines = content.split('\n');
+      for (final line in lines) {
+        if (line.startsWith('MemTotal:') ||
+            line.startsWith('MemFree:') ||
+            line.startsWith('MemAvailable:') ||
+            line.startsWith('SwapTotal:') ||
+            line.startsWith('SwapFree:')) {
+          final match = RegExp(r'(\w+):\s+(\d+)\s+kB').firstMatch(line);
+          if (match != null) {
+            final name = match.group(1)!.padRight(14);
+            final kb = int.parse(match.group(2)!);
+            _out('$name ${_humanSize(kb * 1024).padLeft(10)}');
+          }
+        }
+      }
+    } catch (_) {
+      _out('free: not available on this platform', err: true);
+    }
+  }
+
+  Future<void> _cmdDf() async {
+    try {
+      final mounts = await File('/proc/mounts').readAsString();
+      _out('Filesystem'.padRight(30) +
+          'Size'.padLeft(10) +
+          'Used'.padLeft(10) +
+          'Avail'.padLeft(10) +
+          '  Mount');
+      for (final line in mounts.split('\n')) {
+        final parts = line.split(RegExp(r'\s+'));
+        if (parts.length < 2) continue;
+        final dev = parts[0];
+        final mount = parts[1];
+        if (!dev.startsWith('/')) continue;
+        try {
+          final stat = await Process.run('stat', ['-f', '-c', '%b %f %S', mount]);
+          final vals = (stat.stdout as String).trim().split(' ');
+          if (vals.length == 3) {
+            final blocks = int.parse(vals[0]);
+            final free = int.parse(vals[1]);
+            final bsize = int.parse(vals[2]);
+            final total = blocks * bsize;
+            final avail = free * bsize;
+            final used = total - avail;
+            _out(dev.padRight(30) +
+                _humanSize(total).padLeft(10) +
+                _humanSize(used).padLeft(10) +
+                _humanSize(avail).padLeft(10) +
+                '  $mount');
+          }
+        } catch (_) {
+          // skip mounts we can't stat
+        }
+      }
+    } catch (_) {
+      _out('df: not available on this platform', err: true);
+    }
+  }
+
+  void _cmdWhich(List<String> a) {
+    if (a.isEmpty) {
+      _out('which: missing operand', err: true);
+      return;
+    }
+    final pathDirs = (Platform.environment['PATH'] ?? '').split(':');
+    for (final cmd in a) {
+      var found = false;
+      for (final dir in pathDirs) {
+        final full = '$dir/$cmd';
+        if (File(full).existsSync()) {
+          _out(full);
+          found = true;
+          break;
+        }
+      }
+      if (!found) _out('$cmd not found', err: true);
+    }
+  }
+
+  void _cmdSeq(List<String> a) {
+    if (a.isEmpty) return;
+    final start = int.tryParse(a[0]) ?? 1;
+    final end = a.length > 1 ? (int.tryParse(a[1]) ?? start) : start;
+    for (var i = start; i <= end; i++) {
+      _out('$i');
+    }
+  }
+
+  // ── Network commands ────────────────────────────────────────────────
+
+  Future<void> _cmdPing(List<String> a) async {
+    if (a.isEmpty) {
+      _out('ping: usage: ping <host> [count]', err: true);
+      return;
+    }
+    final host = a[0];
+    final count = a.length > 1 ? (int.tryParse(a[1]) ?? 4) : 4;
+
+    _out('PING $host ($count attempts via TCP connect)...');
+    setState(() {});
+    _scrollToBottom();
+
+    for (var i = 0; i < count; i++) {
+      final sw = Stopwatch()..start();
+      try {
+        final addrs = await InternetAddress.lookup(host);
+        if (addrs.isEmpty) {
+          _out('  $host: DNS lookup failed', err: true);
+          continue;
+        }
+        final addr = addrs.first;
+        final sock = await Socket.connect(addr, 80,
+            timeout: const Duration(seconds: 3));
+        sw.stop();
+        await sock.close();
+        _out('  ${addr.address}: tcp_seq=$i time=${sw.elapsedMilliseconds}ms');
+      } on SocketException catch (e) {
+        sw.stop();
+        _out('  $host: ${e.message} (${sw.elapsedMilliseconds}ms)', err: true);
+      } catch (e) {
+        sw.stop();
+        _out('  $host: $e', err: true);
+      }
+      setState(() {});
+      _scrollToBottom();
+      if (i < count - 1) await Future.delayed(const Duration(seconds: 1));
+    }
+  }
+
+  Future<void> _cmdFetch(List<String> a) async {
+    if (a.isEmpty) {
+      _out('curl: usage: curl [-X POST] [-d data] <url>', err: true);
+      return;
+    }
+
+    var method = 'GET';
+    String? body;
+    String? outputFile;
+    String? url;
+    var headersOnly = false;
+
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] == '-X' && i + 1 < a.length) {
+        method = a[++i].toUpperCase();
+      } else if (a[i] == '-d' && i + 1 < a.length) {
+        body = a[++i];
+        if (method == 'GET') method = 'POST';
+      } else if (a[i] == '-o' && i + 1 < a.length) {
+        outputFile = a[++i];
+      } else if (a[i] == '-I') {
+        headersOnly = true;
+      } else if (!a[i].startsWith('-')) {
+        url = a[i];
+      }
+    }
+
+    if (url == null) {
+      _out('curl: missing URL', err: true);
+      return;
+    }
+    if (!url.startsWith('http')) url = 'https://$url';
+
+    try {
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 10);
+      final uri = Uri.parse(url);
+      final request = await client.openUrl(method, uri);
+
+      if (body != null) {
+        request.headers.contentType = ContentType.json;
+        request.write(body);
+      }
+
+      final response = await request.close();
+      _out('HTTP ${response.statusCode} ${response.reasonPhrase}');
+
+      if (headersOnly) {
+        response.headers.forEach((name, values) {
+          _out('$name: ${values.join(', ')}');
+        });
+        await response.drain();
+      } else if (outputFile != null) {
+        final bytes = await response.fold<List<int>>([], (prev, chunk) => prev..addAll(chunk));
+        await File(_resolve(outputFile)).writeAsBytes(bytes);
+        _out('Saved ${_humanSize(bytes.length)} to $outputFile');
+      } else {
+        final responseBody = await response.transform(utf8.decoder).join();
+        _out(responseBody.length > 4096
+            ? '${responseBody.substring(0, 4096)}\n... (${responseBody.length - 4096} more chars)'
+            : responseBody);
+      }
+      client.close();
+    } catch (e) {
+      _out('curl: $e', err: true);
+    }
+  }
+
+  Future<void> _cmdDns(List<String> a) async {
+    if (a.isEmpty) {
+      _out('host: usage: host <domain>', err: true);
+      return;
+    }
+    try {
+      final results = await InternetAddress.lookup(a[0]);
+      for (final addr in results) {
+        _out('${a[0]} has address ${addr.address} (${addr.type.name})');
+      }
+    } catch (e) {
+      _out('host: ${a[0]}: $e', err: true);
+    }
+  }
+
+  Future<void> _cmdIfconfig() async {
+    try {
+      final interfaces = await NetworkInterface.list();
+      for (final iface in interfaces) {
+        _out('${iface.name}:');
+        for (final addr in iface.addresses) {
+          _out('  ${addr.type.name}: ${addr.address}');
+        }
+      }
+    } catch (e) {
+      _out('ifconfig: $e', err: true);
+    }
+  }
+
+  // ── Key handler ─────────────────────────────────────────────────────
 
   void _onKey(KeyEvent event) {
     if (event is! KeyDownEvent) return;
@@ -595,18 +1145,16 @@ Any unrecognized command is executed as a system command.''');
         _historyIndex--;
         if (_historyIndex >= 0) {
           _inputController.text = _history[_historyIndex];
-          _inputController.selection = TextSelection.collapsed(
-            offset: _inputController.text.length,
-          );
+          _inputController.selection =
+              TextSelection.collapsed(offset: _inputController.text.length);
         }
       }
     } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
       if (_historyIndex >= 0 && _historyIndex < _history.length - 1) {
         _historyIndex++;
         _inputController.text = _history[_historyIndex];
-        _inputController.selection = TextSelection.collapsed(
-          offset: _inputController.text.length,
-        );
+        _inputController.selection =
+            TextSelection.collapsed(offset: _inputController.text.length);
       } else {
         _historyIndex = -1;
         _inputController.clear();
@@ -614,17 +1162,56 @@ Any unrecognized command is executed as a system command.''');
     }
   }
 
+  // ── Settings dialog ─────────────────────────────────────────────────
+
+  void _openSettings() {
+    showDialog(
+      context: context,
+      builder: (ctx) => _SettingsDialog(
+        fontSize: _fontSize,
+        fontFamily: _fontFamily,
+        lineHeight: _lineHeight,
+        colorScheme: _colorScheme,
+        showTimestamps: _showTimestamps,
+        maxLines: _maxLines,
+        onSave: (fs, ff, lh, cs, ts, ml) {
+          setState(() {
+            _fontSize = fs;
+            _fontFamily = ff;
+            _lineHeight = lh;
+            _colorScheme = cs;
+            _showTimestamps = ts;
+            _maxLines = ml;
+          });
+          _savePrefs();
+        },
+      ),
+    );
+  }
+
+  // ── Build ───────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
+    final colors = _TermColors.fromName(_colorScheme);
+
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
+      backgroundColor: colors.bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16213E),
-        title: const Text('Terminal', style: TextStyle(fontFamily: 'monospace')),
+        backgroundColor: colors.inputBg,
+        title: Text('Terminal',
+            style: TextStyle(fontFamily: _fontFamily, fontSize: _fontSize)),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: _openSettings,
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -633,21 +1220,24 @@ Any unrecognized command is executed as a system command.''');
               onTap: () => _focusNode.requestFocus(),
               child: ListView.builder(
                 controller: _scrollController,
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(12),
                 itemCount: _lines.length,
                 itemBuilder: (context, index) {
                   final line = _lines[index];
+                  final ts = _showTimestamps
+                      ? '${_p2(DateTime.now().hour)}:${_p2(DateTime.now().minute)} '
+                      : '';
                   return Text(
-                    line.text,
+                    '$ts${line.text}',
                     style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                      height: 1.4,
+                      fontFamily: _fontFamily,
+                      fontSize: _fontSize,
+                      height: _lineHeight,
                       color: line.isError
-                          ? Colors.redAccent
+                          ? colors.error
                           : line.isCommand
-                              ? Colors.lightGreenAccent
-                              : const Color(0xFFE0E0E0),
+                              ? colors.command
+                              : colors.text,
                     ),
                   );
                 },
@@ -655,8 +1245,8 @@ Any unrecognized command is executed as a system command.''');
             ),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            color: const Color(0xFF0F3460),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            color: colors.inputBg,
             child: KeyboardListener(
               focusNode: FocusNode(),
               onKeyEvent: _onKey,
@@ -664,10 +1254,10 @@ Any unrecognized command is executed as a system command.''');
                 children: [
                   Text(
                     _prompt,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                      color: Colors.lightGreenAccent,
+                    style: TextStyle(
+                      fontFamily: _fontFamily,
+                      fontSize: _fontSize,
+                      color: colors.prompt,
                     ),
                   ),
                   Expanded(
@@ -675,10 +1265,10 @@ Any unrecognized command is executed as a system command.''');
                       controller: _inputController,
                       focusNode: _focusNode,
                       autofocus: true,
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                        color: Color(0xFFE0E0E0),
+                      style: TextStyle(
+                        fontFamily: _fontFamily,
+                        fontSize: _fontSize,
+                        color: colors.text,
                       ),
                       decoration: const InputDecoration(
                         border: InputBorder.none,
@@ -702,10 +1292,205 @@ Any unrecognized command is executed as a system command.''');
   }
 }
 
-class TerminalLine {
+// ── Settings dialog ───────────────────────────────────────────────────
+
+class _SettingsDialog extends StatefulWidget {
+  final double fontSize;
+  final String fontFamily;
+  final double lineHeight;
+  final String colorScheme;
+  final bool showTimestamps;
+  final int maxLines;
+  final void Function(double, String, double, String, bool, int) onSave;
+
+  const _SettingsDialog({
+    required this.fontSize,
+    required this.fontFamily,
+    required this.lineHeight,
+    required this.colorScheme,
+    required this.showTimestamps,
+    required this.maxLines,
+    required this.onSave,
+  });
+
+  @override
+  State<_SettingsDialog> createState() => _SettingsDialogState();
+}
+
+class _SettingsDialogState extends State<_SettingsDialog> {
+  late double _fontSize;
+  late String _fontFamily;
+  late double _lineHeight;
+  late String _colorScheme;
+  late bool _showTimestamps;
+  late int _maxLines;
+
+  @override
+  void initState() {
+    super.initState();
+    _fontSize = widget.fontSize;
+    _fontFamily = widget.fontFamily;
+    _lineHeight = widget.lineHeight;
+    _colorScheme = widget.colorScheme;
+    _showTimestamps = widget.showTimestamps;
+    _maxLines = widget.maxLines;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final previewColors = _TermColors.fromName(_colorScheme);
+
+    return AlertDialog(
+      title: const Text('Terminal Settings'),
+      content: SizedBox(
+        width: 400,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Font size
+              Text('Font size: ${_fontSize.round()}px'),
+              Slider(
+                value: _fontSize,
+                min: 10,
+                max: 32,
+                divisions: 22,
+                label: '${_fontSize.round()}',
+                onChanged: (v) => setState(() => _fontSize = v),
+              ),
+
+              const SizedBox(height: 8),
+
+              // Font family
+              const Text('Font family:'),
+              const SizedBox(height: 4),
+              SegmentedButton<String>(
+                segments: _availableFonts
+                    .map((f) => ButtonSegment(value: f, label: Text(f, style: TextStyle(fontFamily: f, fontSize: 12))))
+                    .toList(),
+                selected: {_fontFamily},
+                onSelectionChanged: (v) => setState(() => _fontFamily = v.first),
+              ),
+
+              const SizedBox(height: 12),
+
+              // Line height
+              Text('Line height: ${_lineHeight.toStringAsFixed(1)}'),
+              Slider(
+                value: _lineHeight,
+                min: 1.0,
+                max: 2.5,
+                divisions: 15,
+                label: _lineHeight.toStringAsFixed(1),
+                onChanged: (v) => setState(() => _lineHeight = v),
+              ),
+
+              const SizedBox(height: 8),
+
+              // Color scheme
+              const Text('Color scheme:'),
+              const SizedBox(height: 4),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: 'dark', label: Text('Dark')),
+                  ButtonSegment(value: 'light', label: Text('Light')),
+                  ButtonSegment(value: 'solarized', label: Text('Solarized')),
+                ],
+                selected: {_colorScheme},
+                onSelectionChanged: (v) => setState(() => _colorScheme = v.first),
+              ),
+
+              const SizedBox(height: 12),
+
+              // Show timestamps
+              SwitchListTile(
+                title: const Text('Show timestamps'),
+                value: _showTimestamps,
+                onChanged: (v) => setState(() => _showTimestamps = v),
+                contentPadding: EdgeInsets.zero,
+              ),
+
+              // Max lines
+              Text('Buffer size: $_maxLines lines'),
+              Slider(
+                value: _maxLines.toDouble(),
+                min: 500,
+                max: 20000,
+                divisions: 39,
+                label: '$_maxLines',
+                onChanged: (v) => setState(() => _maxLines = v.round()),
+              ),
+
+              // Preview
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: previewColors.bg,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '~/projects \$ ls -la',
+                      style: TextStyle(
+                        fontFamily: _fontFamily,
+                        fontSize: _fontSize,
+                        height: _lineHeight,
+                        color: previewColors.command,
+                      ),
+                    ),
+                    Text(
+                      'd    4.0 KB  2026-03-24  src/',
+                      style: TextStyle(
+                        fontFamily: _fontFamily,
+                        fontSize: _fontSize,
+                        height: _lineHeight,
+                        color: previewColors.text,
+                      ),
+                    ),
+                    Text(
+                      'rm: permission denied',
+                      style: TextStyle(
+                        fontFamily: _fontFamily,
+                        fontSize: _fontSize,
+                        height: _lineHeight,
+                        color: previewColors.error,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            widget.onSave(
+                _fontSize, _fontFamily, _lineHeight, _colorScheme, _showTimestamps, _maxLines);
+            Navigator.of(context).pop();
+          },
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Line model ────────────────────────────────────────────────────────
+
+class _Line {
   final String text;
   final bool isError;
   final bool isCommand;
 
-  TerminalLine(this.text, {this.isError = false, this.isCommand = false});
+  _Line(this.text, {this.isError = false, this.isCommand = false});
 }
