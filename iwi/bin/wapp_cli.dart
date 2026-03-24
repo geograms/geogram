@@ -1,9 +1,14 @@
 /// Geogram Wapp CLI — runs a WASM wapp interactively from the terminal.
 ///
-/// Usage: dart run bin/wapp_cli.dart <path/to/app.wasm>
+/// Usage: dart run bin/wapp_cli.dart <path/to/wapp-dir>
 ///
 /// Loads the module via libwasm_bridge, starts the tick loop,
 /// and bridges stdin/stdout as the CLI renderer.
+///
+/// GeoUI screens from .ui.json files are presented as navigable
+/// subcommands per the renderer behaviour matrix in wapps.md:
+///   screen → subcommand (cd/ls), group → section,
+///   field → get/set, action → verb.
 
 import 'dart:async';
 import 'dart:convert';
@@ -54,8 +59,6 @@ class WasmBridge {
     malloc.free(ptr);
   }
 
-  /// Receive next event, blocking up to [timeout] seconds.
-  /// Returns null if nothing available.
   Map<String, dynamic>? receive({double timeout = 0.05}) {
     final ptr = _receive(_client, timeout);
     if (ptr == nullptr) return null;
@@ -68,7 +71,6 @@ class WasmBridge {
     }
   }
 
-  /// Drain all pending events (non-blocking).
   List<Map<String, dynamic>> drain() {
     final events = <Map<String, dynamic>>[];
     while (true) {
@@ -85,7 +87,6 @@ class WasmBridge {
 // ── Library loader ───────────────────────────────────────────────────
 
 DynamicLibrary loadBridgeLibrary(String scriptDir) {
-  // Platform-specific library name
   final libName = Platform.isWindows
       ? 'wasm_bridge.dll'
       : Platform.isMacOS
@@ -93,12 +94,9 @@ DynamicLibrary loadBridgeLibrary(String scriptDir) {
           : 'libwasm_bridge.so';
 
   final candidates = [
-    // Relative to repo root (most common for dev)
     '$scriptDir/../../wasm_bridge/target/release/$libName',
     '$scriptDir/../../wasm_bridge/target/debug/$libName',
-    // Next to the script
     '$scriptDir/$libName',
-    // System paths
     libName,
     '/usr/lib/$libName',
     '/usr/local/lib/$libName',
@@ -114,7 +112,6 @@ DynamicLibrary loadBridgeLibrary(String scriptDir) {
 
   stderr.writeln('Error: Could not find $libName');
   stderr.writeln('Build it with: cd wasm_bridge && cargo build --release');
-  stderr.writeln('Searched: ${candidates.join(', ')}');
   exit(1);
 }
 
@@ -128,6 +125,7 @@ const _red = '\x1B[31m';
 const _yellow = '\x1B[33m';
 const _cyan = '\x1B[36m';
 const _grey = '\x1B[90m';
+const _blue = '\x1B[34m';
 
 String _colorForLevel(String level) => switch (level) {
       'cmd' => _green,
@@ -136,6 +134,357 @@ String _colorForLevel(String level) => switch (level) {
       'warning' || 'warn' => _yellow,
       _ => _reset,
     };
+
+// ── GeoUI screen model (parsed from .ui.json) ───────────────────────
+
+class _UiScreen {
+  final String name;
+  final String? tip;
+  final List<_UiGroup> groups;
+  final List<_UiAction> actions;
+
+  _UiScreen(this.name, this.tip, this.groups, this.actions);
+}
+
+class _UiGroup {
+  final String name;
+  final String? tip;
+  final List<_UiField> fields;
+
+  _UiGroup(this.name, this.tip, this.fields);
+}
+
+class _UiField {
+  final String name;
+  final String label;
+  final String type;
+  final String? tip;
+  final dynamic defaultValue;
+  final double? min, max, step;
+  final List<String> options; // for enum
+  final Map<String, String> optionLabels;
+
+  _UiField({
+    required this.name,
+    required this.label,
+    required this.type,
+    this.tip,
+    this.defaultValue,
+    this.min,
+    this.max,
+    this.step,
+    this.options = const [],
+    this.optionLabels = const {},
+  });
+}
+
+class _UiAction {
+  final String name;
+  final String label;
+  final String style;
+  final String? tip;
+
+  _UiAction(this.name, this.label, this.style, this.tip);
+}
+
+/// Parse all .ui.json screens from a wapp directory.
+List<_UiScreen> _loadScreens(String wappDir) {
+  final screens = <_UiScreen>[];
+  final screensDir = Directory('$wappDir/screens');
+  if (!screensDir.existsSync()) return screens;
+
+  for (final file in screensDir.listSync()) {
+    if (file is! File || !file.path.endsWith('.ui.json')) continue;
+    try {
+      final json = jsonDecode(file.readAsStringSync()) as List;
+      for (final block in json) {
+        final b = block as Map<String, dynamic>;
+        final keyword = b[r'$'] as String? ?? '';
+        if (keyword == 'screen') {
+          screens.add(_parseScreen(b));
+        } else if (keyword == 'app') {
+          // Extract screens from app children
+          final children = b['children'] as List? ?? [];
+          for (final child in children) {
+            final c = child as Map<String, dynamic>;
+            if (c[r'$'] == 'screen') {
+              screens.add(_parseScreen(c));
+            }
+          }
+          // Also look for included screens
+          for (final child in children) {
+            final c = child as Map<String, dynamic>;
+            if (c[r'$'] == 'include') {
+              final includePath = c['name'] as String? ?? '';
+              if (includePath.isNotEmpty) {
+                final incFile = File('$wappDir/$includePath');
+                if (incFile.existsSync()) {
+                  try {
+                    final incJson =
+                        jsonDecode(incFile.readAsStringSync()) as List;
+                    for (final ib in incJson) {
+                      final ic = ib as Map<String, dynamic>;
+                      if (ic[r'$'] == 'screen') {
+                        screens.add(_parseScreen(ic));
+                      }
+                    }
+                  } catch (_) {}
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+  // Deduplicate by name (includes may repeat screens)
+  final seen = <String>{};
+  screens.retainWhere((s) => seen.add(s.name.toLowerCase()));
+
+  return screens;
+}
+
+_UiScreen _parseScreen(Map<String, dynamic> b) {
+  final name = b['name'] as String? ?? 'Unnamed';
+  final tip = b['tip'] as String?;
+  final children = b['children'] as List? ?? [];
+  final groups = <_UiGroup>[];
+  final actions = <_UiAction>[];
+
+  for (final child in children) {
+    final c = child as Map<String, dynamic>;
+    final kw = c[r'$'] as String? ?? '';
+    if (kw == 'group') {
+      groups.add(_parseGroup(c));
+    } else if (kw == 'action') {
+      actions.add(_parseAction(c));
+    }
+  }
+
+  return _UiScreen(name, tip, groups, actions);
+}
+
+_UiGroup _parseGroup(Map<String, dynamic> b) {
+  final name = b['name'] as String? ?? '';
+  final tip = b['tip'] as String?;
+  final children = b['children'] as List? ?? [];
+  final fields = <_UiField>[];
+
+  for (final child in children) {
+    final c = child as Map<String, dynamic>;
+    if (c[r'$'] == 'field') {
+      fields.add(_parseField(c));
+    }
+  }
+
+  return _UiGroup(name, tip, fields);
+}
+
+_UiField _parseField(Map<String, dynamic> b) {
+  final name = b['name'] as String? ?? '';
+  final label = b['label'] as String? ?? name;
+  final type = b[r'$type'] as String? ?? 'string';
+  final tip = b['tip'] as String?;
+  final options = <String>[];
+  final optionLabels = <String, String>{};
+
+  for (final child in (b['children'] as List? ?? [])) {
+    final c = child as Map<String, dynamic>;
+    if (c[r'$'] == 'option') {
+      final optName = c['name'] as String? ?? '';
+      options.add(optName);
+      optionLabels[optName] = c['label'] as String? ?? optName;
+    }
+  }
+
+  return _UiField(
+    name: name,
+    label: label,
+    type: type,
+    tip: tip,
+    defaultValue: b['default'],
+    min: (b['min'] as num?)?.toDouble(),
+    max: (b['max'] as num?)?.toDouble(),
+    step: (b['step'] as num?)?.toDouble(),
+    options: options,
+    optionLabels: optionLabels,
+  );
+}
+
+_UiAction _parseAction(Map<String, dynamic> b) {
+  return _UiAction(
+    b['name'] as String? ?? '',
+    b['label'] as String? ?? '',
+    b['style'] as String? ?? 'secondary',
+    b['tip'] as String?,
+  );
+}
+
+// ── CLI screen renderer ──────────────────────────────────────────────
+
+/// State for the CLI UI navigation.
+class _CliUiState {
+  final List<_UiScreen> screens;
+  final Map<String, dynamic> fieldValues = {};
+  _UiScreen? currentScreen;
+
+  _CliUiState(this.screens) {
+    // Load defaults
+    for (final screen in screens) {
+      for (final group in screen.groups) {
+        for (final field in group.fields) {
+          if (field.defaultValue != null) {
+            fieldValues[field.name] = field.defaultValue;
+          }
+        }
+      }
+    }
+  }
+
+  /// Find screen by name (case-insensitive).
+  _UiScreen? findScreen(String name) {
+    final lower = name.toLowerCase();
+    for (final s in screens) {
+      if (s.name.toLowerCase() == lower) return s;
+    }
+    return null;
+  }
+
+  /// Find field by name in current screen.
+  _UiField? findField(String name) {
+    if (currentScreen == null) return null;
+    for (final group in currentScreen!.groups) {
+      for (final field in group.fields) {
+        if (field.name == name) return field;
+      }
+    }
+    return null;
+  }
+
+  /// Print `ls` for the root (list screens).
+  void listRoot() {
+    stdout.writeln('${_bold}Screens:$_reset');
+    for (final s in screens) {
+      final tip = s.tip != null ? '  $_dim${s.tip}$_reset' : '';
+      stdout.writeln('  $_blue${s.name.toLowerCase()}/$_reset$tip');
+    }
+  }
+
+  /// Print `ls` for the current screen (list groups, fields, actions).
+  void listScreen() {
+    final screen = currentScreen!;
+    if (screen.tip != null) {
+      stdout.writeln('$_dim${screen.tip}$_reset');
+    }
+    stdout.writeln();
+
+    for (final group in screen.groups) {
+      stdout.writeln('$_bold${group.name}$_reset');
+      if (group.tip != null) {
+        stdout.writeln('  $_dim${group.tip}$_reset');
+      }
+      for (final field in group.fields) {
+        final val = fieldValues[field.name] ?? field.defaultValue ?? '';
+        final typeHint = _fieldTypeHint(field);
+        stdout.writeln(
+            '  $_cyan${field.name}$_reset = $val  $typeHint');
+      }
+      stdout.writeln();
+    }
+
+    if (screen.actions.isNotEmpty) {
+      stdout.writeln('${_bold}Actions:$_reset');
+      for (final action in screen.actions) {
+        final tip = action.tip != null ? '  $_dim${action.tip}$_reset' : '';
+        stdout.writeln('  $_green${action.name}$_reset$tip');
+      }
+    }
+  }
+
+  String _fieldTypeHint(_UiField field) {
+    switch (field.type) {
+      case 'bool':
+        return '$_dim(true|false)$_reset';
+      case 'int':
+      case 'float':
+        final parts = <String>[];
+        if (field.min != null) parts.add('min=${_fmtNum(field.min!)}');
+        if (field.max != null) parts.add('max=${_fmtNum(field.max!)}');
+        if (field.step != null) parts.add('step=${_fmtNum(field.step!)}');
+        return parts.isEmpty ? '' : '$_dim(${parts.join(', ')})$_reset';
+      case 'enum':
+        final opts = field.options
+            .map((o) => field.optionLabels[o] ?? o)
+            .join('|');
+        return '$_dim[$opts]$_reset';
+      default:
+        return '';
+    }
+  }
+
+  String _fmtNum(double n) => n == n.roundToDouble() ? n.toInt().toString() : n.toString();
+
+  /// Handle `get <field>` — print current value.
+  void getField(String name) {
+    final field = findField(name);
+    if (field == null) {
+      stderr.writeln('${_red}Unknown field: $name$_reset');
+      return;
+    }
+    final val = fieldValues[field.name] ?? field.defaultValue ?? '';
+    stdout.writeln('${field.label}: $val');
+    if (field.tip != null) stdout.writeln('$_dim${field.tip}$_reset');
+  }
+
+  /// Handle `set <field> <value>` — update field value.
+  void setField(String name, String rawValue) {
+    final field = findField(name);
+    if (field == null) {
+      stderr.writeln('${_red}Unknown field: $name$_reset');
+      return;
+    }
+
+    dynamic parsed;
+    switch (field.type) {
+      case 'bool':
+        parsed = rawValue == 'true' || rawValue == '1';
+      case 'int':
+        parsed = int.tryParse(rawValue);
+        if (parsed == null) {
+          stderr.writeln('${_red}Invalid integer: $rawValue$_reset');
+          return;
+        }
+        if (field.min != null && parsed < field.min!) {
+          stderr.writeln('${_yellow}Clamped to min ${_fmtNum(field.min!)}$_reset');
+          parsed = field.min!.toInt();
+        }
+        if (field.max != null && parsed > field.max!) {
+          stderr.writeln('${_yellow}Clamped to max ${_fmtNum(field.max!)}$_reset');
+          parsed = field.max!.toInt();
+        }
+      case 'float':
+        parsed = double.tryParse(rawValue);
+        if (parsed == null) {
+          stderr.writeln('${_red}Invalid number: $rawValue$_reset');
+          return;
+        }
+        if (field.min != null && parsed < field.min!) parsed = field.min!;
+        if (field.max != null && parsed > field.max!) parsed = field.max!;
+      case 'enum':
+        if (!field.options.contains(rawValue)) {
+          stderr.writeln(
+              '${_red}Invalid option. Choose: ${field.options.join(', ')}$_reset');
+          return;
+        }
+        parsed = rawValue;
+      default:
+        parsed = rawValue;
+    }
+
+    fieldValues[field.name] = parsed;
+    stdout.writeln('${field.name} = $parsed');
+  }
+}
 
 // ── Main ─────────────────────────────────────────────────────────────
 
@@ -146,34 +495,41 @@ Future<void> main(List<String> args) async {
     exit(1);
   }
 
-  // Resolve wasm path
-  var wasmPath = args[0];
-  if (FileSystemEntity.isDirectorySync(wasmPath)) {
-    wasmPath = '$wasmPath/app.wasm';
+  // Resolve wapp directory and wasm path
+  var wappDir = args[0];
+  var wasmPath = wappDir;
+  if (FileSystemEntity.isDirectorySync(wappDir)) {
+    wasmPath = '$wappDir/app.wasm';
+  } else {
+    wappDir = File(wasmPath).parent.path;
   }
   if (!File(wasmPath).existsSync()) {
     stderr.writeln('Error: $wasmPath not found');
     exit(1);
   }
   wasmPath = File(wasmPath).absolute.path;
+  wappDir = Directory(wappDir).absolute.path;
 
-  // Read manifest for display info
-  final manifestFile =
-      File('${File(wasmPath).parent.path}/manifest.json');
+  // Read manifest
+  final manifestFile = File('$wappDir/manifest.json');
   String appName = 'Wapp';
   String moduleId = 'app';
   int tickMs = 500;
   if (manifestFile.existsSync()) {
     try {
-      final mf = jsonDecode(manifestFile.readAsStringSync())
-          as Map<String, dynamic>;
+      final mf =
+          jsonDecode(manifestFile.readAsStringSync()) as Map<String, dynamic>;
       appName = (mf['description'] as String?) ?? appName;
       moduleId = (mf['id'] as String?) ?? moduleId;
       tickMs = (mf['tick_interval_ms'] as int?) ?? tickMs;
     } catch (_) {}
   }
 
-  // Find script directory for library resolution
+  // Load GeoUI screens
+  final screens = _loadScreens(wappDir);
+  final uiState = _CliUiState(screens);
+
+  // Load bridge
   final scriptDir = File(Platform.script.toFilePath()).parent.path;
   final lib = loadBridgeLibrary(scriptDir);
   final bridge = WasmBridge(lib);
@@ -185,8 +541,14 @@ Future<void> main(List<String> args) async {
   // Banner
   stdout.writeln('$_bold$_cyan$appName$_reset');
   stdout.writeln('${_dim}Module: $moduleId$_reset');
-  stdout.writeln('${_dim}WASM:   $wasmPath$_reset');
-  stdout.writeln('${_dim}Type "help" for commands, Ctrl+C to quit.$_reset');
+  if (screens.isNotEmpty) {
+    final screenNames =
+        screens.map((s) => s.name.toLowerCase()).join(', ');
+    stdout.writeln(
+        '${_dim}Screens: $screenNames  (use cd/ls to navigate)$_reset');
+  }
+  stdout.writeln(
+      '${_dim}Type "help" for commands, Ctrl+C to quit.$_reset');
   stdout.writeln();
 
   // Load module
@@ -207,12 +569,10 @@ Future<void> main(List<String> args) async {
       loaded = true;
       break;
     } else if (type == 'error') {
-      stderr.writeln(
-          '${_red}Load error: ${event['message']}$_reset');
+      stderr.writeln('${_red}Load error: ${event['message']}$_reset');
       bridge.destroy();
       exit(1);
     }
-    // Print any init messages
     _handleEvent(event);
   }
 
@@ -222,12 +582,12 @@ Future<void> main(List<String> args) async {
     exit(1);
   }
 
-  // Drain init messages (module_init output)
+  // Drain init messages
   for (final e in bridge.drain()) {
     _handleEvent(e);
   }
 
-  // Set up tick timer
+  // Tick timer
   Timer.periodic(Duration(milliseconds: tickMs), (_) {
     bridge.send({'@type': 'tickModule', 'id': moduleId});
     for (final e in bridge.drain()) {
@@ -235,54 +595,197 @@ Future<void> main(List<String> args) async {
     }
   });
 
-  // Set up signal handler for clean exit
+  // Clean exit
   ProcessSignal.sigint.watch().listen((_) {
     stdout.writeln('\n${_dim}Shutting down...$_reset');
     bridge.send({'@type': 'unloadModule', 'id': moduleId});
-    bridge.drain(); // flush
+    bridge.drain();
     bridge.destroy();
     exit(0);
   });
 
-  // Interactive stdin loop
-  stdout.write('${_green}\$ $_reset');
-  final stdinLines = stdin
-      .transform(utf8.decoder)
-      .transform(const LineSplitter());
+  // Interactive loop
+  _printPrompt(uiState);
+  final stdinLines =
+      stdin.transform(utf8.decoder).transform(const LineSplitter());
 
   await for (final line in stdinLines) {
     final trimmed = line.trim();
     if (trimmed.isEmpty) {
-      stdout.write('${_green}\$ $_reset');
+      _printPrompt(uiState);
       continue;
     }
 
-    // Send command to the wapp module.
-    // The bridge's sendMessage calls val["data"].to_string() on the JSON
-    // value, so we pass data as a nested object — its to_string() yields
-    // the JSON the wapp expects.
+    // Check if this is a CLI UI command (handled locally)
+    if (_handleUiCommand(trimmed, uiState, bridge, moduleId)) {
+      _printPrompt(uiState);
+      continue;
+    }
+
+    // Otherwise send to the WASM module
     bridge.send({
       '@type': 'sendMessage',
       'moduleId': moduleId,
       'data': {'command': trimmed},
     });
 
-    // Give the module time to process and collect output
     await Future.delayed(const Duration(milliseconds: 50));
     for (final e in bridge.drain()) {
       _handleEvent(e);
     }
 
-    stdout.write('${_green}\$ $_reset');
+    _printPrompt(uiState);
   }
 
-  // EOF on stdin
   bridge.send({'@type': 'unloadModule', 'id': moduleId});
   bridge.drain();
   bridge.destroy();
 }
 
-/// Handle an event from the WASM bridge.
+void _printPrompt(_CliUiState uiState) {
+  if (uiState.currentScreen != null) {
+    stdout.write(
+        '$_blue${uiState.currentScreen!.name.toLowerCase()}$_reset $_green\$ $_reset');
+  } else {
+    stdout.write('${_green}\$ $_reset');
+  }
+}
+
+/// Handle CLI UI navigation commands. Returns true if handled locally.
+bool _handleUiCommand(
+    String input, _CliUiState ui, WasmBridge bridge, String moduleId) {
+  final parts = input.split(RegExp(r'\s+'));
+  final cmd = parts[0].toLowerCase();
+  final arg = parts.length > 1 ? parts[1] : '';
+  final rest = parts.length > 2 ? parts.sublist(2).join(' ') : '';
+
+  switch (cmd) {
+    // ── Navigation ──
+    case 'cd':
+      if (arg == '..' || arg.isEmpty) {
+        if (ui.currentScreen != null) {
+          ui.currentScreen = null;
+          return true;
+        }
+        // Not in a screen — let the wapp handle cd
+        return false;
+      }
+      // Try to enter a screen
+      final screen = ui.findScreen(arg);
+      if (screen != null) {
+        ui.currentScreen = screen;
+        return true;
+      }
+      // Not a screen name — let the wapp handle it
+      if (ui.currentScreen != null) {
+        stderr.writeln("${_red}No such screen: $arg$_reset");
+        stderr.writeln("${_dim}Use 'cd ..' to go back$_reset");
+        return true;
+      }
+      return false;
+
+    case 'ls':
+      if (ui.currentScreen != null) {
+        ui.listScreen();
+        return true;
+      }
+      // At root: show screens then forward to wapp for its own listing
+      if (ui.screens.isNotEmpty) {
+        ui.listRoot();
+        stdout.writeln();
+      }
+      return false;
+
+    // ── Field access (only inside a screen) ──
+    case 'get':
+      if (ui.currentScreen != null && arg.isNotEmpty) {
+        ui.getField(arg);
+        return true;
+      }
+      return false;
+
+    case 'set':
+      if (ui.currentScreen != null && arg.isNotEmpty && rest.isNotEmpty) {
+        ui.setField(arg, rest);
+        return true;
+      }
+      if (ui.currentScreen != null && arg.isNotEmpty) {
+        stderr.writeln('${_red}Usage: set <field> <value>$_reset');
+        return true;
+      }
+      return false;
+
+    // ── Actions (only inside a screen) ──
+    case 'save' || 'cancel':
+      if (ui.currentScreen != null) {
+        final action = ui.currentScreen!.actions
+            .where((a) => a.name == cmd)
+            .firstOrNull;
+        if (action != null) {
+          if (cmd == 'save') {
+            // Send field values to the wapp via the action's body fields
+            bridge.send({
+              '@type': 'sendMessage',
+              'moduleId': moduleId,
+              'data': {
+                'type': 'action',
+                'action': cmd,
+                'fields': ui.fieldValues,
+              },
+            });
+            stdout.writeln('${_green}Settings saved.$_reset');
+          }
+          ui.currentScreen = null; // go back
+          return true;
+        }
+      }
+      return false;
+
+    // ── Help override when inside a screen ──
+    case 'help':
+      if (ui.currentScreen != null) {
+        stdout.writeln('${_bold}Screen: ${ui.currentScreen!.name}$_reset');
+        stdout.writeln();
+        stdout.writeln('  ${_cyan}ls$_reset           List fields and actions');
+        stdout.writeln(
+            '  ${_cyan}get$_reset <field>   Show field value and info');
+        stdout.writeln(
+            '  ${_cyan}set$_reset <field> <value>  Change a field');
+        for (final action in ui.currentScreen!.actions) {
+          stdout.writeln(
+              '  ${_cyan}${action.name}$_reset         ${action.tip ?? action.label}');
+        }
+        stdout.writeln('  ${_cyan}cd ..$_reset        Go back');
+        return true;
+      }
+      return false;
+
+    default:
+      // Check if the command matches an action name in the current screen
+      if (ui.currentScreen != null) {
+        final action = ui.currentScreen!.actions
+            .where((a) => a.name.toLowerCase() == cmd)
+            .firstOrNull;
+        if (action != null) {
+          bridge.send({
+            '@type': 'sendMessage',
+            'moduleId': moduleId,
+            'data': {
+              'type': 'action',
+              'action': action.name,
+              'fields': ui.fieldValues,
+            },
+          });
+          stdout.writeln('$_green${action.label}$_reset');
+          return true;
+        }
+      }
+      return false;
+  }
+}
+
+// ── Event handlers ───────────────────────────────────────────────────
+
 void _handleEvent(Map<String, dynamic> event) {
   final type = event['@type'] as String? ?? '';
 
@@ -292,30 +795,24 @@ void _handleEvent(Map<String, dynamic> event) {
     case 'moduleLog':
       final level = event['level'] as int? ?? 0;
       final msg = event['message'] as String? ?? '';
-      // Only show warnings and errors by default; debug/info are noise
       if (level >= 2) {
         final prefix = const ['DBG', 'INF', 'WRN', 'ERR'][level.clamp(0, 3)];
         final color = [_grey, _cyan, _yellow, _red][level.clamp(0, 3)];
         stderr.writeln('$color[$prefix]$_reset $msg');
       }
     case 'ok':
-      break; // Silent ack
+      break;
     case 'error':
-      stderr.writeln(
-          '${_red}Error: ${event['message']}$_reset');
+      stderr.writeln('${_red}Error: ${event['message']}$_reset');
   }
 }
 
-/// Handle a moduleMessage — the wapp's hal_msg_send output.
-/// The terminal wapp sends JSON like:
-///   {"type":"ui.append","target":"output-list","item":{"text":"...","level":"..."}}
 void _handleModuleMessage(Map<String, dynamic> event) {
   final dataStr = event['data'] as String? ?? '';
   Map<String, dynamic>? data;
   try {
     data = jsonDecode(dataStr) as Map<String, dynamic>;
   } catch (_) {
-    // Plain text fallback
     stdout.writeln(dataStr);
     return;
   }
@@ -338,7 +835,6 @@ void _handleModuleMessage(Map<String, dynamic> event) {
     final value = data['value'] ?? '';
     stdout.writeln('$_cyan$target$_reset = $value');
   } else {
-    // Unknown message type — dump it
     stdout.writeln('${_grey}$dataStr$_reset');
   }
 }

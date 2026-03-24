@@ -172,6 +172,60 @@ static void cmd_cd(const char *args) {
     send_output(cwd, "out");
 }
 
+static void cmd_ls(const char *args) {
+    /* ls uses kv.list to show files in the virtual filesystem */
+    char prefix[256] = "";
+    next_word(args, prefix, sizeof(prefix));
+
+    char buf[2048];
+    uint32_t count = hal_kv_list(prefix, str_len(prefix), buf, sizeof(buf) - 1);
+    if (count == 0) {
+        send_output("(empty)", "out");
+        return;
+    }
+
+    char *p = buf;
+    for (uint32_t i = 0; i < count; i++) {
+        send_output(p, "out");
+        while (*p) p++;
+        p++;
+    }
+}
+
+static void cmd_mkdir(const char *args) {
+    char dir[256];
+    next_word(args, dir, sizeof(dir));
+    if (dir[0] == '\0') { send_output("mkdir: missing operand", "err"); return; }
+    /* Mark directory in KV as a convention: dir/ = "" */
+    char key[260] = "";
+    str_cat(key, dir, sizeof(key));
+    if (key[str_len(key) - 1] != '/') str_cat(key, "/", sizeof(key));
+    hal_kv_set(key, str_len(key), "", 0);
+    send_output("ok", "out");
+}
+
+static void cmd_stat(const char *args) {
+    char path[256];
+    next_word(args, path, sizeof(path));
+    if (path[0] == '\0') { send_output("stat: missing operand", "err"); return; }
+
+    uint32_t size = hal_kv_size(path, str_len(path));
+    if (size == 0 && !hal_kv_exists(path, str_len(path))) {
+        send_output("stat: not found", "err");
+        return;
+    }
+    char msg[128] = "  File: ";
+    str_cat(msg, path, sizeof(msg));
+    send_output(msg, "out");
+
+    char sz[32];
+    u64_to_str(size, sz, sizeof(sz));
+    char sz_msg[64] = "  Size: ";
+    str_cat(sz_msg, sz, sizeof(sz_msg));
+    str_cat(sz_msg, " bytes", sizeof(sz_msg));
+    send_output(sz_msg, "out");
+}
+
 static void cmd_cat(const char *args) {
     char path[256];
     next_word(args, path, sizeof(path));
@@ -426,10 +480,13 @@ static void dispatch(const char *input) {
     else if (str_eq(cmd, "echo"))     cmd_echo(args);
     else if (str_eq(cmd, "pwd"))      cmd_pwd();
     else if (str_eq(cmd, "cd"))       cmd_cd(args);
+    else if (str_eq(cmd, "ls"))       cmd_ls(args);
     else if (str_eq(cmd, "cat"))      cmd_cat(args);
     else if (str_eq(cmd, "touch"))    cmd_touch(args);
     else if (str_eq(cmd, "write"))    cmd_write(args);
     else if (str_eq(cmd, "rm"))       cmd_rm(args);
+    else if (str_eq(cmd, "mkdir"))    cmd_mkdir(args);
+    else if (str_eq(cmd, "stat"))     cmd_stat(args);
     else if (str_eq(cmd, "kv.get"))   cmd_kv_get(args);
     else if (str_eq(cmd, "kv.set"))   cmd_kv_set(args);
     else if (str_eq(cmd, "kv.del"))   cmd_kv_del(args);
