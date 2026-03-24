@@ -376,7 +376,8 @@ class _CliUiState {
     if (screen.tip != null) {
       stdout.writeln('$_dim${screen.tip}$_reset');
     }
-    for (final group in screen.groups) {
+    for (var i = 0; i < screen.groups.length; i++) {
+      final group = screen.groups[i];
       stdout.writeln('$_bold${group.name}$_reset  $_dim${group.tip ?? ''}$_reset');
       for (final field in group.fields) {
         final val = fieldValues[field.name] ?? field.defaultValue ?? '';
@@ -384,8 +385,10 @@ class _CliUiState {
         stdout.writeln(
             '  $_cyan${field.name}$_reset = $val  $typeHint');
       }
+      if (i < screen.groups.length - 1) stdout.writeln();
     }
     if (screen.actions.isNotEmpty) {
+      if (screen.groups.isNotEmpty) stdout.writeln();
       stdout.writeln('${_bold}Actions:$_reset');
       for (final action in screen.actions) {
         final tip = action.tip != null ? '  $_dim${action.tip}$_reset' : '';
