@@ -82,7 +82,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   // Multi-select mode
   bool _isMultiSelectMode = false;
-  final Set<String> _selectedCallsigns = {};
+  final Set<String> _selectedDeviceKeys = {};
 
   // Connection state subscription
   EventSubscription<ConnectionStateChangedEvent>? _connectionStateSubscription;
@@ -462,7 +462,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   /// Filter out the current device from the list
   List<RemoteDevice> _filterRemoteDevices(List<RemoteDevice> devices) {
-    return _deduplicateDevicesForDisplay(
+    return _normalizeDevicesForDisplay(
       devices
           .where((d) => d.callsign.toUpperCase() != _myCallsign.toUpperCase())
           .toList(),
@@ -477,7 +477,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     }).toList();
   }
 
-  List<RemoteDevice> _deduplicateDevicesForDisplay(List<RemoteDevice> devices) {
+  List<RemoteDevice> _normalizeDevicesForDisplay(List<RemoteDevice> devices) {
     final devicesByCallsign = <String, List<RemoteDevice>>{};
 
     for (final device in devices) {
@@ -485,10 +485,204 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       devicesByCallsign.putIfAbsent(callsign, () => []).add(device);
     }
 
-    return devicesByCallsign.values.map(_mergeDevicesForDisplay).toList();
+    final normalized = <RemoteDevice>[];
+    for (final callsignDevices in devicesByCallsign.values) {
+      normalized.addAll(_normalizeSameCallsignDevices(callsignDevices));
+    }
+    return normalized;
+  }
+
+  List<RemoteDevice> _normalizeSameCallsignDevices(List<RemoteDevice> devices) {
+    final specificBuckets = <String, List<RemoteDevice>>{};
+    final legacyBuckets = <String, List<RemoteDevice>>{};
+
+    for (final device in devices) {
+      final specificKey = _specificDisplayIdentityKey(device);
+      if (specificKey != null) {
+        specificBuckets.putIfAbsent(specificKey, () => []).add(device);
+      } else {
+        legacyBuckets.putIfAbsent(
+          _legacyDisplayIdentityKey(device),
+          () => [],
+        ).add(device);
+      }
+    }
+
+    final normalizedSpecific = specificBuckets.values
+        .map(_mergeDevicesForDisplay)
+        .toList();
+
+    if (normalizedSpecific.isEmpty) {
+      return legacyBuckets.values.map(_mergeDevicesForDisplay).toList();
+    }
+
+    for (final legacyDevices in legacyBuckets.values) {
+      final legacyDevice = _mergeDevicesForDisplay(legacyDevices);
+      final targetIndex = _findLegacyMergeTarget(
+        normalizedSpecific,
+        legacyDevice,
+      );
+      normalizedSpecific[targetIndex] = _mergeDevicesForDisplay([
+        normalizedSpecific[targetIndex],
+        legacyDevice,
+      ]);
+    }
+
+    return normalizedSpecific;
+  }
+
+  String? _specificDisplayIdentityKey(RemoteDevice device) {
+    final callsign = device.callsign.toUpperCase();
+    final deviceId = device.deviceId?.trim();
+    if (deviceId != null && deviceId.isNotEmpty) {
+      return '$callsign:device:$deviceId';
+    }
+
+    final nickname = _normalizedNicknameIdentity(device);
+    if (nickname != null) {
+      final platform = (device.platform ?? '').trim().toLowerCase();
+      return '$callsign:nickname:$nickname:$platform';
+    }
+
+    return null;
+  }
+
+  String _legacyDisplayIdentityKey(RemoteDevice device) {
+    final callsign = device.callsign.toUpperCase();
+    final platform = (device.platform ?? '').trim().toLowerCase();
+    return '$callsign:legacy:$platform';
+  }
+
+  String? _normalizedNicknameIdentity(RemoteDevice device) {
+    final nickname = device.nickname?.trim();
+    if (nickname == null || nickname.isEmpty) {
+      return null;
+    }
+    if (nickname.toUpperCase() == device.callsign.toUpperCase()) {
+      return null;
+    }
+    return nickname.toLowerCase();
+  }
+
+  int _findLegacyMergeTarget(
+    List<RemoteDevice> specificDevices,
+    RemoteDevice legacyDevice,
+  ) {
+    var bestIndex = 0;
+    var bestScore = -1;
+
+    for (var i = 0; i < specificDevices.length; i++) {
+      final candidate = specificDevices[i];
+      var score = 0;
+
+      if (candidate.isOnline) score += 100;
+      if (candidate.hasLocalConnection) score += 50;
+      if (_samePlatform(candidate, legacyDevice)) score += 25;
+      if (_sameNickname(candidate, legacyDevice)) score += 20;
+      if (candidate.deviceId != null && candidate.deviceId!.isNotEmpty) {
+        score += 10;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = i;
+      }
+    }
+
+    return bestIndex;
+  }
+
+  bool _samePlatform(RemoteDevice a, RemoteDevice b) {
+    final aPlatform = a.platform?.trim().toLowerCase();
+    final bPlatform = b.platform?.trim().toLowerCase();
+    return aPlatform != null &&
+        bPlatform != null &&
+        aPlatform.isNotEmpty &&
+        aPlatform == bPlatform;
+  }
+
+  bool _sameNickname(RemoteDevice a, RemoteDevice b) {
+    final aNickname = _normalizedNicknameIdentity(a);
+    final bNickname = _normalizedNicknameIdentity(b);
+    return aNickname != null && bNickname != null && aNickname == bNickname;
+  }
+
+  String _displayDeviceKey(RemoteDevice device) {
+    return _specificDisplayIdentityKey(device) ??
+        _legacyDisplayIdentityKey(device);
+  }
+
+  List<String> _selectedCallsigns() {
+    final selected = <String>[];
+    final seen = <String>{};
+
+    for (final device in _devices) {
+      if (_selectedDeviceKeys.contains(_displayDeviceKey(device)) &&
+          seen.add(device.callsign)) {
+        selected.add(device.callsign);
+      }
+    }
+
+    return selected;
+  }
+
+  bool _hasMultipleDevicesForCallsign(String callsign) {
+    return _devices.where((device) => device.callsign == callsign).length > 1;
+  }
+
+  String? _formatPlatformLabel(String? platform) {
+    switch (platform?.trim().toLowerCase()) {
+      case 'android':
+        return 'Android';
+      case 'linux':
+        return 'Linux';
+      case 'ios':
+        return 'iOS';
+      case 'macos':
+        return 'macOS';
+      case 'windows':
+        return 'Windows';
+      default:
+        return null;
+    }
   }
 
   RemoteDevice _mergeDevicesForDisplay(List<RemoteDevice> candidates) {
+    if (candidates.length == 1) {
+      final candidate = candidates.first;
+      return RemoteDevice(
+        callsign: candidate.callsign,
+        name: candidate.name,
+        nickname: candidate.nickname,
+        url: candidate.url,
+        npub: candidate.npub,
+        isOnline: candidate.isOnline,
+        latency: candidate.latency,
+        lastChecked: candidate.lastChecked,
+        lastSeen: candidate.lastSeen,
+        lastFetched: candidate.lastFetched,
+        hasCachedData: candidate.hasCachedData,
+        apps: List<RemoteApp>.from(candidate.apps),
+        latitude: candidate.latitude,
+        longitude: candidate.longitude,
+        connectionMethods: List<String>.from(candidate.connectionMethods),
+        source: candidate.source,
+        bleProximity: candidate.bleProximity,
+        bleRssi: candidate.bleRssi,
+        preferredColor: candidate.preferredColor,
+        description: candidate.description,
+        platform: candidate.platform,
+        isPinned: candidate.isPinned,
+        folderId: candidate.folderId,
+        deviceId: candidate.deviceId,
+        udpIp: candidate.udpIp,
+        udpPort: candidate.udpPort,
+        canRelay: candidate.canRelay,
+        relayUrl: candidate.relayUrl,
+        relayHttpPort: candidate.relayHttpPort,
+      );
+    }
+
     final preferred = _selectPreferredDisplayDevice(candidates);
     final orderedCandidates = [
       preferred,
@@ -681,12 +875,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   ) {
     if (oldDevices.length != newDevices.length) return true;
 
-    for (int i = 0; i < oldDevices.length; i++) {
-      final oldDevice = oldDevices[i];
-      final newDevice = newDevices.firstWhere(
-        (d) => d.callsign == oldDevice.callsign,
-        orElse: () => oldDevice,
-      );
+    final oldByKey = {
+      for (final device in oldDevices) _displayDeviceKey(device): device,
+    };
+    final newByKey = {
+      for (final device in newDevices) _displayDeviceKey(device): device,
+    };
+
+    if (oldByKey.length != newByKey.length) return true;
+
+    for (final entry in oldByKey.entries) {
+      final oldDevice = entry.value;
+      final newDevice = newByKey[entry.key];
+      if (newDevice == null) {
+        return true;
+      }
 
       // Check if key properties changed
       if (oldDevice.callsign != newDevice.callsign ||
@@ -699,13 +902,6 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
             oldDevice.connectionMethods,
             newDevice.connectionMethods,
           )) {
-        return true;
-      }
-    }
-
-    // Check for new devices
-    for (final newDevice in newDevices) {
-      if (!oldDevices.any((d) => d.callsign == newDevice.callsign)) {
         return true;
       }
     }
@@ -978,7 +1174,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
               ? Text(
                   _i18n.t(
                     'selected_count',
-                    params: [_selectedCallsigns.length.toString()],
+                    params: [_selectedDeviceKeys.length.toString()],
                   ),
                 )
               : (_selectedDevice != null && isNarrow
@@ -1087,14 +1283,15 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                 ),
                 PopupMenuItem<String>(
                   value: 'move_to_folder',
-                  enabled: _isMultiSelectMode && _selectedCallsigns.isNotEmpty,
+                  enabled: _isMultiSelectMode && _selectedDeviceKeys.isNotEmpty,
                   child: Row(
                     children: [
                       Icon(
                         Icons.drive_file_move_outlined,
                         size: 20,
                         color:
-                            _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                            _isMultiSelectMode &&
+                                _selectedDeviceKeys.isNotEmpty
                             ? theme.colorScheme.primary
                             : theme.colorScheme.onSurface.withValues(
                                 alpha: 0.38,
@@ -1106,7 +1303,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                         style: TextStyle(
                           color:
                               _isMultiSelectMode &&
-                                  _selectedCallsigns.isNotEmpty
+                                  _selectedDeviceKeys.isNotEmpty
                               ? null
                               : theme.colorScheme.onSurface.withValues(
                                   alpha: 0.38,
@@ -1118,14 +1315,15 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                 ),
                 PopupMenuItem<String>(
                   value: 'delete_selected',
-                  enabled: _isMultiSelectMode && _selectedCallsigns.isNotEmpty,
+                  enabled: _isMultiSelectMode && _selectedDeviceKeys.isNotEmpty,
                   child: Row(
                     children: [
                       Icon(
                         Icons.delete_outline,
                         size: 20,
                         color:
-                            _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                            _isMultiSelectMode &&
+                                _selectedDeviceKeys.isNotEmpty
                             ? theme.colorScheme.error
                             : theme.colorScheme.onSurface.withValues(
                                 alpha: 0.38,
@@ -1137,7 +1335,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                         style: TextStyle(
                           color:
                               _isMultiSelectMode &&
-                                  _selectedCallsigns.isNotEmpty
+                                  _selectedDeviceKeys.isNotEmpty
                               ? theme.colorScheme.error
                               : theme.colorScheme.onSurface.withValues(
                                   alpha: 0.38,
@@ -1607,7 +1805,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         setState(() {
           _isMultiSelectMode = true;
           for (final device in devices) {
-            _selectedCallsigns.add(device.callsign);
+            _selectedDeviceKeys.add(_displayDeviceKey(device));
           }
         });
         break;
@@ -1778,7 +1976,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   Widget _buildDeviceListTile(ThemeData theme, RemoteDevice device) {
     final isSelected = _selectedDevice?.callsign == device.callsign;
-    final isChecked = _selectedCallsigns.contains(device.callsign);
+    final isChecked = _selectedDeviceKeys.contains(_displayDeviceKey(device));
     final profile = _profileService.getProfile();
 
     // Get user location with UserLocationService fallback
@@ -1795,6 +1993,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     final distanceKm = device.calculateDistance(userLat, userLon);
     final distanceStr = _formatDistance(device, distanceKm);
     final isStation = CallsignGenerator.isStationCallsign(device.callsign);
+    final accountHasMultipleDevices = _hasMultipleDevicesForCallsign(
+      device.callsign,
+    );
+    final platformLabel = accountHasMultipleDevices
+        ? _formatPlatformLabel(device.platform)
+        : null;
     final connectionTags = <Widget>[
       if (device.isOnline)
         ..._getDeduplicatedConnectionTags(device.connectionMethods).map(
@@ -1814,7 +2018,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
     void handleTap() {
       if (_isMultiSelectMode) {
-        _toggleDeviceSelection(device.callsign);
+        _toggleDeviceSelection(device);
       } else {
         _selectDevice(device);
       }
@@ -1839,7 +2043,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
               _isMultiSelectMode
                   ? Checkbox(
                       value: isChecked,
-                      onChanged: (_) => _toggleDeviceSelection(device.callsign),
+                      onChanged: (_) => _toggleDeviceSelection(device),
                     )
                   : Stack(
                       children: [
@@ -1930,7 +2134,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                       children: [
                         Expanded(
                           child: Text(
-                            device.callsign,
+                            [
+                              device.callsign,
+                              if (platformLabel != null) platformLabel,
+                            ].join(' · '),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.bodySmall?.copyWith(
@@ -2423,18 +2630,18 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
             _exitMultiSelectMode();
           } else {
             _isMultiSelectMode = true;
-            _selectedCallsigns.clear();
+            _selectedDeviceKeys.clear();
           }
         });
         break;
       case 'delete_selected':
-        if (_selectedCallsigns.isNotEmpty) {
+        if (_selectedDeviceKeys.isNotEmpty) {
           _confirmDeleteSelected();
         }
         break;
       case 'move_to_folder':
-        if (_selectedCallsigns.isNotEmpty) {
-          _showMoveToFolderDialog(_selectedCallsigns.toList());
+        if (_selectedDeviceKeys.isNotEmpty) {
+          _showMoveToFolderDialog(_selectedCallsigns());
         }
         break;
       case 'restore_removed':
@@ -2598,24 +2805,26 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   void _exitMultiSelectMode() {
     setState(() {
       _isMultiSelectMode = false;
-      _selectedCallsigns.clear();
+      _selectedDeviceKeys.clear();
     });
   }
 
   /// Toggle device selection in multi-select mode
-  void _toggleDeviceSelection(String callsign) {
+  void _toggleDeviceSelection(RemoteDevice device) {
+    final key = _displayDeviceKey(device);
     setState(() {
-      if (_selectedCallsigns.contains(callsign)) {
-        _selectedCallsigns.remove(callsign);
+      if (_selectedDeviceKeys.contains(key)) {
+        _selectedDeviceKeys.remove(key);
       } else {
-        _selectedCallsigns.add(callsign);
+        _selectedDeviceKeys.add(key);
       }
     });
   }
 
   /// Confirm and delete selected devices
   Future<void> _confirmDeleteSelected() async {
-    final count = _selectedCallsigns.length;
+    final selectedCallsigns = _selectedCallsigns();
+    final count = _selectedDeviceKeys.length;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -2640,7 +2849,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     );
 
     if (confirmed == true) {
-      for (final callsign in _selectedCallsigns.toList()) {
+      for (final callsign in selectedCallsigns) {
         await _devicesService.removeDevice(callsign, permanent: true);
         if (_selectedDevice?.callsign == callsign) {
           _selectedDevice = null;
