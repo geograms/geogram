@@ -23,7 +23,6 @@ import '../services/station_service.dart';
 import '../services/websocket_service.dart';
 import '../services/network_monitor_service.dart';
 import '../services/ble_discovery_service.dart';
-import '../services/bluetooth_classic_service.dart';
 import '../services/bluetooth_classic_pairing_service.dart';
 import '../services/ble_message_service.dart';
 import '../services/group_sync_service.dart';
@@ -57,7 +56,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   final RelayCacheService _cacheService = RelayCacheService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
-  final ChatNotificationService _chatNotificationService = ChatNotificationService();
+  final ChatNotificationService _chatNotificationService =
+      ChatNotificationService();
   final DirectMessageService _dmService = DirectMessageService();
   final StationDiscoveryService _discoveryService = StationDiscoveryService();
   final StationService _stationService = StationService();
@@ -140,7 +140,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         final device = event.params['device'] as RemoteDevice?;
 
         if (callsign != null && device != null) {
-          LogService().log('DevicesBrowserPage: Opening device detail for $callsign via debug action ${event.action}');
+          LogService().log(
+            'DevicesBrowserPage: Opening device detail for $callsign via debug action ${event.action}',
+          );
 
           // Navigate to device detail page showing available apps
           // This is the same as clicking on a device in the UI
@@ -156,11 +158,14 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       } else if (event.action == DebugAction.openDM) {
         final callsign = event.params['callsign'] as String?;
         if (callsign != null) {
-          LogService().log('DevicesBrowserPage: Opening DM with $callsign via debug action');
+          LogService().log(
+            'DevicesBrowserPage: Opening DM with $callsign via debug action',
+          );
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (context) => DMChatPage(otherCallsign: callsign.toUpperCase()),
+              builder: (context) =>
+                  DMChatPage(otherCallsign: callsign.toUpperCase()),
             ),
           );
         }
@@ -170,7 +175,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   /// Handle opening the station chat app and first chat room
   Future<void> _handleOpenStationChat() async {
-    LogService().log('DevicesBrowserPage: Opening station chat via debug action');
+    LogService().log(
+      'DevicesBrowserPage: Opening station chat via debug action',
+    );
 
     // Get the connected station
     final stationService = StationService();
@@ -179,9 +186,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     if (preferred == null) {
       LogService().log('DevicesBrowserPage: No preferred station configured');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No station connected')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('No station connected')));
       }
       return;
     }
@@ -190,7 +197,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     final stationDevice = RemoteDevice(
       callsign: preferred.callsign ?? 'STATION',
       name: preferred.name,
-      url: preferred.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
+      url: preferred.url
+          .replaceFirst('wss://', 'https://')
+          .replaceFirst('ws://', 'http://'),
       description: preferred.description,
       apps: [],
       source: DeviceSourceType.station,
@@ -198,7 +207,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
     try {
       // Fetch chat rooms from the station using DevicesService API
-      LogService().log('DevicesBrowserPage: Fetching chat rooms from ${stationDevice.callsign}');
+      LogService().log(
+        'DevicesBrowserPage: Fetching chat rooms from ${stationDevice.callsign}',
+      );
       final devicesService = DevicesService();
       final response = await devicesService.makeDeviceApiRequest(
         callsign: stationDevice.callsign,
@@ -211,7 +222,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       }
 
       final data = json.decode(response.body);
-      final List<dynamic> roomsData = data is Map ? (data['rooms'] ?? data) : data;
+      final List<dynamic> roomsData = data is Map
+          ? (data['rooms'] ?? data)
+          : data;
 
       if (roomsData.isEmpty) {
         LogService().log('DevicesBrowserPage: No chat rooms available');
@@ -232,19 +245,17 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => RemoteChatRoomPage(
-              device: stationDevice,
-              room: firstRoom,
-            ),
+            builder: (context) =>
+                RemoteChatRoomPage(device: stationDevice, room: firstRoom),
           ),
         );
       }
     } catch (e) {
       LogService().log('DevicesBrowserPage: Error opening station chat: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
     }
   }
@@ -261,8 +272,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   /// Subscribe to connection state changes to refresh UI when connectivity changes
   void _subscribeToConnectionStateChanges() {
-    _connectionStateSubscription = EventBus().on<ConnectionStateChangedEvent>((event) {
-      LogService().log('DevicesBrowserPage: Connection state changed - ${event.connectionType} ${event.isConnected ? "connected" : "disconnected"}');
+    _connectionStateSubscription = EventBus().on<ConnectionStateChangedEvent>((
+      event,
+    ) {
+      LogService().log(
+        'DevicesBrowserPage: Connection state changed - ${event.connectionType} ${event.isConnected ? "connected" : "disconnected"}',
+      );
       if (mounted) {
         setState(() {
           // Trigger rebuild to update connection method tags
@@ -301,31 +316,51 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   String _getBLEStatusMessage(BLEStatusType status) {
     switch (status) {
-      case BLEStatusType.scanning: return 'Scanning for nearby devices...';
-      case BLEStatusType.scanComplete: return 'Scan complete';
-      case BLEStatusType.deviceFound: return 'Found new device';
-      case BLEStatusType.advertising: return 'Broadcasting...';
-      case BLEStatusType.connecting: return 'Connecting...';
-      case BLEStatusType.connected: return 'Connected';
-      case BLEStatusType.disconnected: return 'Disconnected';
-      case BLEStatusType.sending: return 'Sending data...';
-      case BLEStatusType.received: return 'Data received';
-      case BLEStatusType.error: return 'BLE error';
+      case BLEStatusType.scanning:
+        return 'Scanning for nearby devices...';
+      case BLEStatusType.scanComplete:
+        return 'Scan complete';
+      case BLEStatusType.deviceFound:
+        return 'Found new device';
+      case BLEStatusType.advertising:
+        return 'Broadcasting...';
+      case BLEStatusType.connecting:
+        return 'Connecting...';
+      case BLEStatusType.connected:
+        return 'Connected';
+      case BLEStatusType.disconnected:
+        return 'Disconnected';
+      case BLEStatusType.sending:
+        return 'Sending data...';
+      case BLEStatusType.received:
+        return 'Data received';
+      case BLEStatusType.error:
+        return 'BLE error';
     }
   }
 
   IconData _getBLEStatusIcon(BLEStatusType status) {
     switch (status) {
-      case BLEStatusType.scanning: return Icons.bluetooth_searching;
-      case BLEStatusType.scanComplete: return Icons.bluetooth_connected;
-      case BLEStatusType.deviceFound: return Icons.devices;
-      case BLEStatusType.advertising: return Icons.broadcast_on_personal;
-      case BLEStatusType.connecting: return Icons.bluetooth;
-      case BLEStatusType.connected: return Icons.bluetooth_connected;
-      case BLEStatusType.disconnected: return Icons.bluetooth_disabled;
-      case BLEStatusType.sending: return Icons.upload;
-      case BLEStatusType.received: return Icons.download;
-      case BLEStatusType.error: return Icons.error_outline;
+      case BLEStatusType.scanning:
+        return Icons.bluetooth_searching;
+      case BLEStatusType.scanComplete:
+        return Icons.bluetooth_connected;
+      case BLEStatusType.deviceFound:
+        return Icons.devices;
+      case BLEStatusType.advertising:
+        return Icons.broadcast_on_personal;
+      case BLEStatusType.connecting:
+        return Icons.bluetooth;
+      case BLEStatusType.connected:
+        return Icons.bluetooth_connected;
+      case BLEStatusType.disconnected:
+        return Icons.bluetooth_disabled;
+      case BLEStatusType.sending:
+        return Icons.upload;
+      case BLEStatusType.received:
+        return Icons.download;
+      case BLEStatusType.error:
+        return Icons.error_outline;
     }
   }
 
@@ -340,10 +375,15 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   void _subscribeToUnreadCounts() {
     _totalUnreadMessages = _chatNotificationService.totalUnreadCount;
-    _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((counts) {
+    _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((
+      counts,
+    ) {
       if (mounted) {
         setState(() {
-          _totalUnreadMessages = counts.values.fold(0, (sum, count) => sum + count);
+          _totalUnreadMessages = counts.values.fold(
+            0,
+            (sum, count) => sum + count,
+          );
         });
       }
     });
@@ -445,7 +485,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   }
 
   /// Check if devices list has changed
-  bool _devicesChanged(List<RemoteDevice> oldDevices, List<RemoteDevice> newDevices) {
+  bool _devicesChanged(
+    List<RemoteDevice> oldDevices,
+    List<RemoteDevice> newDevices,
+  ) {
     if (oldDevices.length != newDevices.length) return true;
 
     for (int i = 0; i < oldDevices.length; i++) {
@@ -481,28 +524,40 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     if (_isScanning) return;
 
     setState(() => _isScanning = true);
-    LogService().log('DevicesBrowserPage: Starting full scan (localhost, LAN, station)');
+    LogService().log(
+      'DevicesBrowserPage: Starting full scan (localhost, LAN, station)',
+    );
 
     try {
       // Step 1: Run network discovery scan (includes localhost and LAN)
       // This scans localhost ports, and LAN for devices
-      LogService().log('DevicesBrowserPage: Step 1 - Running network discovery scan');
+      LogService().log(
+        'DevicesBrowserPage: Step 1 - Running network discovery scan',
+      );
       await _discoveryService.discover();
 
       // Step 2: Try to connect to preferred station if not already connected
-      LogService().log('DevicesBrowserPage: Step 2 - Checking station connection');
+      LogService().log(
+        'DevicesBrowserPage: Step 2 - Checking station connection',
+      );
       final connectedStation = _stationService.getConnectedStation();
       if (connectedStation == null || !connectedStation.isConnected) {
         // Find preferred station
         final allStations = _stationService.getAllStations();
-        final preferredStation = allStations.where((s) => s.status == 'preferred').firstOrNull;
+        final preferredStation = allStations
+            .where((s) => s.status == 'preferred')
+            .firstOrNull;
 
         if (preferredStation != null) {
-          LogService().log('DevicesBrowserPage: Connecting to preferred station: ${preferredStation.name}');
+          LogService().log(
+            'DevicesBrowserPage: Connecting to preferred station: ${preferredStation.name}',
+          );
           await _stationService.connectStation(preferredStation.url);
         } else if (allStations.isNotEmpty) {
           // Connect to first available station if no preferred
-          LogService().log('DevicesBrowserPage: Connecting to first available station: ${allStations.first.name}');
+          LogService().log(
+            'DevicesBrowserPage: Connecting to first available station: ${allStations.first.name}',
+          );
           await _stationService.connectStation(allStations.first.url);
         }
       }
@@ -513,7 +568,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
       // Update local device list
       _devices = _filterRemoteDevices(_devicesService.getAllDevices());
-      LogService().log('DevicesBrowserPage: Full scan complete, found ${_devices.length} devices');
+      LogService().log(
+        'DevicesBrowserPage: Full scan complete, found ${_devices.length} devices',
+      );
     } catch (e) {
       LogService().log('DevicesBrowserPage: Error during scan: $e');
     } finally {
@@ -527,9 +584,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     // Navigate to device detail page showing available apps
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => DeviceDetailPage(device: device),
-      ),
+      MaterialPageRoute(builder: (context) => DeviceDetailPage(device: device)),
     );
   }
 
@@ -564,7 +619,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       remoteUrl = remoteUrl.replaceFirst('wss://', 'https://');
     }
 
-    LogService().log('DevicesBrowserPage: Opening chat for ${_selectedDevice!.callsign} at $remoteUrl');
+    LogService().log(
+      'DevicesBrowserPage: Opening chat for ${_selectedDevice!.callsign} at $remoteUrl',
+    );
 
     // Navigate to the ChatBrowserPage with remote device parameters
     Navigator.push(
@@ -592,7 +649,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       remoteUrl = remoteUrl.replaceFirst('wss://', 'https://');
     }
 
-    LogService().log('DevicesBrowserPage: Opening events for ${_selectedDevice!.callsign} at $remoteUrl');
+    LogService().log(
+      'DevicesBrowserPage: Opening events for ${_selectedDevice!.callsign} at $remoteUrl',
+    );
 
     // Navigate to the EventsBrowserPage with remote device parameters
     Navigator.push(
@@ -620,7 +679,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       remoteUrl = remoteUrl.replaceFirst('wss://', 'https://');
     }
 
-    LogService().log('DevicesBrowserPage: Opening alerts for ${_selectedDevice!.callsign} at $remoteUrl');
+    LogService().log(
+      'DevicesBrowserPage: Opening alerts for ${_selectedDevice!.callsign} at $remoteUrl',
+    );
 
     // Navigate to the ReportBrowserPage with remote device parameters
     Navigator.push(
@@ -712,35 +773,44 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       child: Scaffold(
         appBar: AppBar(
           title: _isMultiSelectMode
-              ? Text(_i18n.t('selected_count', params: [_selectedCallsigns.length.toString()]))
+              ? Text(
+                  _i18n.t(
+                    'selected_count',
+                    params: [_selectedCallsigns.length.toString()],
+                  ),
+                )
               : (_selectedDevice != null && isNarrow
-                  ? Text(_selectedDevice!.displayName)
-                  : Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_i18n.t('devices')),
-                        const SizedBox(width: 8),
-                        Text(
-                          '(',
-                          style: TextStyle(
-                            color: theme.colorScheme.onSurfaceVariant,
+                    ? Text(_selectedDevice!.displayName)
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_i18n.t('devices')),
+                          const SizedBox(width: 8),
+                          Text(
+                            '(',
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
                           ),
-                        ),
-                        Text(
-                          '$activeDeviceCount',
-                          style: TextStyle(
-                            color: activeDeviceCount > 0 ? Colors.green : theme.colorScheme.onSurfaceVariant,
-                            fontWeight: activeDeviceCount > 0 ? FontWeight.bold : FontWeight.normal,
+                          Text(
+                            '$activeDeviceCount',
+                            style: TextStyle(
+                              color: activeDeviceCount > 0
+                                  ? Colors.green
+                                  : theme.colorScheme.onSurfaceVariant,
+                              fontWeight: activeDeviceCount > 0
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
                           ),
-                        ),
-                        Text(
-                          '/$totalDeviceCount)',
-                          style: TextStyle(
-                            color: theme.colorScheme.onSurfaceVariant,
+                          Text(
+                            '/$totalDeviceCount)',
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
                           ),
-                        ),
-                      ],
-                    )),
+                        ],
+                      )),
           leading: _isMultiSelectMode
               ? IconButton(
                   icon: const Icon(Icons.close),
@@ -748,11 +818,11 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                   tooltip: _i18n.t('cancel'),
                 )
               : (_selectedDevice != null && isNarrow
-                  ? IconButton(
-                      icon: const Icon(Icons.arrow_back),
-                      onPressed: () => setState(() => _selectedDevice = null),
-                    )
-                  : null),
+                    ? IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: () => setState(() => _selectedDevice = null),
+                      )
+                    : null),
           actions: [
             if (_isLoading)
               const Padding(
@@ -798,14 +868,18 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                   child: Row(
                     children: [
                       Icon(
-                        _isMultiSelectMode ? Icons.check_box : Icons.check_box_outline_blank,
+                        _isMultiSelectMode
+                            ? Icons.check_box
+                            : Icons.check_box_outline_blank,
                         size: 20,
                         color: theme.colorScheme.primary,
                       ),
                       const SizedBox(width: 12),
-                      Text(_isMultiSelectMode
-                          ? _i18n.t('exit_selection')
-                          : _i18n.t('select_multiple')),
+                      Text(
+                        _isMultiSelectMode
+                            ? _i18n.t('exit_selection')
+                            : _i18n.t('select_multiple'),
+                      ),
                     ],
                   ),
                 ),
@@ -817,17 +891,24 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                       Icon(
                         Icons.drive_file_move_outlined,
                         size: 20,
-                        color: _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                        color:
+                            _isMultiSelectMode && _selectedCallsigns.isNotEmpty
                             ? theme.colorScheme.primary
-                            : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                            : theme.colorScheme.onSurface.withValues(
+                                alpha: 0.38,
+                              ),
                       ),
                       const SizedBox(width: 12),
                       Text(
                         _i18n.t('move_to_folder'),
                         style: TextStyle(
-                          color: _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                          color:
+                              _isMultiSelectMode &&
+                                  _selectedCallsigns.isNotEmpty
                               ? null
-                              : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                              : theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.38,
+                                ),
                         ),
                       ),
                     ],
@@ -841,17 +922,24 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                       Icon(
                         Icons.delete_outline,
                         size: 20,
-                        color: _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                        color:
+                            _isMultiSelectMode && _selectedCallsigns.isNotEmpty
                             ? theme.colorScheme.error
-                            : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                            : theme.colorScheme.onSurface.withValues(
+                                alpha: 0.38,
+                              ),
                       ),
                       const SizedBox(width: 12),
                       Text(
                         _i18n.t('delete_selected'),
                         style: TextStyle(
-                          color: _isMultiSelectMode && _selectedCallsigns.isNotEmpty
+                          color:
+                              _isMultiSelectMode &&
+                                  _selectedCallsigns.isNotEmpty
                               ? theme.colorScheme.error
-                              : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                              : theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.38,
+                                ),
                         ),
                       ),
                     ],
@@ -893,10 +981,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
             const SizedBox(height: 16),
             Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
             const SizedBox(height: 16),
-            FilledButton(
-              onPressed: _initialize,
-              child: Text(_i18n.t('retry')),
-            ),
+            FilledButton(onPressed: _initialize, child: Text(_i18n.t('retry'))),
           ],
         ),
       );
@@ -917,10 +1002,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         // Desktop layout: side-by-side
         return Row(
           children: [
-            SizedBox(
-              width: 300,
-              child: _buildDeviceList(theme),
-            ),
+            SizedBox(width: 300, child: _buildDeviceList(theme)),
             const VerticalDivider(width: 1),
             Expanded(
               child: _selectedDevice != null
@@ -980,7 +1062,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
           },
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+            color: theme.colorScheme.surfaceContainerHighest.withValues(
+              alpha: 0.5,
+            ),
             child: Row(
               children: [
                 // Drag handle for reordering
@@ -991,7 +1075,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                     child: Icon(
                       Icons.drag_handle,
                       size: 20,
-                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                      color: theme.colorScheme.onSurfaceVariant.withValues(
+                        alpha: 0.5,
+                      ),
                     ),
                   ),
                 ),
@@ -1009,7 +1095,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    folder.isDefault ? _i18n.t('discovered_folder') : folder.name,
+                    folder.isDefault
+                        ? _i18n.t('discovered_folder')
+                        : folder.name,
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                     ),
@@ -1017,7 +1105,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                 ),
                 // Device count badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: theme.colorScheme.surfaceContainerHighest,
                     borderRadius: BorderRadius.circular(4),
@@ -1028,8 +1119,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                       Text(
                         '$activeCount',
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          color: activeCount > 0 ? Colors.green : theme.colorScheme.onSurfaceVariant,
-                          fontWeight: activeCount > 0 ? FontWeight.bold : FontWeight.normal,
+                          color: activeCount > 0
+                              ? Colors.green
+                              : theme.colorScheme.onSurfaceVariant,
+                          fontWeight: activeCount > 0
+                              ? FontWeight.bold
+                              : FontWeight.normal,
                         ),
                       ),
                       Text(
@@ -1052,7 +1147,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                     onPressed: () => _openFolderChat(folder),
                     tooltip: _i18n.t('open_group_chat'),
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                    constraints: const BoxConstraints(
+                      minWidth: 32,
+                      minHeight: 32,
+                    ),
                   ),
                 // Folder options menu (not for default folder on some actions)
                 PopupMenuButton<String>(
@@ -1069,7 +1167,11 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                         value: 'rename',
                         child: Row(
                           children: [
-                            Icon(Icons.edit_outlined, size: 20, color: theme.colorScheme.primary),
+                            Icon(
+                              Icons.edit_outlined,
+                              size: 20,
+                              color: theme.colorScheme.primary,
+                            ),
                             const SizedBox(width: 12),
                             Text(_i18n.t('rename')),
                           ],
@@ -1084,13 +1186,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                             Icon(
                               Icons.cleaning_services_outlined,
                               size: 20,
-                              color: deviceCount > 0 ? theme.colorScheme.primary : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                              color: deviceCount > 0
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.onSurface.withValues(
+                                      alpha: 0.38,
+                                    ),
                             ),
                             const SizedBox(width: 12),
                             Text(
                               _i18n.t('empty_folder'),
                               style: TextStyle(
-                                color: deviceCount > 0 ? null : theme.colorScheme.onSurface.withValues(alpha: 0.38),
+                                color: deviceCount > 0
+                                    ? null
+                                    : theme.colorScheme.onSurface.withValues(
+                                        alpha: 0.38,
+                                      ),
                               ),
                             ),
                           ],
@@ -1101,27 +1211,40 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                         value: 'delete',
                         child: Row(
                           children: [
-                            Icon(Icons.delete_outline, size: 20, color: theme.colorScheme.error),
+                            Icon(
+                              Icons.delete_outline,
+                              size: 20,
+                              color: theme.colorScheme.error,
+                            ),
                             const SizedBox(width: 12),
-                            Text(_i18n.t('delete_folder'), style: TextStyle(color: theme.colorScheme.error)),
+                            Text(
+                              _i18n.t('delete_folder'),
+                              style: TextStyle(color: theme.colorScheme.error),
+                            ),
                           ],
                         ),
                       ),
                     // Toggle chat for non-default folders
                     if (!folder.isDefault)
                       PopupMenuItem<String>(
-                        value: folder.chatEnabled ? 'disable_chat' : 'enable_chat',
+                        value: folder.chatEnabled
+                            ? 'disable_chat'
+                            : 'enable_chat',
                         child: Row(
                           children: [
                             Icon(
-                              folder.chatEnabled ? Icons.chat_bubble : Icons.chat_bubble_outline,
+                              folder.chatEnabled
+                                  ? Icons.chat_bubble
+                                  : Icons.chat_bubble_outline,
                               size: 20,
                               color: theme.colorScheme.primary,
                             ),
                             const SizedBox(width: 12),
-                            Text(folder.chatEnabled
-                                ? _i18n.t('disable_chat')
-                                : _i18n.t('enable_chat')),
+                            Text(
+                              folder.chatEnabled
+                                  ? _i18n.t('disable_chat')
+                                  : _i18n.t('enable_chat'),
+                            ),
                           ],
                         ),
                       ),
@@ -1130,7 +1253,11 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                         value: 'select_all',
                         child: Row(
                           children: [
-                            Icon(Icons.select_all, size: 20, color: theme.colorScheme.primary),
+                            Icon(
+                              Icons.select_all,
+                              size: 20,
+                              color: theme.colorScheme.primary,
+                            ),
                             const SizedBox(width: 12),
                             Text(_i18n.t('select_all')),
                           ],
@@ -1142,7 +1269,11 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                         value: 'remove_disconnected',
                         child: Row(
                           children: [
-                            Icon(Icons.delete_sweep_outlined, size: 20, color: theme.colorScheme.error),
+                            Icon(
+                              Icons.delete_sweep_outlined,
+                              size: 20,
+                              color: theme.colorScheme.error,
+                            ),
                             const SizedBox(width: 12),
                             Text(
                               _i18n.t('remove_disconnected'),
@@ -1159,50 +1290,57 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         ),
         // Devices in folder (when expanded)
         if (isExpanded)
-          ...devicesInFolder.map((device) => DragTarget<String>(
-            onWillAcceptWithDetails: (details) => true,
-            onAcceptWithDetails: (details) {
-              _devicesService.moveDeviceToFolder(
-                details.data,
-                folder.id == DevicesService.defaultFolderId ? null : folder.id,
-              );
-              setState(() {});
-            },
-            builder: (context, candidateData, rejectedData) {
-              return LongPressDraggable<String>(
-                data: device.callsign,
-                delay: const Duration(milliseconds: 300),
-                onDragStarted: () {
-                  // Haptic feedback when drag starts (works on Android/iOS)
-                  HapticFeedback.mediumImpact();
-                },
-                feedback: Material(
-                  elevation: 4,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(_getDeviceIcon(device), color: theme.colorScheme.primary),
-                        const SizedBox(width: 8),
-                        Text(device.displayName),
-                      ],
+          ...devicesInFolder.map(
+            (device) => DragTarget<String>(
+              onWillAcceptWithDetails: (details) => true,
+              onAcceptWithDetails: (details) {
+                _devicesService.moveDeviceToFolder(
+                  details.data,
+                  folder.id == DevicesService.defaultFolderId
+                      ? null
+                      : folder.id,
+                );
+                setState(() {});
+              },
+              builder: (context, candidateData, rejectedData) {
+                return LongPressDraggable<String>(
+                  data: device.callsign,
+                  delay: const Duration(milliseconds: 300),
+                  onDragStarted: () {
+                    // Haptic feedback when drag starts (works on Android/iOS)
+                    HapticFeedback.mediumImpact();
+                  },
+                  feedback: Material(
+                    elevation: 4,
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _getDeviceIcon(device),
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(device.displayName),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                childWhenDragging: Opacity(
-                  opacity: 0.5,
+                  childWhenDragging: Opacity(
+                    opacity: 0.5,
+                    child: _buildDeviceListTile(theme, device),
+                  ),
                   child: _buildDeviceListTile(theme, device),
-                ),
-                child: _buildDeviceListTile(theme, device),
-              );
-            },
-          )),
+                );
+              },
+            ),
+          ),
         // Drop zone at folder level
         if (isExpanded && devicesInFolder.isEmpty)
           DragTarget<String>(
@@ -1228,7 +1366,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                   ),
                   borderRadius: BorderRadius.circular(8),
                   color: candidateData.isNotEmpty
-                      ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
+                      ? theme.colorScheme.primaryContainer.withValues(
+                          alpha: 0.3,
+                        )
                       : null,
                 ),
                 child: Center(
@@ -1295,9 +1435,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: InputDecoration(
-            labelText: _i18n.t('folder_name'),
-          ),
+          decoration: InputDecoration(labelText: _i18n.t('folder_name')),
           onSubmitted: (value) => Navigator.pop(context, value),
         ),
         actions: [
@@ -1313,7 +1451,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       ),
     );
 
-    if (result != null && result.trim().isNotEmpty && result.trim() != folder.name) {
+    if (result != null &&
+        result.trim().isNotEmpty &&
+        result.trim() != folder.name) {
       _devicesService.renameFolder(folder.id, result.trim());
       setState(() {});
     }
@@ -1326,7 +1466,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       context: context,
       builder: (context) => AlertDialog(
         title: Text(_i18n.t('empty_folder')),
-        content: Text(_i18n.t('empty_folder_confirm', params: [folder.name, deviceCount.toString()])),
+        content: Text(
+          _i18n.t(
+            'empty_folder_confirm',
+            params: [folder.name, deviceCount.toString()],
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -1353,7 +1498,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       context: context,
       builder: (context) => AlertDialog(
         title: Text(_i18n.t('delete_folder')),
-        content: Text(_i18n.t('delete_folder_confirm', params: [folder.name, deviceCount.toString()])),
+        content: Text(
+          _i18n.t(
+            'delete_folder_confirm',
+            params: [folder.name, deviceCount.toString()],
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -1390,7 +1540,12 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       context: context,
       builder: (context) => AlertDialog(
         title: Text(_i18n.t('remove_disconnected')),
-        content: Text(_i18n.t('remove_disconnected_confirm', params: [offlineCount.toString()])),
+        content: Text(
+          _i18n.t(
+            'remove_disconnected_confirm',
+            params: [offlineCount.toString()],
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -1438,277 +1593,293 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     final distanceKm = device.calculateDistance(userLat, userLon);
     final distanceStr = _formatDistance(device, distanceKm);
     final isStation = CallsignGenerator.isStationCallsign(device.callsign);
-
-    final tile = ListTile(
-      selected: isSelected && !_isMultiSelectMode,
-      selectedTileColor: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
-      contentPadding: const EdgeInsets.only(left: 16, right: 4),
-      leading: _isMultiSelectMode
-          ? Checkbox(
-              value: isChecked,
-              onChanged: (_) => _toggleDeviceSelection(device.callsign),
-            )
-          : Stack(
-        children: [
-          CircleAvatar(
-            backgroundColor: _getDeviceIconBackgroundColor(device.preferredColor) ??
-                (isStation
-                    ? theme.colorScheme.tertiaryContainer
-                    : theme.colorScheme.primaryContainer),
-            child: Icon(
-              _getDeviceIcon(device),
-              color: _getDeviceIconColor(device.preferredColor) ??
-                  (isStation
-                      ? theme.colorScheme.tertiary
-                      : theme.colorScheme.primary),
-            ),
+    final connectionTags = <Widget>[
+      if (device.isOnline)
+        ..._getDeduplicatedConnectionTags(device.connectionMethods).map(
+          (method) => _buildConnectionTag(
+            theme,
+            RemoteDevice.getConnectionMethodLabel(method),
+            _getConnectionMethodColor(method),
           ),
-          // Online indicator
-          Positioned(
-            right: 0,
-            bottom: 0,
-            child: Container(
-              width: 12,
-              height: 12,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: (device.isOnline && device.connectionMethods.isNotEmpty) ? Colors.green : Colors.grey,
-                border: Border.all(
-                  color: theme.colorScheme.surface,
-                  width: 2,
-                ),
-              ),
-            ),
-          ),
-          // Pin indicator
-          if (device.isPinned)
-            Positioned(
-              left: 0,
-              top: 0,
-              child: Container(
-                width: 14,
-                height: 14,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: theme.colorScheme.primary,
-                  border: Border.all(
-                    color: theme.colorScheme.surface,
-                    width: 1.5,
-                  ),
-                ),
-                child: Icon(
-                  Icons.push_pin,
-                  size: 8,
-                  color: theme.colorScheme.onPrimary,
-                ),
-              ),
-            ),
-        ],
-      ),
-      title: Text(
-        device.displayName,
-        style: TextStyle(
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          color: (device.isOnline && device.connectionMethods.isNotEmpty) ? null : theme.colorScheme.onSurfaceVariant,
         ),
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Callsign and distance
-          Row(
-            children: [
-              Flexible(
-                child: Text(
-                  device.callsign,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontFamily: 'monospace',
-                    color: device.isOnline ? null : theme.colorScheme.onSurfaceVariant,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (distanceStr != null)
-                Padding(
-                  padding: const EdgeInsets.only(left: 8),
-                  child: Text(
-                    distanceStr,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          // Connection methods tags and status
-          Wrap(
-            spacing: 4,
-            runSpacing: 4,
-            children: [
-              // Connection method tags (only show when device is online)
-              if (device.isOnline)
-                ..._getDeduplicatedConnectionTags(device.connectionMethods).map((method) => _buildConnectionTag(
-                  theme,
-                  RemoteDevice.getConnectionMethodLabel(method),
-                  _getConnectionMethodColor(method),
-                )),
-              // Cached indicator
-              if (device.hasCachedData && !device.isOnline)
-                _buildConnectionTag(
-                  theme,
-                  _i18n.t('cached'),
-                  theme.colorScheme.primary,
-                ),
-            ],
-          ),
-        ],
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Direct message button with unread badge
-          // Show for online devices OR devices with existing conversation history
-          // Stations can't reply so exclude them
-          if (!isStation && (device.isOnline || _conversationCallsigns.contains(device.callsign)))
-            Badge(
-              isLabelVisible: (_dmUnreadCounts[device.callsign] ?? 0) > 0,
-              label: Text(
-                (_dmUnreadCounts[device.callsign] ?? 0) > 99
-                    ? '99+'
-                    : '${_dmUnreadCounts[device.callsign] ?? 0}',
-              ),
-              child: IconButton(
-                icon: Icon(
-                  Icons.message_outlined,
-                  // Gray out icon when offline (read-only mode)
-                  color: device.isOnline
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.onSurfaceVariant,
-                  size: 20,
-                ),
-                onPressed: () => _openDirectMessage(device),
-                tooltip: device.isOnline
-                    ? _i18n.t('send_message')
-                    : _i18n.t('view_messages'),
-              ),
-            ),
-          // Menu button with pin and delete options
-          PopupMenuButton<String>(
-            icon: Icon(
-              Icons.more_vert,
-              color: theme.colorScheme.onSurfaceVariant,
-              size: 20,
-            ),
-            tooltip: _i18n.t('more_options'),
-            onSelected: (value) {
-              switch (value) {
-                case 'pin':
-                  _devicesService.pinDevice(device.callsign);
-                  break;
-                case 'unpin':
-                  _devicesService.unpinDevice(device.callsign);
-                  break;
-                case 'move':
-                  _showMoveToFolderDialog([device.callsign]);
-                  break;
-                case 'delete':
-                  _confirmDeleteDevice(device);
-                  break;
-                case 'upgrade_ble_plus':
-                  _initiateBlePlusUpgrade(device);
-                  break;
-              }
-            },
-            itemBuilder: (context) {
-              final hasBLE = device.connectionMethods.contains('bluetooth');
-              final hasBLEPlus = device.connectionMethods.contains('bluetooth_plus');
-              // BLE+ disabled - use pure BLE without pairing
-              const canUpgrade = false; // BluetoothClassicService.isAvailable && !hasBLEPlus;
+      if (device.hasCachedData && !device.isOnline)
+        _buildConnectionTag(
+          theme,
+          _i18n.t('cached'),
+          theme.colorScheme.primary,
+        ),
+    ];
 
-              return [
-                // Upgrade to BLE+ option (show for all, enabled only when BLE is active)
-                if (canUpgrade)
-                  PopupMenuItem<String>(
-                    value: 'upgrade_ble_plus',
-                    enabled: hasBLE,
-                    child: Row(
+    void handleTap() {
+      if (_isMultiSelectMode) {
+        _toggleDeviceSelection(device.callsign);
+      } else {
+        _selectDevice(device);
+      }
+    }
+
+    final tile = Material(
+      color: isSelected && !_isMultiSelectMode
+          ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
+          : Colors.transparent,
+      child: InkWell(
+        onTap: handleTap,
+        child: Padding(
+          padding: const EdgeInsets.only(
+            left: 16,
+            right: 4,
+            top: 10,
+            bottom: 10,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _isMultiSelectMode
+                  ? Checkbox(
+                      value: isChecked,
+                      onChanged: (_) => _toggleDeviceSelection(device.callsign),
+                    )
+                  : Stack(
                       children: [
-                        Icon(
-                          Icons.bluetooth,
-                          size: 20,
-                          color: hasBLE
-                              ? theme.colorScheme.primary
-                              : theme.disabledColor,
-                        ),
-                        const SizedBox(width: 12),
-                        Text(
-                          _i18n.t('upgrade_to_ble_plus'),
-                          style: TextStyle(
-                            color: hasBLE ? null : theme.disabledColor,
+                        CircleAvatar(
+                          backgroundColor:
+                              _getDeviceIconBackgroundColor(
+                                device.preferredColor,
+                              ) ??
+                              (isStation
+                                  ? theme.colorScheme.tertiaryContainer
+                                  : theme.colorScheme.primaryContainer),
+                          child: Icon(
+                            _getDeviceIcon(device),
+                            color:
+                                _getDeviceIconColor(device.preferredColor) ??
+                                (isStation
+                                    ? theme.colorScheme.tertiary
+                                    : theme.colorScheme.primary),
                           ),
                         ),
+                        Positioned(
+                          right: 0,
+                          bottom: 0,
+                          child: Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color:
+                                  (device.isOnline &&
+                                      device.connectionMethods.isNotEmpty)
+                                  ? Colors.green
+                                  : Colors.grey,
+                              border: Border.all(
+                                color: theme.colorScheme.surface,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (device.isPinned)
+                          Positioned(
+                            left: 0,
+                            top: 0,
+                            child: Container(
+                              width: 14,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: theme.colorScheme.primary,
+                                border: Border.all(
+                                  color: theme.colorScheme.surface,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.push_pin,
+                                size: 8,
+                                color: theme.colorScheme.onPrimary,
+                              ),
+                            ),
+                          ),
                       ],
                     ),
-                  ),
-                PopupMenuItem<String>(
-                  value: device.isPinned ? 'unpin' : 'pin',
-                  child: Row(
-                    children: [
-                      Icon(
-                        device.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
-                        size: 20,
-                        color: theme.colorScheme.primary,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      device.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: isSelected
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                        color:
+                            (device.isOnline &&
+                                device.connectionMethods.isNotEmpty)
+                            ? null
+                            : theme.colorScheme.onSurfaceVariant,
                       ),
-                      const SizedBox(width: 12),
-                      Text(device.isPinned ? _i18n.t('unpin') : _i18n.t('pin')),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            device.callsign,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontFamily: 'monospace',
+                              color: device.isOnline
+                                  ? null
+                                  : theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        if (distanceStr != null) ...[
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: Text(
+                              distanceStr,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (connectionTags.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Wrap(spacing: 4, runSpacing: 4, children: connectionTags),
                     ],
-                  ),
+                  ],
                 ),
-                PopupMenuItem<String>(
-                  value: 'move',
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.drive_file_move_outlined,
-                        size: 20,
-                        color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (!isStation &&
+                      (device.isOnline ||
+                          _conversationCallsigns.contains(device.callsign)))
+                    Badge(
+                      isLabelVisible:
+                          (_dmUnreadCounts[device.callsign] ?? 0) > 0,
+                      label: Text(
+                        (_dmUnreadCounts[device.callsign] ?? 0) > 99
+                            ? '99+'
+                            : '${_dmUnreadCounts[device.callsign] ?? 0}',
                       ),
-                      const SizedBox(width: 12),
-                      Text(_i18n.t('move_to_folder')),
-                    ],
+                      child: IconButton(
+                        icon: Icon(
+                          Icons.message_outlined,
+                          color: device.isOnline
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurfaceVariant,
+                          size: 20,
+                        ),
+                        onPressed: () => _openDirectMessage(device),
+                        tooltip: device.isOnline
+                            ? _i18n.t('send_message')
+                            : _i18n.t('view_messages'),
+                      ),
+                    ),
+                  PopupMenuButton<String>(
+                    icon: Icon(
+                      Icons.more_vert,
+                      color: theme.colorScheme.onSurfaceVariant,
+                      size: 20,
+                    ),
+                    tooltip: _i18n.t('more_options'),
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'pin':
+                          _devicesService.pinDevice(device.callsign);
+                          break;
+                        case 'unpin':
+                          _devicesService.unpinDevice(device.callsign);
+                          break;
+                        case 'move':
+                          _showMoveToFolderDialog([device.callsign]);
+                          break;
+                        case 'delete':
+                          _confirmDeleteDevice(device);
+                          break;
+                        case 'upgrade_ble_plus':
+                          _initiateBlePlusUpgrade(device);
+                          break;
+                      }
+                    },
+                    itemBuilder: (context) {
+                      return [
+                        PopupMenuItem<String>(
+                          value: device.isPinned ? 'unpin' : 'pin',
+                          child: Row(
+                            children: [
+                              Icon(
+                                device.isPinned
+                                    ? Icons.push_pin
+                                    : Icons.push_pin_outlined,
+                                size: 20,
+                                color: theme.colorScheme.primary,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                device.isPinned
+                                    ? _i18n.t('unpin')
+                                    : _i18n.t('pin'),
+                              ),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem<String>(
+                          value: 'move',
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.drive_file_move_outlined,
+                                size: 20,
+                                color: theme.colorScheme.primary,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(_i18n.t('move_to_folder')),
+                            ],
+                          ),
+                        ),
+                        PopupMenuItem<String>(
+                          value: 'delete',
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.delete_outline,
+                                size: 20,
+                                color: theme.colorScheme.error,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                _i18n.t('delete'),
+                                style: TextStyle(
+                                  color: theme.colorScheme.error,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ];
+                    },
                   ),
-                ),
-                PopupMenuItem<String>(
-                  value: 'delete',
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.delete_outline,
-                        size: 20,
-                        color: theme.colorScheme.error,
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        _i18n.t('delete'),
-                        style: TextStyle(color: theme.colorScheme.error),
-                      ),
-                    ],
-                  ),
-                ),
-              ];
-            },
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
-      onTap: () {
-        if (_isMultiSelectMode) {
-          _toggleDeviceSelection(device.callsign);
-        } else {
-          _selectDevice(device);
-        }
-      },
     );
 
     // On desktop (non-narrow mode), wrap with GestureDetector for double-click to move
@@ -1741,14 +1912,20 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
             height: 8,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: (device.isOnline && device.connectionMethods.isNotEmpty) ? Colors.green : Colors.grey,
+              color: (device.isOnline && device.connectionMethods.isNotEmpty)
+                  ? Colors.green
+                  : Colors.grey,
             ),
           ),
           const SizedBox(width: 4),
           Text(
-            (device.isOnline && device.connectionMethods.isNotEmpty) ? _i18n.t('online') : _i18n.t('offline'),
+            (device.isOnline && device.connectionMethods.isNotEmpty)
+                ? _i18n.t('online')
+                : _i18n.t('offline'),
             style: theme.textTheme.bodySmall?.copyWith(
-              color: (device.isOnline && device.connectionMethods.isNotEmpty) ? Colors.green : Colors.grey,
+              color: (device.isOnline && device.connectionMethods.isNotEmpty)
+                  ? Colors.green
+                  : Colors.grey,
             ),
           ),
         ],
@@ -1796,12 +1973,17 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         final meters = (distanceKm * 1000).round();
         return _i18n.t('meters_away', params: [meters.toString()]);
       } else {
-        return _i18n.t('kilometers_away', params: [distanceKm.toStringAsFixed(1)]);
+        return _i18n.t(
+          'kilometers_away',
+          params: [distanceKm.toStringAsFixed(1)],
+        );
       }
     }
 
     // If on same LAN but no coordinates, show "Same network"
-    if (device.connectionMethods.any((m) => m.toLowerCase() == 'wifi_local' || m.toLowerCase() == 'wifi-local')) {
+    if (device.connectionMethods.any(
+      (m) => m.toLowerCase() == 'wifi_local' || m.toLowerCase() == 'wifi-local',
+    )) {
       return _i18n.t('same_location');
     }
 
@@ -1877,7 +2059,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   /// Returns null if no preferred color, so caller can use default theme colors
   Color? _getDeviceIconBackgroundColor(String? colorName) {
     if (colorName == null || colorName.isEmpty) {
-      return null;  // Use default theme colors
+      return null; // Use default theme colors
     }
 
     switch (colorName.toLowerCase()) {
@@ -1898,7 +2080,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       case 'blue':
         return Colors.blue.shade100;
       default:
-        return null;  // Use default theme colors
+        return null; // Use default theme colors
     }
   }
 
@@ -1906,7 +2088,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   /// Returns null if no preferred color, so caller can use default theme colors
   Color? _getDeviceIconColor(String? colorName) {
     if (colorName == null || colorName.isEmpty) {
-      return null;  // Use default theme colors
+      return null; // Use default theme colors
     }
 
     switch (colorName.toLowerCase()) {
@@ -1927,7 +2109,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       case 'blue':
         return Colors.blue.shade700;
       default:
-        return null;  // Use default theme colors
+        return null; // Use default theme colors
     }
   }
 
@@ -1944,7 +2126,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     final platform = device.platform?.toLowerCase() ?? '';
 
     // Embedded devices (ESP32, Arduino, etc.)
-    if (platform == 'esp32' || platform == 'esp8266' || platform == 'arduino' || platform == 'embedded') {
+    if (platform == 'esp32' ||
+        platform == 'esp8266' ||
+        platform == 'arduino' ||
+        platform == 'embedded') {
       return Icons.settings_input_antenna;
     }
 
@@ -1953,7 +2138,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       return Icons.laptop;
     }
 
-    return Icons.smartphone;  // Default for mobile/unknown
+    return Icons.smartphone; // Default for mobile/unknown
   }
 
   /// Get color for connection method
@@ -2065,7 +2250,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
-          final currentRemoved = _devicesService.getRemovedDevices().toList()..sort();
+          final currentRemoved = _devicesService.getRemovedDevices().toList()
+            ..sort();
           return AlertDialog(
             title: Text(_i18n.t('restore_removed')),
             content: SizedBox(
@@ -2077,22 +2263,26 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                       children: [
                         Text(_i18n.t('restore_removed_description')),
                         const SizedBox(height: 16),
-                        ...currentRemoved.map((callsign) => ListTile(
-                          dense: true,
-                          title: Text(callsign),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.restore),
-                            tooltip: _i18n.t('restore'),
-                            onPressed: () {
-                              _devicesService.restoreDevice(callsign);
-                              setDialogState(() {});
-                              // If no more removed devices, close dialog
-                              if (_devicesService.getRemovedDevices().isEmpty) {
-                                Navigator.pop(context);
-                              }
-                            },
+                        ...currentRemoved.map(
+                          (callsign) => ListTile(
+                            dense: true,
+                            title: Text(callsign),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.restore),
+                              tooltip: _i18n.t('restore'),
+                              onPressed: () {
+                                _devicesService.restoreDevice(callsign);
+                                setDialogState(() {});
+                                // If no more removed devices, close dialog
+                                if (_devicesService
+                                    .getRemovedDevices()
+                                    .isEmpty) {
+                                  Navigator.pop(context);
+                                }
+                              },
+                            ),
                           ),
-                        )),
+                        ),
                       ],
                     ),
             ),
@@ -2166,14 +2356,21 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
             children: [
               Text(_i18n.t('select_destination_folder')),
               const SizedBox(height: 16),
-              ...folders.map((folder) => ListTile(
-                leading: Icon(
-                  folder.isDefault ? Icons.inbox : Icons.folder,
-                  color: Theme.of(context).colorScheme.primary,
+              ...folders.map(
+                (folder) => ListTile(
+                  leading: Icon(
+                    folder.isDefault ? Icons.inbox : Icons.folder,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  title: Text(folder.name),
+                  onTap: () => Navigator.pop(
+                    context,
+                    folder.id == DevicesService.defaultFolderId
+                        ? null
+                        : folder.id,
+                  ),
                 ),
-                title: Text(folder.name),
-                onTap: () => Navigator.pop(context, folder.id == DevicesService.defaultFolderId ? null : folder.id),
-              )),
+              ),
             ],
           ),
         ),
@@ -2221,7 +2418,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       context: context,
       builder: (context) => AlertDialog(
         title: Text(_i18n.t('delete_devices')),
-        content: Text(_i18n.t('delete_devices_confirm', params: [count.toString()])),
+        content: Text(
+          _i18n.t('delete_devices_confirm', params: [count.toString()]),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -2255,9 +2454,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => DMChatPage(
-          otherCallsign: device.callsign,
-        ),
+        builder: (context) => DMChatPage(otherCallsign: device.callsign),
       ),
     );
   }
@@ -2269,9 +2466,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
     if (chatCollection == null || chatCollection.storagePath == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('chat_room_not_found'))),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_i18n.t('chat_room_not_found'))));
       }
       return;
     }
@@ -2283,10 +2480,8 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => ChatBrowserPage(
-            app: chatCollection,
-            initialRoomId: folder.id,
-          ),
+          builder: (context) =>
+              ChatBrowserPage(app: chatCollection, initialRoomId: folder.id),
         ),
       );
     }
@@ -2314,7 +2509,10 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              _i18n.t('upgrade_ble_plus_description', params: [device.displayName]),
+              _i18n.t(
+                'upgrade_ble_plus_description',
+                params: [device.displayName],
+              ),
               style: theme.textTheme.bodyLarge,
             ),
             const SizedBox(height: 16),
@@ -2552,35 +2750,35 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
           child: _isLoadingApps
               ? const Center(child: CircularProgressIndicator())
               : _remoteApps.isEmpty
-                  ? _buildNoCollections(theme)
-                  : LayoutBuilder(
-                      builder: (context, constraints) {
-                        // Calculate number of columns based on available width
-                        final availableWidth = constraints.maxWidth;
-                        final crossAxisCount = availableWidth < 400
-                            ? 2
-                            : availableWidth < 600
-                                ? 3
-                                : availableWidth < 900
-                                    ? 4
-                                    : 5;
+              ? _buildNoCollections(theme)
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    // Calculate number of columns based on available width
+                    final availableWidth = constraints.maxWidth;
+                    final crossAxisCount = availableWidth < 400
+                        ? 2
+                        : availableWidth < 600
+                        ? 3
+                        : availableWidth < 900
+                        ? 4
+                        : 5;
 
-                        return GridView.builder(
-                          padding: const EdgeInsets.all(16),
-                          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: crossAxisCount,
-                            crossAxisSpacing: 8,
-                            mainAxisSpacing: 8,
-                            childAspectRatio: 1.9,
-                          ),
-                          itemCount: _remoteApps.length,
-                          itemBuilder: (context, index) {
-                            final collection = _remoteApps[index];
-                            return _buildCollectionCard(theme, collection);
-                          },
-                        );
+                    return GridView.builder(
+                      padding: const EdgeInsets.all(16),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        crossAxisSpacing: 8,
+                        mainAxisSpacing: 8,
+                        childAspectRatio: 1.9,
+                      ),
+                      itemCount: _remoteApps.length,
+                      itemBuilder: (context, index) {
+                        final collection = _remoteApps[index];
+                        return _buildCollectionCard(theme, collection);
                       },
-                    ),
+                    );
+                  },
+                ),
         ),
       ],
     );
@@ -2605,10 +2803,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
                   Badge(
                     isLabelVisible: collection.type == 'chat'
                         ? _totalUnreadMessages > 0
-                        : collection.fileCount != null && collection.fileCount! > 0,
-                    label: Text(collection.type == 'chat'
-                        ? '$_totalUnreadMessages'
-                        : '${collection.fileCount ?? 0}'),
+                        : collection.fileCount != null &&
+                              collection.fileCount! > 0,
+                    label: Text(
+                      collection.type == 'chat'
+                          ? '$_totalUnreadMessages'
+                          : '${collection.fileCount ?? 0}',
+                    ),
                     child: Icon(
                       _getCollectionIcon(collection.type),
                       size: 26,
@@ -2728,10 +2929,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
             color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
           ),
           const SizedBox(height: 16),
-          Text(
-            _i18n.t('no_devices_found'),
-            style: theme.textTheme.titleMedium,
-          ),
+          Text(_i18n.t('no_devices_found'), style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
             _i18n.t('no_devices_hint'),
@@ -2756,10 +2954,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
             color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
           ),
           const SizedBox(height: 16),
-          Text(
-            _i18n.t('no_apps_found'),
-            style: theme.textTheme.titleMedium,
-          ),
+          Text(_i18n.t('no_apps_found'), style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
             _selectedDevice!.isOnline
