@@ -30,10 +30,7 @@ import 'photo_viewer_page.dart';
 class DMChatPage extends StatefulWidget {
   final String otherCallsign;
 
-  const DMChatPage({
-    Key? key,
-    required this.otherCallsign,
-  }) : super(key: key);
+  const DMChatPage({Key? key, required this.otherCallsign}) : super(key: key);
 
   @override
   State<DMChatPage> createState() => _DMChatPageState();
@@ -163,7 +160,9 @@ class _DMChatPageState extends State<DMChatPage> {
 
     try {
       await _dmService.initialize();
-      _conversation = await _dmService.getOrCreateConversation(widget.otherCallsign);
+      _conversation = await _dmService.getOrCreateConversation(
+        widget.otherCallsign,
+      );
 
       // Mark this as the current conversation (prevents incrementing unread while viewing)
       _dmService.setCurrentConversation(widget.otherCallsign);
@@ -202,7 +201,10 @@ class _DMChatPageState extends State<DMChatPage> {
 
   Future<void> _loadMessages() async {
     try {
-      final messages = await _dmService.loadMessages(widget.otherCallsign, limit: 200);
+      final messages = await _dmService.loadMessages(
+        widget.otherCallsign,
+        limit: 200,
+      );
       if (mounted) {
         setState(() {
           _messages = messages;
@@ -248,9 +250,9 @@ class _DMChatPageState extends State<DMChatPage> {
       // Message will appear via DirectMessageReceivedEvent
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to send message: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to send message: $e')));
       }
     }
 
@@ -269,7 +271,11 @@ class _DMChatPageState extends State<DMChatPage> {
     });
 
     try {
-      await _dmService.sendVoiceMessage(widget.otherCallsign, filePath, durationSeconds);
+      await _dmService.sendVoiceMessage(
+        widget.otherCallsign,
+        filePath,
+        durationSeconds,
+      );
       await _loadMessages();
     } on DMMustBeReachableException {
       if (mounted) {
@@ -324,8 +330,11 @@ class _DMChatPageState extends State<DMChatPage> {
 
       if (mounted) {
         setState(() {
-          final index = _messages.indexWhere((msg) =>
-              msg.timestamp == updated.timestamp && msg.author == updated.author);
+          final index = _messages.indexWhere(
+            (msg) =>
+                msg.timestamp == updated.timestamp &&
+                msg.author == updated.author,
+          );
           if (index != -1) {
             _messages[index] = updated;
           }
@@ -333,9 +342,9 @@ class _DMChatPageState extends State<DMChatPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to react: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to react: $e')));
       }
     }
   }
@@ -367,7 +376,10 @@ class _DMChatPageState extends State<DMChatPage> {
     if (!message.hasVoice || message.voiceFile == null) return null;
 
     // First check if file exists locally
-    final localPath = await _dmService.getVoiceFilePath(widget.otherCallsign, message.voiceFile!);
+    final localPath = await _dmService.getVoiceFilePath(
+      widget.otherCallsign,
+      message.voiceFile!,
+    );
     if (localPath != null) {
       return localPath;
     }
@@ -375,7 +387,10 @@ class _DMChatPageState extends State<DMChatPage> {
     // If not local and device is online, try to download
     final device = _devicesService.getDevice(widget.otherCallsign);
     if (device?.isOnline ?? false) {
-      return await _dmService.downloadVoiceFile(widget.otherCallsign, message.voiceFile!);
+      return await _dmService.downloadVoiceFile(
+        widget.otherCallsign,
+        message.voiceFile!,
+      );
     }
 
     return null;
@@ -389,7 +404,10 @@ class _DMChatPageState extends State<DMChatPage> {
     final filename = message.attachedFile!;
 
     // First check if file exists locally
-    final localPath = await _dmService.getFilePath(widget.otherCallsign, filename);
+    final localPath = await _dmService.getFilePath(
+      widget.otherCallsign,
+      filename,
+    );
     if (localPath != null) {
       return (localPath, null);
     }
@@ -398,14 +416,18 @@ class _DMChatPageState extends State<DMChatPage> {
     // Respecting bandwidth policy: auto-download only if <= 3 MB and <= 7 days old
     final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
     final messageAge = DateTime.now().difference(message.dateTime);
-    final shouldAutoDownload = fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
+    final shouldAutoDownload =
+        fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
 
     if (!shouldAutoDownload) return (null, null);
 
     final device = _devicesService.getDevice(widget.otherCallsign);
     if (device?.isOnline ?? false) {
       // Download via DM file sync
-      final path = await _dmService.downloadFile(widget.otherCallsign, filename);
+      final path = await _dmService.downloadFile(
+        widget.otherCallsign,
+        filename,
+      );
       return (path, null);
     }
 
@@ -444,9 +466,9 @@ class _DMChatPageState extends State<DMChatPage> {
   Future<void> _openImage(ChatMessage message) async {
     final (filePath, _) = await _getAttachmentData(message);
     if (filePath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Image not available')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Image not available')));
       return;
     }
 
@@ -474,10 +496,8 @@ class _DMChatPageState extends State<DMChatPage> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => PhotoViewerPage(
-          imagePaths: imagePaths,
-          initialIndex: initialIndex,
-        ),
+        builder: (context) =>
+            PhotoViewerPage(imagePaths: imagePaths, initialIndex: initialIndex),
       ),
     );
   }
@@ -576,7 +596,10 @@ class _DMChatPageState extends State<DMChatPage> {
     if (!message.hasFile || message.attachedFile == null) return null;
 
     // Only show upload state for messages sent by current user
-    final currentCallsign = ProfileService().getProfile().callsign.toUpperCase();
+    final currentCallsign = ProfileService()
+        .getProfile()
+        .callsign
+        .toUpperCase();
     if (message.author.toUpperCase() != currentCallsign) return null;
 
     return _uploadManager.getUploadForFile(
@@ -613,9 +636,9 @@ class _DMChatPageState extends State<DMChatPage> {
     final isOnline = device?.isOnline ?? false;
 
     if (!isOnline) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_i18n.t('device_not_reachable'))),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_i18n.t('device_not_reachable'))));
       return;
     }
 
@@ -663,9 +686,8 @@ class _DMChatPageState extends State<DMChatPage> {
     final device = _devicesService.getDevice(widget.otherCallsign);
     final isOnline = device?.isOnline ?? false;
     final nickname = device?.displayName;
-    final hasNickname = nickname != null &&
-        nickname != device?.callsign &&
-        nickname.isNotEmpty;
+    final hasNickname =
+        nickname != null && nickname != device?.callsign && nickname.isNotEmpty;
     final title = hasNickname
         ? '$nickname (${widget.otherCallsign})'
         : widget.otherCallsign;
@@ -684,7 +706,9 @@ class _DMChatPageState extends State<DMChatPage> {
                 color: isOnline ? Colors.green : Colors.grey,
               ),
             ),
-            Text(title),
+            Expanded(
+              child: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
           ],
         ),
         actions: [
@@ -711,7 +735,8 @@ class _DMChatPageState extends State<DMChatPage> {
                       _conversation!.retentionPeriod != RetentionPeriod.forever
                   ? Icons.timer
                   : Icons.timer_outlined,
-              color: _conversation?.retentionPeriod != null &&
+              color:
+                  _conversation?.retentionPeriod != null &&
                       _conversation!.retentionPeriod != RetentionPeriod.forever
                   ? Colors.amber
                   : null,
@@ -794,7 +819,10 @@ class _DMChatPageState extends State<DMChatPage> {
                 Expanded(
                   child: Text(
                     _i18n.t('device_offline_messages_queued'),
-                    style: TextStyle(color: Colors.orange.shade900, fontSize: 13),
+                    style: TextStyle(
+                      color: Colors.orange.shade900,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ],
@@ -874,9 +902,8 @@ class _DMChatPageState extends State<DMChatPage> {
   void _showConversationInfo() {
     final device = _devicesService.getDevice(widget.otherCallsign);
     final nickname = device?.displayName;
-    final hasNickname = nickname != null &&
-        nickname != device?.callsign &&
-        nickname.isNotEmpty;
+    final hasNickname =
+        nickname != null && nickname != device?.callsign && nickname.isNotEmpty;
     final infoTitle = hasNickname
         ? '$nickname (${widget.otherCallsign})'
         : widget.otherCallsign;
@@ -889,7 +916,10 @@ class _DMChatPageState extends State<DMChatPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _infoRow('Status', device?.isOnline ?? false ? 'Online' : 'Offline'),
+            _infoRow(
+              'Status',
+              device?.isOnline ?? false ? 'Online' : 'Offline',
+            ),
             if (_conversation != null) ...[
               const SizedBox(height: 8),
               _infoRow('Messages', '${_messages.length}'),
@@ -898,7 +928,8 @@ class _DMChatPageState extends State<DMChatPage> {
               _infoRow(
                 'Auto-delete',
                 retentionLabel(
-                    _conversation!.retentionPeriod ?? RetentionPeriod.forever),
+                  _conversation!.retentionPeriod ?? RetentionPeriod.forever,
+                ),
               ),
             ],
             if (device?.url != null) ...[
