@@ -40,6 +40,7 @@ import 'device_apps_service.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../connection/connection_manager.dart';
+import '../connection/transport_message.dart';
 import '../teleport/aprs/aprs_is_client.dart';
 import '../teleport/aprs/aprs_message_utils.dart';
 import '../teleport/aprs/aprs_service.dart';
@@ -10910,12 +10911,127 @@ class LogApiService with ChatModificationMixin {
             headers: headers,
           );
 
+        case 'device_send_dm':
+          final callsign = params['callsign'] as String?;
+          final content = params['content'] as String?;
+          if (callsign == null || callsign.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Missing callsign parameter'}),
+              headers: headers,
+            );
+          }
+          if (content == null || content.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Missing content parameter'}),
+              headers: headers,
+            );
+          }
+
+          final transport = params['transport'] as String? ?? 'all';
+          final normalizedCallsign = callsign.toUpperCase();
+
+          final devicesService = DevicesService();
+          final device = devicesService.getDevice(normalizedCallsign);
+          if (device == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Device not found: $normalizedCallsign'}),
+              headers: headers,
+            );
+          }
+
+          devicesService.syncDeviceToConnectionManager(normalizedCallsign);
+
+          final connectionManager = ConnectionManager();
+          if (!connectionManager.isInitialized) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'ConnectionManager not initialized'}),
+              headers: headers,
+            );
+          }
+
+          final profile = ProfileService().getProfile();
+          final signingService = SigningService();
+          await signingService.initialize();
+          if (!signingService.canSign(profile)) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Cannot sign DM: NOSTR keys not configured'}),
+              headers: headers,
+            );
+          }
+
+          final createdAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+          final signedEvent = await signingService.generateSignedEvent(
+            content,
+            {
+              'room': normalizedCallsign,
+              'callsign': profile.callsign,
+            },
+            profile,
+            createdAt: createdAt,
+          );
+          if (signedEvent == null || signedEvent.sig == null || signedEvent.id == null) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({'success': false, 'error': 'Failed to sign DM'}),
+              headers: headers,
+            );
+          }
+
+          final allIds = {
+            'lan',
+            'ble',
+            'dht',
+            'peer_relay',
+            'station',
+            'webrtc',
+            'bluetooth_classic',
+            'usb_aoa',
+          };
+          Set<String>? excludeTransports;
+          if (transport != 'all') {
+            if (!allIds.contains(transport)) {
+              return shelf.Response.badRequest(
+                body: jsonEncode({'success': false, 'error': 'Invalid transport: $transport'}),
+                headers: headers,
+              );
+            }
+            excludeTransports = allIds.difference({transport});
+          }
+
+          final message = TransportMessage.directMessage(
+            targetCallsign: normalizedCallsign,
+            signedEvent: signedEvent.toJson(),
+          );
+
+          final stopwatch = Stopwatch()..start();
+          final result = await connectionManager.send(
+            message,
+            excludeTransports: excludeTransports,
+          );
+          stopwatch.stop();
+
+          final availableTransportIds = await connectionManager.getAvailableTransports(normalizedCallsign);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': result.success,
+              'callsign': normalizedCallsign,
+              'transport_requested': transport,
+              'transport_used': result.transportUsed,
+              'available_transports': availableTransportIds,
+              'latency_ms': stopwatch.elapsedMilliseconds,
+              'status_code': result.statusCode,
+              'error': result.error,
+              'event_id': signedEvent.id,
+            }),
+            headers: headers,
+          );
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
               'success': false,
               'error': 'Unknown device action: $action',
-              'available': ['device_browse_apps', 'device_open_detail', 'device_test_remote_chat', 'device_send_remote_chat', 'device_api_request', 'device_ping'],
+              'available': ['device_browse_apps', 'device_open_detail', 'device_test_remote_chat', 'device_send_remote_chat', 'device_api_request', 'device_ping', 'device_send_dm'],
             }),
             headers: headers,
           );

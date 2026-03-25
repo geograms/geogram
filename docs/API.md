@@ -3104,6 +3104,12 @@ curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action":"device_api_request","callsign":"X1256K","transport":"dht","method":"GET","path":"/api/status"}'
 
+# Force a direct message through a specific transport only
+# Valid transports: lan, dht, peer_relay, station, webrtc, usb_aoa, bluetooth_classic, ble
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"device_send_dm","callsign":"X1256K","transport":"station","content":"Hello over the station relay"}'
+
 # Resolve a peer's npub through the bounded DHT lookup
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \

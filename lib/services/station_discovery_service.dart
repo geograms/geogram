@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../models/monitored_task.dart';
 import '../models/station.dart';
@@ -883,9 +882,11 @@ class StationDiscoveryService {
     try {
       // Use /api/status endpoint for detection (returns JSON)
       final url = 'http://$ip:$port/api/status';
-      final response = await http
-          .get(Uri.parse(url), headers: {'Accept': 'application/json'})
-          .timeout(_requestTimeout);
+      final response = await withHttpClient(
+        (client) => client
+            .get(Uri.parse(url), headers: {'Accept': 'application/json'})
+            .timeout(_requestTimeout),
+      );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;

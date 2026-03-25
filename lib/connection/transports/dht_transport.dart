@@ -9,6 +9,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
+import '../../api/endpoints/chat_api.dart';
 import '../../p2p/dht_node.dart';
 import '../../services/log_service.dart';
 import '../../services/app_args.dart';
@@ -251,17 +252,45 @@ class DhtTransport extends Transport with TransportMixin {
     Duration timeout,
     Stopwatch stopwatch,
   ) async {
-    final path = message.path ?? '/api/dm';
+    String path;
+    if (message.type == TransportMessageType.directMessage) {
+      final senderCallsign = _extractSenderCallsign(message.signedEvent);
+      if (senderCallsign == null) {
+        stopwatch.stop();
+        final result = TransportResult.failure(
+          error: 'Cannot extract sender callsign from signed event',
+          transportUsed: id,
+        );
+        recordMetrics(result);
+        return result;
+      }
+      path = '/api/chat/$senderCallsign/messages';
+    } else {
+      path = ChatApi.messagesPath(message.path ?? 'general');
+    }
+
     final uri = Uri.parse('$baseUrl$path');
     final body = message.signedEvent != null
         ? jsonEncode({'event': message.signedEvent})
         : jsonEncode(message.payload);
+
+    LogService().log('DhtTransport: POST $path to ${message.targetCallsign}');
 
     final response = await _client
         .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
         .timeout(timeout);
 
     stopwatch.stop();
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final result = TransportResult.failure(
+        error: 'HTTP ${response.statusCode}: ${response.body}',
+        statusCode: response.statusCode,
+        transportUsed: id,
+      );
+      recordMetrics(result);
+      return result;
+    }
 
     final result = TransportResult.success(
       statusCode: response.statusCode,
@@ -281,6 +310,18 @@ class DhtTransport extends Transport with TransportMixin {
         normalized.startsWith('video/') ||
         normalized.startsWith('application/octet-stream') ||
         normalized.startsWith('application/pdf');
+  }
+
+  String? _extractSenderCallsign(Map<String, dynamic>? signedEvent) {
+    if (signedEvent == null) return null;
+    final tags = signedEvent['tags'] as List<dynamic>?;
+    if (tags == null) return null;
+    for (final tag in tags) {
+      if (tag is List && tag.length >= 2 && tag[0] == 'callsign') {
+        return (tag[1] as String).toUpperCase();
+      }
+    }
+    return null;
   }
 
   String? _resolveRefreshedUrl(
