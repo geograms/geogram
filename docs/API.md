@@ -3086,6 +3086,36 @@ curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "refresh_devices"}'
 
+# Inspect current DHT status
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"dht_status"}'
+
+# Resolve a peer's npub through the bounded DHT lookup
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"dht_find_user_light","npub":"npub1..."}'
+
+# List the persisted peer identities that will be probed through DHT
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"dht_known_targets"}'
+
+# Trigger one immediate known-peer DHT probe cycle
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"dht_probe_once"}'
+
+# Send a single geogram identity query to a DHT rendezvous socket
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"dht_geogram_query","ip":"47.64.115.57","port":23222}'
+
+# Send a burst of geogram queries for NAT punch testing
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"dht_geogram_punch","ip":"47.64.115.57","port":23222}'
+
 # Start a bot model download (vision)
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \

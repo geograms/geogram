@@ -38,6 +38,10 @@ const int kRefreshMinutes = 2;
 /// Max peers to store per info_hash topic.
 const int kMaxPeersPerTopic = 100;
 const Duration kPeerRetention = Duration(hours: 1);
+const int kLightLookupSeedCount = 8;
+const int kLightLookupAlpha = 2;
+const int kLightLookupMaxRounds = 8;
+const int kLightLookupMaxCandidates = 48;
 
 /// Transaction ID counter for DHT queries.
 int _txIdCounter = 0;
@@ -172,6 +176,9 @@ class DhtNode {
 
   /// Topics we are announced on: info_hash (hex) → local port.
   final Map<String, int> _announcedTopics = {};
+
+  /// Per-topic seed rotation for bounded/light crawls.
+  final Map<String, int> _boundedLookupSeedOffset = {};
 
   /// Token secret for generating announce tokens (rotated periodically).
   late Uint8List _tokenSecret;
@@ -338,11 +345,18 @@ class DhtNode {
   ///
   /// Does a proper iterative get_peers first to find the K-closest nodes
   /// and collect their tokens, then announces to those specific nodes.
-  Future<void> announce(Uint8List infoHash, int port) async {
+  Future<void> announce(
+    Uint8List infoHash,
+    int port, {
+    bool persist = true,
+    bool impliedPort = true,
+  }) async {
     if (!_running) return;
 
     final hexHash = _toHex(infoHash);
-    _announcedTopics[hexHash] = port;
+    if (persist) {
+      _announcedTopics[hexHash] = port;
+    }
 
     // Clear stale tokens before lookup to prevent unbounded growth
     _receivedTokens.clear();
@@ -358,7 +372,14 @@ class DhtNode {
         final ip = parts[0];
         final nodePort = int.tryParse(parts[1]);
         if (nodePort != null) {
-          _sendAnnouncePeer(ip, nodePort, infoHash, port, entry.value);
+          _sendAnnouncePeer(
+            ip,
+            nodePort,
+            infoHash,
+            port,
+            entry.value,
+            impliedPort: impliedPort,
+          );
           announced++;
         }
       }
@@ -371,36 +392,24 @@ class DhtNode {
   }
 
   /// Lightweight announce: send get_peers to closest routing table nodes ONE
-  /// AT A TIME, then announce to those that respond with tokens. No iterative
-  /// lookup — avoids the heap spike from processing hundreds of candidates.
-  Future<void> announceLight(Uint8List infoHash, int port) async {
+  /// AT A TIME, then announce to those that respond with tokens. This uses a
+  /// bounded iterative crawl so Android can still reach topic-near nodes
+  /// without the unbounded candidate growth of a full lookup.
+  Future<void> announceLight(
+    Uint8List infoHash,
+    int port, {
+    bool persist = true,
+    bool impliedPort = true,
+  }) async {
     if (!_running) return;
 
     final hexHash = _toHex(infoHash);
-    _announcedTopics[hexHash] = port;
+    if (persist) {
+      _announcedTopics[hexHash] = port;
+    }
     _receivedTokens.clear();
 
-    // Query closest routing table nodes sequentially (one at a time)
-    final closest = _routingTable.findClosest(infoHash, count: 8);
-    for (final node in closest) {
-      if (!_running) return;
-      final result = await _sendGetPeers(node.ip, node.port, infoHash);
-      if (result != null) {
-        // Process any peers found
-        if (result.containsKey('values')) {
-          try {
-            final values = Bencode.asList(result['values']);
-            for (final v in values) {
-              final bytes = Bencode.asBytes(v);
-              if (bytes.length == 6) {
-                final (ip, peerPort) = DhtContact.parseCompactPeer(bytes);
-                _recordPeer(infoHash, PeerInfo(ip: ip, port: peerPort));
-              }
-            }
-          } catch (_) {}
-        }
-      }
-    }
+    await _boundedIterativeGetPeers(infoHash);
 
     // Announce to nodes that gave us tokens
     var announced = 0;
@@ -410,7 +419,14 @@ class DhtNode {
         final ip = parts[0];
         final nodePort = int.tryParse(parts[1]);
         if (nodePort != null) {
-          _sendAnnouncePeer(ip, nodePort, infoHash, port, entry.value);
+          _sendAnnouncePeer(
+            ip,
+            nodePort,
+            infoHash,
+            port,
+            entry.value,
+            impliedPort: impliedPort,
+          );
           announced++;
         }
       }
@@ -452,6 +468,177 @@ class DhtNode {
     append(remotePeers);
     append(getCachedPeers(infoHash));
     return merged;
+  }
+
+  /// Lightweight peer lookup that only queries the closest routing table nodes.
+  /// This now performs a bounded iterative crawl so memory-limited devices can
+  /// still converge on fresh rendezvous candidates instead of only seeing the
+  /// first routing-table hop.
+  Future<List<PeerInfo>> getPeersLight(
+    Uint8List infoHash, {
+    int count = kLightLookupSeedCount,
+    bool includeCached = true,
+  }) async {
+    if (!_running) return [];
+    final peers = await _boundedIterativeGetPeers(infoHash, seedCount: count);
+    if (!includeCached) {
+      return peers;
+    }
+
+    final merged = <PeerInfo>[];
+    final seen = <String>{};
+    void append(List<PeerInfo> candidates) {
+      for (final peer in candidates) {
+        final key = '${peer.ip}:${peer.port}';
+        if (seen.add(key)) {
+          merged.add(peer);
+        }
+      }
+    }
+
+    append(peers);
+    append(getCachedPeers(infoHash));
+    return merged;
+  }
+
+  Future<List<PeerInfo>> _boundedIterativeGetPeers(
+    Uint8List infoHash, {
+    int seedCount = kLightLookupSeedCount,
+    int alpha = kLightLookupAlpha,
+    int maxRounds = kLightLookupMaxRounds,
+    int maxCandidates = kLightLookupMaxCandidates,
+  }) async {
+    final candidates = <String, DhtContact>{};
+    final distances = <String, Uint8List>{};
+    final queried = <String>{};
+    final foundPeers = <String, PeerInfo>{};
+    final peerSightings = <String, int>{};
+
+    bool addCandidate(DhtContact contact) {
+      if (contact.ip == '0.0.0.0' || contact.port == 0) return false;
+
+      final key = '${contact.ip}:${contact.port}';
+      if (candidates.containsKey(key)) return false;
+
+      final distance = xorDistance(contact.nodeId, infoHash);
+      if (candidates.length >= maxCandidates) {
+        final sorted = candidates.keys.toList()
+          ..sort((a, b) => compareDistance(distances[a]!, distances[b]!));
+        final worstKey = sorted.last;
+        if (compareDistance(distance, distances[worstKey]!) >= 0) {
+          return false;
+        }
+        candidates.remove(worstKey);
+        distances.remove(worstKey);
+      }
+
+      candidates[key] = contact;
+      distances[key] = distance;
+      _routingTable.insertNode(contact);
+      return true;
+    }
+
+    for (final node in _selectBoundedSeedNodes(
+      infoHash,
+      seedCount: seedCount,
+    )) {
+      addCandidate(node);
+    }
+
+    for (var round = 0; round < maxRounds && _running; round++) {
+      final unqueried =
+          candidates.keys.where((key) => !queried.contains(key)).toList()
+            ..sort((a, b) => compareDistance(distances[a]!, distances[b]!));
+      final toQuery = unqueried.take(alpha).toList();
+      if (toQuery.isEmpty) break;
+
+      var expanded = false;
+      final futures = toQuery.map((key) {
+        queried.add(key);
+        final node = candidates[key]!;
+        return _sendGetPeers(node.ip, node.port, infoHash);
+      }).toList();
+      final results = await Future.wait(futures);
+
+      for (final result in results) {
+        if (result == null) continue;
+
+        if (result.containsKey('values')) {
+          try {
+            final values = Bencode.asList(result['values']);
+            for (final v in values) {
+              final bytes = Bencode.asBytes(v);
+              if (bytes.length != 6) continue;
+
+              final (ip, port) = DhtContact.parseCompactPeer(bytes);
+              final peer = PeerInfo(ip: ip, port: port);
+              if (!_isUsableDhtPeer(peer)) continue;
+
+              _recordPeer(infoHash, peer);
+              final key = '${peer.ip}:${peer.port}';
+              foundPeers[key] = peer;
+              peerSightings[key] = (peerSightings[key] ?? 0) + 1;
+            }
+          } catch (_) {
+            // Ignore malformed peer lists from individual nodes.
+          }
+        }
+
+        if (result.containsKey('nodes')) {
+          final nodesBytes = Bencode.asBytes(result['nodes']);
+          for (var i = 0; i + 26 <= nodesBytes.length; i += 26) {
+            final contact = DhtContact.fromCompactNodeInfo(nodesBytes, i);
+            if (addCandidate(contact)) {
+              expanded = true;
+            }
+          }
+        }
+      }
+
+      if (!expanded && foundPeers.isNotEmpty) {
+        break;
+      }
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+
+    final rankedKeys = foundPeers.keys.toList()
+      ..sort((a, b) {
+        final bySightings = (peerSightings[b] ?? 0).compareTo(
+          peerSightings[a] ?? 0,
+        );
+        if (bySightings != 0) return bySightings;
+        return a.compareTo(b);
+      });
+
+    LogService().log(
+      'DHT get_peers (bounded): ${queried.length} nodes queried, '
+      '${foundPeers.length} peers found, '
+      '${candidates.length} bounded candidates',
+    );
+
+    return rankedKeys.map((key) => foundPeers[key]!).toList();
+  }
+
+  List<DhtContact> _selectBoundedSeedNodes(
+    Uint8List infoHash, {
+    required int seedCount,
+  }) {
+    final seedWindow = max(seedCount * 4, seedCount);
+    final closest = _routingTable.findClosest(infoHash, count: seedWindow);
+    if (closest.length <= seedCount) {
+      return closest;
+    }
+
+    final topicKey = _toHex(infoHash);
+    final previousOffset = _boundedLookupSeedOffset[topicKey] ?? 0;
+    final start = previousOffset % closest.length;
+    _boundedLookupSeedOffset[topicKey] = (start + seedCount) % closest.length;
+
+    final selected = <DhtContact>[];
+    for (var i = 0; i < seedCount; i++) {
+      selected.add(closest[(start + i) % closest.length]);
+    }
+    return selected;
   }
 
   /// Start periodic re-announce on all topics.
@@ -806,7 +993,11 @@ class DhtNode {
   }
 
   /// Send a geogram identity query to a peer's DHT socket.
-  Future<Map<String, dynamic>?> sendGeogramQuery(String ip, int port) async {
+  Future<Map<String, dynamic>?> sendGeogramQuery(
+    String ip,
+    int port, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
     final txId = _nextTxId();
     final completer = Completer<Map<String, dynamic>?>();
 
@@ -837,7 +1028,7 @@ class DhtNode {
     LogService().log('DHT: sent geogram query to $ip:$port');
 
     return completer.future.timeout(
-      const Duration(seconds: 5),
+      timeout,
       onTimeout: () {
         _pendingQueries.remove(_toHex(txId));
         return null;
@@ -926,10 +1117,23 @@ class DhtNode {
   /// Our external IP:port as reported by BEP 42 `ip` field in DHT responses.
   String? _externalIp;
   int? _externalPort;
+  final List<int> _recentExternalPorts = <int>[];
 
   /// Our external IP as reported by DHT peers (BEP 42).
   String? get externalIp => _externalIp;
   int? get externalPort => _externalPort;
+  List<int> get recentExternalPorts =>
+      List<int>.unmodifiable(_recentExternalPorts);
+
+  void _recordExternalEndpoint(String ip, int port) {
+    _externalIp = ip;
+    _externalPort = port;
+    _recentExternalPorts.remove(port);
+    _recentExternalPorts.insert(0, port);
+    if (_recentExternalPorts.length > 8) {
+      _recentExternalPorts.removeRange(8, _recentExternalPorts.length);
+    }
+  }
 
   void _handleResponse(Map<String, dynamic> msg, String fromIp, int fromPort) {
     final txId = Bencode.asBytes(msg['t']);
@@ -944,8 +1148,7 @@ class DhtNode {
         if (ipBytes.length == 6) {
           final (ip, port) = DhtContact.parseCompactPeer(ipBytes);
           if (ip != '0.0.0.0' && !ip.startsWith('127.')) {
-            _externalIp = ip;
-            _externalPort = port;
+            _recordExternalEndpoint(ip, port);
           }
         }
       } catch (_) {}
@@ -1219,8 +1422,9 @@ class DhtNode {
     int port,
     Uint8List infoHash,
     int announcePort,
-    Uint8List token,
-  ) {
+    Uint8List token, {
+    bool impliedPort = true,
+  }) {
     _sendQuery(
       'announce_peer',
       {
@@ -1228,7 +1432,7 @@ class DhtNode {
         'info_hash': infoHash,
         'port': announcePort,
         'token': token,
-        'implied_port': 1,
+        'implied_port': impliedPort ? 1 : 0,
       },
       ip,
       port,

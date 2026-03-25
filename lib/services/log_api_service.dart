@@ -19700,6 +19700,98 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
             headers: headers,
           );
 
+        case 'dht_find_user_light':
+          final npub = params['npub'] as String?;
+          if (npub == null || npub.isEmpty) {
+            return shelf.Response(400,
+              body: jsonEncode({
+                'success': false,
+                'error': 'npub parameter required',
+              }),
+              headers: headers,
+            );
+          }
+          final peers = await p2pService.findDevicesForUserLight(npub);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'npub': npub,
+              'devices': peers.map((p) => {
+                'ip': p.ip,
+                'port': p.port,
+              }).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'dht_known_targets':
+          final targets = await p2pService.getKnownPeerTargetsDebug();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'targets': targets,
+            }),
+            headers: headers,
+          );
+
+        case 'dht_probe_once':
+          await p2pService.runKnownPeerProbeNow();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Known-peer DHT probe completed',
+            }),
+            headers: headers,
+          );
+
+        case 'dht_geogram_query':
+          final ip = params['ip'] as String?;
+          final port = params['port'] as int?;
+          if (ip == null || ip.isEmpty || port == null || port <= 0) {
+            return shelf.Response(400,
+              body: jsonEncode({
+                'success': false,
+                'error': 'ip and port parameters required',
+              }),
+              headers: headers,
+            );
+          }
+
+          final response = await p2pService.sendGeogramQuery(ip, port);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': response != null,
+              'ip': ip,
+              'port': port,
+              'response': response,
+            }),
+            headers: headers,
+          );
+
+        case 'dht_geogram_punch':
+          final ip = params['ip'] as String?;
+          final port = params['port'] as int?;
+          if (ip == null || ip.isEmpty || port == null || port <= 0) {
+            return shelf.Response(400,
+              body: jsonEncode({
+                'success': false,
+                'error': 'ip and port parameters required',
+              }),
+              headers: headers,
+            );
+          }
+
+          final response = await p2pService.sendGeogramPunch(ip, port);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': response != null,
+              'ip': ip,
+              'port': port,
+              'response': response,
+            }),
+            headers: headers,
+          );
+
         case 'dht_add_node':
           final ip = params['ip'] as String?;
           final port = params['port'] as int?;
@@ -19731,6 +19823,11 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
                 'dht_start',
                 'dht_stop',
                 'dht_find_user',
+                'dht_find_user_light',
+                'dht_known_targets',
+                'dht_probe_once',
+                'dht_geogram_query',
+                'dht_geogram_punch',
                 'dht_add_node',
               ],
             }),

@@ -6,6 +6,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -16,6 +17,8 @@ import '../services/devices_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/app_service.dart';
+import '../services/profile_storage.dart';
+import '../services/storage_config.dart';
 import '../tracker/models/tracker_proximity_track.dart';
 import '../util/task_monitor_helpers.dart';
 import '../connection/connection_manager.dart';
@@ -28,9 +31,23 @@ const String _kNodeCachePath = 'p2p/dht_cache.json';
 const String _kNodeIdPath = 'p2p/node_id.bin';
 const String _kPeerCachePath = 'p2p/peer_cache.json';
 const String _kTaskId = 'p2p_discovery.dht';
-const Duration _kKnownPeerProbeInterval = Duration(seconds: 45);
+const Duration _kKnownPeerProbeInterval = Duration(seconds: 30);
 const int _kKnownPeerProbeBatchSize = 3;
-const Duration _kFailedDhtCandidateTtl = Duration(minutes: 10);
+const Duration _kFailedDhtCandidateTtl = Duration(seconds: 20);
+const Duration _kKnownPeerCandidateCacheTtl = Duration(minutes: 5);
+const Duration _kKnownPeerTargetCacheTtl = Duration(minutes: 2);
+const int _kKnownPeerTargetLimit = 12;
+const int _kKnownPeerRecentContactFallbackLimit = 8;
+const int _kKnownPeerPunchAttempts = 5;
+const Duration _kKnownPeerPunchTimeout = Duration(milliseconds: 1200);
+const Duration _kKnownPeerPunchSpacing = Duration(milliseconds: 200);
+const Duration _kPreferredKnownPeerTtl = Duration(minutes: 3);
+const List<Duration> _kKnownPeerWarmupProbeDelays = <Duration>[
+  Duration.zero,
+  Duration(seconds: 10),
+  Duration(seconds: 20),
+];
+const String _kPairRendezvousTopicPrefix = 'geogram:rendezvous:v1:';
 
 class _KnownPeerTarget {
   final String callsign;
@@ -45,6 +62,16 @@ class _KnownPeerTarget {
     this.lastSeen,
     this.needsBootstrap = false,
     this.hasReachableEndpoint = false,
+  });
+}
+
+class _CachedKnownPeerCandidates {
+  final List<PeerInfo> peers;
+  final DateTime updatedAt;
+
+  const _CachedKnownPeerCandidates({
+    required this.peers,
+    required this.updatedAt,
   });
 }
 
@@ -89,6 +116,11 @@ class P2PService {
   final Set<String> _selfRendezvousPeers = {};
   final Map<String, DateTime> _failedDhtCandidates = {};
   final Map<String, Completer<List<PeerInfo>>> _findCompleters = {};
+  final Map<String, _CachedKnownPeerCandidates> _knownPeerCandidateCache = {};
+  List<_KnownPeerTarget>? _knownPeerTargetsCache;
+  DateTime? _knownPeerTargetsCacheTime;
+  String? _preferredKnownPeerCallsign;
+  DateTime? _preferredKnownPeerExpiresAt;
 
   Future<void> start({int? localPort}) async {
     localPort ??= AppArgs().port;
@@ -211,12 +243,21 @@ class P2PService {
         // reachable address through NAT. The declared port value doesn't
         // matter but we pass the local DHT port for consistency.
         final dhtPort = _dht!.localPort;
-        await _dht!.announce(geogramHash, dhtPort);
-        await _dht!.announce(npubHash, dhtPort);
-        _dht!.startPeriodicAnnounce();
-        LogService().log(
-          'P2P: announced on DHT (implied_port=1, local: $dhtPort, http: $port)',
-        );
+        if (_useLightDhtLookups) {
+          await _dht!.announceLight(geogramHash, dhtPort);
+          await _dht!.announceLight(npubHash, dhtPort);
+          _dht!.startPeriodicAnnounce(light: true);
+          LogService().log(
+            'P2P: announced on DHT with light mode (local: $dhtPort, http: $port)',
+          );
+        } else {
+          await _dht!.announce(geogramHash, dhtPort);
+          await _dht!.announce(npubHash, dhtPort);
+          _dht!.startPeriodicAnnounce();
+          LogService().log(
+            'P2P: announced on DHT (implied_port=1, local: $dhtPort, http: $port)',
+          );
+        }
         _phase4_detect();
       } catch (e) {
         LogService().log('P2P: announce failed: $e');
@@ -231,7 +272,7 @@ class P2PService {
         await _capability!.detectFromDht(_dht!);
         await _probeExistingDiscoveredPeers();
 
-        final peers = await _dht!.getPeers(
+        final peers = await _lookupDiscoveryPeers(
           sha1Hash('geogram'),
           includeCached: false,
         );
@@ -245,12 +286,13 @@ class P2PService {
           '(type: ${_capability!.type.name}, dht: ${_dht!.routingTableSize} nodes)',
         );
         _startKnownPeerProbeLoop();
+        _scheduleKnownPeerWarmupProbes();
 
         // After 30s: fresh peer scan + probe known devices
         // (gives the other device time to announce)
         Timer(const Duration(seconds: 30), () async {
           if (_dht == null || !_dht!.isRunning) return;
-          final p = await _dht!.getPeers(
+          final p = await _lookupDiscoveryPeers(
             sha1Hash('geogram'),
             includeCached: false,
           );
@@ -264,7 +306,7 @@ class P2PService {
         _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
           if (_dht == null || !_dht!.isRunning) return;
           await _capability!.detectFromDht(_dht!);
-          final p = await _dht!.getPeers(
+          final p = await _lookupDiscoveryPeers(
             sha1Hash('geogram'),
             includeCached: false,
           );
@@ -307,6 +349,10 @@ class P2PService {
     _capability = null;
     _running = false;
     _knownPeerProbeInFlight = false;
+    _knownPeerTargetsCache = null;
+    _knownPeerTargetsCacheTime = null;
+    _preferredKnownPeerCallsign = null;
+    _preferredKnownPeerExpiresAt = null;
     _taskHandle?.dispose();
     _taskHandle = null;
     LogService().log('P2P service stopped');
@@ -327,6 +373,46 @@ class P2PService {
     return _dht!.getPeers(hash);
   }
 
+  Future<List<PeerInfo>> findDevicesForUserLight(String npub) async {
+    if (_dht == null || !_dht!.isRunning) return [];
+    final hash = sha1Hash(npub);
+    final peers = await _dht!.getPeersLight(hash, includeCached: false);
+    if (peers.isNotEmpty) return peers;
+    return _dht!.getCachedPeers(hash);
+  }
+
+  Future<Map<String, dynamic>?> sendGeogramQuery(String ip, int port) async {
+    if (_dht == null || !_dht!.isRunning) return null;
+    return _dht!.sendGeogramQuery(ip, port);
+  }
+
+  Future<Map<String, dynamic>?> sendGeogramPunch(String ip, int port) async {
+    if (_dht == null || !_dht!.isRunning) return null;
+    return _sendGeogramPunchBurst(PeerInfo(ip: ip, port: port));
+  }
+
+  Future<void> runKnownPeerProbeNow() async {
+    await _runKnownPeerProbe();
+  }
+
+  Future<List<Map<String, dynamic>>> getKnownPeerTargetsDebug() async {
+    final targets = await _loadKnownPeerTargets(DevicesService());
+    return targets
+        .map(
+          (target) => {
+            'callsign': target.callsign,
+            'npub': target.npub,
+            'needs_bootstrap': target.needsBootstrap,
+            'has_reachable_endpoint': target.hasReachableEndpoint,
+            'last_seen': target.lastSeen?.toIso8601String(),
+            'cached_candidates': _getCachedKnownPeerCandidates(
+              target,
+            ).map((peer) => {'ip': peer.ip, 'port': peer.port}).toList(),
+          },
+        )
+        .toList();
+  }
+
   Future<void> addNode(String ip, int port) async {
     _dht?.pingNode(ip, port);
   }
@@ -342,6 +428,7 @@ class P2PService {
       'node_type': nt.name,
       'public_ip': ip,
       'public_port': pp,
+      'recent_external_ports': _dht?.recentExternalPorts ?? const <int>[],
       'dht_nodes': _dht?.routingTableSize ?? 0,
       'stored_peers': _dht?.storedPeerCount ?? 0,
       'direct_connections': 0,
@@ -350,6 +437,7 @@ class P2PService {
         'node_type': nt.name,
         'public_ip': ip,
         'public_port': pp,
+        'recent_external_ports': _dht?.recentExternalPorts ?? const <int>[],
         'can_hole_punch': nt == NodeType.typeA || nt == NodeType.typeB,
       },
     };
@@ -559,24 +647,58 @@ class P2PService {
     final targets = await _loadKnownPeerTargets(devService);
     if (targets.isEmpty) return;
 
-    // Rotate through devices — one per call
-    _npubProbeIndex = _npubProbeIndex % targets.length;
-    final target = targets[_npubProbeIndex];
-    _npubProbeIndex++;
+    final target = _selectKnownPeerTarget(targets, devService);
 
     LogService().log(
       'P2P: probing known peer ${target.callsign} via DHT npub lookup',
     );
 
-    var peers = await _dht!.getPeers(
-      sha1Hash(target.npub),
-      includeCached: false,
+    await _announcePairRendezvous(target);
+
+    final cachedCandidates = _selectRendezvousCandidates(
+      target,
+      _getCachedKnownPeerCandidates(target),
+      devService,
     );
-    if (peers.isEmpty) {
-      peers = _dht!.getCachedPeers(sha1Hash(target.npub));
+    if (cachedCandidates.isNotEmpty) {
+      LogService().log(
+        'P2P: trying ${cachedCandidates.length} cached DHT candidate(s) for ${target.callsign} before refresh lookup',
+      );
+      if (await _verifyKnownPeerCandidates(target, cachedCandidates)) {
+        return;
+      }
     }
-    final candidates = _selectRendezvousCandidates(target, peers, devService);
+
+    final pairPeers = await _lookupPairRendezvousPeers(target);
+    final pairCandidates = _selectRendezvousCandidates(
+      target,
+      pairPeers,
+      devService,
+    );
+    if (pairCandidates.isNotEmpty) {
+      LogService().log(
+        'P2P: pair rendezvous lookup for ${target.callsign} returned ${pairPeers.length} peer(s), trying ${pairCandidates.length} candidate(s)',
+      );
+      if (await _verifyKnownPeerCandidates(target, pairCandidates)) {
+        return;
+      }
+    }
+
+    final infoHash = sha1Hash(target.npub);
+    var peers = await _lookupDiscoveryPeers(infoHash, includeCached: false);
+    if (peers.isEmpty) {
+      peers = _dht!.getCachedPeers(infoHash);
+    }
+
+    final combinedPeers = _mergeUniquePeers(pairPeers, peers);
+    final candidates = _selectRendezvousCandidates(
+      target,
+      combinedPeers,
+      devService,
+    );
+    _updateKnownPeerCandidateCache(target, candidates);
     if (candidates.isEmpty) {
+      _rememberPreferredKnownPeer(target);
       LogService().log(
         'P2P: npub lookup for ${target.callsign} returned no usable rendezvous candidates',
       );
@@ -587,19 +709,35 @@ class P2PService {
       'P2P: npub lookup for ${target.callsign} returned ${peers.length} peer(s), trying ${candidates.length} candidate(s)',
     );
 
+    final shouldTryLookupCandidates =
+        cachedCandidates.isEmpty ||
+        !_samePeerSets(cachedCandidates, candidates);
+    if (shouldTryLookupCandidates &&
+        await _verifyKnownPeerCandidates(target, candidates)) {
+      return;
+    }
+
+    _rememberPreferredKnownPeer(target);
+    LogService().log(
+      'P2P: no verified DHT rendezvous responded for ${target.callsign}',
+    );
+  }
+
+  Future<bool> _verifyKnownPeerCandidates(
+    _KnownPeerTarget target,
+    List<PeerInfo> candidates,
+  ) async {
     for (var i = 0; i < candidates.length; i += _kKnownPeerProbeBatchSize) {
       final batch = candidates.skip(i).take(_kKnownPeerProbeBatchSize).toList();
       final verified = await Future.wait(
         batch.map((peer) => _tryVerifyKnownPeerCandidate(target, peer)),
       );
       if (verified.any((ok) => ok)) {
-        return;
+        return true;
       }
     }
 
-    LogService().log(
-      'P2P: no verified DHT rendezvous responded for ${target.callsign}',
-    );
+    return false;
   }
 
   List<PeerInfo> _selectRendezvousCandidates(
@@ -689,7 +827,8 @@ class P2PService {
       'P2P: npub probe trying ${target.callsign} at ${peer.ip}:${peer.port}',
     );
 
-    final response = await _dht!.sendGeogramQuery(peer.ip, peer.port);
+    final response = await _sendGeogramPunchBurst(peer);
+
     if (response == null) {
       _rememberFailedDhtCandidate(target, peer);
       return false;
@@ -715,6 +854,7 @@ class P2PService {
     }
 
     _failedDhtCandidates.remove(_failedDhtCandidateKey(target, peer));
+    _clearPreferredKnownPeer(target.callsign);
     final devService = DevicesService();
     final device = devService.getDevice(target.callsign);
     if (device != null) {
@@ -728,9 +868,41 @@ class P2PService {
 
   void _startKnownPeerProbeLoop() {
     _knownPeerProbeTimer?.cancel();
-    _knownPeerProbeTimer = Timer.periodic(_kKnownPeerProbeInterval, (_) {
-      unawaited(_runKnownPeerProbe());
-    });
+    void scheduleNext() {
+      final now = DateTime.now();
+      final intervalMs = _kKnownPeerProbeInterval.inMilliseconds;
+      final nextMs =
+          ((now.millisecondsSinceEpoch ~/ intervalMs) + 1) * intervalMs;
+      final delay = Duration(milliseconds: nextMs - now.millisecondsSinceEpoch);
+      _knownPeerProbeTimer = Timer(delay, () {
+        unawaited(_runKnownPeerProbe());
+        scheduleNext();
+      });
+    }
+
+    scheduleNext();
+  }
+
+  void _scheduleKnownPeerWarmupProbes() {
+    for (final delay in _kKnownPeerWarmupProbeDelays) {
+      Timer(delay, () {
+        if (!_running || _dht == null || !_dht!.isRunning) return;
+        unawaited(_runKnownPeerProbe());
+      });
+    }
+  }
+
+  bool get _useLightDhtLookups => Platform.isAndroid;
+
+  Future<List<PeerInfo>> _lookupDiscoveryPeers(
+    Uint8List infoHash, {
+    required bool includeCached,
+  }) async {
+    if (_dht == null || !_dht!.isRunning) return const [];
+    if (_useLightDhtLookups) {
+      return _dht!.getPeersLight(infoHash, includeCached: includeCached);
+    }
+    return _dht!.getPeers(infoHash, includeCached: includeCached);
   }
 
   Future<void> _runKnownPeerProbe() async {
@@ -766,11 +938,23 @@ class P2PService {
     _failedDhtCandidates.removeWhere(
       (_, failedAt) => now.difference(failedAt) >= _kFailedDhtCandidateTtl,
     );
+    _knownPeerCandidateCache.removeWhere(
+      (_, cached) =>
+          now.difference(cached.updatedAt) >= _kKnownPeerCandidateCacheTtl,
+    );
   }
 
   Future<List<_KnownPeerTarget>> _loadKnownPeerTargets(
     DevicesService devService,
   ) async {
+    final now = DateTime.now();
+    if (_knownPeerTargetsCache != null &&
+        _knownPeerTargetsCacheTime != null &&
+        now.difference(_knownPeerTargetsCacheTime!) <
+            _kKnownPeerTargetCacheTtl) {
+      return List<_KnownPeerTarget>.from(_knownPeerTargetsCache!);
+    }
+
     final profile = ProfileService().getProfile();
     final myCallsign = profile.callsign.toUpperCase();
     final myNpub = profile.npub;
@@ -833,6 +1017,8 @@ class P2PService {
     try {
       final storage = AppService().profileStorage;
       if (storage != null) {
+        final contactIndex = await _indexContactFiles(storage);
+
         final datesToCheck = <DateTime>[
           DateTime.now(),
           DateTime.now().subtract(const Duration(days: 7)),
@@ -866,6 +1052,20 @@ class P2PService {
             }
           }
         }
+
+        await _loadDirectMessageDhtTargets(
+          addTarget,
+          profileStorage: storage,
+          contactIndex: contactIndex,
+        );
+
+        if (targets.isEmpty) {
+          await _loadRecentContactDhtTargets(
+            storage,
+            addTarget,
+            contactIndex: contactIndex,
+          );
+        }
       }
     } catch (e) {
       LogService().log(
@@ -873,17 +1073,325 @@ class P2PService {
       );
     }
 
-    return targets.values.toList()..sort((a, b) {
-      if (a.needsBootstrap != b.needsBootstrap) {
-        return a.needsBootstrap ? -1 : 1;
+    final sortedTargets = targets.values.toList()
+      ..sort((a, b) {
+        if (a.needsBootstrap != b.needsBootstrap) {
+          return a.needsBootstrap ? -1 : 1;
+        }
+        if (a.hasReachableEndpoint != b.hasReachableEndpoint) {
+          return a.hasReachableEndpoint ? 1 : -1;
+        }
+        final byLastSeen = _compareDescendingTime(a.lastSeen, b.lastSeen);
+        if (byLastSeen != 0) return byLastSeen;
+        return a.callsign.compareTo(b.callsign);
+      });
+
+    final limitedTargets = sortedTargets.take(_kKnownPeerTargetLimit).toList();
+    _knownPeerTargetsCache = limitedTargets;
+    _knownPeerTargetsCacheTime = now;
+    return List<_KnownPeerTarget>.from(limitedTargets);
+  }
+
+  _KnownPeerTarget _selectKnownPeerTarget(
+    List<_KnownPeerTarget> targets,
+    DevicesService devService,
+  ) {
+    final now = DateTime.now();
+    final preferredCallsign = _preferredKnownPeerCallsign;
+    if (preferredCallsign != null &&
+        _preferredKnownPeerExpiresAt != null &&
+        now.isBefore(_preferredKnownPeerExpiresAt!)) {
+      for (final target in targets) {
+        if (target.callsign == preferredCallsign) {
+          return target;
+        }
       }
-      if (a.hasReachableEndpoint != b.hasReachableEndpoint) {
-        return a.hasReachableEndpoint ? 1 : -1;
+    }
+
+    _preferredKnownPeerCallsign = null;
+    _preferredKnownPeerExpiresAt = null;
+
+    for (final target in targets) {
+      final device = devService.getDevice(target.callsign);
+      final hasDhtEndpoint =
+          device != null &&
+          device.udpIp != null &&
+          device.udpIp!.isNotEmpty &&
+          device.udpPort != null &&
+          device.udpPort! > 0;
+      if (target.needsBootstrap ||
+          !target.hasReachableEndpoint ||
+          !hasDhtEndpoint) {
+        return target;
       }
-      final byLastSeen = _compareDescendingTime(a.lastSeen, b.lastSeen);
-      if (byLastSeen != 0) return byLastSeen;
-      return a.callsign.compareTo(b.callsign);
-    });
+    }
+
+    _npubProbeIndex = _npubProbeIndex % targets.length;
+    final target = targets[_npubProbeIndex];
+    _npubProbeIndex++;
+    return target;
+  }
+
+  Future<Map<String, StorageEntry>> _indexContactFiles(
+    ProfileStorage storage,
+  ) async {
+    final indexed = <String, StorageEntry>{};
+    if (!await storage.directoryExists('contacts')) {
+      return indexed;
+    }
+
+    final contactsStorage = ScopedProfileStorage(storage, 'contacts');
+    final entries = await contactsStorage.listDirectory('', recursive: true);
+    for (final entry in entries) {
+      if (entry.isDirectory ||
+          entry.name == 'group.txt' ||
+          entry.name == 'fast.json' ||
+          entry.name.startsWith('.') ||
+          !entry.name.endsWith('.txt')) {
+        continue;
+      }
+      final callsign = entry.name
+          .substring(0, entry.name.length - 4)
+          .toUpperCase();
+      final existing = indexed[callsign];
+      if (existing == null ||
+          _compareDescendingTime(entry.modified, existing.modified) < 0) {
+        indexed[callsign] = entry;
+      }
+    }
+
+    return indexed;
+  }
+
+  Future<void> _loadDirectMessageDhtTargets(
+    void Function(String callsign, String npub, {DateTime? lastSeen})
+    addTarget, {
+    ProfileStorage? profileStorage,
+    Map<String, StorageEntry>? contactIndex,
+  }) async {
+    final config = StorageConfig();
+    if (!config.isInitialized) {
+      return;
+    }
+
+    final chatDir = Directory(config.chatDir);
+    if (!await chatDir.exists()) {
+      return;
+    }
+
+    final contactsStorage =
+        profileStorage != null &&
+            await profileStorage.directoryExists('contacts')
+        ? ScopedProfileStorage(profileStorage, 'contacts')
+        : null;
+
+    await for (final entity in chatDir.list(followLinks: false)) {
+      if (entity is! Directory) continue;
+
+      final segments = entity.uri.pathSegments
+          .where((segment) => segment.isNotEmpty)
+          .toList();
+      final callsign = segments.isEmpty ? null : segments.last.toUpperCase();
+      if (callsign == null ||
+          callsign.isEmpty ||
+          callsign == 'MAIN' ||
+          callsign == 'EXTRA') {
+        continue;
+      }
+
+      final configFile = File('${entity.path}/config.json');
+      if (!await configFile.exists()) {
+        continue;
+      }
+
+      try {
+        final decoded = jsonDecode(await configFile.readAsString());
+        if (decoded is! Map<String, dynamic>) {
+          continue;
+        }
+
+        final type = decoded['type'] as String?;
+        final otherNpub = decoded['otherNpub'] as String?;
+        if (type != 'direct') {
+          continue;
+        }
+
+        final configModified = await configFile.lastModified();
+        if (otherNpub != null &&
+            otherNpub.isNotEmpty &&
+            otherNpub.startsWith('npub1')) {
+          addTarget(callsign, otherNpub, lastSeen: configModified);
+          continue;
+        }
+
+        if (contactsStorage == null || contactIndex == null) {
+          continue;
+        }
+
+        final contactEntry = contactIndex[callsign];
+        if (contactEntry == null) continue;
+        final contactIdentity = await _readContactDhtIdentity(
+          contactsStorage,
+          contactEntry.path,
+        );
+        final contactNpub = contactIdentity.$2;
+        if (contactNpub == null ||
+            contactNpub.isEmpty ||
+            !contactNpub.startsWith('npub1')) {
+          continue;
+        }
+
+        addTarget(
+          callsign,
+          contactNpub,
+          lastSeen: _latestTime(configModified, contactEntry.modified),
+        );
+      } catch (_) {
+        // Ignore malformed DM config files.
+      }
+    }
+  }
+
+  void _rememberPreferredKnownPeer(_KnownPeerTarget target) {
+    _preferredKnownPeerCallsign = target.callsign;
+    _preferredKnownPeerExpiresAt = DateTime.now().add(_kPreferredKnownPeerTtl);
+  }
+
+  void _clearPreferredKnownPeer(String callsign) {
+    if (_preferredKnownPeerCallsign == callsign) {
+      _preferredKnownPeerCallsign = null;
+      _preferredKnownPeerExpiresAt = null;
+    }
+  }
+
+  Uint8List? _pairRendezvousHash(_KnownPeerTarget target) {
+    final myNpub = ProfileService().getProfile().npub.trim();
+    final targetNpub = target.npub.trim();
+    if (myNpub.isEmpty || targetNpub.isEmpty) {
+      return null;
+    }
+
+    final sorted = [myNpub, targetNpub]..sort();
+    final topic = '$_kPairRendezvousTopicPrefix${sorted[0]}:${sorted[1]}';
+    return sha1Hash(topic);
+  }
+
+  Future<void> _announcePairRendezvous(_KnownPeerTarget target) async {
+    final infoHash = _pairRendezvousHash(target);
+    if (infoHash == null || _dht == null || !_dht!.isRunning) return;
+
+    final dhtPort = _dht!.localPort;
+    if (_useLightDhtLookups) {
+      await _dht!.announceLight(infoHash, dhtPort, persist: false);
+    } else {
+      await _dht!.announce(infoHash, dhtPort, persist: false);
+    }
+
+    final explicitPorts = <int>{};
+    final capabilityPort = _capability?.publicPort;
+    if (capabilityPort != null &&
+        capabilityPort > 1 &&
+        capabilityPort != dhtPort) {
+      explicitPorts.add(capabilityPort);
+    }
+    for (final observedPort in _dht!.recentExternalPorts) {
+      if (observedPort > 1 && observedPort != dhtPort) {
+        explicitPorts.add(observedPort);
+      }
+    }
+
+    for (final explicitPort in explicitPorts.take(4)) {
+      if (_useLightDhtLookups) {
+        await _dht!.announceLight(
+          infoHash,
+          explicitPort,
+          persist: false,
+          impliedPort: false,
+        );
+      } else {
+        await _dht!.announce(
+          infoHash,
+          explicitPort,
+          persist: false,
+          impliedPort: false,
+        );
+      }
+    }
+  }
+
+  Future<List<PeerInfo>> _lookupPairRendezvousPeers(
+    _KnownPeerTarget target,
+  ) async {
+    final infoHash = _pairRendezvousHash(target);
+    if (infoHash == null || _dht == null || !_dht!.isRunning) {
+      return const [];
+    }
+
+    var peers = await _lookupDiscoveryPeers(infoHash, includeCached: false);
+    if (peers.isEmpty) {
+      peers = _dht!.getCachedPeers(infoHash);
+    }
+    return peers;
+  }
+
+  Future<void> _loadRecentContactDhtTargets(
+    ProfileStorage storage,
+    void Function(String callsign, String npub, {DateTime? lastSeen})
+    addTarget, {
+    Map<String, StorageEntry>? contactIndex,
+  }) async {
+    if (contactIndex == null || contactIndex.isEmpty) return;
+
+    final contactsStorage = ScopedProfileStorage(storage, 'contacts');
+    final recentEntries = contactIndex.values.toList()
+      ..sort((a, b) => _compareDescendingTime(a.modified, b.modified));
+
+    for (final entry in recentEntries.take(
+      _kKnownPeerRecentContactFallbackLimit,
+    )) {
+      final identity = await _readContactDhtIdentity(
+        contactsStorage,
+        entry.path,
+      );
+      final callsign = identity.$1;
+      final npub = identity.$2;
+      if (callsign == null ||
+          callsign.isEmpty ||
+          npub == null ||
+          npub.isEmpty ||
+          !npub.startsWith('npub1')) {
+        continue;
+      }
+
+      addTarget(callsign, npub, lastSeen: entry.modified);
+    }
+  }
+
+  Future<(String?, String?)> _readContactDhtIdentity(
+    ScopedProfileStorage contactsStorage,
+    String relativePath,
+  ) async {
+    final content = await contactsStorage.readString(relativePath);
+    if (content == null || content.isEmpty) {
+      return (null, null);
+    }
+
+    String? callsign;
+    String? npub;
+    for (final rawLine in content.split('\n')) {
+      final line = rawLine.trim();
+      if (line.startsWith('CALLSIGN:')) {
+        callsign = line.substring('CALLSIGN:'.length).trim();
+      } else if (line.startsWith('NPUB:')) {
+        npub = line.substring('NPUB:'.length).trim();
+      }
+
+      if (callsign != null && npub != null) {
+        break;
+      }
+    }
+
+    return (callsign, npub);
   }
 
   DateTime? _latestTime(DateTime? a, DateTime? b) {
@@ -914,6 +1422,86 @@ class P2PService {
     LogService().log(
       'P2P: updated DHT rendezvous for ${device.callsign} at ${peer.ip}:${peer.port}; awaiting geogram identity',
     );
+  }
+
+  List<PeerInfo> _getCachedKnownPeerCandidates(_KnownPeerTarget target) {
+    _purgeExpiredFailedDhtCandidates();
+    final cached = _knownPeerCandidateCache[target.callsign];
+    if (cached == null) return const [];
+    return cached.peers;
+  }
+
+  void _updateKnownPeerCandidateCache(
+    _KnownPeerTarget target,
+    List<PeerInfo> candidates,
+  ) {
+    if (candidates.isEmpty) return;
+    _knownPeerCandidateCache[target.callsign] = _CachedKnownPeerCandidates(
+      peers: candidates.take(8).toList(),
+      updatedAt: DateTime.now(),
+    );
+  }
+
+  bool _samePeerSets(List<PeerInfo> a, List<PeerInfo> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    final aKeys = a.map((peer) => '${peer.ip}:${peer.port}').toSet();
+    final bKeys = b.map((peer) => '${peer.ip}:${peer.port}').toSet();
+    return aKeys.length == bKeys.length && aKeys.containsAll(bKeys);
+  }
+
+  List<PeerInfo> _mergeUniquePeers(List<PeerInfo> a, List<PeerInfo> b) {
+    final merged = <PeerInfo>[];
+    final seen = <String>{};
+
+    void addAll(List<PeerInfo> peers) {
+      for (final peer in peers) {
+        final key = '${peer.ip}:${peer.port}';
+        if (seen.add(key)) {
+          merged.add(peer);
+        }
+      }
+    }
+
+    addAll(a);
+    addAll(b);
+    return merged;
+  }
+
+  Future<Map<String, dynamic>?> _sendGeogramPunchBurst(PeerInfo peer) async {
+    if (_dht == null || !_dht!.isRunning) return null;
+
+    final responseCompleter = Completer<Map<String, dynamic>?>();
+    var pending = _kKnownPeerPunchAttempts;
+
+    for (var attempt = 0; attempt < _kKnownPeerPunchAttempts; attempt++) {
+      unawaited(() async {
+        if (attempt > 0) {
+          await Future.delayed(
+            Duration(
+              milliseconds: _kKnownPeerPunchSpacing.inMilliseconds * attempt,
+            ),
+          );
+        }
+
+        final response = await _dht!.sendGeogramQuery(
+          peer.ip,
+          peer.port,
+          timeout: _kKnownPeerPunchTimeout,
+        );
+        if (response != null && !responseCompleter.isCompleted) {
+          responseCompleter.complete(response);
+          return;
+        }
+
+        pending--;
+        if (pending == 0 && !responseCompleter.isCompleted) {
+          responseCompleter.complete(null);
+        }
+      }());
+    }
+
+    return responseCompleter.future;
   }
 
   // ─── Persistence ───────────────────────────────────────────────
