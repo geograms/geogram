@@ -476,6 +476,89 @@ mc.addEventListener('touchend', () => { if (mapDragging) { mapDragging = false; 
 document.getElementById('map-zin').onclick = () => { if (mapZoom < 18) { mapZoom++; mapCenterOn(mapLat, mapLon); for (const [k, i] of tileCache) { if (i.parentNode) i.parentNode.removeChild(i); } tileCache.clear(); mapRender(); mapSyncToModule(); } };
 document.getElementById('map-zout').onclick = () => { if (mapZoom > 2) { mapZoom--; mapCenterOn(mapLat, mapLon); for (const [k, i] of tileCache) { if (i.parentNode) i.parentNode.removeChild(i); } tileCache.clear(); mapRender(); mapSyncToModule(); } };
 
+// ── Map search (Nominatim geocoding) ─────────────────────────────────
+let searchDebounce = null;
+const mapQueryEl = document.getElementById('map-query');
+const mapResultsEl = document.getElementById('map-results');
+const mapSearchClear = document.getElementById('map-search-clear');
+
+mapQueryEl.addEventListener('input', () => {
+  clearTimeout(searchDebounce);
+  mapSearchClear.style.display = mapQueryEl.value ? '' : 'none';
+  searchDebounce = setTimeout(() => mapSearch(mapQueryEl.value), 400);
+});
+mapQueryEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { clearTimeout(searchDebounce); mapSearch(mapQueryEl.value); }
+  if (e.key === 'Escape') { mapQueryEl.value = ''; mapResultsEl.style.display = 'none'; mapSearchClear.style.display = 'none'; }
+});
+mapSearchClear.onclick = () => { mapQueryEl.value = ''; mapResultsEl.style.display = 'none'; mapSearchClear.style.display = 'none'; };
+
+async function mapSearch(query) {
+  query = query.trim();
+  if (!query) { mapResultsEl.style.display = 'none'; return; }
+
+  // Check for raw coordinates
+  const coordMatch = query.match(/^(-?\d+\.?\d*)\s*[,\s]\s*(-?\d+\.?\d*)$/);
+  if (coordMatch) {
+    const lat = parseFloat(coordMatch[1]), lon = parseFloat(coordMatch[2]);
+    if (!isNaN(lat) && !isNaN(lon)) {
+      showSearchResults([{ name: `${lat}, ${lon}`, lat, lon }]);
+      return;
+    }
+  }
+
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=8&addressdetails=1`;
+    const resp = await fetch(url, { headers: { 'User-Agent': 'Geogram/1.0' } });
+    const data = await resp.json();
+    const results = data.map(r => ({ name: r.display_name, lat: parseFloat(r.lat), lon: parseFloat(r.lon) }));
+
+    // Sort by distance from current center
+    const container = document.getElementById('map-container');
+    const w = container.clientWidth || 800, h = container.clientHeight || 600;
+    const cLat = px2lat(mapPixelY + h / 2, mapZoom), cLon = px2lon(mapPixelX + w / 2, mapZoom);
+    results.sort((a, b) => {
+      const da = Math.hypot(a.lat - cLat, a.lon - cLon);
+      const db = Math.hypot(b.lat - cLat, b.lon - cLon);
+      return da - db;
+    });
+
+    showSearchResults(results);
+  } catch { showSearchResults([]); }
+}
+
+function showSearchResults(results) {
+  mapResultsEl.innerHTML = '';
+  if (!results.length) {
+    mapResultsEl.innerHTML = '<div class="result"><div class="rname" style="color:var(--muted)">No results found</div></div>';
+    mapResultsEl.style.display = '';
+    return;
+  }
+  for (const r of results) {
+    const div = document.createElement('div');
+    div.className = 'result';
+    div.innerHTML = `<div class="rname">${r.name.length > 80 ? r.name.slice(0, 80) + '...' : r.name}</div><div class="rcoord">${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}</div>`;
+    div.onclick = () => {
+      mapZoom = 15;
+      mapCenterOn(r.lat, r.lon);
+      for (const [k, img] of tileCache) { if (img.parentNode) img.parentNode.removeChild(img); }
+      tileCache.clear();
+      mapRender();
+      mapSyncToModule();
+      mapResultsEl.style.display = 'none';
+      mapQueryEl.value = '';
+      mapSearchClear.style.display = 'none';
+    };
+    mapResultsEl.appendChild(div);
+  }
+  mapResultsEl.style.display = '';
+}
+
+// Prevent map drag when interacting with search
+mapQueryEl.addEventListener('mousedown', e => e.stopPropagation());
+mapQueryEl.addEventListener('touchstart', e => e.stopPropagation());
+document.getElementById('map-search').addEventListener('mousedown', e => e.stopPropagation());
+
 // ── Input ────────────────────────────────────────────────────────────
 document.getElementById('cmd-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { const v = e.target.value.trim(); if (v) { history.push(v); historyIdx = -1; sendCommand(v); } e.target.value = ''; }

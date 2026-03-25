@@ -67,6 +67,18 @@ main{flex:1;display:flex;overflow:hidden}
 #map-coords{position:absolute;bottom:12px;right:12px;background:rgba(22,27,34,.85);color:var(--muted);font-size:11px;font-family:var(--mono);padding:4px 10px;border-radius:6px;z-index:10;pointer-events:none}
 #map-attribution{position:absolute;bottom:0;right:0;font-size:9px;color:var(--muted);padding:2px 6px;background:rgba(13,17,23,.7);z-index:10}
 #map-attribution a{color:var(--muted)}
+#map-search{position:absolute;top:12px;left:12px;right:12px;z-index:20}
+#map-search-input{display:flex;background:rgba(22,27,34,.94);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+#map-search-input input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-size:13px;font-family:var(--font);padding:8px 12px}
+#map-search-input input::placeholder{color:var(--muted)}
+#map-search-input .icon{display:flex;align-items:center;padding:0 10px;color:var(--muted);font-size:16px}
+#map-search-input .clear{background:none;border:none;color:var(--muted);cursor:pointer;padding:0 10px;font-size:14px}
+#map-results{margin-top:4px;background:rgba(22,27,34,.94);border:1px solid var(--border);border-radius:10px;max-height:240px;overflow-y:auto}
+#map-results .result{padding:8px 12px;cursor:pointer;border-bottom:1px solid rgba(48,54,61,.5)}
+#map-results .result:last-child{border-bottom:none}
+#map-results .result:hover{background:var(--border)}
+#map-results .result .rname{font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#map-results .result .rcoord{font-size:10px;font-family:var(--mono);color:var(--muted)}
 </style>
 </head>
 <body>
@@ -85,6 +97,14 @@ main{flex:1;display:flex;overflow:hidden}
   </div>
   <div id="map-container">
     <div id="map-tiles"></div>
+    <div id="map-search">
+      <div id="map-search-input">
+        <span class="icon">&#128269;</span>
+        <input id="map-query" type="text" placeholder="Search address or coordinates..." autocomplete="off" spellcheck="false">
+        <button class="clear" id="map-search-clear" style="display:none">&times;</button>
+      </div>
+      <div id="map-results" style="display:none"></div>
+    </div>
     <div id="map-overlay"><button id="map-zin" title="Zoom in">+</button><button id="map-zout" title="Zoom out">&minus;</button></div>
     <div id="map-coords"></div>
     <div id="map-attribution">Tiles &copy; Esri</div>

@@ -402,6 +402,13 @@ class _SlippyMapState extends State<_SlippyMap> {
   Offset? _dragStart;
   double? _dragPxX, _dragPxY;
 
+  // Search
+  final _searchController = TextEditingController();
+  final _searchFocus = FocusNode();
+  List<_SearchResult>? _searchResults;
+  bool _searching = false;
+  Timer? _debounce;
+
   @override
   void initState() {
     super.initState();
@@ -418,6 +425,89 @@ class _SlippyMapState extends State<_SlippyMap> {
       _zoom = widget.zoom;
       _centerOn(widget.lat, widget.lon);
     }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _searchFocus.dispose();
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _doSearch(String query) async {
+    if (query.trim().isEmpty) {
+      setState(() => _searchResults = null);
+      return;
+    }
+    setState(() => _searching = true);
+
+    // Check if it's raw coordinates (lat, lon)
+    final coordMatch = RegExp(r'^(-?\d+\.?\d*)\s*[,\s]\s*(-?\d+\.?\d*)$')
+        .firstMatch(query.trim());
+    if (coordMatch != null) {
+      final lat = double.tryParse(coordMatch.group(1)!);
+      final lon = double.tryParse(coordMatch.group(2)!);
+      if (lat != null && lon != null) {
+        setState(() {
+          _searchResults = [_SearchResult('$lat, $lon', 'Coordinates', lat, lon)];
+          _searching = false;
+        });
+        return;
+      }
+    }
+
+    try {
+      final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+        'q': query,
+        'format': 'json',
+        'limit': '8',
+        'addressdetails': '1',
+      });
+      final client = HttpClient();
+      client.userAgent = 'Geogram/1.0';
+      final req = await client.getUrl(uri);
+      final resp = await req.close();
+      final body = await resp.transform(utf8.decoder).join();
+      client.close();
+
+      final results = (jsonDecode(body) as List).map((r) {
+        final lat = double.tryParse(r['lat']?.toString() ?? '') ?? 0;
+        final lon = double.tryParse(r['lon']?.toString() ?? '') ?? 0;
+        final name = r['display_name'] as String? ?? '';
+        final type = r['type'] as String? ?? '';
+        return _SearchResult(name, type, lat, lon);
+      }).toList();
+
+      // Sort by distance from current center
+      final size = _viewSize;
+      final cLat = _px2lat(_pxY + size.height / 2, _zoom);
+      final cLon = _px2lon(_pxX + size.width / 2, _zoom);
+      results.sort((a, b) {
+        final da = _distDeg(a.lat, a.lon, cLat, cLon);
+        final db = _distDeg(b.lat, b.lon, cLat, cLon);
+        return da.compareTo(db);
+      });
+
+      setState(() { _searchResults = results; _searching = false; });
+    } catch (_) {
+      setState(() { _searchResults = []; _searching = false; });
+    }
+  }
+
+  double _distDeg(double lat1, double lon1, double lat2, double lon2) {
+    final dlat = lat1 - lat2, dlon = lon1 - lon2;
+    return sqrt(dlat * dlat + dlon * dlon);
+  }
+
+  void _goToResult(_SearchResult r) {
+    setState(() {
+      _searchResults = null;
+      _searchController.clear();
+      _zoom = 15;
+      _centerOn(r.lat, r.lon);
+    });
+    _syncViewport();
   }
 
   void _centerOn(double lat, double lon) {
@@ -530,6 +620,116 @@ class _SlippyMapState extends State<_SlippyMap> {
             children: [
               Container(color: const Color(0xFF0a0e14)),
               ...tiles,
+              // Search bar
+              Positioned(
+                top: 12,
+                left: 12,
+                right: 12,
+                child: Column(
+                  children: [
+                    Container(
+                      decoration: BoxDecoration(
+                        color: const Color(0xF0161b22),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFF30363d)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(left: 12),
+                            child: Icon(Icons.search, size: 18, color: Color(0xFF8b949e)),
+                          ),
+                          Expanded(
+                            child: TextField(
+                              controller: _searchController,
+                              focusNode: _searchFocus,
+                              style: const TextStyle(fontSize: 13, color: Color(0xFFe6edf3)),
+                              decoration: const InputDecoration(
+                                hintText: 'Search address or coordinates...',
+                                hintStyle: TextStyle(color: Color(0xFF8b949e), fontSize: 13),
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                                isDense: true,
+                              ),
+                              onChanged: (v) {
+                                _debounce?.cancel();
+                                _debounce = Timer(const Duration(milliseconds: 400), () => _doSearch(v));
+                              },
+                              onSubmitted: _doSearch,
+                            ),
+                          ),
+                          if (_searching)
+                            const Padding(
+                              padding: EdgeInsets.only(right: 10),
+                              child: SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                            )
+                          else if (_searchController.text.isNotEmpty)
+                            IconButton(
+                              icon: const Icon(Icons.close, size: 16, color: Color(0xFF8b949e)),
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() => _searchResults = null);
+                              },
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                            ),
+                        ],
+                      ),
+                    ),
+                    if (_searchResults != null && _searchResults!.isNotEmpty)
+                      Container(
+                        margin: const EdgeInsets.only(top: 4),
+                        constraints: const BoxConstraints(maxHeight: 240),
+                        decoration: BoxDecoration(
+                          color: const Color(0xF0161b22),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF30363d)),
+                        ),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          padding: EdgeInsets.zero,
+                          itemCount: _searchResults!.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFF30363d)),
+                          itemBuilder: (context, i) {
+                            final r = _searchResults![i];
+                            return InkWell(
+                              onTap: () => _goToResult(r),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      r.name.length > 80 ? '${r.name.substring(0, 80)}...' : r.name,
+                                      style: const TextStyle(fontSize: 12, color: Color(0xFFe6edf3)),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    Text(
+                                      '${r.lat.toStringAsFixed(5)}, ${r.lon.toStringAsFixed(5)}',
+                                      style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Color(0xFF8b949e)),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    if (_searchResults != null && _searchResults!.isEmpty && !_searching)
+                      Container(
+                        margin: const EdgeInsets.only(top: 4),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xF0161b22),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF30363d)),
+                        ),
+                        child: const Text('No results found', style: TextStyle(fontSize: 12, color: Color(0xFF8b949e))),
+                      ),
+                  ],
+                ),
+              ),
               // Zoom controls
               Positioned(
                 bottom: 12,
@@ -590,4 +790,11 @@ class _SlippyMapState extends State<_SlippyMap> {
       ),
     );
   }
+}
+
+class _SearchResult {
+  final String name;
+  final String type;
+  final double lat, lon;
+  _SearchResult(this.name, this.type, this.lat, this.lon);
 }

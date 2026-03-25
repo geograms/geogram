@@ -605,6 +605,10 @@ Future<void> main(List<String> args) async {
         _printPrompt(uiState);
         continue;
       }
+      if (_handleSearchSelection(trimmed, bridge, moduleId)) {
+        _printPrompt(uiState);
+        continue;
+      }
       if (_handleUiCommand(trimmed, uiState, bridge, moduleId)) {
         _printPrompt(uiState);
         continue;
@@ -648,6 +652,10 @@ Future<void> main(List<String> args) async {
         stdout.writeln();
         final line = lineEditor.submit();
         if (line.isNotEmpty) {
+          if (_handleSearchSelection(line, bridge, moduleId)) {
+            _printPrompt(uiState);
+            continue;
+          }
           if (_handleUiCommand(line, uiState, bridge, moduleId)) {
             _printPrompt(uiState);
             continue;
@@ -942,7 +950,7 @@ class _LineEditor {
     }
     // At root — wapp commands + navigation
     return [
-      'help', 'clear', 'echo', 'pwd', 'cd', 'ls',
+      'help', 'clear', 'echo', 'pwd', 'cd', 'ls', 'search',
       'cat', 'touch', 'write', 'rm', 'mkdir', 'stat',
       'kv.get', 'kv.set', 'kv.del', 'kv.list',
       'date', 'uptime', 'platform', 'heap',
@@ -1076,6 +1084,16 @@ bool _handleUiCommand(
       }
       return false;
 
+    case 'search':
+      // Geocoding search — works at any level, sends goto to module
+      if (arg.isEmpty) {
+        stderr.writeln('${_red}Usage: search <address or coordinates>$_reset');
+        return true;
+      }
+      final query = parts.sublist(1).join(' ');
+      _performSearch(query, bridge, moduleId);
+      return true;
+
     default:
       // Check if the command matches an action name in the current screen
       if (ui.currentScreen != null) {
@@ -1098,6 +1116,114 @@ bool _handleUiCommand(
       }
       return false;
   }
+}
+
+/// Geocoding search via Nominatim — results sorted by distance, user picks one.
+void _performSearch(
+    String query, WasmBridge bridge, String moduleId) {
+  // Check for raw coordinates
+  final coordMatch =
+      RegExp(r'^(-?\d+\.?\d*)\s*[,\s]\s*(-?\d+\.?\d*)$').firstMatch(query);
+  if (coordMatch != null) {
+    final lat = double.tryParse(coordMatch.group(1)!);
+    final lon = double.tryParse(coordMatch.group(2)!);
+    if (lat != null && lon != null) {
+      stdout.writeln('$_cyan$lat, $lon$_reset');
+      bridge.send({
+        '@type': 'sendMessage',
+        'moduleId': moduleId,
+        'data': {'command': 'goto $lat $lon'},
+      });
+      bridge.drain();
+      return;
+    }
+  }
+
+  stdout.writeln('${_dim}Searching...$_reset');
+  try {
+    final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+      'q': query,
+      'format': 'json',
+      'limit': '8',
+    });
+    final request = HttpClient()
+      ..userAgent = 'Geogram/1.0';
+    final req = request.getUrl(uri);
+    req.then((r) => r.close()).then((resp) {
+      resp.transform(utf8.decoder).join().then((body) {
+        request.close();
+        final results = (jsonDecode(body) as List).map((r) {
+          final lat = double.tryParse(r['lat']?.toString() ?? '') ?? 0.0;
+          final lon = double.tryParse(r['lon']?.toString() ?? '') ?? 0.0;
+          final name = r['display_name'] as String? ?? '';
+          return (name: name, lat: lat, lon: lon);
+        }).toList();
+
+        if (results.isEmpty) {
+          stdout.writeln('${_yellow}No results found.$_reset');
+          return;
+        }
+
+        stdout.writeln('${_bold}Results:$_reset');
+        for (var i = 0; i < results.length; i++) {
+          final r = results[i];
+          final display = r.name.length > 70
+              ? '${r.name.substring(0, 70)}...'
+              : r.name;
+          stdout.writeln(
+              '  $_cyan${i + 1}$_reset  $display  $_dim${r.lat.toStringAsFixed(5)}, ${r.lon.toStringAsFixed(5)}$_reset');
+        }
+        stdout.writeln(
+            '${_dim}Type a number to go there, or press Enter to cancel.$_reset');
+
+        // Read selection from stdin (next line)
+        // Since we're in raw mode, we can't easily do this synchronously.
+        // Store results for the next input line.
+        _pendingSearchResults = results
+            .map((r) => _PendingResult(r.name, r.lat, r.lon))
+            .toList();
+      });
+    });
+  } catch (e) {
+    stderr.writeln('${_red}Search failed: $e$_reset');
+  }
+}
+
+class _PendingResult {
+  final String name;
+  final double lat, lon;
+  _PendingResult(this.name, this.lat, this.lon);
+}
+
+List<_PendingResult>? _pendingSearchResults;
+
+/// Check if input is a search result selection (number).
+bool _handleSearchSelection(
+    String input, WasmBridge bridge, String moduleId) {
+  if (_pendingSearchResults == null) return false;
+  final results = _pendingSearchResults!;
+  _pendingSearchResults = null;
+
+  final idx = int.tryParse(input.trim());
+  if (idx == null || idx < 1 || idx > results.length) {
+    stdout.writeln('${_dim}Search cancelled.$_reset');
+    return true;
+  }
+
+  final r = results[idx - 1];
+  stdout.writeln('$_green${r.name}$_reset');
+  bridge.send({
+    '@type': 'sendMessage',
+    'moduleId': moduleId,
+    'data': {'command': 'goto ${r.lat} ${r.lon}'},
+  });
+  // Give module time to respond
+  Future.delayed(const Duration(milliseconds: 50), () {
+    for (final e in bridge.drain()) {
+      _handleEvent(e);
+    }
+  });
+  return true;
 }
 
 // ── Event handlers ───────────────────────────────────────────────────
