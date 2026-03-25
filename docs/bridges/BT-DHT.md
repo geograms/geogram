@@ -1,8 +1,8 @@
 # BitTorrent DHT Bridge for P2P Discovery
 
-**Version**: 1.2
-**Status**: Cross-network discovery working. Android memory optimization pending.
-**Last Updated**: 2026-03-22
+**Version**: 1.3
+**Status**: Cross-network discovery working. Direct DHT transport still blocked on endpoint-dependent NATs.
+**Last Updated**: 2026-03-25
 
 ## Table of Contents
 
@@ -29,6 +29,7 @@ Geogram uses the BitTorrent Mainline DHT (BEP 5) to discover devices without dep
 - Discover Geogram nodes on the internet across different networks
 - Find all devices belonging to a specific NOSTR identity (npub)
 - Detect public IP via BEP 42 DHT responses (no STUN needed)
+- Publish pair-specific rendezvous candidates for known peers
 - Show discovered peers in the Devices UI with "internet" tag
 
 ## Architecture
@@ -80,10 +81,14 @@ Every Geogram node announces here. Used to find other Geogram peers and learn pu
 
 Each device announces on the SHA1 of its NOSTR public key. Querying `SHA1(npub)` returns all online devices for that identity. This is how the Devices UI discovers specific peers.
 
+### 3. Pair Rendezvous Topic: `SHA1("geogram:rendezvous:v1:<sorted-npubs>")`
+
+When Geogram is actively trying to connect to a known peer, it also announces on a pair-specific rendezvous topic derived from the two npubs. This reduces dependence on the crowded global and per-user topics and gives each side a fresher candidate set for direct UDP probing.
+
 ### Announce Details
 
 - **Re-announce interval**: every 25 minutes
-- **Announced port**: the device's HTTP API port (default 3456)
+- **Announced port**: the device's DHT UDP socket port, published with `implied_port=1`
 - **Token validation**: BEP 5 token exchange prevents spoofing
 - **Announce target**: the K-closest nodes found by the iterative lookup (not routing table nodes)
 
@@ -109,7 +114,8 @@ Public IP learned from BEP 42 `ip` field in DHT responses.
 7. Scan geogram topic for peers → register in DevicesService
 8. For each known device with npub: fire lightweight get_peers
 9. Periodic: re-announce every 25 min, refresh table every 2 min
-10. Discovered peers appear in Devices UI with "internet" tag (green)
+10. Known peers are probed by `npub` and pair-rendezvous topics
+11. Discovered peers appear in Devices UI with "internet" tag (green)
 ```
 
 ### Persistence
@@ -226,6 +232,11 @@ Multiple devices behind the same NAT share the same public IP. DHT returns entri
 | `dht_start` | — | Start DHT |
 | `dht_stop` | — | Stop DHT |
 | `dht_find_user` | `npub` | Find devices for npub |
+| `dht_find_user_light` | `npub` | Bounded lookup for an npub topic |
+| `dht_known_targets` | — | Show the persisted peers that will be probed |
+| `dht_probe_once` | — | Run one immediate known-peer probe cycle |
+| `dht_geogram_query` | `ip`, `port` | Send a single geogram identity query |
+| `dht_geogram_punch` | `ip`, `port` | Send a short burst of geogram queries |
 | `dht_add_node` | `ip`, `port` | Add a DHT peer |
 
 ## Testing
@@ -265,29 +276,47 @@ Verified via `dht_find_user` debug API. Both devices' iterative lookups converge
 
 ## Current Status
 
-### Working (tested 2026-03-22)
+### Working (tested 2026-03-25)
 
-- **Iterative lookup**: proper BEP 5 convergence with own candidate set, parallel alpha=3 queries, converges in ~7-10s
-- **Cross-network discovery**: laptop on WiFi finds Android on mobile data via DHT
-- **Devices UI**: discovered peers show as ONLINE with `['internet']` tag
-- **BEP 42 IP detection**: public IP learned from DHT responses
-- **DHT announce**: announces reach the K-closest nodes (not just routing table nodes)
-- **Routing table growth**: nodes from ALL response types processed (find_node + get_peers)
-- **Persistence**: node ID, routing table, discovered peers cached across sessions
-- **Standalone test**: two nodes find each other — PASS
+- **Iterative lookup**: proper BEP 5 convergence with per-lookup candidate sets and bounded/light mode on Android
+- **Cross-network discovery**: desktop and Android still find each other through the public DHT
+- **Known-peer probing**: persisted npub targets are probed automatically, with sticky retry for unresolved peers
+- **Pair rendezvous**: active known-peer probes publish and query pair-specific DHT topics for fresher candidates
+- **BEP 42 endpoint observation**: recent external ports are tracked and exposed in `dht_status`
+- **Devices/debug tooling**: DHT status, target inspection, and manual query/punch debug endpoints are available
 
-### Pending
+### Blocked
 
-- **Android OOM**: the DHT iterative lookups combined with other Geogram services (BLE, Whisper, DM queue) exceed available memory on low-RAM Android devices. The DHT library itself uses only 6MB — the issue is total app memory pressure. Needs: either reduce other services' memory during DHT operations, or run DHT in a lighter mode on Android (fewer candidates, shorter lookups).
-- **Direct data transport**: UDP hole punching (`ice_punch.dart`) is scaffolded but not active.
+- **Direct DHT transport on the tested laptop/Android networks**: discovery succeeds, but the peers still do not receive each other's geogram UDP queries or responses
+- **Direct WebSocket/WebRTC bootstrap through DHT alone**: not reliable on the tested NATs because the rendezvous UDP path itself is not becoming reachable
+- **Relay-free internet transport**: still unresolved for endpoint-dependent NATs
 
 ## Known Issues
 
+### Endpoint-Dependent NAT / Direct Transport
+
+As of the March 25, 2026 verification runs, the main blocker is no longer Android memory. The current Android build stays alive long enough to bootstrap, announce, and run repeated DHT probe cycles.
+
+What the latest verified run showed:
+
+- Desktop advertised and probed from `178.202.105.29:40362`
+- Android DHT socket started on `47.64.115.57:55398`
+- Android BEP 42 observation reported a different public port, `47.64.115.57:19836`
+- Both peers discovered current and recent candidates through the `npub` topic and the pair-rendezvous topic
+- Both peers sent repeated geogram UDP bursts to those candidates
+- Neither peer logged an inbound `DHT: geogram query from ...` or `DHT: geogram response from ...`
+
+This is consistent with endpoint-dependent NAT behavior on the Android network: the same UDP socket is not presenting a single stable public port to all remote peers. In that case, BitTorrent DHT remains useful for discovery, but it is not sufficient as the only transport bootstrap across these two networks.
+
+Practical implication:
+
+- **DHT is the discovery/rendezvous plane**
+- **Direct transport still needs a reachable path**: STUN/TURN, relay, or another introducer that can carry signaling when direct UDP does not open
+- **Direct WebSocket between two NATed peers is not realistic without a reachable TCP listener or relay**
+
 ### Android Memory
 
-The OBLUE TANK2 (Android 14, limited RAM) OOMs when DHT runs alongside all other services. The OOM stack trace shows `new Uint8List` in HTTP stream buffering — the immediate trigger is station HTTP probes (TLS decompression), not DHT itself. The fix `_fetchStationClients` to only run when the station WebSocket is connected reduced the frequency, but the app still hits OOM during DHT announce phase (iterative lookup creates ~85 candidate objects).
-
-The standalone test proves the DHT library uses only 6MB. The Android issue is total app memory budget, not DHT efficiency.
+The earlier Android OOM problem was real, but it is no longer the primary blocker in the current code path. The move to bounded/light lookups on Android reduced the memory pressure enough for repeated DHT announce and probe cycles during the latest tests.
 
 ### Token Errors
 
