@@ -23,18 +23,19 @@ import 'log_service.dart';
 // Constants from fcntl.h
 // -----------------------------------------------------------------------------
 const O_RDWR = 0x0002;
-const O_NONBLOCK = 0x0800;
 
 // -----------------------------------------------------------------------------
 // Constants from linux/usbdevice_fs.h
 // -----------------------------------------------------------------------------
 // IOCTL numbers for USB device operations (Linux x86_64)
 // These are calculated using _IOWR/_IOR macros from asm-generic/ioctl.h
-const USBDEVFS_CONTROL = 0xC0185500; // _IOWR('U', 0, struct usbdevfs_ctrltransfer)
+const USBDEVFS_CONTROL =
+    0xC0185500; // _IOWR('U', 0, struct usbdevfs_ctrltransfer)
 const USBDEVFS_BULK = 0xC0185502; // _IOWR('U', 2, struct usbdevfs_bulktransfer)
 const USBDEVFS_CLAIMINTERFACE = 0x8004550F; // _IOR('U', 15, unsigned int)
 const USBDEVFS_RELEASEINTERFACE = 0x80045510; // _IOR('U', 16, unsigned int)
-const USBDEVFS_SETINTERFACE = 0x80085504; // _IOR('U', 4, struct usbdevfs_setinterface)
+const USBDEVFS_SETINTERFACE =
+    0x80085504; // _IOR('U', 4, struct usbdevfs_setinterface)
 const USBDEVFS_CLEAR_HALT = 0x80045515; // _IOR('U', 21, unsigned int)
 
 // USB transfer direction flags (bmRequestType)
@@ -143,49 +144,28 @@ typedef OpenDart = int Function(Pointer<Utf8> path, int flags);
 typedef CloseNative = Int32 Function(Int32 fd);
 typedef CloseDart = int Function(int fd);
 
-typedef ReadNative = IntPtr Function(Int32 fd, Pointer<Uint8> buf, IntPtr count);
+typedef ReadNative =
+    IntPtr Function(Int32 fd, Pointer<Uint8> buf, IntPtr count);
 typedef ReadDart = int Function(int fd, Pointer<Uint8> buf, int count);
 
-typedef WriteNative = IntPtr Function(Int32 fd, Pointer<Uint8> buf, IntPtr count);
+typedef WriteNative =
+    IntPtr Function(Int32 fd, Pointer<Uint8> buf, IntPtr count);
 typedef WriteDart = int Function(int fd, Pointer<Uint8> buf, int count);
 
 // ioctl with pointer argument
-typedef IoctlPtrNative = Int32 Function(
-    Int32 fd, Uint64 request, Pointer<Void> arg);
+typedef IoctlPtrNative =
+    Int32 Function(Int32 fd, Uint64 request, Pointer<Void> arg);
 typedef IoctlPtrDart = int Function(int fd, int request, Pointer<Void> arg);
 
 // ioctl with int argument
-typedef IoctlIntNative = Int32 Function(
-    Int32 fd, Uint64 request, Pointer<Int32> arg);
+typedef IoctlIntNative =
+    Int32 Function(Int32 fd, Uint64 request, Pointer<Int32> arg);
 typedef IoctlIntDart = int Function(int fd, int request, Pointer<Int32> arg);
 
 // Poll for events
-typedef PollNative = Int32 Function(
-    Pointer<Void> fds, Uint64 nfds, Int32 timeout);
-typedef PollDart = int Function(Pointer<Void> fds, int nfds, int timeout);
-
 // errno access
 typedef ErrnoLocNative = Pointer<Int32> Function();
 typedef ErrnoLocDart = Pointer<Int32> Function();
-
-// -----------------------------------------------------------------------------
-// pollfd structure
-// -----------------------------------------------------------------------------
-final class PollFd extends Struct {
-  @Int32()
-  external int fd;
-
-  @Int16()
-  external int events;
-
-  @Int16()
-  external int revents;
-}
-
-const POLLIN = 0x0001;
-const POLLOUT = 0x0004;
-const POLLERR = 0x0008;
-const POLLHUP = 0x0010;
 
 // -----------------------------------------------------------------------------
 // USB Device Info
@@ -211,11 +191,15 @@ class UsbDeviceInfo {
     this.serial,
   });
 
-  String get vidHex => '0x${vid.toRadixString(16).toUpperCase().padLeft(4, '0')}';
-  String get pidHex => '0x${pid.toRadixString(16).toUpperCase().padLeft(4, '0')}';
+  String get vidHex =>
+      '0x${vid.toRadixString(16).toUpperCase().padLeft(4, '0')}';
+  String get pidHex =>
+      '0x${pid.toRadixString(16).toUpperCase().padLeft(4, '0')}';
 
   bool get isAndroidDevice => _androidVids.contains(vid);
-  bool get isAoaDevice => vid == AOA_VID && (pid == AOA_PID_ACCESSORY || pid == AOA_PID_ACCESSORY_ADB);
+  bool get isAoaDevice =>
+      vid == AOA_VID &&
+      (pid == AOA_PID_ACCESSORY || pid == AOA_PID_ACCESSORY_ADB);
 
   @override
   String toString() => 'UsbDevice($vidHex:$pidHex $devPath)';
@@ -235,7 +219,6 @@ class UsbAoaLinux {
   static late CloseDart _close;
   static late IoctlPtrDart _ioctlPtr;
   static late IoctlIntDart _ioctlInt;
-  static late PollDart _poll;
   static late ErrnoLocDart _errnoLoc;
 
   // Connection state
@@ -314,9 +297,9 @@ class UsbAoaLinux {
     _close = _lib!.lookupFunction<CloseNative, CloseDart>('close');
     _ioctlPtr = _lib!.lookupFunction<IoctlPtrNative, IoctlPtrDart>('ioctl');
     _ioctlInt = _lib!.lookupFunction<IoctlIntNative, IoctlIntDart>('ioctl');
-    _poll = _lib!.lookupFunction<PollNative, PollDart>('poll');
-    _errnoLoc =
-        _lib!.lookupFunction<ErrnoLocNative, ErrnoLocDart>('__errno_location');
+    _errnoLoc = _lib!.lookupFunction<ErrnoLocNative, ErrnoLocDart>(
+      '__errno_location',
+    );
 
     _initialized = true;
   }
@@ -361,15 +344,22 @@ class UsbAoaLinux {
 
         if (!await vidFile.exists() || !await pidFile.exists()) continue;
 
-        final vid = int.tryParse((await vidFile.readAsString()).trim(), radix: 16);
-        final pid = int.tryParse((await pidFile.readAsString()).trim(), radix: 16);
+        final vid = int.tryParse(
+          (await vidFile.readAsString()).trim(),
+          radix: 16,
+        );
+        final pid = int.tryParse(
+          (await pidFile.readAsString()).trim(),
+          radix: 16,
+        );
 
         if (vid == null || pid == null) continue;
 
         // Check if this is an Android device or AOA accessory
         final isAndroid = _androidVids.contains(vid);
         final isAoa =
-            vid == AOA_VID && (pid == AOA_PID_ACCESSORY || pid == AOA_PID_ACCESSORY_ADB);
+            vid == AOA_VID &&
+            (pid == AOA_PID_ACCESSORY || pid == AOA_PID_ACCESSORY_ADB);
 
         if (!isAndroid && !isAoa) continue;
 
@@ -407,15 +397,17 @@ class UsbAoaLinux {
           serial = (await serialFile.readAsString()).trim();
         }
 
-        devices.add(UsbDeviceInfo(
-          vid: vid,
-          pid: pid,
-          devPath: devPath,
-          sysPath: entry.path,
-          manufacturer: manufacturer,
-          product: product,
-          serial: serial,
-        ));
+        devices.add(
+          UsbDeviceInfo(
+            vid: vid,
+            pid: pid,
+            devPath: devPath,
+            sysPath: entry.path,
+            manufacturer: manufacturer,
+            product: product,
+            serial: serial,
+          ),
+        );
       } catch (e) {
         // Skip devices with read errors
         continue;
@@ -459,7 +451,8 @@ class UsbAoaLinux {
         if (err == 13) {
           // EACCES
           LogService().log(
-              'UsbAoaLinux: Permission denied. Run with sudo or add udev rules.');
+            'UsbAoaLinux: Permission denied. Run with sudo or add udev rules.',
+          );
         }
         return false;
       }
@@ -467,7 +460,9 @@ class UsbAoaLinux {
       // Check AOA protocol version
       final version = await _getProtocolVersion(fd);
       if (version < 1) {
-        LogService().log('UsbAoaLinux: Device does not support AOA (version=$version)');
+        LogService().log(
+          'UsbAoaLinux: Device does not support AOA (version=$version)',
+        );
         _close(fd);
         return false;
       }
@@ -497,7 +492,9 @@ class UsbAoaLinux {
       // Use 20 second timeout to handle slow devices that take 16+ seconds to re-enumerate
       final aoaDevice = await _waitForAoaDevice(timeout: Duration(seconds: 20));
       if (aoaDevice == null) {
-        LogService().log('UsbAoaLinux: Device did not re-enumerate in AOA mode');
+        LogService().log(
+          'UsbAoaLinux: Device did not re-enumerate in AOA mode',
+        );
         return false;
       }
 
@@ -584,7 +581,9 @@ class UsbAoaLinux {
 
       final result = _ioctlPtr(fd, USBDEVFS_CONTROL, ctrl.cast());
       if (result < 0) {
-        LogService().log('UsbAoaLinux: SEND_STRING[$index] failed, errno=$_errno');
+        LogService().log(
+          'UsbAoaLinux: SEND_STRING[$index] failed, errno=$_errno',
+        );
         return false;
       }
 
@@ -648,9 +647,11 @@ class UsbAoaLinux {
     final pathPtr = device.devPath.toNativeUtf8();
 
     try {
-      final fd = _open(pathPtr, O_RDWR | O_NONBLOCK);
+      final fd = _open(pathPtr, O_RDWR);
       if (fd < 0) {
-        LogService().log('UsbAoaLinux: Failed to open AOA device, errno=$_errno');
+        LogService().log(
+          'UsbAoaLinux: Failed to open AOA device, errno=$_errno',
+        );
         return false;
       }
 
@@ -666,10 +667,11 @@ class UsbAoaLinux {
       final interfaceNum = calloc<Int32>();
       interfaceNum.value = 0;
 
-      final claimResult =
-          _ioctlInt(fd, USBDEVFS_CLAIMINTERFACE, interfaceNum);
+      final claimResult = _ioctlInt(fd, USBDEVFS_CLAIMINTERFACE, interfaceNum);
       if (claimResult < 0) {
-        LogService().log('UsbAoaLinux: Failed to claim interface, errno=$_errno');
+        LogService().log(
+          'UsbAoaLinux: Failed to claim interface, errno=$_errno',
+        );
         calloc.free(interfaceNum);
         _close(fd);
         return false;
@@ -682,17 +684,21 @@ class UsbAoaLinux {
       _epOut = endpoints.$2;
       _isConnected = true;
 
-      LogService().log('UsbAoaLinux: Connected to AOA device (IN=0x${_epIn!.toRadixString(16)}, OUT=0x${_epOut!.toRadixString(16)})');
+      LogService().log(
+        'UsbAoaLinux: Connected to AOA device (IN=0x${_epIn!.toRadixString(16)}, OUT=0x${_epOut!.toRadixString(16)})',
+      );
 
       // Notify connection
       _connectionController.add(UsbAoaConnectionEvent.connected(device));
 
-      // Start reading immediately - read loop handles waiting for Android via poll()
-      // Channel ready event will fire when Android opens accessory (first POLLIN)
+      // Start reading immediately. The timed bulk-read loop will declare the
+      // channel ready only after actual bytes arrive from Android.
       // Add a small delay to let Android prepare after USB mode switch
       LogService().log('UsbAoaLinux: Waiting 1s for Android to prepare...');
       await Future.delayed(Duration(seconds: 1));
-      LogService().log('UsbAoaLinux: Starting read loop (will wait for Android via poll)');
+      LogService().log(
+        'UsbAoaLinux: Starting read loop (waiting for actual data)',
+      );
       _startReadLoop();
 
       return true;
@@ -747,8 +753,9 @@ class UsbAoaLinux {
           final addrFile = File('${ep.path}/bEndpointAddress');
           if (!await addrFile.exists()) continue;
           final addr = int.tryParse(
-              (await addrFile.readAsString()).trim().replaceFirst('0x', ''),
-              radix: 16);
+            (await addrFile.readAsString()).trim().replaceFirst('0x', ''),
+            radix: 16,
+          );
 
           if (addr == null) continue;
 
@@ -783,17 +790,13 @@ class UsbAoaLinux {
 
   /// Async read loop
   Future<void> _readLoopAsync() async {
-    LogService().log('UsbAoaLinux: _readLoopAsync() ENTERED, _isReading=$_isReading, _isConnected=$_isConnected, _fd=$_fd');
+    LogService().log(
+      'UsbAoaLinux: _readLoopAsync() ENTERED, _isReading=$_isReading, _isConnected=$_isConnected, _fd=$_fd',
+    );
 
     const bufferSize = 16384;
     final buffer = calloc<Uint8>(bufferSize);
     final bulk = calloc<UsbBulkTransfer>();
-    final pollFd = calloc<PollFd>();
-
-    // Track poll errors for resilience
-    int pollErrorCount = 0;
-    int eintrCount = 0;
-    const maxPollErrors = 10;
 
     // Clear any stall condition on the IN endpoint before starting
     // This can help recover from previous failed transfers
@@ -803,19 +806,20 @@ class UsbAoaLinux {
       final clearResult = _ioctlPtr(_fd!, USBDEVFS_CLEAR_HALT, epInPtr.cast());
       if (clearResult < 0) {
         final err = _errno;
-        LogService().log('UsbAoaLinux: Clear halt on IN endpoint returned errno=$err (may be ok)');
+        LogService().log(
+          'UsbAoaLinux: Clear halt on IN endpoint returned errno=$err (may be ok)',
+        );
       } else {
         LogService().log('UsbAoaLinux: Cleared halt on IN endpoint');
       }
       calloc.free(epInPtr);
     }
 
-    // Track consecutive POLLHUP events to distinguish "waiting for Android" from "disconnected"
-    int consecutiveHangups = 0;
-    const maxHangupsBeforeGiveUp = 300; // 300 * 100ms poll timeout = 30 seconds grace period
+    int consecutiveErrors = 0;
+    int interruptedCount = 0;
+    const maxConsecutiveErrors = 20;
     bool androidConnected = false;
-    _pollTimeoutCount = 0; // Reset poll timeout counter at start of read loop
-    bool firstIteration = true;
+    _pollTimeoutCount = 0;
     int readAttemptCounter = 0;
 
     LogService().log('UsbAoaLinux: Read loop starting main loop');
@@ -823,197 +827,14 @@ class UsbAoaLinux {
     try {
       while (_isReading && _isConnected && _fd != null) {
         readAttemptCounter++;
-        // Yield control at the start of each iteration to keep UI responsive
         await Future.delayed(Duration.zero);
 
-        // Poll for incoming data
-        pollFd.ref.fd = _fd!;
-        pollFd.ref.events = POLLIN;
-        pollFd.ref.revents = 0;
-
-        final pollResult = _poll(pollFd.cast(), 1, 100);
-
-        // Log first poll attempt for diagnostics
-        if (firstIteration) {
-          LogService().log('UsbAoaLinux: First poll attempt, pollResult=$pollResult, revents=${pollFd.ref.revents}');
-          firstIteration = false;
-        }
-
-        if (pollResult < 0) {
-          final err = _errno;
-
-          // On any poll error (including EINTR), try a bulk read
-          // poll() on USB device fds is unreliable on Linux
-          bulk.ref.ep = _epIn!;
-          bulk.ref.len = bufferSize;
-          bulk.ref.timeout = 100; // 100ms timeout
-          bulk.ref.data = buffer.cast();
-
-          final bytesRead = _ioctlPtr(_fd!, USBDEVFS_BULK, bulk.cast());
-          if (bytesRead > 0) {
-            LogService().log('UsbAoaLinux: Got $bytesRead bytes (poll errno was $err)');
-            final data = Uint8List(bytesRead);
-            for (var i = 0; i < bytesRead; i++) {
-              data[i] = buffer[i];
-            }
-            _dataController.add(data);
-
-            // Data received means Android is connected - fire channel ready
-            if (!androidConnected) {
-              androidConnected = true;
-              _channelReadyController.add(null);
-              LogService().log('UsbAoaLinux: Channel ready (got data)');
-            }
-
-            pollErrorCount = 0;
-            eintrCount = 0;
-            consecutiveHangups = 0;
-            continue;
-          }
-
-          if (err == 4) {
-            // EINTR - interrupted, retry with yield to event loop
-            eintrCount++;
-            if (eintrCount == 1 || eintrCount % 1000 == 0) {
-              LogService().log('UsbAoaLinux: poll() EINTR #$eintrCount (bulk read returned ${bytesRead < 0 ? "errno=${_errno}" : "0 bytes"})');
-            }
-            await Future.delayed(Duration.zero);
-            continue;
-          }
-          eintrCount = 0; // Reset on non-EINTR
-
-          // Log the poll error periodically
-          pollErrorCount++;
-          if (pollErrorCount == 1 || pollErrorCount % 20 == 0) {
-            LogService().log('UsbAoaLinux: poll() returned $pollResult, errno=$err (error #$pollErrorCount)');
-          }
-
-          if (pollErrorCount > maxPollErrors) {
-            LogService().log('UsbAoaLinux: Too many poll errors ($pollErrorCount), exiting');
-            break;
-          }
-          await Future.delayed(Duration(milliseconds: 100));
-          continue;
-        }
-
-        if (pollResult == 0) {
-          // Timeout, no data - reset hangup counter if we've had successful polls
-          if (androidConnected) {
-            consecutiveHangups = 0;
-          }
-          // Log periodically during poll timeout for debugging visibility
-          _pollTimeoutCount++;
-          if (_pollTimeoutCount % 50 == 0) {
-            // Every ~5 seconds (50 * 100ms poll timeout)
-            LogService().log('UsbAoaLinux: Still polling ($_pollTimeoutCount timeouts, androidConnected=$androidConnected)');
-          }
-          // On Linux, poll() may not work correctly with USB device fds
-          // Try a non-blocking bulk read anyway in case data is available
-          bulk.ref.ep = _epIn!;
-          bulk.ref.len = bufferSize;
-          bulk.ref.timeout = 50; // Short timeout for non-blocking check
-          bulk.ref.data = buffer.cast();
-
-          final bytesRead = _ioctlPtr(_fd!, USBDEVFS_BULK, bulk.cast());
-          if (bytesRead > 0) {
-            LogService().log('UsbAoaLinux: Received $bytesRead bytes from USB');
-            final data = Uint8List(bytesRead);
-            for (var i = 0; i < bytesRead; i++) {
-              data[i] = buffer[i];
-            }
-            _dataController.add(data);
-            if (!androidConnected) {
-              LogService().log('UsbAoaLinux: Channel ready (data received)');
-              androidConnected = true;
-              _pollTimeoutCount = 0; // Reset timeout counter
-              _channelReadyController.add(null);
-            }
-          }
-          await Future.delayed(Duration(milliseconds: 10));
-          continue;
-        }
-
-        // Both POLLERR and POLLHUP can occur when Android hasn't opened its end yet
-        // POLLERR: usually indicates endpoint stall or device error
-        // POLLHUP: indicates the other end closed or never opened
-        final hasError = (pollFd.ref.revents & POLLERR) != 0;
-        final hasHangup = (pollFd.ref.revents & POLLHUP) != 0;
-
-        if (hasError || hasHangup) {
-          consecutiveHangups++;
-
-          // TRY BULK READ EVEN DURING ERROR - USB may have data despite poll error
-          // This is crucial because Linux poll() doesn't always work correctly with USB
-          bulk.ref.ep = _epIn!;
-          bulk.ref.len = bufferSize;
-          bulk.ref.timeout = 50; // Short timeout for non-blocking check
-          bulk.ref.data = buffer.cast();
-
-          final bytesRead = _ioctlPtr(_fd!, USBDEVFS_BULK, bulk.cast());
-          if (bytesRead > 0) {
-            LogService().log('UsbAoaLinux: Got $bytesRead bytes despite POLLERR/POLLHUP');
-            final data = Uint8List(bytesRead);
-            for (var i = 0; i < bytesRead; i++) {
-              data[i] = buffer[i];
-            }
-            _dataController.add(data);
-            if (!androidConnected) {
-              LogService().log('UsbAoaLinux: Channel ready (data received during error)');
-              androidConnected = true;
-              consecutiveHangups = 0;
-              _pollTimeoutCount = 0;
-              _channelReadyController.add(null);
-            }
-            continue;
-          }
-
-          // Retry on POLLERR/POLLHUP - these can be transient on USB
-          if (consecutiveHangups <= maxHangupsBeforeGiveUp) {
-            final errorType = hasError ? 'POLLERR' : 'POLLHUP';
-            if (consecutiveHangups == 1 || consecutiveHangups % 20 == 0) {
-              final status = androidConnected ? 'connected' : 'waiting for Android';
-              LogService().log('UsbAoaLinux: $errorType ($status, attempt $consecutiveHangups)');
-            }
-            // Longer delay when connected (likely transient), shorter when waiting
-            final delayMs = androidConnected ? 50 : 100;
-            await Future.delayed(Duration(milliseconds: delayMs));
-            continue;
-          }
-          final errorType = hasError ? 'POLLERR' : 'POLLHUP';
-          LogService().log('UsbAoaLinux: Poll error/hangup after $consecutiveHangups attempts ($errorType), giving up');
-          break;
-        }
-
-        if ((pollFd.ref.revents & POLLIN) == 0) {
-          continue;
-        }
-
-        // We got POLLIN - Android has opened its end
-        if (!androidConnected) {
-          LogService().log('UsbAoaLinux: Channel ready (first POLLIN)');
-          androidConnected = true;
-          consecutiveHangups = 0;
-          _pollTimeoutCount = 0; // Reset timeout counter
-          _channelReadyController.add(null);
-        }
-
-        // Perform bulk read
         bulk.ref.ep = _epIn!;
         bulk.ref.len = bufferSize;
-        bulk.ref.timeout = 1000;
+        bulk.ref.timeout = 250;
         bulk.ref.data = buffer.cast();
 
         final bytesRead = _ioctlPtr(_fd!, USBDEVFS_BULK, bulk.cast());
-
-        if (bytesRead < 0) {
-          final err = _errno;
-          if (err == 110) {
-            // ETIMEDOUT - timeout, retry
-            continue;
-          }
-          LogService().log('UsbAoaLinux: Bulk read error, errno=$err');
-          break;
-        }
 
         if (bytesRead > 0) {
           LogService().log('UsbAoaLinux: Received $bytesRead bytes from USB');
@@ -1022,18 +843,60 @@ class UsbAoaLinux {
             data[i] = buffer[i];
           }
           _dataController.add(data);
+          if (!androidConnected) {
+            androidConnected = true;
+            _pollTimeoutCount = 0;
+            _channelReadyController.add(null);
+            LogService().log('UsbAoaLinux: Channel ready (data received)');
+          }
+          consecutiveErrors = 0;
+          interruptedCount = 0;
+          continue;
         }
 
-        // Small delay to prevent tight loop
-        await Future.delayed(Duration.zero);
+        final err = _errno;
+        if (bytesRead == 0 || err == 110 || err == 11 || err == 16) {
+          _pollTimeoutCount++;
+          consecutiveErrors = 0;
+          if (_pollTimeoutCount % 20 == 0) {
+            LogService().log(
+              'UsbAoaLinux: Still waiting for USB data ($_pollTimeoutCount timeouts, androidConnected=$androidConnected)',
+            );
+          }
+          continue;
+        }
+
+        if (err == 4) {
+          interruptedCount++;
+          if (interruptedCount == 1 || interruptedCount % 100 == 0) {
+            LogService().log(
+              'UsbAoaLinux: Bulk read interrupted (#$interruptedCount)',
+            );
+          }
+          continue;
+        }
+
+        consecutiveErrors++;
+        if (consecutiveErrors == 1 || consecutiveErrors % 5 == 0) {
+          LogService().log(
+            'UsbAoaLinux: Bulk read error, errno=$err (error #$consecutiveErrors, androidConnected=$androidConnected)',
+          );
+        }
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          LogService().log(
+            'UsbAoaLinux: Too many consecutive bulk read errors ($consecutiveErrors), exiting',
+          );
+          break;
+        }
       }
 
       // Log why the loop exited
-      LogService().log('UsbAoaLinux: Read loop exited: _isReading=$_isReading, _isConnected=$_isConnected, fd=${_fd != null}, iterations=$readAttemptCounter');
+      LogService().log(
+        'UsbAoaLinux: Read loop exited: _isReading=$_isReading, _isConnected=$_isConnected, fd=${_fd != null}, iterations=$readAttemptCounter',
+      );
     } finally {
       calloc.free(buffer);
       calloc.free(bulk);
-      calloc.free(pollFd);
     }
 
     _isReading = false;
@@ -1075,7 +938,9 @@ class UsbAoaLinux {
         final err = _errno;
         // EBUSY (16) or EAGAIN (11) - retry after delay
         if (err == 16 || err == 11) {
-          LogService().log('UsbAoaLinux: Write busy/again (errno=$err), retry ${attempt + 1}/$retries');
+          LogService().log(
+            'UsbAoaLinux: Write busy/again (errno=$err), retry ${attempt + 1}/$retries',
+          );
           await Future.delayed(Duration(milliseconds: 100 * (attempt + 1)));
           continue;
         }

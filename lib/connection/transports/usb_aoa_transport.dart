@@ -85,6 +85,17 @@ class UsbAoaTransport extends Transport with TransportMixin {
   DateTime? _lastHelloSentAt;
   static const Duration _helloReplyCooldown = Duration(seconds: 10);
   static const Duration _helloSendDebounce = Duration(milliseconds: 500);
+  bool _accessoryHelloSentForConnection = false;
+
+  bool get _shouldRetryHello => Platform.isLinux;
+
+  void _sendAccessoryStartupHello() {
+    if (_shouldRetryHello || _accessoryHelloSentForConnection) {
+      return;
+    }
+    _accessoryHelloSentForConnection = true;
+    _sendHello();
+  }
 
   UsbAoaTransport({this.timeout = const Duration(seconds: 30)});
 
@@ -107,19 +118,26 @@ class UsbAoaTransport extends Transport with TransportMixin {
     _connectionSubscription = _usbService.connectionStateStream.listen((state) {
       LogService().log('UsbAoaTransport: Connection state changed to $state');
       if (state == UsbAoaConnectionState.connected) {
-        // Don't send hello immediately on connect - wait for channel ready.
-        // On Linux, the USB channel isn't ready until Android opens the accessory.
-        // Sending hello before that causes the message to be lost, adding 2+ second delay.
-        // The channelReadyStream listener will send hello when Android is ready.
-        LogService().log(
-          'UsbAoaTransport: Connected, waiting for channel ready before hello',
-        );
-        _startHelloRetry(); // Start retry mechanism as backup
+        if (_shouldRetryHello) {
+          // Linux is the USB host and owns the retry loop. Android may come up
+          // much earlier while Linux is still compiling/starting, so letting both
+          // sides retry builds up a large backlog of stale hello packets.
+          LogService().log(
+            'UsbAoaTransport: Connected on host side, waiting for channel ready before hello',
+          );
+          _startHelloRetry();
+        } else {
+          LogService().log(
+            'UsbAoaTransport: Connected on accessory side, sending a single startup hello',
+          );
+          _sendAccessoryStartupHello();
+        }
       } else if (state == UsbAoaConnectionState.disconnected) {
         // Stop hello retry on disconnect
         _stopHelloRetry();
         _lastHelloReplyAt = null;
         _lastHelloSentAt = null;
+        _accessoryHelloSentForConnection = false;
         // Clear pending requests on disconnect
         for (final pending in _pendingRequests.values) {
           pending.stopwatch.stop();
@@ -151,11 +169,18 @@ class UsbAoaTransport extends Transport with TransportMixin {
 
     // Check if already connected (connection may have happened during/after initialization)
     if (_usbService.connectionState == UsbAoaConnectionState.connected) {
-      LogService().log(
-        'UsbAoaTransport: [INIT] Already connected, sending hello',
-      );
-      _sendHello();
-      _startHelloRetry();
+      if (_shouldRetryHello) {
+        LogService().log(
+          'UsbAoaTransport: [INIT] Already connected on host side, sending hello',
+        );
+        _sendHello();
+        _startHelloRetry();
+      } else {
+        LogService().log(
+          'UsbAoaTransport: [INIT] Already connected on accessory side, sending single hello',
+        );
+        _sendAccessoryStartupHello();
+      }
     }
 
     markInitialized();
