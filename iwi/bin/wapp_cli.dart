@@ -545,7 +545,7 @@ Future<void> main(List<String> args) async {
         '${_dim}Screens: $screenNames  (use cd/ls to navigate)$_reset');
   }
   stdout.writeln(
-      '${_dim}Type "help" for commands, Ctrl+C to quit.$_reset');
+      '${_dim}Type "help" for commands, "search <address>" to find locations.$_reset');
   stdout.writeln();
 
   // Load module
@@ -622,6 +622,9 @@ Future<void> main(List<String> args) async {
       for (final e in bridge.drain()) {
         _handleEvent(e);
       }
+      if (trimmed == 'help' && uiState.currentScreen == null) {
+        _printRendererHelp();
+      }
       _printPrompt(uiState);
     }
     bridge.send({'@type': 'unloadModule', 'id': moduleId});
@@ -668,6 +671,9 @@ Future<void> main(List<String> args) async {
           await Future.delayed(const Duration(milliseconds: 50));
           for (final e in bridge.drain()) {
             _handleEvent(e);
+          }
+          if (line == 'help' && uiState.currentScreen == null) {
+            _printRendererHelp();
           }
         }
         _printPrompt(uiState);
@@ -945,6 +951,7 @@ class _LineEditor {
         'set',
         'help',
         'cd',
+        'search',
         ..._ui.currentScreen!.actions.map((a) => a.name),
       ];
     }
@@ -964,6 +971,14 @@ class _LineEditor {
         .expand((g) => g.fields.map((f) => f.name))
         .toList();
   }
+}
+
+/// Print renderer-provided commands (appended after module help at root).
+void _printRendererHelp() {
+  stdout.writeln();
+  stdout.writeln('${_bold}Navigation:$_reset');
+  stdout.writeln(
+      '  ${_cyan}search$_reset <query>  Search for a location');
 }
 
 void _printPrompt(_CliUiState uiState) {
@@ -1080,8 +1095,13 @@ bool _handleUiCommand(
               '  ${_cyan}${action.name}$_reset         ${action.tip ?? action.label}');
         }
         stdout.writeln('  ${_cyan}cd ..$_reset        Go back');
+        stdout.writeln();
+        stdout.writeln('${_bold}Navigation:$_reset');
+        stdout.writeln(
+            '  ${_cyan}search$_reset <query>  Search for a location');
         return true;
       }
+      // At root: forward help to module, then append renderer commands
       return false;
 
     case 'search':

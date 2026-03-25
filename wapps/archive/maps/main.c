@@ -158,7 +158,7 @@ static void dispatch(const char *input) {
         send_output("  zoom in/out       Zoom in or out", "out");
         send_output("  pan <n|s|e|w>     Pan in direction", "out");
         send_output("  where             Show current position", "out");
-        send_output("  search <query>    Search for a location (via renderer)", "out");
+        send_output("  search <query>    Search for a location", "out");
         send_output("  help              Show this help", "out");
     }
     else if (str_eq(cmd, "goto")) {
