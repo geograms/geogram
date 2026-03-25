@@ -8,7 +8,7 @@ import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, VoidCallback;
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import '../models/device_source.dart';
@@ -69,6 +69,8 @@ class DevicesService {
   final UsbAoaService _usbAoaService = UsbAoaService();
   StreamSubscription<UsbAoaConnectionState>? _usbSubscription;
   StreamSubscription<String?>? _usbCallsignSubscription;
+  late final VoidCallback _securitySettingsListener =
+      _handleSecuritySettingsChanged;
 
   /// Debug controller subscription
   StreamSubscription<DebugActionEvent>? _debugSubscription;
@@ -115,6 +117,9 @@ class DevicesService {
   bool get _skipNonBleLocal =>
       AppArgs().internetOnly || SecurityService().bleOnlyMode;
 
+  bool get _usbCommunicationAllowed =>
+      !_skipNonBleLocal && SecurityService().usbAccessEnabled;
+
   /// Whether to skip BLE (only in internet-only mode)
   bool get _skipBle => AppArgs().internetOnly;
 
@@ -150,6 +155,7 @@ class DevicesService {
     _subscribeToDebugActions();
     _subscribeToStationConnection();
     _subscribeToProfileChanges();
+    SecurityService().settingsNotifier.addListener(_securitySettingsListener);
 
     _isInitialized = true;
 
@@ -694,8 +700,17 @@ class DevicesService {
 
   /// Initialize USB AOA subscription for device discovery
   void _initializeUSB() {
+    if (!_usbCommunicationAllowed) {
+      LogService().log('DevicesService: USB disabled by security settings');
+      return;
+    }
+
     if (kIsWeb) {
       LogService().log('DevicesService: USB not available on web platform');
+      return;
+    }
+
+    if (_usbSubscription != null || _usbCallsignSubscription != null) {
       return;
     }
 
@@ -724,6 +739,37 @@ class DevicesService {
     if (currentState == UsbAoaConnectionState.connected) {
       _handleUSBConnection(currentState);
     }
+  }
+
+  void _handleSecuritySettingsChanged() {
+    unawaited(_syncUsbSecurityState());
+  }
+
+  Future<void> _syncUsbSecurityState() async {
+    if (!_usbCommunicationAllowed) {
+      await _disableUsbCommunication();
+      return;
+    }
+
+    _initializeUSB();
+    await _usbAoaService.enableTemporarily();
+
+    final connectionManager = ConnectionManager();
+    final usbTransport = connectionManager.getTransport('usb_aoa');
+    if (usbTransport != null &&
+        usbTransport.isAvailable &&
+        !usbTransport.isInitialized) {
+      await usbTransport.initialize();
+    }
+  }
+
+  Future<void> _disableUsbCommunication() async {
+    await _usbSubscription?.cancel();
+    _usbSubscription = null;
+    await _usbCallsignSubscription?.cancel();
+    _usbCallsignSubscription = null;
+    await _usbAoaService.disableTemporarily();
+    _removeUsbFromAllDevices();
   }
 
   /// Handle USB connection state changes
@@ -3387,6 +3433,9 @@ class DevicesService {
     _bleChatSubscription?.cancel();
     _usbSubscription?.cancel();
     _usbCallsignSubscription?.cancel();
+    SecurityService().settingsNotifier.removeListener(
+      _securitySettingsListener,
+    );
     _debugSubscription?.cancel();
     _stationConnectionSubscription?.cancel();
     _profileChangedSubscription?.cancel();

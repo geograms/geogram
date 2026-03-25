@@ -23,13 +23,17 @@ class SecurityService {
   static const String _keyDebugApiEnabled = 'security.debugApiEnabled';
   static const String _keyHttpApiEnabled = 'security.httpApiEnabled';
   static const String _keyBleOnlyMode = 'security.bleOnlyMode';
-  static const String _keyLocationGranularity = 'security.locationGranularityMeters';
+  static const String _keyUsbAccessEnabled = 'security.usbAccessEnabled';
+  static const String _keyLocationGranularity =
+      'security.locationGranularityMeters';
 
   // Default values
   static const bool _defaultDebugApiEnabled = false;
   static const bool _defaultHttpApiEnabled = true;
   static const bool _defaultBleOnlyMode = false;
-  static const double _defaultLocationGranularity = 50000.0; // 50 km default (middle of slider, region level)
+  static const bool _defaultUsbAccessEnabled = true;
+  static const double _defaultLocationGranularity =
+      50000.0; // 50 km default (middle of slider, region level)
 
   // Location granularity bounds
   // Uses bilinear-log scale: 5m - 50km - 100km with 50km at slider center (0.5)
@@ -39,14 +43,17 @@ class SecurityService {
 
   /// Check if debug API is enabled
   bool get debugApiEnabled {
-    return _config.getNestedValue(_keyDebugApiEnabled, _defaultDebugApiEnabled) as bool;
+    return _config.getNestedValue(_keyDebugApiEnabled, _defaultDebugApiEnabled)
+        as bool;
   }
 
   /// Set debug API enabled state
   set debugApiEnabled(bool value) {
     _config.setNestedValue(_keyDebugApiEnabled, value);
     _notifyChange();
-    LogService().log('SecurityService: Debug API ${value ? 'enabled' : 'disabled'}');
+    LogService().log(
+      'SecurityService: Debug API ${value ? 'enabled' : 'disabled'}',
+    );
   }
 
   /// Check if BLE-only mode is enabled
@@ -58,34 +65,65 @@ class SecurityService {
   set bleOnlyMode(bool value) {
     _config.setNestedValue(_keyBleOnlyMode, value);
     _notifyChange();
-    LogService().log('SecurityService: BLE-only mode ${value ? 'enabled' : 'disabled'}');
+    LogService().log(
+      'SecurityService: BLE-only mode ${value ? 'enabled' : 'disabled'}',
+    );
+  }
+
+  /// Check if USB communication is enabled
+  bool get usbAccessEnabled {
+    return _config.getNestedValue(
+          _keyUsbAccessEnabled,
+          _defaultUsbAccessEnabled,
+        )
+        as bool;
+  }
+
+  /// Set USB communication enabled state
+  set usbAccessEnabled(bool value) {
+    _config.setNestedValue(_keyUsbAccessEnabled, value);
+    _notifyChange();
+    LogService().log(
+      'SecurityService: USB access ${value ? 'enabled' : 'disabled'}',
+    );
   }
 
   /// Check if HTTP API is enabled
   bool get httpApiEnabled {
-    return _config.getNestedValue(_keyHttpApiEnabled, _defaultHttpApiEnabled) as bool;
+    return _config.getNestedValue(_keyHttpApiEnabled, _defaultHttpApiEnabled)
+        as bool;
   }
 
   /// Set HTTP API enabled state
   set httpApiEnabled(bool value) {
     _config.setNestedValue(_keyHttpApiEnabled, value);
     _notifyChange();
-    LogService().log('SecurityService: HTTP API ${value ? 'enabled' : 'disabled'}');
+    LogService().log(
+      'SecurityService: HTTP API ${value ? 'enabled' : 'disabled'}',
+    );
   }
 
   /// Get location granularity in meters
   double get locationGranularityMeters {
-    final value = _config.getNestedValue(_keyLocationGranularity, _defaultLocationGranularity);
+    final value = _config.getNestedValue(
+      _keyLocationGranularity,
+      _defaultLocationGranularity,
+    );
     if (value is int) return value.toDouble();
     return (value as double?) ?? _defaultLocationGranularity;
   }
 
   /// Set location granularity in meters
   set locationGranularityMeters(double value) {
-    final clampedValue = value.clamp(minGranularityMeters, maxGranularityMeters);
+    final clampedValue = value.clamp(
+      minGranularityMeters,
+      maxGranularityMeters,
+    );
     _config.setNestedValue(_keyLocationGranularity, clampedValue);
     _notifyChange();
-    LogService().log('SecurityService: Location granularity set to ${_formatDistance(clampedValue)}');
+    LogService().log(
+      'SecurityService: Location granularity set to ${_formatDistance(clampedValue)}',
+    );
   }
 
   /// Get location granularity as a normalized slider value (0.0 to 1.0)
@@ -129,7 +167,10 @@ class SecurityService {
   /// Apply location granularity to coordinates
   /// Returns coordinates rounded to the configured precision
   /// This is used when sharing location with other devices
-  (double?, double?) applyLocationGranularity(double? latitude, double? longitude) {
+  (double?, double?) applyLocationGranularity(
+    double? latitude,
+    double? longitude,
+  ) {
     if (latitude == null || longitude == null) return (null, null);
 
     final granularityMeters = locationGranularityMeters;
@@ -142,8 +183,10 @@ class SecurityService {
     final granularityDegrees = granularityMeters / metersPerDegree;
 
     // Round coordinates to granularity
-    final roundedLat = (latitude / granularityDegrees).round() * granularityDegrees;
-    final roundedLon = (longitude / granularityDegrees).round() * granularityDegrees;
+    final roundedLat =
+        (latitude / granularityDegrees).round() * granularityDegrees;
+    final roundedLon =
+        (longitude / granularityDegrees).round() * granularityDegrees;
 
     return (roundedLat, roundedLon);
   }

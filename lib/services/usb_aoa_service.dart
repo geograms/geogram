@@ -526,6 +526,53 @@ class UsbAoaService {
     }
   }
 
+  /// Disable the active USB link without destroying reusable stream controllers.
+  Future<void> disableTemporarily() async {
+    _userInitiatedDisconnect = true;
+    _cancelAutoReconnect();
+    _stopLinuxPeriodicScan();
+    await close();
+    _remoteCallsign = null;
+    if (!_remoteCallsignController.isClosed) {
+      _remoteCallsignController.add(null);
+    }
+  }
+
+  /// Re-enable USB operation after a temporary suspension.
+  Future<void> enableTemporarily() async {
+    if (!isAvailable) return;
+
+    if (!_isInitialized) {
+      await initialize();
+      return;
+    }
+
+    _userInitiatedDisconnect = false;
+
+    if (Platform.isLinux) {
+      _startLinuxPeriodicScan();
+      Future.microtask(() => _autoConnectLinux());
+      return;
+    }
+
+    try {
+      final isConnected =
+          await _channel.invokeMethod<bool>('isConnected') ?? false;
+      _connectionState = isConnected
+          ? UsbAoaConnectionState.connected
+          : UsbAoaConnectionState.disconnected;
+      if (!_connectionStateController.isClosed) {
+        _connectionStateController.add(_connectionState);
+      }
+    } on PlatformException catch (e) {
+      LogService().log(
+        'UsbAoa: Failed to resume temporary enable - ${e.message}',
+      );
+    } on MissingPluginException {
+      // Ignore on unsupported platforms.
+    }
+  }
+
   /// Write data to the USB accessory
   Future<bool> write(Uint8List data) async {
     if (!isConnected) {

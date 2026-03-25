@@ -3,7 +3,8 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' show Directory, File, NetworkInterface, InternetAddressType, Platform, exit;
+import 'dart:io'
+    show Directory, File, NetworkInterface, InternetAddressType, Platform, exit;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -86,7 +87,8 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         for (final addr in interface.addresses) {
           // Prefer private network addresses (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
           final ip = addr.address;
-          if (ip.startsWith('192.168.') || ip.startsWith('10.') ||
+          if (ip.startsWith('192.168.') ||
+              ip.startsWith('10.') ||
               (ip.startsWith('172.') && _isPrivateClass172(ip))) {
             ipAddress = ip;
             break;
@@ -131,16 +133,20 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_i18n.t('security')),
-      ),
+      appBar: AppBar(title: Text(_i18n.t('security'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           // Section: Connection Mode
-          _buildSectionHeader(theme, _i18n.t('connection_mode'), Icons.bluetooth),
+          _buildSectionHeader(
+            theme,
+            _i18n.t('connection_mode'),
+            Icons.bluetooth,
+          ),
           const SizedBox(height: 8),
           _buildBleOnlyTile(theme),
+          const SizedBox(height: 8),
+          _buildUsbAccessTile(theme),
           const SizedBox(height: 24),
 
           // Section: API Access
@@ -156,7 +162,11 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
           const SizedBox(height: 24),
 
           // Section: Location Privacy
-          _buildSectionHeader(theme, _i18n.t('location_privacy'), Icons.location_on),
+          _buildSectionHeader(
+            theme,
+            _i18n.t('location_privacy'),
+            Icons.location_on,
+          ),
           const SizedBox(height: 8),
 
           // Location Granularity
@@ -183,7 +193,11 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
 
           // Section: Diagnostics (only on Android, where crash recovery is available)
           if (!kIsWeb && Platform.isAndroid) ...[
-            _buildSectionHeader(theme, _i18n.t('diagnostics'), Icons.bug_report),
+            _buildSectionHeader(
+              theme,
+              _i18n.t('diagnostics'),
+              Icons.bug_report,
+            ),
             const SizedBox(height: 8),
             _buildCrashLogsTile(theme),
           ],
@@ -262,7 +276,11 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
               else if (_localIpAddress != null) ...[
                 Row(
                   children: [
-                    Icon(Icons.lan, size: 16, color: theme.colorScheme.secondary),
+                    Icon(
+                      Icons.lan,
+                      size: 16,
+                      color: theme.colorScheme.secondary,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -314,7 +332,10 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                       ),
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.orange.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(4),
@@ -376,7 +397,10 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                           ),
                           const SizedBox(width: 8),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.red.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(4),
@@ -423,6 +447,77 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                       _i18n.t('ble_only_mode_warning'),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: Colors.orange,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUsbAccessTile(ThemeData theme) {
+    final isEnabled = _securityService.usbAccessEnabled;
+    final isInternetOnly = AppArgs().internetOnly;
+    final isBleOnly = _securityService.bleOnlyMode;
+    final isLocked = isInternetOnly || isBleOnly;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _i18n.t('usb_access'),
+                        style: theme.textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _i18n.t('usb_access_description'),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: isEnabled,
+                  onChanged: isLocked
+                      ? null
+                      : (value) {
+                          setState(() {
+                            _securityService.usbAccessEnabled = value;
+                          });
+                        },
+                ),
+              ],
+            ),
+            if (isLocked) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: theme.colorScheme.secondary,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _i18n.t('usb_access_locked_description'),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.secondary,
                       ),
                     ),
                   ),
@@ -508,9 +603,24 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _buildPrivacyIndicator(theme, Icons.gps_fixed, _i18n.t('precise'), sliderValue < 0.2),
-                _buildPrivacyIndicator(theme, Icons.location_city, _i18n.t('city'), sliderValue >= 0.2 && sliderValue < 0.6),
-                _buildPrivacyIndicator(theme, Icons.public, _i18n.t('region'), sliderValue >= 0.6),
+                _buildPrivacyIndicator(
+                  theme,
+                  Icons.gps_fixed,
+                  _i18n.t('precise'),
+                  sliderValue < 0.2,
+                ),
+                _buildPrivacyIndicator(
+                  theme,
+                  Icons.location_city,
+                  _i18n.t('city'),
+                  sliderValue >= 0.2 && sliderValue < 0.6,
+                ),
+                _buildPrivacyIndicator(
+                  theme,
+                  Icons.public,
+                  _i18n.t('region'),
+                  sliderValue >= 0.6,
+                ),
               ],
             ),
           ],
@@ -519,19 +629,28 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
     );
   }
 
-  Widget _buildPrivacyIndicator(ThemeData theme, IconData icon, String label, bool isActive) {
+  Widget _buildPrivacyIndicator(
+    ThemeData theme,
+    IconData icon,
+    String label,
+    bool isActive,
+  ) {
     return Column(
       children: [
         Icon(
           icon,
           size: 24,
-          color: isActive ? theme.colorScheme.primary : theme.colorScheme.outline,
+          color: isActive
+              ? theme.colorScheme.primary
+              : theme.colorScheme.outline,
         ),
         const SizedBox(height: 4),
         Text(
           label,
           style: theme.textTheme.labelSmall?.copyWith(
-            color: isActive ? theme.colorScheme.primary : theme.colorScheme.outline,
+            color: isActive
+                ? theme.colorScheme.primary
+                : theme.colorScheme.outline,
             fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
           ),
         ),
@@ -580,7 +699,9 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
 
   Widget _buildWorkingFolderTile(ThemeData theme) {
     final storageConfig = StorageConfig();
-    final currentPath = storageConfig.isInitialized ? storageConfig.baseDir : 'Not initialized';
+    final currentPath = storageConfig.isInitialized
+        ? storageConfig.baseDir
+        : 'Not initialized';
 
     return Card(
       child: Padding(
@@ -588,10 +709,7 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _i18n.t('working_folder'),
-              style: theme.textTheme.titleSmall,
-            ),
+            Text(_i18n.t('working_folder'), style: theme.textTheme.titleSmall),
             const SizedBox(height: 4),
             Text(
               _i18n.t('working_folder_description'),
@@ -602,7 +720,11 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
             const SizedBox(height: 12),
             Row(
               children: [
-                Icon(Icons.folder_open, size: 16, color: theme.colorScheme.secondary),
+                Icon(
+                  Icons.folder_open,
+                  size: 16,
+                  color: theme.colorScheme.secondary,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -751,18 +873,27 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
     );
   }
 
-  Widget _buildEncryptionProgress(ThemeData theme, EncryptionProgress progress) {
+  Widget _buildEncryptionProgress(
+    ThemeData theme,
+    EncryptionProgress progress,
+  ) {
     final progressText = progress.isEncrypting
-        ? _i18n.t('encrypting_progress', params: [
-            progress.filesProcessed.toString(),
-            progress.totalFiles.toString(),
-            progress.percent.toString(),
-          ])
-        : _i18n.t('decrypting_progress', params: [
-            progress.filesProcessed.toString(),
-            progress.totalFiles.toString(),
-            progress.percent.toString(),
-          ]);
+        ? _i18n.t(
+            'encrypting_progress',
+            params: [
+              progress.filesProcessed.toString(),
+              progress.totalFiles.toString(),
+              progress.percent.toString(),
+            ],
+          )
+        : _i18n.t(
+            'decrypting_progress',
+            params: [
+              progress.filesProcessed.toString(),
+              progress.totalFiles.toString(),
+              progress.percent.toString(),
+            ],
+          );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -771,10 +902,14 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: LinearProgressIndicator(
-            value: progress.totalFiles > 0 ? progress.filesProcessed / progress.totalFiles : null,
+            value: progress.totalFiles > 0
+                ? progress.filesProcessed / progress.totalFiles
+                : null,
             minHeight: 6,
             backgroundColor: theme.colorScheme.surfaceContainerHighest,
-            valueColor: AlwaysStoppedAnimation<Color>(theme.colorScheme.primary),
+            valueColor: AlwaysStoppedAnimation<Color>(
+              theme.colorScheme.primary,
+            ),
           ),
         ),
         const SizedBox(height: 8),
@@ -817,7 +952,9 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text(enable ? _i18n.t('enable_encryption') : _i18n.t('disable_encryption')),
+        title: Text(
+          enable ? _i18n.t('enable_encryption') : _i18n.t('disable_encryption'),
+        ),
         content: Text(_i18n.t('encryption_warning')),
         actions: [
           TextButton(
@@ -826,7 +963,11 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(enable ? _i18n.t('enable_encryption') : _i18n.t('disable_encryption')),
+            child: Text(
+              enable
+                  ? _i18n.t('enable_encryption')
+                  : _i18n.t('disable_encryption'),
+            ),
           ),
         ],
       ),
@@ -837,9 +978,15 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
     try {
       MigrationResult result;
       if (enable) {
-        result = await progressController.runEncryption(profile.callsign, profile.nsec!);
+        result = await progressController.runEncryption(
+          profile.callsign,
+          profile.nsec!,
+        );
       } else {
-        result = await progressController.runDecryption(profile.callsign, profile.nsec!);
+        result = await progressController.runDecryption(
+          profile.callsign,
+          profile.nsec!,
+        );
       }
 
       if (mounted) {
@@ -883,10 +1030,7 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _i18n.t('crash_logs'),
-              style: theme.textTheme.titleSmall,
-            ),
+            Text(_i18n.t('crash_logs'), style: theme.textTheme.titleSmall),
             const SizedBox(height: 4),
             Text(
               _i18n.t('crash_logs_description'),
@@ -1113,7 +1257,9 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
       LogService().log('SecuritySettingsPage: Error changing folder: $e');
       if (mounted) {
         // Close any open dialogs
-        Navigator.of(context).popUntil((route) => route.isFirst || route.settings.name != null);
+        Navigator.of(
+          context,
+        ).popUntil((route) => route.isFirst || route.settings.name != null);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(_i18n.t('folder_change_failed')),
@@ -1138,7 +1284,9 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
       // Copy all contents recursively
       await _copyDirectory(sourceDir, destDir);
 
-      LogService().log('SecuritySettingsPage: Successfully moved folder from $sourcePath to $destPath');
+      LogService().log(
+        'SecuritySettingsPage: Successfully moved folder from $sourcePath to $destPath',
+      );
       return true;
     } catch (e) {
       LogService().log('SecuritySettingsPage: Error moving folder: $e');

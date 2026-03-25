@@ -50,6 +50,7 @@ class UsbAoaTransport extends Transport with TransportMixin {
     if (kIsWeb) return false;
     if (AppArgs().internetOnly) return false;
     if (SecurityService().bleOnlyMode) return false;
+    if (!SecurityService().usbAccessEnabled) return false;
     // USB AOA: Android (accessory) + Linux (host)
     return Platform.isAndroid || Platform.isLinux;
   }
