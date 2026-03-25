@@ -423,6 +423,20 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
     }
   }
 
+  Future<void> _openDataDir() async {
+    if (_dataDir == null) return;
+    final dir = Directory(_dataDir!);
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final uri = Uri.directory(dir.absolute.path);
+    if (Platform.isLinux) {
+      await Process.run('xdg-open', [dir.absolute.path]);
+    } else if (Platform.isMacOS) {
+      await Process.run('open', [dir.absolute.path]);
+    } else if (Platform.isWindows) {
+      await Process.run('explorer', [dir.absolute.path]);
+    }
+  }
+
   /// List existing wapp data subdirectories.
   List<_WappDataEntry> _listWappData() {
     if (_dataDir == null) return [];
@@ -493,7 +507,17 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
                         color: cs.onSurfaceVariant,
                       ),
                     ),
-                    trailing: const Icon(Icons.edit),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.open_in_new),
+                          tooltip: 'Open in file explorer',
+                          onPressed: _openDataDir,
+                        ),
+                        const Icon(Icons.edit),
+                      ],
+                    ),
                     onTap: _pickDirectory,
                   ),
                 ),
