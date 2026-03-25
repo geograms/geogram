@@ -462,7 +462,197 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   /// Filter out the current device from the list
   List<RemoteDevice> _filterRemoteDevices(List<RemoteDevice> devices) {
-    return devices.where((d) => d.callsign != _myCallsign).toList();
+    return _deduplicateDevicesForDisplay(
+      devices
+          .where((d) => d.callsign.toUpperCase() != _myCallsign.toUpperCase())
+          .toList(),
+    );
+  }
+
+  List<RemoteDevice> _getDisplayDevicesInFolder(String? folderId) {
+    final targetFolderId = folderId ?? DevicesService.defaultFolderId;
+    return _devices.where((device) {
+      final deviceFolderId = device.folderId ?? DevicesService.defaultFolderId;
+      return deviceFolderId == targetFolderId;
+    }).toList();
+  }
+
+  List<RemoteDevice> _deduplicateDevicesForDisplay(List<RemoteDevice> devices) {
+    final devicesByCallsign = <String, List<RemoteDevice>>{};
+
+    for (final device in devices) {
+      final callsign = device.callsign.toUpperCase();
+      devicesByCallsign.putIfAbsent(callsign, () => []).add(device);
+    }
+
+    return devicesByCallsign.values.map(_mergeDevicesForDisplay).toList();
+  }
+
+  RemoteDevice _mergeDevicesForDisplay(List<RemoteDevice> candidates) {
+    final preferred = _selectPreferredDisplayDevice(candidates);
+    final orderedCandidates = [
+      preferred,
+      ...candidates.where((device) => !identical(device, preferred)),
+    ];
+
+    final mergedMethods = <String>[];
+    final seenMethods = <String>{};
+    for (final candidate in orderedCandidates) {
+      for (final method in candidate.connectionMethods) {
+        final normalized = method.toLowerCase();
+        if (seenMethods.add(normalized)) {
+          mergedMethods.add(method);
+        }
+      }
+    }
+
+    final mergedApps = preferred.apps.isNotEmpty
+        ? preferred.apps
+        : orderedCandidates.expand((device) => device.apps).toList();
+
+    return RemoteDevice(
+      callsign: preferred.callsign,
+      name:
+          _firstNonEmptyString(
+            orderedCandidates.map((device) => device.name),
+          ) ??
+          preferred.callsign,
+      nickname: _firstNonEmptyString(
+        orderedCandidates.map((device) => device.nickname),
+      ),
+      url: _firstNonEmptyString(orderedCandidates.map((device) => device.url)),
+      npub: _firstNonEmptyString(
+        orderedCandidates.map((device) => device.npub),
+      ),
+      isOnline: candidates.any((device) => device.isOnline),
+      latency: _lowestInt(orderedCandidates.map((device) => device.latency)),
+      lastChecked: _latestDateTime(
+        orderedCandidates.map((device) => device.lastChecked),
+      ),
+      lastSeen: _latestDateTime(
+        orderedCandidates.map((device) => device.lastSeen),
+      ),
+      lastFetched: _latestDateTime(
+        orderedCandidates.map((device) => device.lastFetched),
+      ),
+      hasCachedData: candidates.any((device) => device.hasCachedData),
+      apps: mergedApps,
+      latitude: _firstNonNull(
+        orderedCandidates.map((device) => device.latitude),
+      ),
+      longitude: _firstNonNull(
+        orderedCandidates.map((device) => device.longitude),
+      ),
+      connectionMethods: mergedMethods,
+      source: preferred.source,
+      bleProximity: _firstNonEmptyString(
+        orderedCandidates.map((device) => device.bleProximity),
+      ),
+      bleRssi: _firstNonNull(orderedCandidates.map((device) => device.bleRssi)),
+      preferredColor: _firstNonEmptyString(
+        orderedCandidates.map((device) => device.preferredColor),
+      ),
+      description: _firstNonEmptyString(
+        orderedCandidates.map((device) => device.description),
+      ),
+      platform: _firstNonEmptyString(
+        orderedCandidates.map((device) => device.platform),
+      ),
+      isPinned: candidates.any((device) => device.isPinned),
+      folderId: _firstNonEmptyString(
+        orderedCandidates.map((device) => device.folderId),
+      ),
+      deviceId: preferred.deviceId,
+      udpIp: _firstNonEmptyString(
+        orderedCandidates.map((device) => device.udpIp),
+      ),
+      udpPort: _firstNonNull(orderedCandidates.map((device) => device.udpPort)),
+      canRelay: candidates.any((device) => device.canRelay),
+      relayUrl: _firstNonEmptyString(
+        orderedCandidates.map((device) => device.relayUrl),
+      ),
+      relayHttpPort: _firstNonNull(
+        orderedCandidates.map((device) => device.relayHttpPort),
+      ),
+    );
+  }
+
+  RemoteDevice _selectPreferredDisplayDevice(List<RemoteDevice> candidates) {
+    var best = candidates.first;
+    var bestScore = _displayPreferenceScore(best);
+
+    for (final candidate in candidates.skip(1)) {
+      final score = _displayPreferenceScore(candidate);
+      if (score > bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+
+    return best;
+  }
+
+  int _displayPreferenceScore(RemoteDevice device) {
+    var score = 0;
+
+    if (device.isOnline) score += 100;
+    if (device.nickname?.isNotEmpty ?? false) score += 30;
+    if (device.name.isNotEmpty &&
+        device.name.toUpperCase() != device.callsign.toUpperCase()) {
+      score += 20;
+    }
+    if (device.hasLocalConnection) score += 15;
+    if (device.connectionMethods.any((m) => m.toLowerCase() == 'internet')) {
+      score += 10;
+    }
+    if (device.url?.isNotEmpty ?? false) score += 8;
+    if (device.apps.isNotEmpty) score += 6;
+    if (device.platform?.isNotEmpty ?? false) score += 4;
+    if (device.preferredColor?.isNotEmpty ?? false) score += 2;
+    if (device.description?.isNotEmpty ?? false) score += 2;
+    if (device.hasCachedData) score += 1;
+
+    return score;
+  }
+
+  String? _firstNonEmptyString(Iterable<String?> values) {
+    for (final value in values) {
+      if (value != null && value.isNotEmpty) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  T? _firstNonNull<T>(Iterable<T?> values) {
+    for (final value in values) {
+      if (value != null) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  int? _lowestInt(Iterable<int?> values) {
+    int? result;
+    for (final value in values) {
+      if (value == null) continue;
+      if (result == null || value < result) {
+        result = value;
+      }
+    }
+    return result;
+  }
+
+  DateTime? _latestDateTime(Iterable<DateTime?> values) {
+    DateTime? latest;
+    for (final value in values) {
+      if (value == null) continue;
+      if (latest == null || value.isAfter(latest)) {
+        latest = value;
+      }
+    }
+    return latest;
   }
 
   /// Refresh devices - force=true for user-initiated refresh (pull-to-refresh, button)
@@ -502,8 +692,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       if (oldDevice.callsign != newDevice.callsign ||
           oldDevice.isOnline != newDevice.isOnline ||
           oldDevice.displayName != newDevice.displayName ||
+          oldDevice.folderId != newDevice.folderId ||
           oldDevice.latitude != newDevice.latitude ||
-          oldDevice.longitude != newDevice.longitude) {
+          oldDevice.longitude != newDevice.longitude ||
+          !_sameConnectionMethods(
+            oldDevice.connectionMethods,
+            newDevice.connectionMethods,
+          )) {
         return true;
       }
     }
@@ -516,6 +711,13 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     }
 
     return false;
+  }
+
+  bool _sameConnectionMethods(List<String> a, List<String> b) {
+    final aMethods = a.map((method) => method.toLowerCase()).toSet();
+    final bMethods = b.map((method) => method.toLowerCase()).toSet();
+    if (aMethods.length != bMethods.length) return false;
+    return aMethods.containsAll(bMethods);
   }
 
   /// Full scan: localhost ports, LAN, and connect to preferred station
@@ -756,7 +958,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     final isNarrow = MediaQuery.of(context).size.width < 600;
 
     // Calculate total device counts for title
-    final allDevices = _devicesService.getAllDevices();
+    final allDevices = _devices;
     final totalDeviceCount = allDevices.length;
     final activeDeviceCount = allDevices.where((d) => d.isOnline).length;
 
@@ -1044,7 +1246,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   /// Build a folder section with its devices
   Widget _buildFolderSection(ThemeData theme, DeviceFolder folder, int index) {
-    final devicesInFolder = _devicesService.getDevicesInFolder(
+    final devicesInFolder = _getDisplayDevicesInFolder(
       folder.id == DevicesService.defaultFolderId ? null : folder.id,
     );
     final isExpanded = folder.isExpanded;
@@ -1399,7 +1601,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
         await _confirmDeleteFolder(folder);
         break;
       case 'select_all':
-        final devices = _devicesService.getDevicesInFolder(
+        final devices = _getDisplayDevicesInFolder(
           folder.id == DevicesService.defaultFolderId ? null : folder.id,
         );
         setState(() {
@@ -1461,7 +1663,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   /// Confirm emptying a folder
   Future<void> _confirmEmptyFolder(DeviceFolder folder) async {
-    final deviceCount = _devicesService.getDevicesInFolder(folder.id).length;
+    final deviceCount = _getDisplayDevicesInFolder(folder.id).length;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1493,7 +1695,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   /// Confirm deleting a folder
   Future<void> _confirmDeleteFolder(DeviceFolder folder) async {
-    final deviceCount = _devicesService.getDevicesInFolder(folder.id).length;
+    final deviceCount = _getDisplayDevicesInFolder(folder.id).length;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -1528,7 +1730,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   /// Confirm removing all disconnected devices from a folder
   Future<void> _confirmRemoveDisconnected(DeviceFolder folder) async {
-    final devices = _devicesService.getDevicesInFolder(
+    final devices = _getDisplayDevicesInFolder(
       folder.id == DevicesService.defaultFolderId ? null : folder.id,
     );
     final offlineDevices = devices.where((d) => !d.isOnline).toList();

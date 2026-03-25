@@ -69,9 +69,48 @@ class ChatMessage implements Comparable<ChatMessage> {
     );
   }
 
+  DateTime? get _createdAtDateTime {
+    final createdAt = getMeta('created_at');
+    if (createdAt == null) return null;
+
+    final parsed = int.tryParse(createdAt);
+    if (parsed == null || parsed <= 0) return null;
+
+    final epochMs = parsed > 1000000000000 ? parsed : parsed * 1000;
+    return DateTime.fromMillisecondsSinceEpoch(epochMs, isUtc: true).toLocal();
+  }
+
+  String _formatDatePart(DateTime dt) {
+    final year = dt.year.toString().padLeft(4, '0');
+    final month = dt.month.toString().padLeft(2, '0');
+    final day = dt.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
+  }
+
+  String _formatTimePart(DateTime dt) {
+    final hour = dt.hour.toString().padLeft(2, '0');
+    final minute = dt.minute.toString().padLeft(2, '0');
+    final second = dt.second.toString().padLeft(2, '0');
+    return '$hour:$minute'
+        '_$second';
+  }
+
   /// Parse timestamp string to DateTime
   DateTime get dateTime {
+    final createdAt = _createdAtDateTime;
+    if (createdAt != null) {
+      return createdAt;
+    }
+
     try {
+      // Legacy fallback: older locally generated messages stored local wall-clock
+      // timestamps directly in the raw chat timestamp field.
+      final normalized = timestamp.replaceAll('_', ':');
+      final parsed = DateTime.tryParse(normalized);
+      if (parsed != null) {
+        return parsed;
+      }
+
       // Format: YYYY-MM-DD HH:MM_ss
       String datePart = timestamp.substring(0, 10); // YYYY-MM-DD
       String timePart = timestamp.substring(11); // HH:MM_ss
@@ -88,25 +127,27 @@ class ChatMessage implements Comparable<ChatMessage> {
         int.parse(timeParts[2]), // second
       );
     } catch (e) {
-      // Fallback to current time if parsing fails
-      return DateTime.now();
+      try {
+        return ChatFormat.parseTimestamp(timestamp).toLocal();
+      } catch (_) {
+        // Fallback to current time if parsing fails
+        return DateTime.now();
+      }
     }
   }
 
   /// Get date portion (YYYY-MM-DD) from timestamp
-  String get datePortion => timestamp.substring(0, 10);
+  String get datePortion => _formatDatePart(dateTime);
 
   /// Get time portion (HH:MM_ss) from timestamp
-  String get timePortion => timestamp.substring(11);
+  String get timePortion => _formatTimePart(dateTime);
 
   /// Get formatted time for display (HH:MM)
   String get displayTime {
-    try {
-      List<String> parts = timePortion.split(RegExp(r'[_:]'));
-      return '${parts[0]}:${parts[1]}';
-    } catch (e) {
-      return timePortion;
-    }
+    final dt = dateTime;
+    final hour = dt.hour.toString().padLeft(2, '0');
+    final minute = dt.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
   }
 
   /// Get metadata value by key
@@ -271,7 +312,7 @@ class ChatMessage implements Comparable<ChatMessage> {
 
     // Special case for polls (put Poll metadata first for readability)
     if (isPoll) {
-      buffer.writeln('--> Poll: ${pollQuestion}');
+      buffer.writeln('--> Poll: $pollQuestion');
     }
 
     // Content
@@ -325,7 +366,12 @@ class ChatMessage implements Comparable<ChatMessage> {
     }
 
     // Unsigned metadata (post-signature allowlist)
-    for (final key in const ['status', 'delivery_state', 'retry_count', 'queued_at']) {
+    for (final key in const [
+      'status',
+      'delivery_state',
+      'retry_count',
+      'queued_at',
+    ]) {
       if (metadata.containsKey(key)) {
         buffer.writeln('--> $key: ${metadata[key]}');
       }
@@ -412,15 +458,20 @@ class ChatMessage implements Comparable<ChatMessage> {
   /// Sort messages by timestamp, then author, then content
   @override
   int compareTo(ChatMessage other) {
-    // Primary sort: timestamp
-    int cmp = timestamp.compareTo(other.timestamp);
+    // Primary sort: resolved display time. This keeps locally-authored legacy
+    // timestamps and signed created_at-based timestamps in the same order.
+    int cmp = dateTime.compareTo(other.dateTime);
     if (cmp != 0) return cmp;
 
-    // Secondary sort: author
+    // Secondary sort: raw timestamp for stability
+    cmp = timestamp.compareTo(other.timestamp);
+    if (cmp != 0) return cmp;
+
+    // Tertiary sort: author
     cmp = author.compareTo(other.author);
     if (cmp != 0) return cmp;
 
-    // Tertiary sort: content
+    // Final sort: content
     return content.compareTo(other.content);
   }
 
@@ -438,8 +489,11 @@ class ChatMessage implements Comparable<ChatMessage> {
 
   @override
   String toString() {
+    final preview = content.length > 50
+        ? '${content.substring(0, 50)}...'
+        : content;
     return 'ChatMessage(author: $author, timestamp: $timestamp, '
-        'content: ${content.length > 50 ? content.substring(0, 50) + '...' : content}, '
+        'content: $preview, '
         'metadata: $metadata)';
   }
 
