@@ -83,6 +83,7 @@ import 'connection/transports/ble_transport.dart';
 import 'services/ble_identity_service.dart';
 import 'services/ble_foreground_service.dart';
 import 'connection/transports/bluetooth_classic_transport.dart';
+import 'connection/transports/peer_relay_transport.dart';
 import 'connection/transports/station_transport.dart';
 import 'connection/transports/webrtc_transport.dart';
 import 'connection/transports/usb_aoa_transport.dart';
@@ -591,18 +592,19 @@ void main() async {
 
       // Initialize ConnectionManager with transports after StationService
       // This is needed for DevicesService to route requests properly
-      // Transport priority: USB (5) > LAN (10) > WebRTC (15) > DHT (25) > Station (30) > BT Classic (35) > BLE (40)
+      // Transport priority: USB (5) > LAN (10) > WebRTC (15) > DHT (25) > Peer Relay (27) > Station (30) > BT Classic (35) > BLE (40)
       final connectionManager = ConnectionManager();
       connectionManager.registerTransport(UsbAoaTransport());
       connectionManager.registerTransport(LanTransport());
       connectionManager.registerTransport(WebRTCTransport());
       connectionManager.registerTransport(DhtTransport());
+      connectionManager.registerTransport(PeerRelayTransport());
       connectionManager.registerTransport(StationTransport());
       connectionManager.registerTransport(BluetoothClassicTransport());
       connectionManager.registerTransport(BleTransport());
       await connectionManager.initialize();
       LogService().log(
-        'ConnectionManager initialized with USB + LAN + WebRTC + DHT + Station + BT Classic + BLE transports (deferred)',
+        'ConnectionManager initialized with USB + LAN + WebRTC + DHT + Peer Relay + Station + BT Classic + BLE transports (deferred)',
       );
 
       // UpdateService may check for updates - defer it

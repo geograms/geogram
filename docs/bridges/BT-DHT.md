@@ -88,7 +88,8 @@ When Geogram is actively trying to connect to a known peer, it also announces on
 ### Announce Details
 
 - **Re-announce interval**: every 25 minutes
-- **Announced port**: the device's DHT UDP socket port, published with `implied_port=1`
+- **Default announced port**: the device's DHT UDP socket port, published with `implied_port=1`
+- **Public HTTP announce**: when the device verifies that `http://<public_ip>:3456/api/status` is reachable and matches its own identity, it also announces the HTTP API port explicitly with `implied_port=0`
 - **Token validation**: BEP 5 token exchange prevents spoofing
 - **Announce target**: the K-closest nodes found by the iterative lookup (not routing table nodes)
 
@@ -282,6 +283,7 @@ Verified via `dht_find_user` debug API. Both devices' iterative lookups converge
 - **Cross-network discovery**: desktop and Android still find each other through the public DHT
 - **Known-peer probing**: persisted npub targets are probed automatically, with sticky retry for unresolved peers
 - **Pair rendezvous**: active known-peer probes publish and query pair-specific DHT topics for fresher candidates
+- **Public HTTP announce**: a publicly reachable Geogram API can be announced directly on DHT once the node verifies its own external `http://ip:3456` endpoint
 - **BEP 42 endpoint observation**: recent external ports are tracked and exposed in `dht_status`
 - **Devices/debug tooling**: DHT status, target inspection, and manual query/punch debug endpoints are available
 

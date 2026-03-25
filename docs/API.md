@@ -3091,6 +3091,9 @@ curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action":"dht_status"}'
 
+# Inspect the current peer relay candidates, active pollers, and queue state
+curl http://localhost:3456/api/debug/peer-relay
+
 # Resolve a peer's npub through the bounded DHT lookup
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
@@ -4538,6 +4541,16 @@ Response (all): `{"results": {"radio.geogram.blog.post": 3, "radio.geogram.place
 P2P file transfer enables direct file sharing between Geogram devices. The sender creates an offer, the receiver accepts and downloads files directly from the sender's HTTP API.
 
 For full documentation of the P2P transfer protocol, see [API_p2p.md](API_p2p.md).
+
+### Peer Relay Endpoints
+
+These endpoints let a publicly reachable Geogram peer act as an application relay for other peers. They are used by `PeerRelayService` and `PeerRelayTransport`.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/p2p/relay/send` | POST | Queue a relayed transport or signaling envelope for another callsign |
+| `/api/p2p/relay/poll?callsign=X1ABC&timeout=20` | GET | Long-poll for queued relay envelopes for a callsign |
+| `/api/p2p/relay/status` | GET | Inspect relay candidates, active pollers, and queued targets |
 
 ### Endpoints
 

@@ -119,6 +119,23 @@ class _StoredPeer {
   }
 }
 
+class _AnnouncedTopic {
+  final int port;
+  final bool impliedPort;
+
+  const _AnnouncedTopic({required this.port, required this.impliedPort});
+
+  @override
+  bool operator ==(Object other) {
+    return other is _AnnouncedTopic &&
+        other.port == port &&
+        other.impliedPort == impliedPort;
+  }
+
+  @override
+  int get hashCode => Object.hash(port, impliedPort);
+}
+
 /// Peer info returned by get_peers.
 class PeerInfo {
   final String ip;
@@ -174,8 +191,8 @@ class DhtNode {
   Timer? _refreshTimer;
   Timer? _cleanupTimer;
 
-  /// Topics we are announced on: info_hash (hex) → local port.
-  final Map<String, int> _announcedTopics = {};
+  /// Topics we are announced on: info_hash (hex) → announced endpoints.
+  final Map<String, List<_AnnouncedTopic>> _announcedTopics = {};
 
   /// Per-topic seed rotation for bounded/light crawls.
   final Map<String, int> _boundedLookupSeedOffset = {};
@@ -355,7 +372,14 @@ class DhtNode {
 
     final hexHash = _toHex(infoHash);
     if (persist) {
-      _announcedTopics[hexHash] = port;
+      final topics = _announcedTopics.putIfAbsent(
+        hexHash,
+        () => <_AnnouncedTopic>[],
+      );
+      final topic = _AnnouncedTopic(port: port, impliedPort: impliedPort);
+      if (!topics.contains(topic)) {
+        topics.add(topic);
+      }
     }
 
     // Clear stale tokens before lookup to prevent unbounded growth
@@ -405,7 +429,14 @@ class DhtNode {
 
     final hexHash = _toHex(infoHash);
     if (persist) {
-      _announcedTopics[hexHash] = port;
+      final topics = _announcedTopics.putIfAbsent(
+        hexHash,
+        () => <_AnnouncedTopic>[],
+      );
+      final topic = _AnnouncedTopic(port: port, impliedPort: impliedPort);
+      if (!topics.contains(topic)) {
+        topics.add(topic);
+      }
     }
     _receivedTokens.clear();
 
@@ -650,10 +681,16 @@ class DhtNode {
       (_) {
         for (final entry in _announcedTopics.entries) {
           final infoHash = _fromHex(entry.key);
-          if (light) {
-            announceLight(infoHash, entry.value);
-          } else {
-            announce(infoHash, entry.value);
+          for (final topic in entry.value) {
+            if (light) {
+              announceLight(
+                infoHash,
+                topic.port,
+                impliedPort: topic.impliedPort,
+              );
+            } else {
+              announce(infoHash, topic.port, impliedPort: topic.impliedPort);
+            }
           }
         }
       },
@@ -794,6 +831,8 @@ class DhtNode {
   String? geogramDeviceId;
   String? geogramPlatform;
   int geogramHttpPort = 3456;
+  bool geogramCanRelay = false;
+  int? geogramRelayHttpPort;
 
   /// Callback when a geogram query or response is received from a peer.
   void Function(
@@ -802,6 +841,8 @@ class DhtNode {
     String? deviceId,
     String? platform,
     int httpPort,
+    bool canRelay,
+    int? relayHttpPort,
     String ip,
     int udpPort,
   )?
@@ -831,6 +872,12 @@ class DhtNode {
     final peerHttpPort = args.containsKey('http_port')
         ? (args['http_port'] as int? ?? 3456)
         : 3456;
+    final peerCanRelay = args.containsKey('can_relay')
+        ? ((args['can_relay'] as int? ?? 0) == 1)
+        : false;
+    final peerRelayHttpPort = args.containsKey('relay_http_port')
+        ? (args['relay_http_port'] as int?)
+        : null;
 
     LogService().log(
       'DHT: geogram query from $peerCallsign at $fromIp:$fromPort',
@@ -848,6 +895,9 @@ class DhtNode {
           'device_id': geogramDeviceId ?? '',
           'platform': geogramPlatform ?? '',
           'http_port': geogramHttpPort,
+          'can_relay': geogramCanRelay ? 1 : 0,
+          'relay_http_port':
+              geogramRelayHttpPort ?? (geogramCanRelay ? geogramHttpPort : 0),
         },
       },
       fromIp,
@@ -862,6 +912,8 @@ class DhtNode {
         peerDeviceId,
         peerPlatform,
         peerHttpPort,
+        peerCanRelay,
+        peerRelayHttpPort,
         fromIp,
         fromPort,
       );
@@ -1019,6 +1071,9 @@ class DhtNode {
           'device_id': geogramDeviceId ?? '',
           'platform': geogramPlatform ?? '',
           'http_port': geogramHttpPort,
+          'can_relay': geogramCanRelay ? 1 : 0,
+          'relay_http_port':
+              geogramRelayHttpPort ?? (geogramCanRelay ? geogramHttpPort : 0),
         },
       },
       ip,
@@ -1211,6 +1266,12 @@ class DhtNode {
           final peerHttpPort = body.containsKey('http_port')
               ? (body['http_port'] as int? ?? 3456)
               : 3456;
+          final peerCanRelay = body.containsKey('can_relay')
+              ? ((body['can_relay'] as int? ?? 0) == 1)
+              : false;
+          final peerRelayHttpPort = body.containsKey('relay_http_port')
+              ? (body['relay_http_port'] as int?)
+              : null;
           LogService().log(
             'DHT: geogram response from $peerCallsign at $fromIp:$fromPort (http:$peerHttpPort)',
           );
@@ -1220,6 +1281,8 @@ class DhtNode {
             peerDeviceId,
             peerPlatform,
             peerHttpPort,
+            peerCanRelay,
+            peerRelayHttpPort,
             fromIp,
             fromPort,
           );

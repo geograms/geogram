@@ -95,6 +95,8 @@ class P2PService {
 
   bool _running = false;
   bool _knownPeerProbeInFlight = false;
+  bool _publicHttpReachable = false;
+  String? _publicHttpUrl;
   bool get isRunning => _running;
   int _dhtPort = 0;
   int get dhtPort => _dhtPort;
@@ -154,7 +156,7 @@ class P2PService {
     }
 
     LogService().log('P2P: scheduled DHT start');
-    _phase1_startNode(localPort!, profile.npub);
+    _phase1_startNode(localPort, profile.npub);
   }
 
   // ─── Phased Startup (each phase scheduled via Timer) ──────────
@@ -179,6 +181,8 @@ class P2PService {
         _dht!.geogramDeviceId = ConfigService().deviceId;
         _dht!.geogramPlatform = Platform.operatingSystem;
         _dht!.geogramHttpPort = AppArgs().port;
+        _dht!.geogramCanRelay = AppArgs().port > 0;
+        _dht!.geogramRelayHttpPort = AppArgs().port;
 
         // Handle geogram peer discoveries (from queries AND responses)
         _dht!.onGeogramPeer = _handleGeogramPeer;
@@ -244,15 +248,15 @@ class P2PService {
         // matter but we pass the local DHT port for consistency.
         final dhtPort = _dht!.localPort;
         if (_useLightDhtLookups) {
-          await _dht!.announceLight(geogramHash, dhtPort);
-          await _dht!.announceLight(npubHash, dhtPort);
+          await _announceTopic(geogramHash, dhtPort);
+          await _announceTopic(npubHash, dhtPort);
           _dht!.startPeriodicAnnounce(light: true);
           LogService().log(
             'P2P: announced on DHT with light mode (local: $dhtPort, http: $port)',
           );
         } else {
-          await _dht!.announce(geogramHash, dhtPort);
-          await _dht!.announce(npubHash, dhtPort);
+          await _announceTopic(geogramHash, dhtPort);
+          await _announceTopic(npubHash, dhtPort);
           _dht!.startPeriodicAnnounce();
           LogService().log(
             'P2P: announced on DHT (implied_port=1, local: $dhtPort, http: $port)',
@@ -270,6 +274,7 @@ class P2PService {
       if (!_running || _dht == null) return;
       try {
         await _capability!.detectFromDht(_dht!);
+        await _refreshPublicHttpAnnounce();
         await _probeExistingDiscoveredPeers();
 
         final peers = await _lookupDiscoveryPeers(
@@ -349,6 +354,8 @@ class P2PService {
     _capability = null;
     _running = false;
     _knownPeerProbeInFlight = false;
+    _publicHttpReachable = false;
+    _publicHttpUrl = null;
     _knownPeerTargetsCache = null;
     _knownPeerTargetsCacheTime = null;
     _preferredKnownPeerCallsign = null;
@@ -428,6 +435,8 @@ class P2PService {
       'node_type': nt.name,
       'public_ip': ip,
       'public_port': pp,
+      'public_http_reachable': _publicHttpReachable,
+      'public_http_url': _publicHttpUrl,
       'recent_external_ports': _dht?.recentExternalPorts ?? const <int>[],
       'dht_nodes': _dht?.routingTableSize ?? 0,
       'stored_peers': _dht?.storedPeerCount ?? 0,
@@ -437,10 +446,148 @@ class P2PService {
         'node_type': nt.name,
         'public_ip': ip,
         'public_port': pp,
+        'public_http_reachable': _publicHttpReachable,
+        'public_http_url': _publicHttpUrl,
         'recent_external_ports': _dht?.recentExternalPorts ?? const <int>[],
         'can_hole_punch': nt == NodeType.typeA || nt == NodeType.typeB,
       },
     };
+  }
+
+  Future<void> _announceTopic(
+    Uint8List infoHash,
+    int port, {
+    bool persist = true,
+    bool impliedPort = true,
+  }) async {
+    if (_dht == null || !_dht!.isRunning) return;
+
+    if (_useLightDhtLookups) {
+      await _dht!.announceLight(
+        infoHash,
+        port,
+        persist: persist,
+        impliedPort: impliedPort,
+      );
+      return;
+    }
+
+    await _dht!.announce(
+      infoHash,
+      port,
+      persist: persist,
+      impliedPort: impliedPort,
+    );
+  }
+
+  Future<void> _refreshPublicHttpAnnounce() async {
+    _publicHttpReachable = false;
+    _publicHttpUrl = null;
+
+    final ip = _capability?.publicIp?.trim();
+    final httpPort = AppArgs().port;
+    if (ip == null || ip.isEmpty || httpPort <= 0 || _dht == null) {
+      return;
+    }
+
+    final profile = ProfileService().getProfile();
+    final status = await _fetchDirectHttpStatus(
+      PeerInfo(ip: ip, port: httpPort),
+    );
+    if (status == null) {
+      LogService().log(
+        'P2P: public HTTP self-check failed for http://$ip:$httpPort',
+      );
+      return;
+    }
+
+    final callsign = (status['callsign'] as String?)?.trim().toUpperCase();
+    final npub = (status['npub'] as String?)?.trim();
+    if (callsign != profile.callsign.toUpperCase() || npub != profile.npub) {
+      LogService().log(
+        'P2P: public HTTP self-check mismatch at http://$ip:$httpPort '
+        '(callsign=${callsign ?? "unknown"}, npub=${npub ?? "missing"})',
+      );
+      return;
+    }
+
+    _publicHttpReachable = true;
+    _publicHttpUrl = 'http://$ip:$httpPort';
+    LogService().log('P2P: public HTTP endpoint verified at $_publicHttpUrl');
+
+    final geogramHash = sha1Hash('geogram');
+    await _announceTopic(geogramHash, httpPort, impliedPort: false);
+    await _announceTopic(sha1Hash(profile.npub), httpPort, impliedPort: false);
+  }
+
+  Future<Map<String, dynamic>?> _fetchDirectHttpStatus(PeerInfo peer) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    try {
+      final request = await client.getUrl(
+        Uri.parse('http://${peer.ip}:${peer.port}/api/status'),
+      );
+      final response = await request.close().timeout(
+        const Duration(seconds: 4),
+      );
+      if (response.statusCode != HttpStatus.ok) {
+        return null;
+      }
+
+      final body = await response.transform(utf8.decoder).join();
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+      if (decoded is Map) {
+        return decoded.map((key, value) => MapEntry(key.toString(), value));
+      }
+      return null;
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<bool> _probeDirectHttpPeer(
+    PeerInfo peer, {
+    String? expectedCallsign,
+    String? expectedNpub,
+  }) async {
+    final status = await _fetchDirectHttpStatus(peer);
+    if (status == null) return false;
+
+    final callsign = (status['callsign'] as String?)?.trim().toUpperCase();
+    final npub = (status['npub'] as String?)?.trim();
+    final platform = (status['platform'] as String?)?.trim();
+    final httpPort = (status['port'] as int?) ?? peer.port;
+
+    if (callsign == null || callsign.isEmpty || npub == null || npub.isEmpty) {
+      return false;
+    }
+    if (expectedCallsign != null &&
+        expectedCallsign.isNotEmpty &&
+        callsign != expectedCallsign.toUpperCase()) {
+      return false;
+    }
+    if (expectedNpub != null &&
+        expectedNpub.isNotEmpty &&
+        npub != expectedNpub) {
+      return false;
+    }
+
+    _handleGeogramPeer(
+      callsign,
+      npub,
+      status['device_id'] as String?,
+      platform,
+      httpPort,
+      status['can_relay'] as bool? ?? false,
+      status['relay_http_port'] as int?,
+      peer.ip,
+      0,
+    );
+    return true;
   }
 
   // ─── Peer Management ──────────────────────────────────────────
@@ -467,9 +614,12 @@ class P2PService {
     final myDhtPort = _dht?.localPort ?? _dhtPort;
     final myPublicIp = _capability?.publicIp;
     final myPublicPort = _capability?.publicPort;
+    final myHttpPort = AppArgs().port;
     if (myPublicIp != null &&
         peer.ip == myPublicIp &&
-        (peer.port == myDhtPort || peer.port == myPublicPort)) {
+        (peer.port == myDhtPort ||
+            peer.port == myPublicPort ||
+            (_publicHttpReachable && peer.port == myHttpPort))) {
       return;
     }
 
@@ -485,11 +635,19 @@ class P2PService {
   }
 
   Future<void> _registerDhtPeer(PeerInfo peer) async {
-    // The geogram topic announces the peer's DHT rendezvous socket, not an HTTP
-    // API port. Resolve the real HTTP endpoint through the geogram identity
-    // exchange before trying direct API traffic.
+    LogService().log('P2P: discovered DHT peer ${peer.ip}:${peer.port}');
+
+    if (await _probeDirectHttpPeer(peer)) {
+      LogService().log(
+        'P2P: ${peer.ip}:${peer.port} accepted direct HTTP probe from DHT discovery',
+      );
+      return;
+    }
+
+    // Otherwise treat it as a DHT rendezvous socket and resolve the peer's
+    // real HTTP endpoint through the geogram identity exchange.
     LogService().log(
-      'P2P: discovered DHT peer ${peer.ip}:${peer.port}, sending geogram query',
+      'P2P: ${peer.ip}:${peer.port} did not answer HTTP, sending geogram query',
     );
     if (_dht != null && _dht!.isRunning) {
       await _dht!.sendGeogramQuery(peer.ip, peer.port);
@@ -504,6 +662,8 @@ class P2PService {
     String? deviceId,
     String? platform,
     int httpPort,
+    bool canRelay,
+    int? relayHttpPort,
     String ip,
     int udpPort,
   ) {
@@ -518,8 +678,14 @@ class P2PService {
     }
 
     LogService().log(
-      'P2P: geogram peer $callsign at $ip (http:$httpPort, udp:$udpPort)',
+      'P2P: geogram peer $callsign at $ip '
+      '(http:$httpPort, udp:$udpPort${canRelay ? ", relay:${relayHttpPort ?? httpPort}" : ""})',
     );
+
+    final resolvedRelayPort = relayHttpPort ?? httpPort;
+    final relayUrl = canRelay && resolvedRelayPort > 0
+        ? 'http://$ip:$resolvedRelayPort'
+        : null;
 
     final devService = DevicesService();
     devService.addOrUpdateDevice(
@@ -538,6 +704,9 @@ class P2PService {
         deviceId: deviceId,
         udpIp: ip,
         udpPort: udpPort,
+        canRelay: canRelay,
+        relayHttpPort: canRelay ? resolvedRelayPort : null,
+        relayUrl: relayUrl,
       ),
     );
     devService.syncDeviceToConnectionManager(callsign.toUpperCase());
@@ -826,6 +995,19 @@ class P2PService {
     LogService().log(
       'P2P: npub probe trying ${target.callsign} at ${peer.ip}:${peer.port}',
     );
+
+    if (await _probeDirectHttpPeer(
+      peer,
+      expectedCallsign: target.callsign,
+      expectedNpub: target.npub,
+    )) {
+      _failedDhtCandidates.remove(_failedDhtCandidateKey(target, peer));
+      _clearPreferredKnownPeer(target.callsign);
+      LogService().log(
+        'P2P: verified direct HTTP endpoint for ${target.callsign} at ${peer.ip}:${peer.port}',
+      );
+      return true;
+    }
 
     final response = await _sendGeogramPunchBurst(peer);
 
@@ -1288,6 +1470,11 @@ class P2PService {
     }
 
     final explicitPorts = <int>{};
+    if (_publicHttpReachable &&
+        AppArgs().port > 0 &&
+        AppArgs().port != dhtPort) {
+      explicitPorts.add(AppArgs().port);
+    }
     final capabilityPort = _capability?.publicPort;
     if (capabilityPort != null &&
         capabilityPort > 1 &&

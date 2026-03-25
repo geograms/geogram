@@ -26,7 +26,9 @@ void _check(String name, bool condition) {
 }
 
 void main() async {
-  final testHash = sha1Hash('geogram-test-${DateTime.now().millisecondsSinceEpoch}');
+  final testHash = sha1Hash(
+    'geogram-test-${DateTime.now().millisecondsSinceEpoch}',
+  );
   print('=== P2P Connection Test ===');
   print('Test topic: ${_hex(testHash).substring(0, 16)}...');
   print('Memory before: ${_memoryMB()} MB');
@@ -39,8 +41,12 @@ void main() async {
 
   await nodeA.start();
   await nodeB.start();
-  print('Node A: port ${nodeA.localPort}, id ${_hex(nodeA.nodeId).substring(0, 8)}');
-  print('Node B: port ${nodeB.localPort}, id ${_hex(nodeB.nodeId).substring(0, 8)}');
+  print(
+    'Node A: port ${nodeA.localPort}, id ${_hex(nodeA.nodeId).substring(0, 8)}',
+  );
+  print(
+    'Node B: port ${nodeB.localPort}, id ${_hex(nodeB.nodeId).substring(0, 8)}',
+  );
   _check('Node A started', nodeA.isRunning);
   _check('Node B started', nodeB.isRunning);
   _check('Different ports', nodeA.localPort != nodeB.localPort);
@@ -88,17 +94,43 @@ void main() async {
   int? aReceivedHttpPort;
   int? bReceivedHttpPort;
 
-  nodeA.onGeogramPeer = (callsign, npub, deviceId, platform, httpPort, ip, udpPort) {
-    print('  Node A received peer: $callsign (npub: $npub, platform: $platform, http: $httpPort)');
-    aReceivedCallsign = callsign;
-    aReceivedHttpPort = httpPort;
-  };
+  nodeA.onGeogramPeer =
+      (
+        callsign,
+        npub,
+        deviceId,
+        platform,
+        httpPort,
+        canRelay,
+        relayHttpPort,
+        ip,
+        udpPort,
+      ) {
+        print(
+          '  Node A received peer: $callsign (npub: $npub, platform: $platform, http: $httpPort, relay: ${canRelay ? relayHttpPort ?? httpPort : "no"})',
+        );
+        aReceivedCallsign = callsign;
+        aReceivedHttpPort = httpPort;
+      };
 
-  nodeB.onGeogramPeer = (callsign, npub, deviceId, platform, httpPort, ip, udpPort) {
-    print('  Node B received peer: $callsign (npub: $npub, platform: $platform, http: $httpPort)');
-    bReceivedCallsign = callsign;
-    bReceivedHttpPort = httpPort;
-  };
+  nodeB.onGeogramPeer =
+      (
+        callsign,
+        npub,
+        deviceId,
+        platform,
+        httpPort,
+        canRelay,
+        relayHttpPort,
+        ip,
+        udpPort,
+      ) {
+        print(
+          '  Node B received peer: $callsign (npub: $npub, platform: $platform, http: $httpPort, relay: ${canRelay ? relayHttpPort ?? httpPort : "no"})',
+        );
+        bReceivedCallsign = callsign;
+        bReceivedHttpPort = httpPort;
+      };
 
   // Node A sends geogram query to Node B (direct localhost)
   print('  Sending: A → B (127.0.0.1:${nodeB.localPort})');
@@ -214,8 +246,10 @@ void main() async {
       final response = await nodeA.sendGeogramQuery(peerIp, udpPort);
       _check('Full flow: got geogram response', response != null);
       if (response != null) {
-        _check('Full flow: response has callsign',
-            response.containsKey('callsign'));
+        _check(
+          'Full flow: response has callsign',
+          response.containsKey('callsign'),
+        );
       }
       // Allow time for callback
       await Future.delayed(const Duration(milliseconds: 500));
@@ -229,10 +263,16 @@ void main() async {
       // Try the discovered port directly.
       final discoveredPort = peersA.first.port;
       print('  Trying discovered port $discoveredPort directly');
-      final response = await nodeA.sendGeogramQuery('127.0.0.1', discoveredPort);
+      final response = await nodeA.sendGeogramQuery(
+        '127.0.0.1',
+        discoveredPort,
+      );
       _check('Full flow (localhost): got geogram response', response != null);
       await Future.delayed(const Duration(milliseconds: 500));
-      _check('Full flow (localhost): identified peer', aReceivedCallsign != null);
+      _check(
+        'Full flow (localhost): identified peer',
+        aReceivedCallsign != null,
+      );
       if (aReceivedCallsign != null) {
         print('  Identified peer: $aReceivedCallsign');
       }

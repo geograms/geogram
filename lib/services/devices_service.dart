@@ -40,9 +40,11 @@ import '../models/profile.dart';
 import '../connection/connection_manager.dart';
 import '../connection/transports/dht_transport.dart';
 import '../connection/transports/lan_transport.dart';
+import '../connection/transports/peer_relay_transport.dart';
 import '../tracker/services/proximity_detection_service.dart';
 import 'usb_aoa_service.dart';
 import 'security_service.dart';
+import 'peer_relay_service.dart';
 import '../util/task_monitor_helpers.dart';
 
 /// Service for managing remote devices we've contacted
@@ -1154,6 +1156,9 @@ class DevicesService {
               : [],
           bleProximity: statusCache?['bleProximity'] as String?,
           bleRssi: statusCache?['bleRssi'] as int?,
+          canRelay: statusCache?['canRelay'] as bool? ?? false,
+          relayUrl: statusCache?['relayUrl'] as String?,
+          relayHttpPort: statusCache?['relayHttpPort'] as int?,
         );
       }
 
@@ -1300,6 +1305,15 @@ class DevicesService {
       }
       if (device.udpPort != null && device.udpPort! > 0) {
         existing.udpPort = device.udpPort;
+      }
+      if (device.relayUrl != null && device.relayUrl!.isNotEmpty) {
+        existing.relayUrl = device.relayUrl;
+      }
+      if (device.relayHttpPort != null && device.relayHttpPort! > 0) {
+        existing.relayHttpPort = device.relayHttpPort;
+      }
+      if (device.canRelay) {
+        existing.canRelay = true;
       }
     } else {
       _devices[key] = device;
@@ -1853,6 +1867,21 @@ class DevicesService {
         );
       }
     }
+
+    if (device.connectionMethods.contains('internet')) {
+      final relayTransport =
+          connectionManager.getTransport('peer_relay') as PeerRelayTransport?;
+      if (relayTransport != null) {
+        relayTransport.registerRelayDevice(
+          callsign,
+          npub: device.npub,
+          canRelay: device.canRelay,
+          relayUrl: device.relayUrl,
+        );
+      }
+    }
+
+    PeerRelayService().notifyRelayCandidatesChanged();
   }
 
   /// Internal HTTP request helper
@@ -2971,6 +3000,9 @@ class DevicesService {
         'connectionMethods': device.connectionMethods,
         'bleProximity': device.bleProximity,
         'bleRssi': device.bleRssi,
+        'canRelay': device.canRelay,
+        'relayUrl': device.relayUrl,
+        'relayHttpPort': device.relayHttpPort,
         'updatedAt': DateTime.now().toIso8601String(),
       };
       await statusFile.writeAsString(json.encode(data));
@@ -3358,6 +3390,11 @@ class RemoteDevice {
   String? udpIp;
   int? udpPort;
 
+  /// Public relay capability learned from DHT geogram identity exchange.
+  bool canRelay;
+  String? relayUrl;
+  int? relayHttpPort;
+
   RemoteDevice({
     required this.callsign,
     required this.name,
@@ -3385,6 +3422,9 @@ class RemoteDevice {
     this.deviceId,
     this.udpIp,
     this.udpPort,
+    this.canRelay = false,
+    this.relayUrl,
+    this.relayHttpPort,
   });
 
   /// Unique key for the _devices map. Uses deviceId when available to

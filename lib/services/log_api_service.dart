@@ -102,6 +102,7 @@ import '../api/handlers/blog_handler.dart';
 import '../api/handlers/video_handler.dart';
 import 'station_service.dart';
 import 'station_server_service_stub.dart' if (dart.library.ui) 'station_server_service.dart';
+import 'peer_relay_service.dart';
 import 'websocket_service.dart';
 import 'web_theme_service.dart';
 import 'cli_console_controller.dart';
@@ -502,6 +503,14 @@ class LogApiService with ChatModificationMixin {
     // Mirror discovery debug endpoints
     if (urlPath == 'api/debug/mirrors' && request.method == 'GET') {
       return _handleDebugMirrors(headers);
+    }
+    if (urlPath == 'api/debug/peer-relay' &&
+        request.method == 'GET' &&
+        SecurityService().debugApiEnabled) {
+      return shelf.Response.ok(
+        jsonEncode(PeerRelayService().getStatus()),
+        headers: headers,
+      );
     }
     if (urlPath == 'api/debug/sync-trigger' && request.method == 'POST') {
       return await _handleDebugSyncTrigger(request, headers);
@@ -981,6 +990,8 @@ class LogApiService with ChatModificationMixin {
     // Add device_id and mirror_enabled for LAN mirror discovery
     response['device_id'] = ConfigService().deviceId;
     response['mirror_enabled'] = MirrorConfigService.instance.isEnabled;
+    response['can_relay'] = true;
+    response['relay_http_port'] = port;
 
     // Add uptime in seconds
     if (_startTime != null) {
@@ -18043,6 +18054,21 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
     String urlPath,
     Map<String, String> headers,
   ) async {
+    if (urlPath == 'api/p2p/relay/send' && request.method == 'POST') {
+      return await PeerRelayService().handleSendRequest(request, headers);
+    }
+
+    if (urlPath == 'api/p2p/relay/poll' && request.method == 'GET') {
+      return await PeerRelayService().handlePollRequest(request, headers);
+    }
+
+    if (urlPath == 'api/p2p/relay/status' && request.method == 'GET') {
+      return shelf.Response.ok(
+        jsonEncode(PeerRelayService().getStatus()),
+        headers: headers,
+      );
+    }
+
     // POST /api/p2p/offer - Receive offer from sender (called by remote instance)
     if (urlPath == 'api/p2p/offer' && request.method == 'POST') {
       return await _handleP2PReceiveOffer(request, headers);

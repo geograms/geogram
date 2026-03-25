@@ -7,6 +7,7 @@ library;
 import 'dart:async';
 import 'dart:math';
 import '../p2p/p2p_service.dart';
+import 'peer_relay_service.dart';
 import 'webrtc_config.dart';
 import 'websocket_service.dart';
 import 'profile_service.dart';
@@ -28,6 +29,7 @@ class WebRTCSignalingService {
   WebRTCSignalingService._internal();
 
   final WebSocketService _wsService = WebSocketService();
+  final PeerRelayService _peerRelayService = PeerRelayService();
   final _random = Random();
 
   /// Stream controller for incoming WebRTC signals
@@ -41,6 +43,9 @@ class WebRTCSignalingService {
 
   /// Subscription to DHT rendezvous signaling messages
   StreamSubscription<Map<String, dynamic>>? _dhtSubscription;
+
+  /// Subscription to peer relay signaling messages
+  StreamSubscription<Map<String, dynamic>>? _relaySubscription;
 
   /// Whether the service is initialized
   bool _initialized = false;
@@ -56,6 +61,9 @@ class WebRTCSignalingService {
 
     // Listen for WebRTC messages from WebSocket
     _wsSubscription = _wsService.messages.listen(_handleWebSocketMessage);
+    _relaySubscription = _peerRelayService.signalingMessages.listen(
+      _handleRelayMessage,
+    );
     _dhtSubscription = P2PService().onSignalingMessage.listen(
       _handleDhtMessage,
     );
@@ -67,6 +75,7 @@ class WebRTCSignalingService {
   /// Dispose resources
   void dispose() {
     _wsSubscription?.cancel();
+    _relaySubscription?.cancel();
     _dhtSubscription?.cancel();
     _signalController.close();
 
@@ -208,6 +217,17 @@ class WebRTCSignalingService {
       return;
     }
 
+    final sentViaRelay = await _peerRelayService.sendSignalingMessage(
+      signal.toCallsign,
+      signal.toJson(),
+    );
+    if (sentViaRelay) {
+      LogService().log(
+        'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via peer relay',
+      );
+      return;
+    }
+
     final sentViaDht = await P2PService().sendSignalingMessage(
       signal.toCallsign,
       signal.toJson(),
@@ -232,6 +252,11 @@ class WebRTCSignalingService {
   /// Handle incoming DHT rendezvous messages.
   void _handleDhtMessage(Map<String, dynamic> message) {
     _handleIncomingSignal(message, source: 'DHT');
+  }
+
+  /// Handle incoming peer relay messages.
+  void _handleRelayMessage(Map<String, dynamic> message) {
+    _handleIncomingSignal(message, source: 'PeerRelay');
   }
 
   void _handleIncomingSignal(
@@ -274,6 +299,8 @@ class WebRTCSignalingService {
 
   /// Check whether there is any signaling path to a peer.
   bool canSignalPeer(String callsign) {
-    return _wsService.isConnected || P2PService().canSignalPeer(callsign);
+    return _wsService.isConnected ||
+        _peerRelayService.canRelayTo(callsign) ||
+        P2PService().canSignalPeer(callsign);
   }
 }

@@ -309,20 +309,21 @@ class DhtTransport extends Transport with TransportMixin {
     String? udpIp,
     int? udpPort,
   }) {
+    final normalizedUdpPort = udpPort != null && udpPort > 0 ? udpPort : null;
     registerDevice(
       callsign,
       url: url,
       metadata: {
         'source': 'dht',
         'npub': npub,
-        'udp_ip': udpIp,
-        'udp_port': udpPort,
+        'udp_ip': normalizedUdpPort != null ? udpIp : null,
+        'udp_port': normalizedUdpPort,
         'registered_at': DateTime.now().toIso8601String(),
       },
     );
     LogService().log(
       'DhtTransport: Registered $callsign at $url'
-      '${udpPort != null ? " (udp: $udpIp:$udpPort)" : ""}',
+      '${normalizedUdpPort != null ? " (udp: $udpIp:$normalizedUdpPort)" : ""}',
     );
   }
 }
