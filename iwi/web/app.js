@@ -170,6 +170,7 @@ function handleMessage(d) {
   if (d.type === 'ui.append') appendOutput((d.item || {}).text || '', (d.item || {}).level || 'out');
   else if (d.type === 'ui.toast') showToast(d.message || '', d.level || 'info');
   else if (d.type === 'ui.field') fieldValues[d.target] = d.value;
+  else if (d.type === 'ui.map.viewport') mapSetViewport(d.lat, d.lon, d.zoom);
 }
 function appendOutput(text, level) {
   const el = document.getElementById('output');
@@ -191,12 +192,24 @@ function sendCommand(cmd) {
 }
 
 // ── Tabs ─────────────────────────────────────────────────────────────
+let hasMapScreen = false;
 function buildTabs() {
   const c = document.getElementById('tabs'); c.innerHTML = '';
-  const t = document.createElement('button'); t.className = 'tab active'; t.textContent = 'Terminal';
-  t.onclick = () => switchTab('terminal'); c.appendChild(t);
+  // Detect if there's a map screen (group with $type=map)
+  hasMapScreen = screens.some(s => (s.children || []).some(ch => ch.$ === 'group' && ch.$type === 'map'));
+  // First tab: Map if it's a map wapp, otherwise Terminal
+  const firstName = hasMapScreen ? 'Map' : 'Terminal';
+  const firstId = hasMapScreen ? 'map' : 'terminal';
+  const t = document.createElement('button'); t.className = 'tab active'; t.textContent = firstName;
+  t.onclick = () => switchTab(firstId); c.appendChild(t);
+  // If map wapp, also add terminal tab
+  if (hasMapScreen) {
+    const tb = document.createElement('button'); tb.className = 'tab'; tb.textContent = 'Terminal';
+    tb.onclick = () => switchTab('terminal'); c.appendChild(tb);
+  }
   for (const s of screens) {
-    const n = s.name || ''; if (n.toLowerCase() === 'terminal') continue;
+    const n = s.name || '';
+    if (n.toLowerCase() === 'terminal' || n.toLowerCase() === 'map') continue;
     const b = document.createElement('button'); b.className = 'tab'; b.textContent = n;
     b.onclick = () => switchTab(n.toLowerCase()); c.appendChild(b);
   }
@@ -204,9 +217,11 @@ function buildTabs() {
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.textContent.toLowerCase() === name));
   document.getElementById('terminal').style.display = name === 'terminal' ? 'flex' : 'none';
+  document.getElementById('map-container').style.display = name === 'map' ? 'block' : 'none';
   document.getElementById('settings').style.display = name === 'settings' ? 'block' : 'none';
   document.getElementById('launcher').style.display = 'none';
   if (name === 'terminal') document.getElementById('cmd-input').focus();
+  if (name === 'map') mapResize();
 }
 
 // ── Settings renderer ────────────────────────────────────────────────
@@ -271,6 +286,195 @@ function handleAction(a) {
     showToast('Settings saved.', 'success');
   } else if (a.name === 'cancel') switchTab('terminal');
 }
+
+// ── Slippy map renderer ──────────────────────────────────────────────
+
+const TILE_SIZE = 256;
+const tileServers = {
+  satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  osm: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  topo: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+};
+let mapLat = 0, mapLon = 0, mapZoom = 2;
+let mapPixelX = 0, mapPixelY = 0; // top-left corner in world pixel coords
+let mapDragging = false, mapDragStartX = 0, mapDragStartY = 0, mapDragPxX = 0, mapDragPxY = 0;
+const tileCache = new Map(); // "z/x/y" → img element
+let mapTileUrl = tileServers.satellite;
+
+function lon2px(lon, z) { return ((lon + 180) / 360) * TILE_SIZE * Math.pow(2, z); }
+function lat2px(lat, z) { const r = Math.PI / 180 * lat; return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * TILE_SIZE * Math.pow(2, z); }
+function px2lon(px, z) { return px / (TILE_SIZE * Math.pow(2, z)) * 360 - 180; }
+function px2lat(py, z) { const n = Math.PI - 2 * Math.PI * py / (TILE_SIZE * Math.pow(2, z)); return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))); }
+
+function mapSetViewport(lat, lon, zoom) {
+  mapLat = lat; mapLon = lon; mapZoom = Math.round(zoom);
+  // Find tile URL from screen definition
+  const mapGroup = screens.flatMap(s => s.children || []).find(c => c.$ === 'group' && c.$type === 'map');
+  if (mapGroup) {
+    const url = mapGroup['tile-url'];
+    if (url) mapTileUrl = url;
+  }
+  // Also check fieldValues for tileServer setting
+  if (fieldValues.tileServer && tileServers[fieldValues.tileServer]) {
+    mapTileUrl = tileServers[fieldValues.tileServer];
+  }
+  mapCenterOn(lat, lon);
+  mapRender();
+}
+
+function mapCenterOn(lat, lon) {
+  const container = document.getElementById('map-container');
+  const w = container.clientWidth || 800, h = container.clientHeight || 600;
+  mapPixelX = lon2px(lon, mapZoom) - w / 2;
+  mapPixelY = lat2px(lat, mapZoom) - h / 2;
+}
+
+function mapRender() {
+  const container = document.getElementById('map-container');
+  const tilesEl = document.getElementById('map-tiles');
+  const w = container.clientWidth || 800, h = container.clientHeight || 600;
+
+  // Calculate visible tile range
+  const tileXMin = Math.floor(mapPixelX / TILE_SIZE);
+  const tileYMin = Math.floor(mapPixelY / TILE_SIZE);
+  const tileXMax = Math.floor((mapPixelX + w) / TILE_SIZE);
+  const tileYMax = Math.floor((mapPixelY + h) / TILE_SIZE);
+  const maxTile = Math.pow(2, mapZoom) - 1;
+
+  // Track which tiles should be visible
+  const visible = new Set();
+
+  for (let ty = tileYMin; ty <= tileYMax; ty++) {
+    for (let tx = tileXMin; tx <= tileXMax; tx++) {
+      const wrappedX = ((tx % (maxTile + 1)) + (maxTile + 1)) % (maxTile + 1);
+      if (ty < 0 || ty > maxTile) continue;
+      const key = `${mapZoom}/${wrappedX}/${ty}`;
+      visible.add(key);
+
+      let img = tileCache.get(key);
+      if (!img) {
+        img = document.createElement('img');
+        img.src = mapTileUrl.replace('{z}', mapZoom).replace('{x}', wrappedX).replace('{y}', ty);
+        img.draggable = false;
+        img.onerror = () => { img.style.opacity = '0'; };
+        img.onload = () => { img.style.opacity = '1'; };
+        img.style.opacity = '0';
+        img.style.transition = 'opacity 0.2s';
+        tileCache.set(key, img);
+        tilesEl.appendChild(img);
+      }
+
+      // Position
+      img.style.left = (tx * TILE_SIZE - mapPixelX) + 'px';
+      img.style.top = (ty * TILE_SIZE - mapPixelY) + 'px';
+      img.style.display = '';
+    }
+  }
+
+  // Hide tiles not in view
+  for (const [key, img] of tileCache) {
+    if (!visible.has(key)) img.style.display = 'none';
+  }
+
+  // Prune cache (keep max 200 tiles)
+  if (tileCache.size > 200) {
+    const keys = [...tileCache.keys()];
+    for (let i = 0; i < keys.length - 150; i++) {
+      const img = tileCache.get(keys[i]);
+      if (img && img.parentNode) img.parentNode.removeChild(img);
+      tileCache.delete(keys[i]);
+    }
+  }
+
+  // Update coords display
+  const cLat = px2lat(mapPixelY + h / 2, mapZoom);
+  const cLon = px2lon(mapPixelX + w / 2, mapZoom);
+  document.getElementById('map-coords').textContent = `${cLat.toFixed(5)}, ${cLon.toFixed(5)} z${mapZoom}`;
+}
+
+function mapResize() { if (document.getElementById('map-container').style.display !== 'none') mapRender(); }
+window.addEventListener('resize', mapResize);
+
+// Sync viewport back to WASM module
+function mapSyncToModule() {
+  const container = document.getElementById('map-container');
+  const w = container.clientWidth || 800, h = container.clientHeight || 600;
+  mapLat = px2lat(mapPixelY + h / 2, mapZoom);
+  mapLon = px2lon(mapPixelX + w / 2, mapZoom);
+  if (instance) {
+    msgQueue.push(enc.encode(JSON.stringify({ type: 'setViewport', lat: mapLat, lon: mapLon, zoom: mapZoom })));
+    instance.exports.module_handle_event();
+    drainOutbox();
+  }
+}
+
+// ── Map mouse/touch events ───────────────────────────────────────────
+const mc = document.getElementById('map-container');
+
+mc.addEventListener('mousedown', (e) => {
+  mapDragging = true; mapDragStartX = e.clientX; mapDragStartY = e.clientY;
+  mapDragPxX = mapPixelX; mapDragPxY = mapPixelY;
+});
+window.addEventListener('mousemove', (e) => {
+  if (!mapDragging) return;
+  mapPixelX = mapDragPxX - (e.clientX - mapDragStartX);
+  mapPixelY = mapDragPxY - (e.clientY - mapDragStartY);
+  mapRender();
+});
+window.addEventListener('mouseup', () => {
+  if (mapDragging) { mapDragging = false; mapSyncToModule(); }
+});
+mc.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const container = document.getElementById('map-container');
+  const rect = container.getBoundingClientRect();
+  // Zoom towards cursor position
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const worldX = mapPixelX + mx, worldY = mapPixelY + my;
+  const oldZoom = mapZoom;
+  if (e.deltaY < 0 && mapZoom < 18) mapZoom++;
+  else if (e.deltaY > 0 && mapZoom > 2) mapZoom--;
+  if (mapZoom !== oldZoom) {
+    const scale = Math.pow(2, mapZoom - oldZoom);
+    mapPixelX = worldX * scale - mx;
+    mapPixelY = worldY * scale - my;
+    // Clear old zoom tiles
+    for (const [key, img] of tileCache) {
+      if (!key.startsWith(mapZoom + '/')) { if (img.parentNode) img.parentNode.removeChild(img); tileCache.delete(key); }
+    }
+    mapRender();
+    mapSyncToModule();
+  }
+}, { passive: false });
+
+// Touch support
+let touchDist = 0;
+mc.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 1) {
+    mapDragging = true; mapDragStartX = e.touches[0].clientX; mapDragStartY = e.touches[0].clientY;
+    mapDragPxX = mapPixelX; mapDragPxY = mapPixelY;
+  } else if (e.touches.length === 2) {
+    mapDragging = false;
+    touchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+  }
+}, { passive: true });
+mc.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (e.touches.length === 1 && mapDragging) {
+    mapPixelX = mapDragPxX - (e.touches[0].clientX - mapDragStartX);
+    mapPixelY = mapDragPxY - (e.touches[0].clientY - mapDragStartY);
+    mapRender();
+  } else if (e.touches.length === 2) {
+    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+    if (d > touchDist * 1.3 && mapZoom < 18) { mapZoom++; touchDist = d; mapCenterOn(mapLat, mapLon); for (const [k, i] of tileCache) { if (i.parentNode) i.parentNode.removeChild(i); } tileCache.clear(); mapRender(); mapSyncToModule(); }
+    else if (d < touchDist * 0.7 && mapZoom > 2) { mapZoom--; touchDist = d; mapCenterOn(mapLat, mapLon); for (const [k, i] of tileCache) { if (i.parentNode) i.parentNode.removeChild(i); } tileCache.clear(); mapRender(); mapSyncToModule(); }
+  }
+}, { passive: false });
+mc.addEventListener('touchend', () => { if (mapDragging) { mapDragging = false; mapSyncToModule(); } });
+
+// Zoom buttons
+document.getElementById('map-zin').onclick = () => { if (mapZoom < 18) { mapZoom++; mapCenterOn(mapLat, mapLon); for (const [k, i] of tileCache) { if (i.parentNode) i.parentNode.removeChild(i); } tileCache.clear(); mapRender(); mapSyncToModule(); } };
+document.getElementById('map-zout').onclick = () => { if (mapZoom > 2) { mapZoom--; mapCenterOn(mapLat, mapLon); for (const [k, i] of tileCache) { if (i.parentNode) i.parentNode.removeChild(i); } tileCache.clear(); mapRender(); mapSyncToModule(); } };
 
 // ── Input ────────────────────────────────────────────────────────────
 document.getElementById('cmd-input').addEventListener('keydown', (e) => {

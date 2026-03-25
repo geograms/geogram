@@ -57,6 +57,16 @@ main{flex:1;display:flex;overflow:hidden}
 #launcher .app-card .desc{font-size:11px;color:var(--muted);text-align:center;max-width:120px}
 .loading{position:fixed;inset:0;background:rgba(13,17,23,.8);display:flex;align-items:center;justify-content:center;z-index:50}
 .loading span{color:var(--primary);font-size:14px}
+#map-container{flex:1;position:relative;overflow:hidden;display:none;cursor:grab;background:#0a0e14}
+#map-container:active{cursor:grabbing}
+#map-tiles{position:absolute;top:0;left:0;width:100%;height:100%}
+#map-tiles img{position:absolute;width:256px;height:256px;image-rendering:auto;pointer-events:none;user-select:none;-webkit-user-drag:none}
+#map-overlay{position:absolute;bottom:12px;left:12px;display:flex;gap:6px;z-index:10}
+#map-overlay button{width:36px;height:36px;border-radius:8px;border:none;background:var(--surface);color:var(--text);font-size:18px;cursor:pointer;border:1px solid var(--border);display:flex;align-items:center;justify-content:center}
+#map-overlay button:hover{background:var(--border)}
+#map-coords{position:absolute;bottom:12px;right:12px;background:rgba(22,27,34,.85);color:var(--muted);font-size:11px;font-family:var(--mono);padding:4px 10px;border-radius:6px;z-index:10;pointer-events:none}
+#map-attribution{position:absolute;bottom:0;right:0;font-size:9px;color:var(--muted);padding:2px 6px;background:rgba(13,17,23,.7);z-index:10}
+#map-attribution a{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -72,6 +82,12 @@ main{flex:1;display:flex;overflow:hidden}
   <div id="terminal" style="display:none">
     <div id="output"></div>
     <div id="input-row"><span class="prompt">$</span><input id="cmd-input" type="text" autocomplete="off" spellcheck="false" placeholder="Type a command..."></div>
+  </div>
+  <div id="map-container">
+    <div id="map-tiles"></div>
+    <div id="map-overlay"><button id="map-zin" title="Zoom in">+</button><button id="map-zout" title="Zoom out">&minus;</button></div>
+    <div id="map-coords"></div>
+    <div id="map-attribution">Tiles &copy; Esri</div>
   </div>
   <div id="settings"></div>
 </main>

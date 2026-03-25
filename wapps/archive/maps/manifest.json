@@ -1,0 +1,23 @@
+{
+  "id":              "tools.geogram.maps",
+  "version":         "1.0.0",
+  "kind":            "app",
+  "description":     "Satellite maps with offline tile cache",
+  "summary":         "Browse satellite imagery with pan/zoom. Tiles are cached locally for offline use.",
+  "icon":            "media/icons/map.svg",
+  "tags":            ["maps", "satellite", "gps", "tools"],
+  "entry_ui":        "screens/home.ui.json",
+  "tick_interval_ms": 1000,
+  "permissions":     ["network", "storage"],
+  "provides": {
+    "functions": [],
+    "events":    ["viewport.changed"],
+    "variables": ["center_lat", "center_lon", "zoom"]
+  },
+  "requires": {
+    "hal":       ["log", "kv", "msg", "platform"],
+    "events":    [],
+    "libraries": [],
+    "variables": []
+  }
+}

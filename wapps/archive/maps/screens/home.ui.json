@@ -1,0 +1,105 @@
+[
+  {
+    "$": "screen",
+    "name": "Map",
+    "tip": "Browse satellite imagery. Drag to pan, scroll to zoom.",
+    "children": [
+      {
+        "$": "group",
+        "name": "map-viewport",
+        "$type": "map",
+        "tile-url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        "default-lat": 38.7223,
+        "default-lon": -9.1393,
+        "default-zoom": 12,
+        "min-zoom": 2,
+        "max-zoom": 18
+      },
+      {
+        "$": "group",
+        "name": "Controls",
+        "children": [
+          {
+            "$": "action",
+            "name": "zoom-in",
+            "label": "+",
+            "style": "primary",
+            "tip": "Zoom in"
+          },
+          {
+            "$": "action",
+            "name": "zoom-out",
+            "label": "-",
+            "style": "primary",
+            "tip": "Zoom out"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "$": "screen",
+    "name": "Settings",
+    "tip": "Map display settings.",
+    "children": [
+      {
+        "$": "group",
+        "name": "Tiles",
+        "tip": "Tile server configuration.",
+        "children": [
+          {
+            "$": "field",
+            "name": "tileServer",
+            "$type": "enum",
+            "label": "Tile Source",
+            "default": "satellite",
+            "children": [
+              { "$": "option", "name": "satellite", "label": "Satellite (ESRI)" },
+              { "$": "option", "name": "osm", "label": "OpenStreetMap" },
+              { "$": "option", "name": "topo", "label": "Topographic (ESRI)" }
+            ]
+          }
+        ]
+      },
+      {
+        "$": "group",
+        "name": "Cache",
+        "tip": "Offline tile cache settings.",
+        "children": [
+          {
+            "$": "field",
+            "name": "cacheEnabled",
+            "$type": "bool",
+            "label": "Enable Cache",
+            "default": true,
+            "tip": "Cache downloaded tiles for offline use."
+          },
+          {
+            "$": "field",
+            "name": "maxCacheMb",
+            "$type": "int",
+            "label": "Max Cache Size",
+            "default": 200,
+            "min": 50,
+            "max": 2000,
+            "step": 50,
+            "tip": "Maximum tile cache size in megabytes."
+          }
+        ]
+      },
+      {
+        "$": "action",
+        "name": "save",
+        "label": "Save",
+        "style": "primary",
+        "tip": "Apply settings."
+      },
+      {
+        "$": "action",
+        "name": "cancel",
+        "label": "Cancel",
+        "style": "secondary"
+      }
+    ]
+  }
+]
