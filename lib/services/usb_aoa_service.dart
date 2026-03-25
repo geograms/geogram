@@ -80,8 +80,10 @@ class UsbAoaService {
   String? get remoteCallsign => _remoteCallsign;
 
   /// Stream controller for connection state changes
-  final _connectionStateController = StreamController<UsbAoaConnectionState>.broadcast();
-  Stream<UsbAoaConnectionState> get connectionStateStream => _connectionStateController.stream;
+  final _connectionStateController =
+      StreamController<UsbAoaConnectionState>.broadcast();
+  Stream<UsbAoaConnectionState> get connectionStateStream =>
+      _connectionStateController.stream;
 
   /// Stream controller for incoming data
   final _dataController = StreamController<Uint8List>.broadcast();
@@ -145,8 +147,9 @@ class UsbAoaService {
         await _linuxImpl!.initialize();
 
         // Subscribe to connection events
-        _linuxConnectionSub =
-            _linuxImpl!.connectionStream.listen(_handleLinuxConnection);
+        _linuxConnectionSub = _linuxImpl!.connectionStream.listen(
+          _handleLinuxConnection,
+        );
 
         // Subscribe to incoming data
         _linuxDataSub = _linuxImpl!.dataStream.listen((data) {
@@ -193,7 +196,9 @@ class UsbAoaService {
       LogService().log('UsbAoa: Failed to initialize - ${e.message}');
     } on MissingPluginException {
       // Native implementation not available yet
-      LogService().log('UsbAoa: Native plugin not implemented for this platform');
+      LogService().log(
+        'UsbAoa: Native plugin not implemented for this platform',
+      );
     }
   }
 
@@ -228,7 +233,9 @@ class UsbAoaService {
   /// Schedule auto-reconnect with exponential backoff
   void _scheduleAutoReconnect() {
     if (_autoReconnectAttempts >= _maxAutoReconnectAttempts) {
-      LogService().log('UsbAoa: Max auto-reconnect attempts reached ($_maxAutoReconnectAttempts)');
+      LogService().log(
+        'UsbAoa: Max auto-reconnect attempts reached ($_maxAutoReconnectAttempts)',
+      );
       _autoReconnectAttempts = 0;
       return;
     }
@@ -237,11 +244,15 @@ class UsbAoaService {
     _autoReconnectAttempts++;
     // Exponential backoff: 1s, 2s, 4s
     final delay = Duration(seconds: 1 << (_autoReconnectAttempts - 1));
-    LogService().log('UsbAoa: Scheduling auto-reconnect attempt $_autoReconnectAttempts in ${delay.inSeconds}s');
+    LogService().log(
+      'UsbAoa: Scheduling auto-reconnect attempt $_autoReconnectAttempts in ${delay.inSeconds}s',
+    );
 
     _autoReconnectTimer = Timer(delay, () async {
       if (_connectionState == UsbAoaConnectionState.disconnected) {
-        LogService().log('UsbAoa: Auto-reconnect attempt $_autoReconnectAttempts');
+        LogService().log(
+          'UsbAoa: Auto-reconnect attempt $_autoReconnectAttempts',
+        );
         await _autoConnectLinux();
       }
     });
@@ -256,7 +267,9 @@ class UsbAoaService {
   /// Auto-connect to Android devices on Linux
   Future<void> _autoConnectLinux() async {
     if (!Platform.isLinux || _linuxImpl == null) {
-      LogService().log('UsbAoa: _autoConnectLinux skipped (Linux=${Platform.isLinux}, impl=${_linuxImpl != null})');
+      LogService().log(
+        'UsbAoa: _autoConnectLinux skipped (Linux=${Platform.isLinux}, impl=${_linuxImpl != null})',
+      );
       return;
     }
 
@@ -267,7 +280,9 @@ class UsbAoaService {
       LogService().log('UsbAoa: Found ${devices.length} device(s)');
 
       for (final device in devices) {
-        LogService().log('UsbAoa: Found ${device.manufacturer ?? "unknown"} ${device.product ?? ""} (${device.vidHex}:${device.pidHex})');
+        LogService().log(
+          'UsbAoa: Found ${device.manufacturer ?? "unknown"} ${device.product ?? ""} (${device.vidHex}:${device.pidHex})',
+        );
       }
 
       if (devices.isEmpty) {
@@ -277,7 +292,9 @@ class UsbAoaService {
 
       // Try to connect to first available device
       for (final device in devices) {
-        LogService().log('UsbAoa: Attempting to connect to ${device.devPath}...');
+        LogService().log(
+          'UsbAoa: Attempting to connect to ${device.devPath}...',
+        );
         _connectionState = UsbAoaConnectionState.connecting;
         _connectionStateController.add(_connectionState);
 
@@ -321,14 +338,20 @@ class UsbAoaService {
       try {
         final devices = await _linuxImpl!.listDevices();
         if (devices.isNotEmpty) {
-          LogService().log('UsbAoa: Hotplug detected ${devices.length} device(s)');
+          LogService().log(
+            'UsbAoa: Hotplug detected ${devices.length} device(s)',
+          );
           for (final d in devices) {
-            LogService().log('UsbAoa:   - ${d.vidHex}:${d.pidHex} ${d.manufacturer ?? ""} ${d.product ?? ""} isAoa=${d.isAoaDevice}');
+            LogService().log(
+              'UsbAoa:   - ${d.vidHex}:${d.pidHex} ${d.manufacturer ?? ""} ${d.product ?? ""} isAoa=${d.isAoaDevice}',
+            );
           }
           await _autoConnectLinux();
         } else if (_periodicScanCount % 30 == 0) {
           // Log every ~60 seconds when no devices found
-          LogService().log('UsbAoa: Periodic scan #$_periodicScanCount - no devices');
+          LogService().log(
+            'UsbAoa: Periodic scan #$_periodicScanCount - no devices',
+          );
         }
       } catch (e) {
         LogService().log('UsbAoa: Periodic scan error: $e');
@@ -348,7 +371,9 @@ class UsbAoaService {
       case 'onAccessoryConnected':
         final args = call.arguments as Map?;
         if (args != null) {
-          _accessoryInfo = UsbAccessoryInfo.fromMap(Map<String, dynamic>.from(args));
+          _accessoryInfo = UsbAccessoryInfo.fromMap(
+            Map<String, dynamic>.from(args),
+          );
         }
         _connectionState = UsbAoaConnectionState.connected;
         _connectionStateController.add(_connectionState);
@@ -418,7 +443,9 @@ class UsbAoaService {
 
         // Try to connect to first available device
         for (final device in devices) {
-          LogService().log('UsbAoa: Found ${device.manufacturer ?? "unknown"} ${device.product ?? ""} (${device.vidHex}:${device.pidHex})');
+          LogService().log(
+            'UsbAoa: Found ${device.manufacturer ?? "unknown"} ${device.product ?? ""} (${device.vidHex}:${device.pidHex})',
+          );
           if (await _linuxImpl!.connect(device)) {
             return true;
           }
@@ -566,6 +593,7 @@ class UsbAoaService {
 
   /// Set the remote device's callsign (discovered during protocol handshake)
   void setRemoteCallsign(String callsign) {
+    if (_remoteCallsign == callsign) return;
     _remoteCallsign = callsign;
     _remoteCallsignController.add(callsign);
     LogService().log('UsbAoa: Remote callsign set to $callsign');

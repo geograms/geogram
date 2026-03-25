@@ -12,7 +12,9 @@ import android.util.Log;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.PrintWriter;
+import java.io.RandomAccessFile;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -284,7 +286,7 @@ public class GeogramApplication extends Application {
 
             Log.d(TAG, "Crash logged to: " + crashFile.getAbsolutePath());
             truncateCrashLog();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(TAG, "Failed to write crash log", e);
         }
     }
@@ -337,7 +339,7 @@ public class GeogramApplication extends Application {
             // Recent logs for context
             if (recentLogs != null && !recentLogs.isEmpty()) {
                 sb.append("\n--- Recent Log Entries (before crash) ---\n");
-                sb.append(recentLogs).append("\n");
+                sb.append(truncateForCrashLog(recentLogs, MAX_RECENT_LOG_CHARS)).append("\n");
                 sb.append("--- End Recent Logs ---\n");
             }
 
@@ -349,7 +351,7 @@ public class GeogramApplication extends Application {
 
             Log.d(TAG, "Flutter crash logged to: " + crashFile.getAbsolutePath());
             truncateCrashLog();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(TAG, "Failed to write Flutter crash log", e);
         }
     }
@@ -359,6 +361,8 @@ public class GeogramApplication extends Application {
      * Prevents the crash file from growing unbounded during OOM crash loops.
      */
     private static final int MAX_CRASH_REPORTS = 50;
+    private static final long MAX_CRASH_LOG_TAIL_BYTES = 512 * 1024;
+    private static final int MAX_RECENT_LOG_CHARS = 32 * 1024;
 
     private void truncateCrashLog() {
         try {
@@ -368,7 +372,20 @@ public class GeogramApplication extends Application {
             // Only truncate if file is larger than 200KB
             if (crashFile.length() < 200 * 1024) return;
 
-            String content = new String(java.nio.file.Files.readAllBytes(crashFile.toPath()));
+            long fileSize = crashFile.length();
+            int bytesToRead = (int) Math.min(fileSize, MAX_CRASH_LOG_TAIL_BYTES);
+            byte[] buffer = new byte[bytesToRead];
+
+            try (RandomAccessFile raf = new RandomAccessFile(crashFile, "r")) {
+                raf.seek(fileSize - bytesToRead);
+                raf.readFully(buffer);
+            }
+
+            String content = new String(buffer, StandardCharsets.UTF_8);
+            int firstMarker = content.indexOf("=== CRASH REPORT ===");
+            if (firstMarker > 0) {
+                content = content.substring(firstMarker);
+            }
             String[] reports = content.split("=== CRASH REPORT ===");
 
             if (reports.length <= MAX_CRASH_REPORTS) return;
@@ -387,9 +404,16 @@ public class GeogramApplication extends Application {
             fos.close();
 
             Log.d(TAG, "Crash log truncated to " + MAX_CRASH_REPORTS + " reports");
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Log.e(TAG, "Failed to truncate crash log", e);
         }
+    }
+
+    private String truncateForCrashLog(String text, int maxChars) {
+        if (text == null || text.length() <= maxChars) {
+            return text;
+        }
+        return text.substring(text.length() - maxChars);
     }
 
     /**

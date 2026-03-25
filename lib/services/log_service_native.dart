@@ -39,18 +39,29 @@ Future<LogReadResult> _readLogFileInIsolate(_LogReadParams params) async {
 
     final bytes = await file.readAsBytes();
     final content = utf8.decode(bytes, allowMalformed: true);
-    final allLines = content.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    final allLines = content
+        .split('\n')
+        .where((l) => l.trim().isNotEmpty)
+        .toList();
     final totalLines = allLines.length;
 
     if (totalLines <= params.maxLines) {
-      return LogReadResult(lines: allLines, totalLines: totalLines, truncated: false);
+      return LogReadResult(
+        lines: allLines,
+        totalLines: totalLines,
+        truncated: false,
+      );
     }
 
     // Return only last N lines
     final lines = allLines.sublist(totalLines - params.maxLines);
     return LogReadResult(lines: lines, totalLines: totalLines, truncated: true);
   } catch (e) {
-    return LogReadResult(lines: ['Error reading log: $e'], totalLines: 1, truncated: false);
+    return LogReadResult(
+      lines: ['Error reading log: $e'],
+      totalLines: 1,
+      truncated: false,
+    );
   }
 }
 
@@ -75,6 +86,9 @@ class LogService {
   IOSink? _crashSink;
   DateTime? _currentLogDay;
   bool _initialized = false;
+  bool _isPruningLogFile = false;
+  DateTime? _lastWriteErrorAt;
+  String? _lastWriteError;
 
   // ProfileStorage support for encrypted profiles
   ProfileStorage? _storage;
@@ -89,7 +103,8 @@ class LogService {
   // Loop detection: track recent messages to detect tight loops
   final Map<String, _LogCounter> _recentMessages = {};
   static const int _loopDetectionWindowMs = 5000; // 5 second window
-  static const int _loopThreshold = 50; // warn if same message > 50 times in window
+  static const int _loopThreshold =
+      50; // warn if same message > 50 times in window
   DateTime? _lastLoopWarning;
   String? _suppressedMessage; // currently suppressed message pattern
   int _suppressedCount = 0;
@@ -206,6 +221,9 @@ class LogService {
     if (kIsWeb) return;
 
     try {
+      if (_isPruningLogFile && !_useStorage) {
+        return;
+      }
       if (_useStorage) {
         _pendingBuffer.writeln(message);
         if (isCrash) {
@@ -238,7 +256,15 @@ class LogService {
         _checkAndPruneLogFile(); // Fire and forget
       }
     } catch (e) {
-      print('Error writing to log file: $e');
+      final now = DateTime.now();
+      final error = e.toString();
+      if (_lastWriteError != error ||
+          _lastWriteErrorAt == null ||
+          now.difference(_lastWriteErrorAt!) >= const Duration(seconds: 10)) {
+        _lastWriteError = error;
+        _lastWriteErrorAt = now;
+        print('Error writing to log file: $e');
+      }
     }
   }
 
@@ -286,69 +312,82 @@ class LogService {
 
   Future<void> _checkAndPruneLogFile() async {
     if (kIsWeb || _logsDir == null || _currentLogDay == null) return;
+    if (_isPruningLogFile) return;
 
-    final now = _currentLogDay!;
+    _isPruningLogFile = true;
+    try {
+      final now = _currentLogDay!;
 
-    if (_useStorage) {
-      final relPath = _logRelPath(now);
-      final content = await _storage!.readString(relPath);
-      if (content == null) return;
-      final size = content.length; // approximate — byte count ≈ char count for log text
+      if (_useStorage) {
+        final relPath = _logRelPath(now);
+        final content = await _storage!.readString(relPath);
+        if (content == null) return;
+        final size = content
+            .length; // approximate — byte count ≈ char count for log text
+        if (size <= _maxLogFileSizeBytes) return;
+
+        final lines = content.split('\n');
+        if (lines.isEmpty) return;
+        final avgLineSize = size ~/ lines.length;
+        final linesToKeep = _pruneTargetSizeBytes ~/ avgLineSize;
+        final prunedLines = lines.length > linesToKeep
+            ? lines.sublist(lines.length - linesToKeep)
+            : lines;
+        final prunedContent = prunedLines.join('\n');
+        await _storage!.writeString(
+          relPath,
+          '=== Log pruned at ${DateTime.now().toIso8601String()} (was ${(size / 1024 / 1024).toStringAsFixed(1)}MB) ===\n$prunedContent',
+        );
+        return;
+      }
+
+      final dateStr =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+      final logPath = p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt');
+      final logFile = File(logPath);
+
+      if (!await logFile.exists()) return;
+
+      final size = await logFile.length();
       if (size <= _maxLogFileSizeBytes) return;
 
+      // Close current sink before rewriting the file.
+      await _logSink?.flush();
+      await _logSink?.close();
+      _logSink = null;
+
+      // Read file, keep last ~20MB worth of lines
+      // Use allowMalformed to handle corrupted/non-UTF-8 bytes gracefully
+      final bytes = await logFile.readAsBytes();
+      final content = utf8.decode(bytes, allowMalformed: true);
       final lines = content.split('\n');
+      if (lines.isEmpty) return;
+
+      // Estimate bytes per line and calculate how many lines to keep
       final avgLineSize = size ~/ lines.length;
       final linesToKeep = _pruneTargetSizeBytes ~/ avgLineSize;
+
       final prunedLines = lines.length > linesToKeep
           ? lines.sublist(lines.length - linesToKeep)
           : lines;
+
+      // Write pruned content
       final prunedContent = prunedLines.join('\n');
-      await _storage!.writeString(relPath,
-          '=== Log pruned at ${DateTime.now().toIso8601String()} (was ${(size / 1024 / 1024).toStringAsFixed(1)}MB) ===\n$prunedContent');
-      return;
+      await logFile.writeAsString(
+        '=== Log pruned at ${DateTime.now().toIso8601String()} (was ${(size / 1024 / 1024).toStringAsFixed(1)}MB) ===\n$prunedContent',
+      );
+
+      // Reopen sink
+      _logSink = logFile.openWrite(mode: FileMode.append);
+    } finally {
+      _isPruningLogFile = false;
     }
-
-    final dateStr =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-    final logPath = p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt');
-    final logFile = File(logPath);
-
-    if (!await logFile.exists()) return;
-
-    final size = await logFile.length();
-    if (size <= _maxLogFileSizeBytes) return;
-
-    // Close current sink
-    await _logSink?.flush();
-    await _logSink?.close();
-    _logSink = null;
-
-    // Read file, keep last ~20MB worth of lines
-    // Use allowMalformed to handle corrupted/non-UTF-8 bytes gracefully
-    final bytes = await logFile.readAsBytes();
-    final content = utf8.decode(bytes, allowMalformed: true);
-    final lines = content.split('\n');
-
-    // Estimate bytes per line and calculate how many lines to keep
-    final avgLineSize = size ~/ lines.length;
-    final linesToKeep = _pruneTargetSizeBytes ~/ avgLineSize;
-
-    final prunedLines = lines.length > linesToKeep
-        ? lines.sublist(lines.length - linesToKeep)
-        : lines;
-
-    // Write pruned content
-    final prunedContent = prunedLines.join('\n');
-    await logFile.writeAsString(
-        '=== Log pruned at ${DateTime.now().toIso8601String()} (was ${(size / 1024 / 1024).toStringAsFixed(1)}MB) ===\n$prunedContent');
-
-    // Reopen sink
-    _logSink = logFile.openWrite(mode: FileMode.append);
   }
 
   void _openSinks(DateTime now) {
     if (_logsDir == null) return;
-    if (_useStorage) return; // Encrypted storage uses buffered writes, not IOSink
+    if (_useStorage)
+      return; // Encrypted storage uses buffered writes, not IOSink
     if (!_logsDir!.existsSync()) {
       _logsDir!.createSync(recursive: true);
     }
@@ -431,11 +470,19 @@ class LogService {
       if (_suppressedMessage != pattern) {
         // Emit suppression start warning
         if (_suppressedMessage != null && _suppressedCount > 0) {
-          _emitLog(now, '[LOOP] Suppressed $_suppressedCount repetitions of: $_suppressedMessage', LogLevel.warn);
+          _emitLog(
+            now,
+            '[LOOP] Suppressed $_suppressedCount repetitions of: $_suppressedMessage',
+            LogLevel.warn,
+          );
         }
         _suppressedMessage = pattern;
         _suppressedCount = 0;
-        _emitLog(now, '[LOOP DETECTED] Message repeated ${counter.count}x in ${_loopDetectionWindowMs}ms: $message', LogLevel.warn);
+        _emitLog(
+          now,
+          '[LOOP DETECTED] Message repeated ${counter.count}x in ${_loopDetectionWindowMs}ms: $message',
+          LogLevel.warn,
+        );
       }
       _suppressedCount++;
 
@@ -443,10 +490,15 @@ class LogService {
       if (_suppressedCount % 100 != 0) {
         return;
       }
-    } else if (_suppressedMessage == pattern && counter.count < _loopThreshold ~/ 2) {
+    } else if (_suppressedMessage == pattern &&
+        counter.count < _loopThreshold ~/ 2) {
       // Loop ended, emit summary
       if (_suppressedCount > 0) {
-        _emitLog(now, '[LOOP ENDED] Suppressed $_suppressedCount repetitions of: $_suppressedMessage', LogLevel.info);
+        _emitLog(
+          now,
+          '[LOOP ENDED] Suppressed $_suppressedCount repetitions of: $_suppressedMessage',
+          LogLevel.info,
+        );
       }
       _suppressedMessage = null;
       _suppressedCount = 0;
@@ -456,8 +508,10 @@ class LogService {
   }
 
   void _emitLog(DateTime now, String message, LogLevel level) {
-    final date = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-    final time = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}.${now.millisecond.toString().padLeft(3, '0')}';
+    final date =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    final time =
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}.${now.millisecond.toString().padLeft(3, '0')}';
     final levelStr = level.name.toUpperCase().padRight(5);
     final logEntry = '$date $time [$levelStr] $message';
 
@@ -469,7 +523,8 @@ class LogService {
     }
 
     // Write to file asynchronously
-    final isCrash = level == LogLevel.error ||
+    final isCrash =
+        level == LogLevel.error ||
         message.toLowerCase().contains('exception') ||
         message.toLowerCase().contains('crash') ||
         message.toLowerCase().contains('fatal');
@@ -531,7 +586,9 @@ class LogService {
 
     final dateStr =
         '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
-    final file = File(p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt'));
+    final file = File(
+      p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt'),
+    );
     if (!await file.exists()) return null;
     try {
       return await file.readAsString();
@@ -563,20 +620,34 @@ class LogService {
       if (content == null) {
         return LogReadResult(lines: [], totalLines: 0, truncated: false);
       }
-      final allLines = content.split('\n').where((l) => l.trim().isNotEmpty).toList();
+      final allLines = content
+          .split('\n')
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
       final totalLines = allLines.length;
       if (totalLines <= maxLines) {
-        return LogReadResult(lines: allLines, totalLines: totalLines, truncated: false);
+        return LogReadResult(
+          lines: allLines,
+          totalLines: totalLines,
+          truncated: false,
+        );
       }
       final lines = allLines.sublist(totalLines - maxLines);
-      return LogReadResult(lines: lines, totalLines: totalLines, truncated: true);
+      return LogReadResult(
+        lines: lines,
+        totalLines: totalLines,
+        truncated: true,
+      );
     }
 
     final dateStr =
         '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
     final filePath = p.join(_logsDir!.path, '${now.year}', 'log-$dateStr.txt');
 
-    return await compute(_readLogFileInIsolate, _LogReadParams(filePath, maxLines));
+    return await compute(
+      _readLogFileInIsolate,
+      _LogReadParams(filePath, maxLines),
+    );
   }
 
   Future<String?> readCrashLog() async {

@@ -80,9 +80,13 @@ class UsbAoaTransport extends Transport with TransportMixin {
   /// Count of hello retry attempts
   int _helloRetryCount = 0;
 
-  UsbAoaTransport({
-    this.timeout = const Duration(seconds: 30),
-  });
+  /// Avoid echoing hello forever on an already-established USB link.
+  DateTime? _lastHelloReplyAt;
+  DateTime? _lastHelloSentAt;
+  static const Duration _helloReplyCooldown = Duration(seconds: 10);
+  static const Duration _helloSendDebounce = Duration(milliseconds: 500);
+
+  UsbAoaTransport({this.timeout = const Duration(seconds: 30)});
 
   @override
   Future<void> initialize() async {
@@ -107,18 +111,24 @@ class UsbAoaTransport extends Transport with TransportMixin {
         // On Linux, the USB channel isn't ready until Android opens the accessory.
         // Sending hello before that causes the message to be lost, adding 2+ second delay.
         // The channelReadyStream listener will send hello when Android is ready.
-        LogService().log('UsbAoaTransport: Connected, waiting for channel ready before hello');
+        LogService().log(
+          'UsbAoaTransport: Connected, waiting for channel ready before hello',
+        );
         _startHelloRetry(); // Start retry mechanism as backup
       } else if (state == UsbAoaConnectionState.disconnected) {
         // Stop hello retry on disconnect
         _stopHelloRetry();
+        _lastHelloReplyAt = null;
+        _lastHelloSentAt = null;
         // Clear pending requests on disconnect
         for (final pending in _pendingRequests.values) {
           pending.stopwatch.stop();
-          pending.completer.complete(TransportResult.failure(
-            error: 'USB connection lost',
-            transportUsed: id,
-          ));
+          pending.completer.complete(
+            TransportResult.failure(
+              error: 'USB connection lost',
+              transportUsed: id,
+            ),
+          );
         }
         _pendingRequests.clear();
         _receiveBuffer.clear();
@@ -131,7 +141,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
       LogService().log('UsbAoaTransport: Channel ready, sending hello');
       _sendHello();
     });
-    LogService().log('UsbAoaTransport: [INIT] Subscribed to channel ready stream');
+    LogService().log(
+      'UsbAoaTransport: [INIT] Subscribed to channel ready stream',
+    );
 
     // Now initialize the USB AOA service (after subscriptions are set up)
     await _usbService.initialize();
@@ -139,7 +151,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
 
     // Check if already connected (connection may have happened during/after initialization)
     if (_usbService.connectionState == UsbAoaConnectionState.connected) {
-      LogService().log('UsbAoaTransport: [INIT] Already connected, sending hello');
+      LogService().log(
+        'UsbAoaTransport: [INIT] Already connected, sending hello',
+      );
       _sendHello();
       _startHelloRetry();
     }
@@ -166,7 +180,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
   @override
   Future<bool> canReach(String callsign) async {
     if (!isInitialized) {
-      LogService().log('UsbAoaTransport: canReach($callsign) = false (not initialized)');
+      LogService().log(
+        'UsbAoaTransport: canReach($callsign) = false (not initialized)',
+      );
       return false;
     }
 
@@ -177,15 +193,21 @@ class UsbAoaTransport extends Transport with TransportMixin {
     if (remoteCallsign == null) {
       // Check if USB is physically connected even though handshake is incomplete
       if (_usbService.isConnected) {
-        LogService().log('UsbAoaTransport: canReach($callsign) = true (USB connected, handshake pending)');
+        LogService().log(
+          'UsbAoaTransport: canReach($callsign) = true (USB connected, handshake pending)',
+        );
         return true;
       }
-      LogService().log('UsbAoaTransport: canReach($callsign) = false (not connected)');
+      LogService().log(
+        'UsbAoaTransport: canReach($callsign) = false (not connected)',
+      );
       return false;
     }
 
     final matches = remoteCallsign.toUpperCase() == callsign.toUpperCase();
-    LogService().log('UsbAoaTransport: canReach($callsign) = $matches (remoteCallsign=$remoteCallsign)');
+    LogService().log(
+      'UsbAoaTransport: canReach($callsign) = $matches (remoteCallsign=$remoteCallsign)',
+    );
     return matches;
   }
 
@@ -287,17 +309,25 @@ class UsbAoaTransport extends Transport with TransportMixin {
   }
 
   /// Send hello message with our callsign
-  Future<void> _sendHello() async {
+  Future<void> _sendHello({bool isReply = false}) async {
     try {
+      final now = DateTime.now();
+      if (_lastHelloSentAt != null &&
+          now.difference(_lastHelloSentAt!) < _helloSendDebounce) {
+        return;
+      }
       final callsign = AppService().currentCallsign;
       if (callsign == null || callsign.isEmpty) {
         LogService().log('UsbAoaTransport: No active callsign to send');
         return;
       }
 
-      LogService().log('UsbAoaTransport: Sending hello with callsign $callsign');
+      LogService().log(
+        'UsbAoaTransport: Sending ${isReply ? 'hello reply' : 'hello'} with callsign $callsign',
+      );
       final success = await _sendEnvelope('_hello', {'callsign': callsign});
       if (success) {
+        _lastHelloSentAt = now;
         LogService().log('UsbAoaTransport: Hello sent successfully');
       } else {
         LogService().log('UsbAoaTransport: Failed to send hello');
@@ -322,12 +352,16 @@ class UsbAoaTransport extends Transport with TransportMixin {
         return;
       }
       _helloRetryCount++;
-      LogService().log('UsbAoaTransport: Hello retry #$_helloRetryCount (no response yet)');
+      LogService().log(
+        'UsbAoaTransport: Hello retry #$_helloRetryCount (no response yet)',
+      );
       _sendHello();
 
       // Give up after 30 retries (60 seconds)
       if (_helloRetryCount >= 30) {
-        LogService().log('UsbAoaTransport: Hello retry limit reached, giving up');
+        LogService().log(
+          'UsbAoaTransport: Hello retry limit reached, giving up',
+        );
         _stopHelloRetry();
       }
     });
@@ -338,14 +372,18 @@ class UsbAoaTransport extends Transport with TransportMixin {
     _helloRetryTimer?.cancel();
     _helloRetryTimer = null;
     if (_helloRetryCount > 0) {
-      LogService().log('UsbAoaTransport: Hello retry stopped after $_helloRetryCount attempts');
+      LogService().log(
+        'UsbAoaTransport: Hello retry stopped after $_helloRetryCount attempts',
+      );
     }
     _helloRetryCount = 0;
   }
 
   /// Public method to restart hello retry mechanism (for debugging)
   void restartHelloRetry() {
-    LogService().log('UsbAoaTransport: Restarting hello retry (manual trigger)');
+    LogService().log(
+      'UsbAoaTransport: Restarting hello retry (manual trigger)',
+    );
     _stopHelloRetry();
     _sendHello();
     _startHelloRetry();
@@ -356,13 +394,17 @@ class UsbAoaTransport extends Transport with TransportMixin {
     TransportMessage message,
     Stopwatch stopwatch,
   ) async {
-    LogService().log('UsbAoaTransport: [API-REQ] START ${message.method} ${message.path}');
+    LogService().log(
+      'UsbAoaTransport: [API-REQ] START ${message.method} ${message.path}',
+    );
     LogService().log('UsbAoaTransport: [API-REQ] Request ID: ${message.id}');
 
     // Create a Completer to track this request
     final completer = Completer<TransportResult>();
     _pendingRequests[message.id] = _PendingRequest(completer, stopwatch);
-    LogService().log('UsbAoaTransport: [API-REQ] Added to pending requests. Total: ${_pendingRequests.length}');
+    LogService().log(
+      'UsbAoaTransport: [API-REQ] Added to pending requests. Total: ${_pendingRequests.length}',
+    );
 
     // Encode API request as JSON payload
     final requestPayload = {
@@ -390,7 +432,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
     }
 
     // Wait for response with timeout
-    LogService().log('UsbAoaTransport: [API-REQ] Send OK, waiting for response...');
+    LogService().log(
+      'UsbAoaTransport: [API-REQ] Send OK, waiting for response...',
+    );
     try {
       final result = await completer.future.timeout(timeout);
       LogService().log('UsbAoaTransport: [API-REQ] SUCCESS - Got response');
@@ -483,7 +527,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
   ) async {
     final roomId = message.path ?? 'general';
 
-    LogService().log('UsbAoaTransport: Chat to ${message.targetCallsign} room=$roomId');
+    LogService().log(
+      'UsbAoaTransport: Chat to ${message.targetCallsign} room=$roomId',
+    );
 
     final content = message.signedEvent ?? message.payload;
     final success = await _sendEnvelope(roomId, content);
@@ -547,14 +593,18 @@ class UsbAoaTransport extends Transport with TransportMixin {
   /// Handle incoming USB data and convert to TransportMessages
   void _handleIncomingData(Uint8List data) {
     try {
-      LogService().log('UsbAoaTransport: [RECV] Got ${data.length} bytes from USB');
+      LogService().log(
+        'UsbAoaTransport: [RECV] Got ${data.length} bytes from USB',
+      );
       // Add to receive buffer
       _receiveBuffer.addAll(data);
 
       // Guard against corrupted length prefix causing unbounded buffering
       // If the buffer grows beyond 1MB, something went wrong — reset it
       if (_receiveBuffer.length > 1024 * 1024) {
-        LogService().log('UsbAoaTransport: Receive buffer overflow (${_receiveBuffer.length} bytes), resetting');
+        LogService().log(
+          'UsbAoaTransport: Receive buffer overflow (${_receiveBuffer.length} bytes), resetting',
+        );
         _receiveBuffer.clear();
         return;
       }
@@ -567,7 +617,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
 
         // Sanity check: reject absurdly large messages (> 512KB)
         if (length > 512 * 1024) {
-          LogService().log('UsbAoaTransport: Invalid message length ($length bytes), resetting buffer');
+          LogService().log(
+            'UsbAoaTransport: Invalid message length ($length bytes), resetting buffer',
+          );
           _receiveBuffer.clear();
           return;
         }
@@ -590,7 +642,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
         }
       }
     } catch (e) {
-      LogService().log('UsbAoaTransport: Unhandled error in _handleIncomingData: $e');
+      LogService().log(
+        'UsbAoaTransport: Unhandled error in _handleIncomingData: $e',
+      );
       // Don't let buffer corruption propagate — reset and continue
       _receiveBuffer.clear();
     }
@@ -603,7 +657,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
       final contentStr = envelope['content'] as String?;
 
       if (channel == null || contentStr == null) {
-        LogService().log('UsbAoaTransport: Invalid envelope - missing channel or content');
+        LogService().log(
+          'UsbAoaTransport: Invalid envelope - missing channel or content',
+        );
         return;
       }
 
@@ -633,14 +689,25 @@ class UsbAoaTransport extends Transport with TransportMixin {
           // Handle callsign exchange
           if (content is Map && content['callsign'] != null) {
             final remoteCallsign = content['callsign'].toString();
+            final previousCallsign = _usbService.remoteCallsign;
             _usbService.setRemoteCallsign(remoteCallsign);
-            LogService().log('UsbAoaTransport: Received hello from $remoteCallsign');
+            LogService().log(
+              'UsbAoaTransport: Received hello from $remoteCallsign',
+            );
             _stopHelloRetry(); // Stop retrying - handshake successful
 
-            // Always send hello back to handle restart scenarios where one side
-            // already knows the callsign but the other side restarted
-            LogService().log('UsbAoaTransport: Sending hello reply...');
-            _sendHello();
+            final now = DateTime.now();
+            final shouldReply =
+                previousCallsign == null ||
+                previousCallsign.toUpperCase() !=
+                    remoteCallsign.toUpperCase() ||
+                _lastHelloReplyAt == null ||
+                now.difference(_lastHelloReplyAt!) >= _helloReplyCooldown;
+            if (shouldReply) {
+              _lastHelloReplyAt = now;
+              LogService().log('UsbAoaTransport: Sending hello reply...');
+              _sendHello(isReply: true);
+            }
           }
           return; // Don't emit hello messages
         default:
@@ -660,13 +727,17 @@ class UsbAoaTransport extends Transport with TransportMixin {
             pendingRequest.stopwatch.stop();
             final statusCode = responseData['statusCode'] as int? ?? 200;
             final body = responseData['body'];
-            LogService().log('UsbAoaTransport: Received API response for $requestId (status: $statusCode)');
-            pendingRequest.completer.complete(TransportResult.success(
-              transportUsed: id,
-              statusCode: statusCode,
-              responseData: body,
-              latency: pendingRequest.stopwatch.elapsed,
-            ));
+            LogService().log(
+              'UsbAoaTransport: Received API response for $requestId (status: $statusCode)',
+            );
+            pendingRequest.completer.complete(
+              TransportResult.success(
+                transportUsed: id,
+                statusCode: statusCode,
+                responseData: body,
+                latency: pendingRequest.stopwatch.elapsed,
+              ),
+            );
             return;
           }
         }
@@ -695,7 +766,9 @@ class UsbAoaTransport extends Transport with TransportMixin {
           });
         }
         message = TransportMessage(
-          id: content['id']?.toString() ?? 'usb-${DateTime.now().millisecondsSinceEpoch}',
+          id:
+              content['id']?.toString() ??
+              'usb-${DateTime.now().millisecondsSinceEpoch}',
           targetCallsign: _usbService.remoteCallsign ?? 'USB',
           type: TransportMessageType.apiRequest,
           method: content['method']?.toString(),
