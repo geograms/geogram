@@ -1923,7 +1923,11 @@ class DevicesService {
     }
 
     final localUrlDevice = preferredBy(
-      (device) => device.url != null && device.url!.isNotEmpty,
+      (device) =>
+          device.isOnline &&
+          device.hasLocalConnection &&
+          device.url != null &&
+          device.url!.isNotEmpty,
     );
     final internetDevice = preferredBy(
       (device) =>
@@ -1944,7 +1948,12 @@ class DevicesService {
       final lanTransport =
           connectionManager.getTransport('lan') as LanTransport?;
       if (lanTransport != null) {
-        lanTransport.registerLocalDevice(callsign, localUrlDevice!.url!);
+        lanTransport.registerLocalDevice(
+          callsign,
+          localUrlDevice!.url!,
+          expectedDeviceId: internetDevice?.deviceId ?? localUrlDevice.deviceId,
+          expectedNpub: internetDevice?.npub ?? localUrlDevice.npub,
+        );
       }
     }
 

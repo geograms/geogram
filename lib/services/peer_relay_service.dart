@@ -7,6 +7,7 @@ import 'package:shelf/shelf.dart' as shelf;
 
 import '../connection/routing_strategy.dart';
 import '../connection/transport_message.dart';
+import '../p2p/p2p_service.dart';
 import '../util/managed_http_client.dart';
 import 'devices_service.dart';
 import 'log_service.dart';
@@ -334,23 +335,21 @@ class PeerRelayService {
   }) async {
     _purgeExpiredRelayPeers();
 
-    final candidates = targetOnly
-        ? <_RelayCandidate>[
-            if (_getTargetRelayCandidate(envelope.toCallsign)
-                case final candidate?)
-              candidate,
-          ]
-        : _selectRelayCandidates();
+    final candidates = <_RelayCandidate>[
+      if (_getTargetRelayCandidate(envelope.toCallsign) case final candidate?)
+        candidate,
+      if (!targetOnly)
+        ..._selectRelayCandidates().where(
+          (candidate) => candidate.callsign != envelope.toCallsign,
+        ),
+    ];
 
     if (candidates.isEmpty) {
-      if (targetOnly) {
-        LogService().log(
-          'PeerRelayService: No direct relay endpoint known for ${envelope.toCallsign}',
-        );
-        return false;
+      if (_tryQueueOnSelfRelay(envelope, reason: 'no target relay candidate')) {
+        return true;
       }
 
-      if (_hasRecentRelayPeer(envelope.toCallsign)) {
+      if (!targetOnly && _hasRecentRelayPeer(envelope.toCallsign)) {
         _enqueueEnvelope(envelope);
         LogService().log(
           'PeerRelayService: queued ${envelope.id} for ${envelope.toCallsign} '
@@ -390,7 +389,16 @@ class PeerRelayService {
         );
       }
     }
-    return anySuccess;
+
+    if (anySuccess) {
+      return true;
+    }
+
+    if (_tryQueueOnSelfRelay(envelope, reason: 'target relay send failed')) {
+      return true;
+    }
+
+    return false;
   }
 
   Future<void> _syncPollers() async {
@@ -646,6 +654,29 @@ class PeerRelayService {
     }
 
     return _RelayCandidate(callsign: normalized, baseUrl: relayUrl);
+  }
+
+  bool _tryQueueOnSelfRelay(
+    PeerRelayEnvelope envelope, {
+    required String reason,
+  }) {
+    final selfRelayUrl = P2PService().publicHttpUrl;
+    if (!P2PService().publicHttpReachable ||
+        selfRelayUrl == null ||
+        selfRelayUrl.isEmpty) {
+      LogService().log(
+        'PeerRelayService: Cannot queue ${envelope.id} on self relay for '
+        '${envelope.toCallsign} ($reason)',
+      );
+      return false;
+    }
+
+    _enqueueEnvelope(envelope);
+    LogService().log(
+      'PeerRelayService: queued ${envelope.id} for ${envelope.toCallsign} '
+      'on self relay $selfRelayUrl ($reason)',
+    );
+    return true;
   }
 
   String get _myCallsign {

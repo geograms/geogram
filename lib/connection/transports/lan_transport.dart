@@ -79,7 +79,55 @@ class LanTransport extends Transport with TransportMixin {
     try {
       final uri = Uri.parse('${deviceInfo.url}/api/status');
       final response = await _client.get(uri).timeout(reachabilityTimeout);
-      return response.statusCode == 200;
+      if (response.statusCode != 200) {
+        return false;
+      }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final actualCallsign =
+          ((data['callsign'] as String?) ??
+                  (data['stationCallsign'] as String?))
+              ?.trim()
+              .toUpperCase();
+      if (actualCallsign == null || actualCallsign != callsign.toUpperCase()) {
+        LogService().log(
+          'LanTransport: Rejecting ${deviceInfo.url} for $callsign '
+          '(reported callsign: ${actualCallsign ?? "unknown"})',
+        );
+        return false;
+      }
+
+      final expectedDeviceId =
+          (deviceInfo.metadata['expected_device_id'] as String?)?.trim();
+      if (expectedDeviceId != null && expectedDeviceId.isNotEmpty) {
+        final actualDeviceId = (data['device_id'] as String?)?.trim();
+        if (actualDeviceId == null ||
+            actualDeviceId.isEmpty ||
+            actualDeviceId != expectedDeviceId) {
+          LogService().log(
+            'LanTransport: Rejecting ${deviceInfo.url} for $callsign '
+            '(device_id mismatch: expected $expectedDeviceId, got ${actualDeviceId ?? "missing"})',
+          );
+          return false;
+        }
+      } else {
+        final expectedNpub = (deviceInfo.metadata['expected_npub'] as String?)
+            ?.trim();
+        if (expectedNpub != null && expectedNpub.isNotEmpty) {
+          final actualNpub = (data['npub'] as String?)?.trim();
+          if (actualNpub == null ||
+              actualNpub.isEmpty ||
+              actualNpub != expectedNpub) {
+            LogService().log(
+              'LanTransport: Rejecting ${deviceInfo.url} for $callsign '
+              '(npub mismatch: expected $expectedNpub, got ${actualNpub ?? "missing"})',
+            );
+            return false;
+          }
+        }
+      }
+
+      return true;
     } catch (e) {
       return false;
     }
@@ -122,14 +170,29 @@ class LanTransport extends Transport with TransportMixin {
       // Handle based on message type
       switch (message.type) {
         case TransportMessageType.apiRequest:
-          return await _handleApiRequest(message, deviceInfo.url!, effectiveTimeout, stopwatch);
+          return await _handleApiRequest(
+            message,
+            deviceInfo.url!,
+            effectiveTimeout,
+            stopwatch,
+          );
 
         case TransportMessageType.directMessage:
         case TransportMessageType.chatMessage:
-          return await _handleMessagePost(message, deviceInfo.url!, effectiveTimeout, stopwatch);
+          return await _handleMessagePost(
+            message,
+            deviceInfo.url!,
+            effectiveTimeout,
+            stopwatch,
+          );
 
         case TransportMessageType.sync:
-          return await _handleSync(message, deviceInfo.url!, effectiveTimeout, stopwatch);
+          return await _handleSync(
+            message,
+            deviceInfo.url!,
+            effectiveTimeout,
+            stopwatch,
+          );
 
         default:
           return TransportResult.failure(
@@ -172,15 +235,21 @@ class LanTransport extends Transport with TransportMixin {
       }
     }
 
-    LogService().log('LanTransport: $method ${message.path} to ${message.targetCallsign}');
+    LogService().log(
+      'LanTransport: $method ${message.path} to ${message.targetCallsign}',
+    );
 
     http.Response response;
     switch (method) {
       case 'POST':
-        response = await _client.post(uri, headers: headers, body: body).timeout(timeout);
+        response = await _client
+            .post(uri, headers: headers, body: body)
+            .timeout(timeout);
         break;
       case 'PUT':
-        response = await _client.put(uri, headers: headers, body: body).timeout(timeout);
+        response = await _client
+            .put(uri, headers: headers, body: body)
+            .timeout(timeout);
         break;
       case 'DELETE':
         response = await _client.delete(uri, headers: headers).timeout(timeout);
@@ -240,11 +309,9 @@ class LanTransport extends Transport with TransportMixin {
 
     LogService().log('LanTransport: POST $path to ${message.targetCallsign}');
 
-    final response = await _client.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: body,
-    ).timeout(timeout);
+    final response = await _client
+        .post(uri, headers: {'Content-Type': 'application/json'}, body: body)
+        .timeout(timeout);
 
     stopwatch.stop();
 
@@ -296,10 +363,9 @@ class LanTransport extends Transport with TransportMixin {
 
     LogService().log('LanTransport: GET sync from $targetCallsign');
 
-    final response = await _client.get(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-    ).timeout(timeout);
+    final response = await _client
+        .get(uri, headers: {'Content-Type': 'application/json'})
+        .timeout(timeout);
 
     stopwatch.stop();
 
@@ -364,12 +430,25 @@ class LanTransport extends Transport with TransportMixin {
   /// Register a device with its local URL
   ///
   /// Call this when a device is discovered on the local network.
-  void registerLocalDevice(String callsign, String url) {
+  void registerLocalDevice(
+    String callsign,
+    String url, {
+    String? expectedDeviceId,
+    String? expectedNpub,
+  }) {
     if (_isLocalUrl(url)) {
-      registerDevice(callsign, url: url, metadata: {
-        'source': 'lan_discovery',
-        'registered_at': DateTime.now().toIso8601String(),
-      });
+      registerDevice(
+        callsign,
+        url: url,
+        metadata: {
+          'source': 'lan_discovery',
+          'registered_at': DateTime.now().toIso8601String(),
+          if (expectedDeviceId != null && expectedDeviceId.isNotEmpty)
+            'expected_device_id': expectedDeviceId,
+          if (expectedNpub != null && expectedNpub.isNotEmpty)
+            'expected_npub': expectedNpub,
+        },
+      );
       LogService().log('LanTransport: Registered $callsign at $url');
     }
   }

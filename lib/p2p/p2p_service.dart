@@ -98,6 +98,8 @@ class P2PService {
   bool _publicHttpReachable = false;
   String? _publicHttpUrl;
   bool get isRunning => _running;
+  bool get publicHttpReachable => _publicHttpReachable;
+  String? get publicHttpUrl => _publicHttpUrl;
   int _dhtPort = 0;
   int get dhtPort => _dhtPort;
   int get dhtPeerCount => _dht?.routingTableSize ?? 0;
