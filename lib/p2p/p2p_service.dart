@@ -590,6 +590,56 @@ class P2PService {
     return true;
   }
 
+  Set<int> _knownSelfEndpointPorts() {
+    final ports = <int>{};
+
+    final httpPort = AppArgs().port;
+    if (_publicHttpReachable && httpPort > 0) {
+      ports.add(httpPort);
+    }
+
+    final dhtPort = _dht?.localPort ?? _dhtPort;
+    if (dhtPort != null && dhtPort > 0) {
+      ports.add(dhtPort);
+    }
+
+    final capabilityPort = _capability?.publicPort;
+    if (capabilityPort != null && capabilityPort > 0) {
+      ports.add(capabilityPort);
+    }
+
+    final externalPort = _dht?.externalPort;
+    if (externalPort != null && externalPort > 0) {
+      ports.add(externalPort);
+    }
+
+    final recentExternalPorts = _dht?.recentExternalPorts ?? const <int>[];
+    for (final port in recentExternalPorts) {
+      if (port > 0) {
+        ports.add(port);
+      }
+    }
+
+    return ports;
+  }
+
+  bool _isSelfEndpoint(String ip, int port) {
+    if (ip.isEmpty || port <= 0) {
+      return false;
+    }
+
+    if ((ip == '127.0.0.1' || ip == '0.0.0.0') && port == AppArgs().port) {
+      return true;
+    }
+
+    final myPublicIp = _capability?.publicIp?.trim();
+    if (myPublicIp == null || myPublicIp.isEmpty || ip != myPublicIp) {
+      return false;
+    }
+
+    return _knownSelfEndpointPorts().contains(port);
+  }
+
   // ─── Peer Management ──────────────────────────────────────────
 
   Future<void> _probeExistingDiscoveredPeers() async {
@@ -605,21 +655,7 @@ class P2PService {
       return;
     }
 
-    final myPort = AppArgs().port;
-    if ((peer.ip == '127.0.0.1' || peer.ip == '0.0.0.0') &&
-        peer.port == myPort) {
-      return;
-    }
-
-    final myDhtPort = _dht?.localPort ?? _dhtPort;
-    final myPublicIp = _capability?.publicIp;
-    final myPublicPort = _capability?.publicPort;
-    final myHttpPort = AppArgs().port;
-    if (myPublicIp != null &&
-        peer.ip == myPublicIp &&
-        (peer.port == myDhtPort ||
-            peer.port == myPublicPort ||
-            (_publicHttpReachable && peer.port == myHttpPort))) {
+    if (_isSelfEndpoint(peer.ip, peer.port)) {
       return;
     }
 
@@ -668,6 +704,7 @@ class P2PService {
     int udpPort,
   ) {
     final myCallsign = ProfileService().getProfile().callsign;
+    final resolvedRelayPort = relayHttpPort ?? httpPort;
     if (callsign.toUpperCase() == myCallsign.toUpperCase()) {
       final selfKey = '$ip:$udpPort';
       _selfRendezvousPeers.add(selfKey);
@@ -677,12 +714,22 @@ class P2PService {
       return;
     }
 
+    if (_isSelfEndpoint(ip, udpPort) ||
+        _isSelfEndpoint(ip, httpPort) ||
+        (resolvedRelayPort > 0 && _isSelfEndpoint(ip, resolvedRelayPort))) {
+      LogService().log(
+        'P2P: ignoring conflicting geogram peer $callsign at '
+        '$ip (http:$httpPort, udp:$udpPort, relay:$resolvedRelayPort) '
+        'because it resolves to this node\'s public endpoint',
+      );
+      return;
+    }
+
     LogService().log(
       'P2P: geogram peer $callsign at $ip '
       '(http:$httpPort, udp:$udpPort${canRelay ? ", relay:${relayHttpPort ?? httpPort}" : ""})',
     );
 
-    final resolvedRelayPort = relayHttpPort ?? httpPort;
     final relayUrl = canRelay && resolvedRelayPort > 0
         ? 'http://$ip:$resolvedRelayPort'
         : null;
@@ -932,15 +979,10 @@ class P2PService {
       if (peer.port <= 1) return;
 
       final key = '${peer.ip}:${peer.port}';
-      final myPublicIp = _capability?.publicIp;
-      final myPublicPort = _capability?.publicPort;
-      final myDhtPort = _dht?.localPort ?? _dhtPort;
       if (peer.ip.isEmpty ||
           peer.ip == '0.0.0.0' ||
           peer.ip.startsWith('127.') ||
-          (myPublicIp != null &&
-              peer.ip == myPublicIp &&
-              (peer.port == myPublicPort || peer.port == myDhtPort)) ||
+          _isSelfEndpoint(peer.ip, peer.port) ||
           _selfRendezvousPeers.contains(key) ||
           _isKnownPeerCandidateCoolingDown(target, peer) ||
           !seen.add(key)) {

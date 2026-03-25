@@ -10765,7 +10765,16 @@ class LogApiService with ChatModificationMixin {
           }
 
           // Force specific transport by excluding all others
-          final allIds = {'lan', 'ble', 'station', 'webrtc', 'bluetooth_classic', 'usb_aoa'};
+          final allIds = {
+            'lan',
+            'ble',
+            'dht',
+            'peer_relay',
+            'station',
+            'webrtc',
+            'bluetooth_classic',
+            'usb_aoa',
+          };
           Set<String>? excludeTransports;
           if (transport != 'all') {
             if (!allIds.contains(transport)) {
@@ -10861,7 +10870,16 @@ class LogApiService with ChatModificationMixin {
           }
 
           // Force specific transport by excluding all others
-          final allIds = {'lan', 'ble', 'station', 'webrtc', 'bluetooth_classic', 'usb_aoa'};
+          final allIds = {
+            'lan',
+            'ble',
+            'dht',
+            'peer_relay',
+            'station',
+            'webrtc',
+            'bluetooth_classic',
+            'usb_aoa',
+          };
           Set<String>? excludeTransports;
           if (transport != 'all') {
             excludeTransports = allIds.difference({transport});

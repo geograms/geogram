@@ -3094,6 +3094,16 @@ curl -X POST http://localhost:3456/api/debug \
 # Inspect the current peer relay candidates, active pollers, and queue state
 curl http://localhost:3456/api/debug/peer-relay
 
+# Force an API request through the peer relay transport only
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"device_api_request","callsign":"X1256K","transport":"peer_relay","method":"GET","path":"/api/status"}'
+
+# Force an API request through the DHT transport only
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action":"device_api_request","callsign":"X1256K","transport":"dht","method":"GET","path":"/api/status"}'
+
 # Resolve a peer's npub through the bounded DHT lookup
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \

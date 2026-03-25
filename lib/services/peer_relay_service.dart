@@ -44,20 +44,20 @@ class PeerRelayEnvelope {
   });
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'kind': kind,
-        'from_callsign': fromCallsign,
-        'to_callsign': toCallsign,
-        if (transportType != null) 'transport_type': transportType,
-        if (requestId != null) 'request_id': requestId,
-        if (method != null) 'method': method,
-        if (path != null) 'path': path,
-        if (headers != null) 'headers': headers,
-        if (payload != null) 'payload': payload,
-        if (signedEvent != null) 'signed_event': signedEvent,
-        if (signal != null) 'signal': signal,
-        'created_at': createdAt.toIso8601String(),
-      };
+    'id': id,
+    'kind': kind,
+    'from_callsign': fromCallsign,
+    'to_callsign': toCallsign,
+    if (transportType != null) 'transport_type': transportType,
+    if (requestId != null) 'request_id': requestId,
+    if (method != null) 'method': method,
+    if (path != null) 'path': path,
+    if (headers != null) 'headers': headers,
+    if (payload != null) 'payload': payload,
+    if (signedEvent != null) 'signed_event': signedEvent,
+    if (signal != null) 'signal': signal,
+    'created_at': createdAt.toIso8601String(),
+  };
 
   factory PeerRelayEnvelope.fromJson(Map<String, dynamic> json) {
     Map<String, String>? headers;
@@ -117,7 +117,8 @@ class PeerRelayEnvelope {
     required Map<String, dynamic> signal,
   }) {
     return PeerRelayEnvelope(
-      id: signal['id'] as String? ??
+      id:
+          signal['id'] as String? ??
           '${DateTime.now().millisecondsSinceEpoch}-${signal['session_id'] ?? 'signal'}',
       kind: 'signal',
       fromCallsign: fromCallsign.toUpperCase(),
@@ -164,13 +165,16 @@ class PeerRelayService {
   final Map<String, List<_QueuedRelayEnvelope>> _queuedByTarget = {};
   final Map<String, Completer<void>> _pollWaiters = {};
   final Map<String, DateTime> _seenEnvelopeIds = {};
+  final Map<String, DateTime> _recentRelayPeers = {};
   final Map<String, _RelayPollerState> _pollers = {};
 
   Timer? _candidateRefreshTimer;
   bool _initialized = false;
 
-  Stream<PeerRelayEnvelope> get transportEnvelopes => _transportController.stream;
-  Stream<Map<String, dynamic>> get signalingMessages => _signalController.stream;
+  Stream<PeerRelayEnvelope> get transportEnvelopes =>
+      _transportController.stream;
+  Stream<Map<String, dynamic>> get signalingMessages =>
+      _signalController.stream;
 
   List<String> get activeRelayUrls => _pollers.keys.toList()..sort();
 
@@ -195,6 +199,7 @@ class PeerRelayService {
     _pollWaiters.clear();
     _queuedByTarget.clear();
     _seenEnvelopeIds.clear();
+    _recentRelayPeers.clear();
     await _transportController.close();
     await _signalController.close();
     _client.close();
@@ -259,14 +264,24 @@ class PeerRelayService {
     Map<String, String> headers,
   ) async {
     try {
-      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final body =
+          jsonDecode(await request.readAsString()) as Map<String, dynamic>;
       final envelope = PeerRelayEnvelope.fromJson(body);
-      _enqueueEnvelope(envelope);
+      _rememberRelayPeer(envelope.fromCallsign);
+      final deliveredLocally = envelope.toCallsign == _myCallsign;
+      if (deliveredLocally) {
+        if (_markEnvelopeSeen(envelope.id)) {
+          _dispatchEnvelope(envelope);
+        }
+      } else {
+        _enqueueEnvelope(envelope);
+      }
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
           'queued_for': envelope.toCallsign,
           'id': envelope.id,
+          'delivered_locally': deliveredLocally,
         }),
         headers: headers,
       );
@@ -287,10 +302,7 @@ class PeerRelayService {
         request.url.queryParameters['callsign']?.trim().toUpperCase() ?? '';
     if (callsign.isEmpty) {
       return shelf.Response.badRequest(
-        body: jsonEncode({
-          'success': false,
-          'error': 'Missing callsign',
-        }),
+        body: jsonEncode({'success': false, 'error': 'Missing callsign'}),
         headers: headers,
       );
     }
@@ -317,8 +329,18 @@ class PeerRelayService {
   }
 
   Future<bool> _sendEnvelope(PeerRelayEnvelope envelope) async {
+    _purgeExpiredRelayPeers();
     final candidates = _selectRelayCandidates();
     if (candidates.isEmpty) {
+      if (_hasRecentRelayPeer(envelope.toCallsign)) {
+        _enqueueEnvelope(envelope);
+        LogService().log(
+          'PeerRelayService: queued ${envelope.id} for ${envelope.toCallsign} '
+          'via local relay fallback',
+        );
+        return true;
+      }
+
       LogService().log(
         'PeerRelayService: No relay candidate available for ${envelope.toCallsign}',
       );
@@ -357,7 +379,9 @@ class PeerRelayService {
     if (!_initialized) return;
 
     final candidates = _selectRelayCandidates();
-    final desired = {for (final candidate in candidates) candidate.baseUrl: candidate};
+    final desired = {
+      for (final candidate in candidates) candidate.baseUrl: candidate,
+    };
 
     for (final baseUrl in _pollers.keys.toList()) {
       if (!desired.containsKey(baseUrl)) {
@@ -367,7 +391,10 @@ class PeerRelayService {
 
     for (final candidate in candidates) {
       if (_pollers.containsKey(candidate.baseUrl)) continue;
-      final state = _RelayPollerState(candidate: candidate, token: _nextToken());
+      final state = _RelayPollerState(
+        candidate: candidate,
+        token: _nextToken(),
+      );
       _pollers[candidate.baseUrl] = state;
       unawaited(_runPollLoop(state));
     }
@@ -384,16 +411,14 @@ class PeerRelayService {
 
       final uri = Uri.parse('${state.candidate.baseUrl}/api/p2p/relay/poll')
           .replace(
-        queryParameters: {
-          'callsign': _myCallsign,
-          'timeout': _pollTimeout.inSeconds.toString(),
-        },
-      );
+            queryParameters: {
+              'callsign': _myCallsign,
+              'timeout': _pollTimeout.inSeconds.toString(),
+            },
+          );
 
       try {
-        final response = await _client
-            .get(uri)
-            .timeout(_pollRequestTimeout);
+        final response = await _client.get(uri).timeout(_pollRequestTimeout);
         if (response.statusCode != 200) {
           LogService().log(
             'PeerRelayService: poll ${state.candidate.baseUrl} failed '
@@ -437,8 +462,13 @@ class PeerRelayService {
   void _enqueueEnvelope(PeerRelayEnvelope envelope) {
     _purgeExpiredQueueEntries();
     final key = envelope.toCallsign.toUpperCase();
-    final queue = _queuedByTarget.putIfAbsent(key, () => <_QueuedRelayEnvelope>[]);
-    queue.add(_QueuedRelayEnvelope(envelope: envelope, queuedAt: DateTime.now()));
+    final queue = _queuedByTarget.putIfAbsent(
+      key,
+      () => <_QueuedRelayEnvelope>[],
+    );
+    queue.add(
+      _QueuedRelayEnvelope(envelope: envelope, queuedAt: DateTime.now()),
+    );
     _pollWaiters.remove(key)?.complete();
   }
 
@@ -509,6 +539,29 @@ class PeerRelayService {
     );
   }
 
+  void _rememberRelayPeer(String callsign) {
+    final normalized = callsign.trim().toUpperCase();
+    if (normalized.isEmpty || normalized == _myCallsign) return;
+    _recentRelayPeers[normalized] = DateTime.now();
+  }
+
+  bool _hasRecentRelayPeer(String callsign) {
+    final normalized = callsign.trim().toUpperCase();
+    if (normalized.isEmpty || normalized == _myCallsign) {
+      return false;
+    }
+    final seenAt = _recentRelayPeers[normalized];
+    if (seenAt == null) return false;
+    return DateTime.now().difference(seenAt) <= _queueRetention;
+  }
+
+  void _purgeExpiredRelayPeers() {
+    final now = DateTime.now();
+    _recentRelayPeers.removeWhere(
+      (_, seenAt) => now.difference(seenAt) > _queueRetention,
+    );
+  }
+
   List<_RelayCandidate> _selectRelayCandidates() {
     final myCallsign = _myCallsign;
     final devices = DevicesService().getAllDevices();
@@ -560,28 +613,19 @@ class _QueuedRelayEnvelope {
   final PeerRelayEnvelope envelope;
   final DateTime queuedAt;
 
-  const _QueuedRelayEnvelope({
-    required this.envelope,
-    required this.queuedAt,
-  });
+  const _QueuedRelayEnvelope({required this.envelope, required this.queuedAt});
 }
 
 class _RelayCandidate {
   final String callsign;
   final String baseUrl;
 
-  const _RelayCandidate({
-    required this.callsign,
-    required this.baseUrl,
-  });
+  const _RelayCandidate({required this.callsign, required this.baseUrl});
 }
 
 class _RelayPollerState {
   final _RelayCandidate candidate;
   final String token;
 
-  const _RelayPollerState({
-    required this.candidate,
-    required this.token,
-  });
+  const _RelayPollerState({required this.candidate, required this.token});
 }

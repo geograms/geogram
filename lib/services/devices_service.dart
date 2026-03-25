@@ -1838,45 +1838,94 @@ class DevicesService {
 
   /// Sync device info to ConnectionManager transports
   void syncDeviceToConnectionManager(String callsign) {
-    final device = getDevice(callsign);
-    if (device == null) return;
+    final devices = getDevicesByCallsign(callsign);
+    if (devices.isEmpty) return;
 
     final connectionManager = ConnectionManager();
     if (!connectionManager.isInitialized) return;
 
+    RemoteDevice? preferredBy(bool Function(RemoteDevice device) matches) {
+      final matchesList = devices.where(matches).toList();
+      if (matchesList.isEmpty) return null;
+      matchesList.sort((a, b) {
+        if (a.isOnline != b.isOnline) {
+          return a.isOnline ? -1 : 1;
+        }
+        final aDirect = a.source == DeviceSourceType.direct;
+        final bDirect = b.source == DeviceSourceType.direct;
+        if (aDirect != bDirect) {
+          return aDirect ? -1 : 1;
+        }
+        final aInternet = a.connectionMethods.contains('internet');
+        final bInternet = b.connectionMethods.contains('internet');
+        if (aInternet != bInternet) {
+          return aInternet ? -1 : 1;
+        }
+        final aLocal = a.hasLocalConnection;
+        final bLocal = b.hasLocalConnection;
+        if (aLocal != bLocal) {
+          return aLocal ? -1 : 1;
+        }
+        final aSeen = a.lastSeen;
+        final bSeen = b.lastSeen;
+        if (aSeen == null && bSeen == null) return 0;
+        if (aSeen == null) return 1;
+        if (bSeen == null) return -1;
+        return bSeen.compareTo(aSeen);
+      });
+      return matchesList.first;
+    }
+
+    final localUrlDevice = preferredBy(
+      (device) => device.url != null && device.url!.isNotEmpty,
+    );
+    final internetDevice = preferredBy(
+      (device) =>
+          device.connectionMethods.contains('internet') &&
+          device.url != null &&
+          device.url!.isNotEmpty,
+    );
+    final relayDevice = preferredBy(
+      (device) =>
+          device.connectionMethods.contains('internet') &&
+          device.canRelay &&
+          device.relayUrl != null &&
+          device.relayUrl!.isNotEmpty,
+    );
+
     // Register device URL with LAN transport if available
-    if (device.url != null) {
+    if (localUrlDevice?.url != null) {
       final lanTransport =
           connectionManager.getTransport('lan') as LanTransport?;
       if (lanTransport != null) {
-        lanTransport.registerLocalDevice(callsign, device.url!);
+        lanTransport.registerLocalDevice(callsign, localUrlDevice!.url!);
       }
     }
 
     // Register with DHT transport for internet-discovered devices
-    if (device.url != null && device.connectionMethods.contains('internet')) {
+    if (internetDevice?.url != null) {
       final dhtTransport =
           connectionManager.getTransport('dht') as DhtTransport?;
       if (dhtTransport != null) {
         dhtTransport.registerDhtDevice(
           callsign,
-          device.url!,
-          npub: device.npub,
-          udpIp: device.udpIp,
-          udpPort: device.udpPort,
+          internetDevice!.url!,
+          npub: internetDevice.npub,
+          udpIp: internetDevice.udpIp,
+          udpPort: internetDevice.udpPort,
         );
       }
     }
 
-    if (device.connectionMethods.contains('internet')) {
+    if (relayDevice != null) {
       final relayTransport =
           connectionManager.getTransport('peer_relay') as PeerRelayTransport?;
       if (relayTransport != null) {
         relayTransport.registerRelayDevice(
           callsign,
-          npub: device.npub,
-          canRelay: device.canRelay,
-          relayUrl: device.relayUrl,
+          npub: relayDevice.npub,
+          canRelay: relayDevice.canRelay,
+          relayUrl: relayDevice.relayUrl,
         );
       }
     }
