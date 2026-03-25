@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'apps/terminal_page.dart';
+import 'services/preferences_service.dart';
 import 'wapp/wapp_engine.dart';
 
 void main() {
@@ -200,13 +201,14 @@ class _LauncherPageState extends State<LauncherPage> {
       appBar: AppBar(
         title: const Text('Iwi'),
         actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.menu),
-            onSelected: (value) {},
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'settings', child: Text('Settings')),
-              const PopupMenuItem(value: 'about', child: Text('About')),
-            ],
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const IwiSettingsPage()),
+              );
+            },
           ),
         ],
       ),
@@ -325,6 +327,299 @@ class _AppIcon extends StatelessWidget {
       ),
     );
   }
+}
+
+// ── Iwi Settings ─────────────────────────────────────────────────────
+
+class IwiSettingsPage extends StatefulWidget {
+  const IwiSettingsPage({super.key});
+
+  @override
+  State<IwiSettingsPage> createState() => _IwiSettingsPageState();
+}
+
+class _IwiSettingsPageState extends State<IwiSettingsPage> {
+  PreferencesService? _prefs;
+  String? _dataDir;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await PreferencesService.instance();
+    setState(() {
+      _prefs = prefs;
+      _dataDir = prefs.wappDataDir ?? _defaultDataDir();
+    });
+  }
+
+  static String _defaultDataDir() {
+    final home = Platform.environment['HOME'] ??
+        Platform.environment['USERPROFILE'] ??
+        '/tmp';
+    return '$home/.local/share/iwi/wapps';
+  }
+
+  Future<void> _pickDirectory() async {
+    // Show a dialog to type the path (no file_picker dependency needed)
+    final controller = TextEditingController(text: _dataDir);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Wapp Data Directory'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Each wapp stores its settings and files in a subfolder here, '
+              'named after the wapp ID.',
+              style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                labelText: 'Directory path',
+                filled: true,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.folder_open),
+                  tooltip: 'Reset to default',
+                  onPressed: () => controller.text = _defaultDataDir(),
+                ),
+              ),
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null && result.isNotEmpty && _prefs != null) {
+      // Ensure directory exists
+      final dir = Directory(result);
+      if (!dir.existsSync()) {
+        dir.createSync(recursive: true);
+      }
+      _prefs!.wappDataDir = result;
+      setState(() => _dataDir = result);
+    }
+  }
+
+  /// List existing wapp data subdirectories.
+  List<_WappDataEntry> _listWappData() {
+    if (_dataDir == null) return [];
+    final dir = Directory(_dataDir!);
+    if (!dir.existsSync()) return [];
+    final entries = <_WappDataEntry>[];
+    for (final sub in dir.listSync()) {
+      if (sub is! Directory) continue;
+      final name = sub.path.split(Platform.pathSeparator).last;
+      var size = 0;
+      try {
+        for (final f in sub.listSync(recursive: true)) {
+          if (f is File) size += f.lengthSync();
+        }
+      } catch (_) {}
+      entries.add(_WappDataEntry(name, sub.path, size));
+    }
+    entries.sort((a, b) => a.name.compareTo(b.name));
+    return entries;
+  }
+
+  String _humanSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Settings')),
+      body: _prefs == null
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                // ── Data Directory ──
+                Text('Storage',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: cs.primary,
+                          fontWeight: FontWeight.w600,
+                        )),
+                const SizedBox(height: 4),
+                Text(
+                  'Where wapp settings, downloads, and user files are stored.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+                  ),
+                  color: cs.surfaceContainerLow,
+                  child: ListTile(
+                    leading: const Icon(Icons.folder),
+                    title: const Text('Wapp Data Directory'),
+                    subtitle: Text(
+                      _dataDir ?? 'Not set',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                    trailing: const Icon(Icons.edit),
+                    onTap: _pickDirectory,
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // ── Per-wapp data ──
+                Text('Wapp Data',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: cs.primary,
+                          fontWeight: FontWeight.w600,
+                        )),
+                const SizedBox(height: 4),
+                Text(
+                  'Each subfolder contains settings and files for one wapp.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: 12),
+                ..._buildWappDataList(cs),
+              ],
+            ),
+    );
+  }
+
+  List<Widget> _buildWappDataList(ColorScheme cs) {
+    final entries = _listWappData();
+    if (entries.isEmpty) {
+      return [
+        Card(
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+          ),
+          color: cs.surfaceContainerLow,
+          child: const ListTile(
+            leading: Icon(Icons.info_outline),
+            title: Text('No wapp data yet'),
+            subtitle: Text('Data folders are created when a wapp first runs.'),
+          ),
+        ),
+      ];
+    }
+
+    return [
+      Card(
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+        ),
+        color: cs.surfaceContainerLow,
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          children: [
+            for (var i = 0; i < entries.length; i++) ...[
+              ListTile(
+                leading: const Icon(Icons.extension),
+                title: Text(entries[i].name),
+                subtitle: Text(
+                  _humanSize(entries[i].size),
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                ),
+                trailing: IconButton(
+                  icon: Icon(Icons.delete_outline, color: cs.error),
+                  tooltip: 'Delete wapp data',
+                  onPressed: () => _confirmDelete(entries[i]),
+                ),
+              ),
+              if (i < entries.length - 1)
+                Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: cs.outlineVariant.withAlpha(50)),
+            ],
+          ],
+        ),
+      ),
+    ];
+  }
+
+  Future<void> _confirmDelete(_WappDataEntry entry) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete ${entry.name}?'),
+        content: Text(
+            'This will permanently delete all settings and files for '
+            '"${entry.name}" (${_humanSize(entry.size)}).'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+              foregroundColor: Theme.of(ctx).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        Directory(entry.path).deleteSync(recursive: true);
+        setState(() {}); // Refresh list
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to delete: $e')),
+          );
+        }
+      }
+    }
+  }
+}
+
+class _WappDataEntry {
+  final String name;
+  final String path;
+  final int size;
+  _WappDataEntry(this.name, this.path, this.size);
 }
 
 // ── Wapp Runner (generic WASM module runner) ─────────────────────────

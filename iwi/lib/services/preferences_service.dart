@@ -33,4 +33,14 @@ class PreferencesService {
 
   int get terminalMaxLines => _prefs.getInt('terminal.maxLines') ?? 5000;
   set terminalMaxLines(int v) => _prefs.setInt('terminal.maxLines', v);
+
+  // Wapp data directory — root folder for per-wapp user data
+  String? get wappDataDir => _prefs.getString('wapp.dataDir');
+  set wappDataDir(String? v) {
+    if (v == null) {
+      _prefs.remove('wapp.dataDir');
+    } else {
+      _prefs.setString('wapp.dataDir', v);
+    }
+  }
 }
