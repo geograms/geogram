@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'apps/terminal_page.dart';
 import 'services/preferences_service.dart';
 import 'wapp/wapp_engine.dart';
+import 'wapp/wapp_page.dart';
 
 void main() {
   runApp(const IwiApp());
@@ -176,20 +177,11 @@ class _LauncherPageState extends State<LauncherPage> {
   }
 
   void _openWapp(WappManifest manifest) {
-    // For the terminal wapp, use the native Terminal page
-    if (manifest.id == 'tools.geogram.terminal') {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const TerminalPage()),
-      );
-      return;
-    }
-    // For other wapps, use the generic Wapp Runner with the wasm file
-    final wasmPath = '${manifest.dirPath}/app.wasm';
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => WappRunnerPage(
+        builder: (_) => WappPage(
+          wappDir: manifest.dirPath,
           title: manifest.name,
-          wasmPath: wasmPath,
         ),
       ),
     );
