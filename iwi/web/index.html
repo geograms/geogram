@@ -1,38 +1,80 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
-  <base href="$FLUTTER_BASE_HREF">
-
-  <meta charset="UTF-8">
-  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
-
-  <!-- iOS meta tags & icons -->
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="iwi">
-  <link rel="apple-touch-icon" href="icons/Icon-192.png">
-
-  <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png"/>
-
-  <title>iwi</title>
-  <link rel="manifest" href="manifest.json">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Iwi</title>
+<style>
+:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--primary:#58a6ff;--green:#7ee787;--red:#f85149;--yellow:#e3b341;--radius:12px;--font:'Segoe UI',system-ui,sans-serif;--mono:'SF Mono','Cascadia Code','Consolas',monospace}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;height:100vh;display:flex;flex-direction:column}
+header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:12px}
+header h1{font-size:16px;font-weight:600}
+header .tabs{display:flex;gap:4px;margin-left:24px}
+header .tab{padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--muted);background:transparent;border:none;font-family:var(--font)}
+header .tab:hover{color:var(--text);background:var(--border)}
+header .tab.active{color:var(--primary);background:rgba(88,166,255,0.1)}
+header .spacer{flex:1}
+header .status{font-size:12px;color:var(--muted)}
+header .status.ok{color:var(--green)}
+header .back{background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;padding:4px 8px;border-radius:6px}
+header .back:hover{color:var(--text);background:var(--border)}
+main{flex:1;display:flex;overflow:hidden}
+#terminal{flex:1;display:flex;flex-direction:column}
+#output{flex:1;overflow-y:auto;padding:12px 16px;font-family:var(--mono);font-size:13px;line-height:1.6}
+#output .line{white-space:pre-wrap;word-break:break-all}
+#output .cmd{color:var(--green)} #output .err{color:var(--red)} #output .info{color:var(--primary)} #output .warn{color:var(--yellow)}
+#input-row{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface);border-top:1px solid var(--border)}
+#input-row .prompt{color:var(--green);font-family:var(--mono);font-size:13px;user-select:none}
+#cmd-input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:13px}
+#settings{flex:1;overflow-y:auto;padding:20px 24px;display:none}
+#settings .screen-tip{color:var(--muted);margin-bottom:16px;font-size:13px}
+#settings .group{margin-bottom:20px}
+#settings .group-header{font-weight:600;font-size:13px;color:var(--primary);margin-bottom:2px}
+#settings .group-tip{color:var(--muted);font-size:12px;margin-bottom:10px}
+#settings .field{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px}
+#settings .field label{min-width:140px;font-size:13px}
+#settings .field .tip{font-size:11px;color:var(--muted);margin-left:auto}
+#settings .field input[type="range"]{flex:1;accent-color:var(--primary)}
+#settings .field input[type="checkbox"]{accent-color:var(--primary);width:18px;height:18px}
+#settings .field select{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px;font-family:var(--font)}
+#settings .field .value{font-family:var(--mono);font-size:13px;min-width:40px;text-align:right}
+#settings .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+#settings .actions button{padding:8px 20px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-family:var(--font)}
+#settings .actions .primary{background:var(--primary);color:#000;font-weight:600}
+#settings .actions .secondary{background:transparent;color:var(--muted);border:1px solid var(--border)}
+#settings .actions button:hover{filter:brightness(1.15)}
+.toast{position:fixed;bottom:20px;right:20px;padding:10px 18px;border-radius:8px;font-size:13px;z-index:100;animation:fadein .2s,fadeout .3s 2.7s}
+.toast.success{background:var(--green);color:#000} .toast.warning{background:var(--yellow);color:#000} .toast.error{background:var(--red);color:#fff}
+@keyframes fadein{from{opacity:0;transform:translateY(10px)}to{opacity:1}} @keyframes fadeout{to{opacity:0;transform:translateY(10px)}}
+#launcher{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
+#launcher h2{font-size:18px;color:var(--muted);font-weight:400}
+#launcher .apps{display:flex;gap:20px;flex-wrap:wrap;justify-content:center;padding:0 20px}
+#launcher .app-card{display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;padding:16px 20px;border-radius:16px;border:1px solid var(--border);background:var(--surface);min-width:100px;transition:border-color .15s}
+#launcher .app-card:hover{border-color:var(--primary)}
+#launcher .app-card .icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff}
+#launcher .app-card .name{font-size:12px;text-align:center}
+#launcher .app-card .desc{font-size:11px;color:var(--muted);text-align:center;max-width:120px}
+.loading{position:fixed;inset:0;background:rgba(13,17,23,.8);display:flex;align-items:center;justify-content:center;z-index:50}
+.loading span{color:var(--primary);font-size:14px}
+</style>
 </head>
 <body>
-  <script src="flutter_bootstrap.js" async></script>
+<header>
+  <button class="back" id="back-btn" style="display:none" title="Back to launcher">&larr;</button>
+  <h1 id="app-title">Iwi</h1>
+  <div class="tabs" id="tabs"></div>
+  <div class="spacer"></div>
+  <div class="status" id="status">Select a wapp</div>
+</header>
+<main>
+  <div id="launcher"><h2>Wapps</h2><div class="apps" id="app-list"></div></div>
+  <div id="terminal" style="display:none">
+    <div id="output"></div>
+    <div id="input-row"><span class="prompt">$</span><input id="cmd-input" type="text" autocomplete="off" spellcheck="false" placeholder="Type a command..."></div>
+  </div>
+  <div id="settings"></div>
+</main>
+<script src="app.js"></script>
 </body>
 </html>
