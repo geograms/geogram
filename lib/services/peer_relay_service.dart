@@ -216,7 +216,7 @@ class PeerRelayService {
     final normalized = callsign.toUpperCase();
     return normalized.isNotEmpty &&
         normalized != _myCallsign &&
-        _selectRelayCandidates().isNotEmpty;
+        _getTargetRelayCandidate(normalized) != null;
   }
 
   Future<bool> sendTransportMessage(TransportMessage message) async {
@@ -224,7 +224,7 @@ class PeerRelayService {
       message,
       fromCallsign: _myCallsign,
     );
-    return _sendEnvelope(envelope);
+    return _sendEnvelope(envelope, targetOnly: true);
   }
 
   Future<bool> sendSignalingMessage(
@@ -236,7 +236,7 @@ class PeerRelayService {
       fromCallsign: _myCallsign,
       signal: signal,
     );
-    return _sendEnvelope(envelope);
+    return _sendEnvelope(envelope, targetOnly: true);
   }
 
   Map<String, dynamic> getStatus() {
@@ -328,10 +328,28 @@ class PeerRelayService {
     );
   }
 
-  Future<bool> _sendEnvelope(PeerRelayEnvelope envelope) async {
+  Future<bool> _sendEnvelope(
+    PeerRelayEnvelope envelope, {
+    bool targetOnly = false,
+  }) async {
     _purgeExpiredRelayPeers();
-    final candidates = _selectRelayCandidates();
+
+    final candidates = targetOnly
+        ? <_RelayCandidate>[
+            if (_getTargetRelayCandidate(envelope.toCallsign)
+                case final candidate?)
+              candidate,
+          ]
+        : _selectRelayCandidates();
+
     if (candidates.isEmpty) {
+      if (targetOnly) {
+        LogService().log(
+          'PeerRelayService: No direct relay endpoint known for ${envelope.toCallsign}',
+        );
+        return false;
+      }
+
       if (_hasRecentRelayPeer(envelope.toCallsign)) {
         _enqueueEnvelope(envelope);
         LogService().log(
@@ -594,6 +612,40 @@ class PeerRelayService {
       return candidates.take(_maxRelayCandidates).toList(growable: false);
     }
     return candidates;
+  }
+
+  _RelayCandidate? _getTargetRelayCandidate(String callsign) {
+    final normalized = callsign.trim().toUpperCase();
+    if (normalized.isEmpty || normalized == _myCallsign) {
+      return null;
+    }
+
+    final matches = DevicesService()
+        .getAllDevices()
+        .where((device) => device.callsign.toUpperCase() == normalized)
+        .where((device) => device.canRelay)
+        .where(
+          (device) =>
+              device.connectionMethods.contains('internet') &&
+              ((device.relayUrl != null && device.relayUrl!.isNotEmpty) ||
+                  (device.url != null && device.url!.isNotEmpty)),
+        )
+        .toList();
+
+    if (matches.isEmpty) return null;
+
+    matches.sort((a, b) {
+      final aSeen = a.lastSeen ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bSeen = b.lastSeen ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bSeen.compareTo(aSeen);
+    });
+
+    final relayUrl = matches.first.relayUrl ?? matches.first.url;
+    if (relayUrl == null || relayUrl.isEmpty) {
+      return null;
+    }
+
+    return _RelayCandidate(callsign: normalized, baseUrl: relayUrl);
   }
 
   String get _myCallsign {

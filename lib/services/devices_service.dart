@@ -1889,8 +1889,8 @@ class DevicesService {
       (device) =>
           device.connectionMethods.contains('internet') &&
           device.canRelay &&
-          device.relayUrl != null &&
-          device.relayUrl!.isNotEmpty,
+          ((device.relayUrl != null && device.relayUrl!.isNotEmpty) ||
+              (device.url != null && device.url!.isNotEmpty)),
     );
 
     // Register device URL with LAN transport if available
@@ -1925,7 +1925,7 @@ class DevicesService {
           callsign,
           npub: relayDevice.npub,
           canRelay: relayDevice.canRelay,
-          relayUrl: relayDevice.relayUrl,
+          relayUrl: relayDevice.relayUrl ?? relayDevice.url,
         );
       }
     }

@@ -53,8 +53,6 @@ class PeerRelayTransport extends Transport with TransportMixin {
 
   @override
   Future<bool> canReach(String callsign) async {
-    final info = getDeviceInfo(callsign);
-    if (info == null) return false;
     return _relayService.canRelayTo(callsign);
   }
 
@@ -267,10 +265,7 @@ class PeerRelayTransport extends Transport with TransportMixin {
   _ApiResponsePayload _decodeResponsePayload(dynamic payload) {
     if (payload is Map<String, dynamic>) {
       final statusCode = payload['statusCode'] as int? ?? 200;
-      return _ApiResponsePayload(
-        statusCode: statusCode,
-        body: payload['body'],
-      );
+      return _ApiResponsePayload(statusCode: statusCode, body: payload['body']);
     }
 
     if (payload is Map) {
@@ -308,18 +303,12 @@ class _PendingRequest {
   final Completer<TransportResult> completer;
   final Stopwatch stopwatch;
 
-  const _PendingRequest({
-    required this.completer,
-    required this.stopwatch,
-  });
+  const _PendingRequest({required this.completer, required this.stopwatch});
 }
 
 class _ApiResponsePayload {
   final int statusCode;
   final dynamic body;
 
-  const _ApiResponsePayload({
-    required this.statusCode,
-    required this.body,
-  });
+  const _ApiResponsePayload({required this.statusCode, required this.body});
 }
