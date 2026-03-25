@@ -1,334 +1,238 @@
-# BitTorrent DHT Bridge for P2P Discovery
+# Current Connection Mechanism
 
-**Version**: 1.3
-**Status**: Cross-network discovery working. Direct DHT transport still blocked on endpoint-dependent NATs.
-**Last Updated**: 2026-03-25
-
-## Table of Contents
-
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [DHT Topics](#dht-topics)
-- [Node Types](#node-types)
-- [Connection Flow](#connection-flow)
-- [Iterative Lookup](#iterative-lookup)
-- [Implementation](#implementation)
-- [Devices UI Integration](#devices-ui-integration)
-- [Same-Household Devices](#same-household-devices)
-- [Privacy](#privacy)
-- [Debug API](#debug-api)
-- [Testing](#testing)
-- [Current Status](#current-status)
-- [Known Issues](#known-issues)
+**Status**: Current implementation as of `2026-03-25`
+**Scope**: How Geogram currently chooses between LAN, public HTTP, DHT, peer relay, station, WebRTC, USB, and Bluetooth
 
 ## Overview
 
-Geogram uses the BitTorrent Mainline DHT (BEP 5) to discover devices without depending on the central station server. When the station is down or unreachable, devices find each other by announcing and querying the global DHT network — a distributed hash table with millions of active nodes maintained by BitTorrent clients worldwide.
-
-**Key capabilities:**
-- Discover Geogram nodes on the internet across different networks
-- Find all devices belonging to a specific NOSTR identity (npub)
-- Detect public IP via BEP 42 DHT responses (no STUN needed)
-- Publish pair-specific rendezvous candidates for known peers
-- Show discovered peers in the Devices UI with "internet" tag
-
-## Architecture
-
-```
-                       +--------------------------+
-                       |   BitTorrent Mainline    |
-                       |        DHT Network       |
-                       | (millions of BT clients) |
-                       +-----------+--------------+
-                                   |
-                      get_peers / announce_peer
-                                   |
-              +--------------------+--------------------+
-              |                                         |
-    +---------v---------+                     +---------v---------+
-    |   Geogram Node A  |                     |   Geogram Node B  |
-    |   (laptop/WiFi)   |                     |   (phone/mobile)  |
-    |                   |                     |                   |
-    |   DHT UDP socket  |                     |   DHT UDP socket  |
-    |   (random port)   |                     |   (random port)   |
-    |                   |                     |                   |
-    |   Shelf HTTP 3456 |                     |   Shelf HTTP 3456 |
-    |   Flutter UI      |                     |   Flutter UI      |
-    +-------------------+                     +-------------------+
-```
-
-### Transport Priority
-
-| Priority | Transport | Scope |
-|----------|-----------|-------|
-| 5 | USB AOA | Physical cable |
-| 10 | LAN | Local network |
-| 15 | WebRTC | Browser/data channels |
-| **25** | **DHT** | **Internet P2P** |
-| 30 | Station | Internet relay |
-| 35 | Bluetooth Classic | Short range |
-| 40 | BLE | Short range |
+The file name says `BT-DHT`, but the current mechanism is no longer "DHT transport only".
 
-## DHT Topics
+Today Geogram uses a layered connection stack:
 
-Each device announces under two info_hashes:
-
-### 1. Global Topic: `SHA1("geogram")`
+1. Prefer direct local transports first.
+2. Prefer direct public HTTP when a peer is reachable on the internet.
+3. Use BitTorrent DHT to discover or refresh that public endpoint.
+4. Use peer relay when the target is not directly reachable.
+5. Use station or WebRTC where those paths are available.
 
-Every Geogram node announces here. Used to find other Geogram peers and learn public IP via BEP 42.
+The practical consequence is:
 
-### 2. Per-User Topic: `SHA1(npub)`
+- DHT is now mainly a discovery, reachability, and signaling layer.
+- Cross-network message delivery often completes through `peer_relay`, not raw DHT payload transport.
+- Same-LAN traffic should stay on `lan`.
 
-Each device announces on the SHA1 of its NOSTR public key. Querying `SHA1(npub)` returns all online devices for that identity. This is how the Devices UI discovers specific peers.
-
-### 3. Pair Rendezvous Topic: `SHA1("geogram:rendezvous:v1:<sorted-npubs>")`
+## Transport Priority
 
-When Geogram is actively trying to connect to a known peer, it also announces on a pair-specific rendezvous topic derived from the two npubs. This reduces dependence on the crowded global and per-user topics and gives each side a fresher candidate set for direct UDP probing.
+The transports are registered in this order in `lib/main.dart`:
 
-### Announce Details
+| Priority | Transport | Intended scope |
+|---------|-----------|----------------|
+| 5 | `usb_aoa` | Physical USB cable |
+| 10 | `lan` | Same local network |
+| 15 | `webrtc` | Direct data channel once signaling succeeds |
+| 25 | `dht` | Public internet discovery and direct HTTP reachability |
+| 27 | `peer_relay` | Cross-network relay when direct reachability is not available |
+| 30 | `station` | Station-mediated internet path |
+| 35 | `bluetooth_classic` | Short-range fallback |
+| 40 | `ble` | Short-range fallback |
 
-- **Re-announce interval**: every 25 minutes
-- **Default announced port**: the device's DHT UDP socket port, published with `implied_port=1`
-- **Public HTTP announce**: when the device verifies that `http://<public_ip>:3456/api/status` is reachable and matches its own identity, it also announces the HTTP API port explicitly with `implied_port=0`
-- **Token validation**: BEP 5 token exchange prevents spoofing
-- **Announce target**: the K-closest nodes found by the iterative lookup (not routing table nodes)
-
-## Node Types
+`ConnectionManager` uses priority plus `canReach()` checks, with short reachability caching, to pick the first usable path.
 
-Public IP learned from BEP 42 `ip` field in DHT responses.
+## What DHT Does Now
 
-| Type | Detection | Capabilities |
-|------|-----------|-------------|
-| **A** | Public IP matches a local interface | Full peer |
-| **B** | BEP 42 reports a different public IP | Behind NAT |
-| **unknown** | No BEP 42 data received yet | Deferred |
+Current DHT behavior lives mainly in `lib/p2p/p2p_service.dart` and `lib/connection/transports/dht_transport.dart`.
 
-## Connection Flow
+### DHT responsibilities
 
-```
-1. App starts → P2PService.start()
-2. Timer(2s) → _runDht()
-3. Load persisted node ID + cached routing table
-4. Bootstrap DHT (cached nodes, then public BT routers)
-5. Iterative announce on SHA1("geogram") and SHA1(npub)
-6. Learn public IP from BEP 42 responses
-7. Scan geogram topic for peers → register in DevicesService
-8. For each known device with npub: fire lightweight get_peers
-9. Periodic: re-announce every 25 min, refresh table every 2 min
-10. Known peers are probed by `npub` and pair-rendezvous topics
-11. Discovered peers appear in Devices UI with "internet" tag (green)
-```
+- Bootstrap onto the BitTorrent Mainline DHT.
+- Announce and query the global `geogram` topic.
+- Announce and query per-user `npub` topics.
+- Announce pair-specific rendezvous topics for active peer discovery.
+- Learn the device's public IP and observed UDP port from DHT responses.
+- Check whether the device's own public HTTP endpoint is actually reachable.
+- Register discovered peers into `DevicesService` with `internet` capability.
+- Provide a fallback signaling path for WebRTC.
 
-### Persistence
+### Important limitation
 
-- **Node ID** (`p2p/node_id.bin`): 20-byte random ID, reused across sessions
-- **Routing table cache** (`p2p/dht_cache.json`): best 30 nodes
-- **Discovered peers** (`p2p/peer_cache.json`): known peer IPs
+DHT is not currently the general payload carrier.
 
-## Iterative Lookup
+For normal API requests and direct messages, `DhtTransport` tries to talk to the peer's HTTP endpoint. If that endpoint is stale or missing, DHT is used to refresh the endpoint information. The payload itself is still sent over HTTP once a usable public URL is known.
 
-The core of BEP 5. Both `find_node` and `get_peers` use the same pattern:
+So, in current code, "send over DHT" effectively means:
 
-```
-candidates = SortedSet<Node>(by XOR distance to target)
-queried = Set<NodeId>()
+1. find or refresh the peer's public endpoint via DHT
+2. send the real request to that endpoint over HTTP
 
-seed candidates from routing table (8 closest)
+It does not mean "deliver the full message body over UDP through the DHT".
 
-loop (up to 10 rounds):
-  pick alpha=3 unqueried candidates closest to target
-  if none left → converged, stop
+## What Peer Relay Does Now
 
-  query all 3 in parallel (await Future.wait, 3s timeout each)
+Current peer relay behavior lives in `lib/services/peer_relay_service.dart` and `lib/connection/transports/peer_relay_transport.dart`.
 
-  for each response:
-    if peers returned → collect them
-    if nodes returned → add to candidates (if new)
+Peer relay exists for the cases where DHT can identify the peer but direct public HTTP delivery is not possible.
 
-  if peers found and no new candidates → stop
-```
+### Relay model
 
-**Critical implementation details:**
-- The candidate set is **per-lookup**, NOT the global routing table. This is the most common BEP 5 implementation bug — using only routing table nodes means the lookup never reaches the K-closest nodes.
-- `announce_peer` must go to the nodes found at the END of the lookup (the K-closest that gave us tokens), not to routing table nodes.
-- Responses from `find_node` must be processed too — not just `get_peers`. Otherwise the routing table can't grow.
-- The lookup must NOT exit early just because no new candidates were added in one round — there may still be unqueried candidates closer than those already queried.
+- Devices that can act as relays advertise `canRelay` plus a relay base URL.
+- That base URL is taken from `relayUrl` when present, otherwise from the device's public `url`.
+- The preferred case is the target device itself exposing a relay endpoint.
+- If the sender is publicly reachable, the sender's own relay can be used as a fallback queue for the other side to poll.
 
-### Cross-Network Discovery
+### Relay flow
 
-Two devices on different networks (e.g., home WiFi and mobile data) find each other because:
-1. Both do iterative `announce_peer` on `SHA1("geogram")` → both converge on the same K-closest nodes in the 160-bit keyspace
-2. Both do iterative `get_peers` on the same hash → they traverse to the same K-closest nodes and find the other's announce
+1. Sender chooses `peer_relay`.
+2. Sender posts an envelope to `/api/p2p/relay/send`.
+3. Recipient long-polls `/api/p2p/relay/poll?callsign=...`.
+4. Recipient receives the queued envelope and processes it locally.
 
-This works regardless of routing table size — even with 9 nodes, a correct iterative lookup traverses through the DHT hop by hop until it converges. Verified in testing with laptop (178.202.105.29) finding Android on mobile data (47.64.113.206).
+This is used both for cross-network transport envelopes and for WebRTC signaling when needed.
 
-## Implementation
+### Important limitation
 
-### Core DHT Library (pure Dart, no Flutter dependency)
+Peer relay currently handles JSON-style transport and signaling envelopes. It is not the generic path for arbitrary binary streaming.
 
-| File | Purpose |
-|------|---------|
-| `lib/p2p/bencode.dart` | Bencode encoder/decoder |
-| `lib/p2p/k_bucket.dart` | Kademlia routing table (160 buckets × 8 nodes) |
-| `lib/p2p/dht_node.dart` | BEP 5 DHT node (UDP, RPCs, iterative lookups) |
-| `lib/p2p/node_capability.dart` | BEP 42 IP detection, NAT type |
+## What WebRTC Does Now
 
-### Geogram Integration
+WebRTC is a direct transport only after signaling succeeds.
 
-| File | Purpose |
-|------|---------|
-| `lib/p2p/p2p_service.dart` | Singleton orchestrator, manages DHT lifecycle |
-| `lib/p2p/ice_punch.dart` | UDP hole punching (scaffolding) |
-| `lib/connection/transports/dht_transport.dart` | ConnectionManager transport |
+The signaling order in `lib/services/webrtc_signaling_service.dart` is:
 
-### Bootstrap Nodes
+1. station WebSocket
+2. peer relay
+3. DHT signaling
 
-```
-router.bittorrent.com:6881
-dht.transmissionbt.com:6881
-router.utorrent.com:6881
-dht.libtorrent.org:25401
-dht.aelitis.com:6881
-```
+So WebRTC is not independent of the rest of the stack. It depends on at least one working signaling path.
 
-Port 25401 included for mobile carriers that block 6881.
+## How Devices Become Reachable
 
-## Devices UI Integration
+`DevicesService.syncDeviceToConnectionManager()` is where discovered device metadata gets translated into transport registrations.
 
-When a peer is found via DHT, it appears in the Devices panel:
+Current mapping:
 
-### Discovery via npub lookup
+- A local `http://192.168.x.x:3456` style URL is registered into `LanTransport`.
+- A public internet URL is registered into `DhtTransport`.
+- A relay-capable public endpoint is registered into `PeerRelayTransport`.
 
-For each known device with an npub, `P2PService` fires lightweight `get_peers(SHA1(npub))` queries. When a response contains peers, the device is marked online with `['internet']` connection method.
+This matters because the UI may show one device, but internally multiple connection methods can be attached to that same peer.
 
-### Preserving the internet tag
+## Identity Validation And Stale LAN Protection
 
-`DevicesService.checkReachability()` checks direct HTTP and station proxy. Both can fail for NAT'd peers. The `internet` tag set by DHT is preserved if `lastSeen` is within 30 minutes — station checks don't override DHT-confirmed connectivity.
+LAN is no longer accepted just because a callsign matches.
 
-### Display
+`LanTransport` verifies `/api/status` against the expected peer identity before treating a LAN candidate as reachable:
 
-Devices found via DHT show:
-- **Green** online indicator
-- **`['internet']`** connection method tag
-- Identity from the device's profile (callsign, nickname)
+- `device_id` is preferred
+- `npub` is the fallback identity check
 
-## Same-Household Devices
+This avoids stale LAN entries hijacking cross-network traffic, which was a real failure mode during Android-to-laptop testing.
 
-Multiple devices behind the same NAT share the same public IP. DHT returns entries with same IP, different ports. The self-filter only excludes `127.0.0.1` — same-public-IP peers are NOT filtered. The callsign comparison in the HTTP probe filters out self.
+## Typical Paths
 
-## Privacy
+### Same LAN
 
-- **No external STUN**: public IP from BEP 42 `ip` field in DHT responses
-- **No Google/Mozilla infrastructure**
-- **No IP logging**
-- **Identity not in DHT**: announces only contain IP:port
+- `lan` should win.
+- Device talks directly to the peer's local HTTP endpoint.
 
-## Debug API
+### Different networks, target has reachable public HTTP
 
-`POST /api/debug`:
+- `dht` can win.
+- DHT discovery refreshes the peer endpoint if needed.
+- The actual request goes to the peer's public HTTP endpoint.
 
-| Action | Parameters | Description |
-|--------|-----------|-------------|
-| `dht_status` | — | Full P2P status |
-| `dht_start` | — | Start DHT |
-| `dht_stop` | — | Stop DHT |
-| `dht_find_user` | `npub` | Find devices for npub |
-| `dht_find_user_light` | `npub` | Bounded lookup for an npub topic |
-| `dht_known_targets` | — | Show the persisted peers that will be probed |
-| `dht_probe_once` | — | Run one immediate known-peer probe cycle |
-| `dht_geogram_query` | `ip`, `port` | Send a single geogram identity query |
-| `dht_geogram_punch` | `ip`, `port` | Send a short burst of geogram queries |
-| `dht_add_node` | `ip`, `port` | Add a DHT peer |
+### Different networks, target is not directly reachable
 
-## Testing
+- `peer_relay` usually wins.
+- Sender queues the message on the target relay or on a fallback sender-side relay queue.
+- Recipient polls and receives it asynchronously.
 
-### Standalone Test
+### Browser or NAT-friendly direct path after signaling
 
-```bash
-dart run tests/dht/dht_discovery_test.dart
-```
+- `webrtc` can win after the session is established.
 
-Spawns two `DhtNode` instances, bootstraps both into the real BT mainline DHT, announces on a test topic, and verifies both find each other via iterative `get_peers`.
+## Security Settings That Affect This
 
-**Test results (2026-03-22):**
-```
-Node A: 9 nodes after bootstrap (6.5s)
-Node B: 14 nodes after bootstrap (12.9s)
-Node A announced (24s), Node B announced (31.6s)
-Node A found 2 peers (7s): 178.202.105.29:41331, 178.202.105.29:59920
-Node B found 2 peers (10.4s): 178.202.105.29:41331, 178.202.105.29:59920
-*** PASS: Both nodes found each other ***
-Memory: 174MB → 180MB peak → 152MB final (6MB DHT overhead)
-```
+Relevant settings live in `lib/services/security_service.dart`.
 
-Key findings:
-- **6MB memory overhead** — the DHT library itself is lightweight
-- Both nodes converge on the same K-closest nodes despite having only 9-14 routing table nodes
-- The iterative lookup correctly traverses ~15-18 nodes across ~82-94 candidates
+### BLE Only Mode
 
-### Cross-Network Test (laptop + Android on different internet connections)
+When enabled, the system should avoid the internet-style transports and stay on short-range methods.
 
-```
-Laptop (178.202.105.29) → DHT → found Android (47.64.113.206:3456)
-Android on mobile data found laptop's announce on SHA1("geogram")
-```
+### USB Access
 
-Verified via `dht_find_user` debug API. Both devices' iterative lookups converged on the same K-closest nodes in the global DHT.
+`USB access` controls whether Geogram itself is allowed to use USB as a communication path. This was added so the USB cable can stay connected for ADB while Geogram ignores USB transport.
 
-## Current Status
+If `USB access` is off:
 
-### Working (tested 2026-03-25)
+- ADB can still use the cable.
+- Geogram should not use USB AOA for discovery or messaging.
 
-- **Iterative lookup**: proper BEP 5 convergence with per-lookup candidate sets and bounded/light mode on Android
-- **Cross-network discovery**: desktop and Android still find each other through the public DHT
-- **Known-peer probing**: persisted npub targets are probed automatically, with sticky retry for unresolved peers
-- **Pair rendezvous**: active known-peer probes publish and query pair-specific DHT topics for fresher candidates
-- **Public HTTP announce**: a publicly reachable Geogram API can be announced directly on DHT once the node verifies its own external `http://ip:3456` endpoint
-- **BEP 42 endpoint observation**: recent external ports are tracked and exposed in `dht_status`
-- **Devices/debug tooling**: DHT status, target inspection, and manual query/punch debug endpoints are available
+## Current Debug API Hooks
 
-### Blocked
+Useful verification endpoints are documented in `docs/API.md`.
 
-- **Direct DHT transport on the tested laptop/Android networks**: discovery succeeds, but the peers still do not receive each other's geogram UDP queries or responses
-- **Direct WebSocket/WebRTC bootstrap through DHT alone**: not reliable on the tested NATs because the rendezvous UDP path itself is not becoming reachable
-- **Relay-free internet transport**: still unresolved for endpoint-dependent NATs
+### DHT and routing
 
-## Known Issues
+- `POST /api/debug` with `{"action":"dht_status"}`
+- `POST /api/debug` with `{"action":"dht_find_user_light","npub":"..."}`
+- `POST /api/debug` with `{"action":"dht_known_targets"}`
+- `POST /api/debug` with `{"action":"dht_probe_once"}`
+- `POST /api/debug` with `{"action":"device_ping","callsign":"X1ABC"}`
 
-### Endpoint-Dependent NAT / Direct Transport
+### Force a specific transport
 
-As of the March 25, 2026 verification runs, the main blocker is no longer Android memory. The current Android build stays alive long enough to bootstrap, announce, and run repeated DHT probe cycles.
+- `POST /api/debug` with `{"action":"device_api_request","callsign":"X1ABC","transport":"peer_relay","method":"GET","path":"/api/status"}`
+- `POST /api/debug` with `{"action":"device_api_request","callsign":"X1ABC","transport":"dht","method":"GET","path":"/api/status"}`
+- `POST /api/debug` with `{"action":"device_send_dm","callsign":"X1ABC","transport":"peer_relay","content":"hello"}`
 
-What the latest verified run showed:
+Valid transport names currently include:
 
-- Desktop advertised and probed from `178.202.105.29:40362`
-- Android DHT socket started on `47.64.115.57:55398`
-- Android BEP 42 observation reported a different public port, `47.64.115.57:19836`
-- Both peers discovered current and recent candidates through the `npub` topic and the pair-rendezvous topic
-- Both peers sent repeated geogram UDP bursts to those candidates
-- Neither peer logged an inbound `DHT: geogram query from ...` or `DHT: geogram response from ...`
+- `lan`
+- `dht`
+- `peer_relay`
+- `station`
+- `webrtc`
+- `usb_aoa`
+- `bluetooth_classic`
+- `ble`
 
-This is consistent with endpoint-dependent NAT behavior on the Android network: the same UDP socket is not presenting a single stable public port to all remote peers. In that case, BitTorrent DHT remains useful for discovery, but it is not sufficient as the only transport bootstrap across these two networks.
+### Relay inspection
 
-Practical implication:
+- `GET /api/debug/peer-relay`
+- `POST /api/p2p/relay/send`
+- `GET /api/p2p/relay/poll?callsign=X1ABC&timeout=20`
 
-- **DHT is the discovery/rendezvous plane**
-- **Direct transport still needs a reachable path**: STUN/TURN, relay, or another introducer that can carry signaling when direct UDP does not open
-- **Direct WebSocket between two NATed peers is not realistic without a reachable TCP listener or relay**
+## Known Limits
 
-### Android Memory
+- DHT does not currently carry arbitrary message payloads by itself.
+- Direct `dht` delivery still depends on the peer exposing a working public HTTP endpoint.
+- Peer relay currently focuses on queued envelopes, not general binary transport.
+- WebRTC still needs some other signaling path to bootstrap.
+- The device list may aggregate multiple connection methods for one peer, but routing still happens per transport registration underneath.
 
-The earlier Android OOM problem was real, but it is no longer the primary blocker in the current code path. The move to bounded/light lookups on Android reduced the memory pressure enough for repeated DHT announce and probe cycles during the latest tests.
+## Relevant Files
 
-### Token Errors
+Core files for the current mechanism:
 
-`DHT error 203: invalid token` and `Announce_peer with forbidden port number` are common during announces. Some DHT nodes reject announces with non-standard ports (3456 instead of typical BT ports). Tokens expire after 5-10 minutes, so re-announces may use stale tokens. These are non-fatal — the announce reaches enough nodes for discovery to work.
+- `lib/main.dart`
+- `lib/connection/connection_manager.dart`
+- `lib/connection/routing_strategy.dart`
+- `lib/connection/transports/lan_transport.dart`
+- `lib/connection/transports/dht_transport.dart`
+- `lib/connection/transports/peer_relay_transport.dart`
+- `lib/services/devices_service.dart`
+- `lib/services/peer_relay_service.dart`
+- `lib/services/webrtc_signaling_service.dart`
+- `lib/p2p/p2p_service.dart`
+- `lib/services/security_service.dart`
 
-## What Does NOT Change
+## Bottom Line
 
-- Station servers — no modifications
-- Station connections — still work, higher priority when available
-- LAN/BLE discovery — unchanged
-- Mirror sync protocol — unchanged
-- Identity — same npub/callsign/NOSTR keys
-- Content serving — same Shelf HTTP server
+The current cross-network design is:
+
+- DHT finds peers and refreshes public endpoint information.
+- Direct HTTP is preferred when that public endpoint is reachable.
+- Peer relay handles the NATed cases that direct public HTTP cannot.
+- WebRTC can become the direct data path, but only after being signaled through station, relay, or DHT.
+
+That is the mechanism that is currently implemented in code. Any document that describes Geogram as "DHT transport only" is outdated.
