@@ -46,6 +46,7 @@
   "save": "Save",
   "cancel": "Cancel",
   "delete": "Delete",
+  "delete_channel_confirm": "This will permanently delete this channel and all its messages.",
   "pin": "Pin",
   "unpin": "Unpin",
   "more_options": "More options",

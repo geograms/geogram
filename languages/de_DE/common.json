@@ -46,6 +46,7 @@
   "save": "Speichern",
   "cancel": "Abbrechen",
   "delete": "Löschen",
+  "delete_channel_confirm": "Dies wird diesen Kanal und alle Nachrichten dauerhaft löschen.",
   "pin": "Anheften",
   "unpin": "Lösen",
   "more_options": "Weitere Optionen",

@@ -46,6 +46,7 @@
   "save": "Guardar",
   "cancel": "Cancelar",
   "delete": "Eliminar",
+  "delete_channel_confirm": "Isto irá eliminar permanentemente este canal e todas as suas mensagens.",
   "edit": "Editar",
   "add": "Adicionar",
   "close": "Fechar",

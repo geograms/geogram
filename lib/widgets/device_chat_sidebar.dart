@@ -54,6 +54,9 @@ class DeviceChatSidebar extends StatefulWidget {
   /// Callback to toggle mute for a room
   final Function(String roomId)? onToggleMute;
 
+  /// Callback to delete a local channel
+  final Function(ChatChannel channel)? onDeleteLocalChannel;
+
   /// Whether the user is a moderator on the station (enables room management)
   final bool isModerator;
 
@@ -82,6 +85,7 @@ class DeviceChatSidebar extends StatefulWidget {
     this.unreadCounts = const {},
     this.mutedRooms = const {},
     this.onToggleMute,
+    this.onDeleteLocalChannel,
     this.isModerator = false,
     this.onCreateRoom,
     this.onDeleteRoom,
@@ -451,9 +455,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     ),
                   ),
                 ),
-              // Mute toggle menu
+              // Channel menu (mute, delete)
               if (widget.onToggleMute != null)
-                _buildMuteMenuButton(theme, channel.id, isMuted),
+                _buildChannelMenuButton(theme, channel, isMuted),
             ],
           ),
         ),
@@ -638,7 +642,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     );
   }
 
-  Widget _buildMuteMenuButton(ThemeData theme, String roomId, bool isMuted) {
+  Widget _buildChannelMenuButton(ThemeData theme, ChatChannel channel, bool isMuted) {
+    final canDelete = !channel.isMain && widget.onDeleteLocalChannel != null;
+
     return SizedBox(
       width: 24,
       height: 24,
@@ -652,7 +658,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
         ),
         onSelected: (value) {
           if (value == 'toggle_mute') {
-            widget.onToggleMute?.call(roomId);
+            widget.onToggleMute?.call(channel.id);
+          } else if (value == 'delete') {
+            _confirmDeleteChannel(context, channel);
           }
         },
         itemBuilder: (context) => [
@@ -670,6 +678,41 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                 Text(isMuted ? _i18n.t('unmute_notifications') : _i18n.t('mute_notifications')),
               ],
             ),
+          ),
+          if (canDelete) ...[
+            const PopupMenuDivider(),
+            PopupMenuItem<String>(
+              value: 'delete',
+              height: 40,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('delete'), style: TextStyle(color: Colors.red)),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteChannel(BuildContext context, ChatChannel channel) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${_i18n.t('delete')} "${channel.name}"?'),
+        content: Text(_i18n.t('delete_channel_confirm')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              widget.onDeleteLocalChannel?.call(channel);
+            },
+            child: Text(_i18n.t('delete'), style: TextStyle(color: Colors.red)),
           ),
         ],
       ),

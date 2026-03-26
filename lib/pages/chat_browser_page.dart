@@ -2169,6 +2169,24 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
+  Future<void> _deleteLocalChannel(ChatChannel channel) async {
+    try {
+      await _chatService.deleteChannel(channel.id);
+      // If we deleted the selected channel, deselect it
+      if (_selectedChannel?.id == channel.id) {
+        _setStateIfMounted(() {
+          _selectedChannel = null;
+        });
+      }
+      await _chatService.refreshChannels();
+      _setStateIfMounted(() {
+        _channels = List.from(_chatService.channels);
+      });
+    } catch (e) {
+      _showError('Failed to delete channel: $e');
+    }
+  }
+
   Future<void> _renameStationRoom(StationChatRoom room, String newName) async {
     final stationUrl = _lastStationUrl;
     if (stationUrl == null) return;
@@ -3535,6 +3553,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         _chatNotificationService.toggleRoomMute(roomId);
         setState(() {});
       },
+      onDeleteLocalChannel: widget.isRemoteDevice ? null : _deleteLocalChannel,
       isModerator: isModerator,
       onCreateRoom: isModerator ? _createStationRoom : null,
       onDeleteRoom: isModerator ? _deleteStationRoom : null,
@@ -4148,6 +4167,25 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 ? Text(_i18n.t('group_chat'))
                 : null),
         onTap: () => _selectChannelMobile(channel),
+        onLongPress: !channel.isMain && !widget.isRemoteDevice ? () {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text('${_i18n.t('delete')} "${channel.isDirect ? _dmDisplayName(channel) : channel.name}"?'),
+              content: Text(_i18n.t('delete_channel_confirm')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _deleteLocalChannel(channel);
+                  },
+                  child: Text(_i18n.t('delete'), style: TextStyle(color: Colors.red)),
+                ),
+              ],
+            ),
+          );
+        } : null,
       );
       }),
     ];
