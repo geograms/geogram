@@ -3492,7 +3492,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final currentProfile = _profileService.getProfile();
 
     // For remote device mode, don't show local channels
-    final localChannels = widget.isRemoteDevice ? <ChatChannel>[] : _channels;
+    final localChannels = widget.isRemoteDevice ? <ChatChannel>[] : List<ChatChannel>.from(_channels);
+    _sortChannels(localChannels);
 
     // Station owner is always moderator of their own rooms
     final isModerator = ProfileService().getProfile().isRelay ||
@@ -3500,6 +3501,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     return DeviceChatSidebar(
       localChannels: localChannels,
+      nicknameMap: _nicknameMap,
       remoteSources: remoteSources,
       selectedLocalChannelId: _selectedChannel?.id,
       selectedRemoteRoom: _selectedStationRoom != null
@@ -3612,6 +3614,28 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     );
   }
 
+  /// Sort channels: favorites first, then by last message time (newest first)
+  void _sortChannels(List<ChatChannel> channels) {
+    channels.sort((a, b) {
+      if (a.isFavorite && !b.isFavorite) return -1;
+      if (!a.isFavorite && b.isFavorite) return 1;
+      if (a.lastMessageTime == null && b.lastMessageTime == null) return 0;
+      if (a.lastMessageTime == null) return 1;
+      if (b.lastMessageTime == null) return -1;
+      return b.lastMessageTime!.compareTo(a.lastMessageTime!);
+    });
+  }
+
+  /// Resolve DM display name: "nickname (CALLSIGN)" or just callsign
+  String _dmDisplayName(ChatChannel channel) {
+    final callsign = channel.name.toUpperCase();
+    final nickname = _nicknameMap[callsign];
+    if (nickname != null && nickname.isNotEmpty) {
+      return '$nickname ($callsign)';
+    }
+    return channel.name;
+  }
+
   /// Build full-width channel list for mobile view
   Widget _buildFullWidthChannelList(ThemeData theme) {
     // For remote device mode, only show station rooms
@@ -3621,21 +3645,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Sort channels: favorites first, then by last message time
     final sortedChannels = List<ChatChannel>.from(_channels);
-    sortedChannels.sort((a, b) {
-      // Favorites first
-      if (a.isFavorite && !b.isFavorite) return -1;
-      if (!a.isFavorite && b.isFavorite) return 1;
-
-      // Main channel always at top (after favorites)
-      if (a.isMain && !b.isMain) return -1;
-      if (!a.isMain && b.isMain) return 1;
-
-      // Then by last message time (newest first)
-      if (a.lastMessageTime == null && b.lastMessageTime == null) return 0;
-      if (a.lastMessageTime == null) return 1;
-      if (b.lastMessageTime == null) return -1;
-      return b.lastMessageTime!.compareTo(a.lastMessageTime!);
-    });
+    _sortChannels(sortedChannels);
 
     // Check if any external device is reachable
     final anyDeviceOnline = _stationReachable || _cachedDeviceSources.any((d) => d.isOnline);
@@ -4095,7 +4105,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           children: [
             Expanded(
               child: Text(
-                channel.name,
+                channel.isDirect ? _dmDisplayName(channel) : channel.name,
                 style: TextStyle(
                   fontWeight: channel.isFavorite
                       ? FontWeight.bold

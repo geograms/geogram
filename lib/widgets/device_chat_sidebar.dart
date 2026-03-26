@@ -15,6 +15,9 @@ class DeviceChatSidebar extends StatefulWidget {
   /// Local device channels
   final List<ChatChannel> localChannels;
 
+  /// Nickname map (uppercase callsign -> display name) for DM channels
+  final Map<String, String> nicknameMap;
+
   /// List of connected device sources (stations, direct connections)
   final List<DeviceSourceWithRooms> remoteSources;
 
@@ -63,6 +66,7 @@ class DeviceChatSidebar extends StatefulWidget {
   const DeviceChatSidebar({
     Key? key,
     required this.localChannels,
+    this.nicknameMap = const {},
     required this.remoteSources,
     this.selectedLocalChannelId,
     this.selectedRemoteRoom,
@@ -89,6 +93,16 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
 
   /// Track which device sections are expanded
   final Map<String, bool> _expandedDevices = {'local': true};
+
+  /// Resolve DM display name: "nickname (CALLSIGN)" or just callsign
+  String _dmDisplayName(ChatChannel channel) {
+    final callsign = channel.name.toUpperCase();
+    final nickname = widget.nicknameMap[callsign];
+    if (nickname != null && nickname.isNotEmpty) {
+      return '$nickname ($callsign)';
+    }
+    return channel.name;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -383,7 +397,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                   children: [
                     Flexible(
                       child: Text(
-                        channel.name,
+                        channel.isDirect ? _dmDisplayName(channel) : channel.name,
                         style: theme.textTheme.bodyMedium?.copyWith(
                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                           color: isSelected
