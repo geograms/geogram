@@ -18,7 +18,7 @@ class UpdateMirrorUtils {
   static Future<Map<String, dynamic>?> pollBetaRelease({
     required String mirrorUrl,
     required String stableVersion,
-    required Future<int> Function(Map<String, dynamic> release) downloadAssets,
+    Future<int> Function(Map<String, dynamic> release)? downloadAssets,
     required Map<String, String> Function() buildAssetUrls,
     required Map<String, String> Function() buildAssetFilenames,
     required void Function(String level, String message) log,
@@ -48,7 +48,19 @@ class UpdateMirrorUtils {
       if (!isNewerVersion(betaVersion, stableVersion)) return null;
 
       log('INFO', 'Beta release found: $betaVersion (stable: $stableVersion)');
-      await downloadAssets(beta);
+      if (downloadAssets != null) {
+        await downloadAssets(beta);
+      }
+
+      // Build GitHub download URLs from the release assets
+      final githubAssets = <String, String>{};
+      for (final asset in (beta['assets'] as List? ?? [])) {
+        final name = asset['name'] as String? ?? '';
+        final url = asset['browser_download_url'] as String? ?? '';
+        if (name.isNotEmpty && url.isNotEmpty) {
+          githubAssets[name] = url;
+        }
+      }
 
       return {
         'status': 'available',
@@ -59,8 +71,8 @@ class UpdateMirrorUtils {
         'publishedAt': beta['published_at'] as String?,
         'htmlUrl': beta['html_url'] as String?,
         'prerelease': true,
-        'assets': buildAssetUrls(),
-        'assetFilenames': buildAssetFilenames(),
+        'assets': downloadAssets != null ? buildAssetUrls() : githubAssets,
+        'assetFilenames': downloadAssets != null ? buildAssetFilenames() : <String, String>{},
       };
     } catch (e) {
       log('ERROR', 'Error checking beta releases: $e');

@@ -9118,10 +9118,13 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       }
 
       // Also check for beta releases (separate track)
+      // On mobile, skip downloading beta binaries (memory-constrained) — just cache metadata
       _cachedBetaRelease = await UpdateMirrorUtils.pollBetaRelease(
         mirrorUrl: _settings.updateMirrorUrl,
         stableVersion: version,
-        downloadAssets: (release) => _downloadAllPlatformBinaries(release),
+        downloadAssets: (Platform.isAndroid || Platform.isIOS)
+            ? null  // Skip binary download on mobile
+            : (release) => _downloadAllPlatformBinaries(release),
         buildAssetUrls: _buildAssetUrls,
         buildAssetFilenames: _buildAssetFilenames,
         log: _log,
