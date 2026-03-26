@@ -2104,43 +2104,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   void _showCreateRoomMobileDialog(BuildContext context) {
-    final idController = TextEditingController();
-    final nameController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(_i18n.t('create_room')),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: InputDecoration(labelText: 'Room name'),
-              autofocus: true,
-            ),
-            TextField(
-              controller: idController,
-              decoration: InputDecoration(labelText: 'Room ID (lowercase, no spaces)'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
-          TextButton(
-            onPressed: () {
-              final name = nameController.text.trim();
-              var id = idController.text.trim().toLowerCase().replaceAll(' ', '-');
-              if (id.isEmpty) id = name.toLowerCase().replaceAll(' ', '-');
-              if (name.isNotEmpty && id.isNotEmpty) {
-                Navigator.pop(ctx);
-                _createStationRoom(id, name);
-              }
-            },
-            child: Text(_i18n.t('create')),
-          ),
-        ],
-      ),
-    );
+    _showNewChannelDialog();
   }
 
   Future<void> _createStationRoom(String id, String name, {String? description}) async {
@@ -3050,11 +3014,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Show new channel dialog
   Future<void> _showNewChannelDialog() async {
-    final result = await showDialog<ChatChannel>(
-      context: context,
-      builder: (context) => NewChannelDialog(
-        existingChannelIds: _channels.map((ch) => ch.id).toList(),
-        knownCallsigns: _chatService.participants.keys.toList(),
+    final result = await Navigator.push<ChatChannel>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => NewChannelDialog(
+          existingChannelIds: _channels.map((ch) => ch.id).toList(),
+          knownCallsigns: _chatService.participants.keys.toList(),
+        ),
       ),
     );
 

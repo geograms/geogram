@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import '../models/chat_channel.dart';
 import '../util/group_utils.dart';
 
-/// Dialog for creating a new chat channel (DM or group)
+/// Full-screen page for creating a new chat channel (DM or group)
 class NewChannelDialog extends StatefulWidget {
   final List<String> existingChannelIds;
   final List<String> knownCallsigns;
@@ -24,7 +24,8 @@ class NewChannelDialog extends StatefulWidget {
 
 class _NewChannelDialogState extends State<NewChannelDialog> {
   final _formKey = GlobalKey<FormState>();
-  ChatChannelType _channelType = ChatChannelType.direct;
+  ChatChannelType _channelType = ChatChannelType.group;
+  bool _dailyFiles = false;
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _callsignController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
@@ -43,207 +44,195 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return AlertDialog(
-      title: const Text('New Channel'),
-      content: Form(
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('New Channel'),
+        leading: IconButton(
+          icon: Icon(Icons.close),
+          onPressed: () => Navigator.pop(context),
+        ),
+        actions: [
+          Padding(
+            padding: EdgeInsets.only(right: 8),
+            child: FilledButton(
+              onPressed: _isCreating ? null : _handleCreate,
+              child: _isCreating
+                  ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : Text('Create'),
+            ),
+          ),
+        ],
+      ),
+      body: Form(
         key: _formKey,
-        child: SizedBox(
-          width: 500,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Channel type selector
-                Text(
-                  'Channel Type',
-                  style: theme.textTheme.titleSmall,
-                ),
-                const SizedBox(height: 8),
-                SegmentedButton<ChatChannelType>(
-                  segments: const [
-                    ButtonSegment(
-                      value: ChatChannelType.direct,
-                      label: Text('Direct Message'),
-                      icon: Icon(Icons.person),
-                    ),
-                    ButtonSegment(
-                      value: ChatChannelType.group,
-                      label: Text('Group'),
-                      icon: Icon(Icons.group),
-                    ),
-                  ],
-                  selected: {_channelType},
-                  onSelectionChanged: (Set<ChatChannelType> newSelection) {
-                    setState(() {
-                      _channelType = newSelection.first;
-                    });
+        child: SingleChildScrollView(
+          padding: EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Channel type selector
+              Text('Channel Type', style: theme.textTheme.titleSmall),
+              SizedBox(height: 8),
+              SegmentedButton<ChatChannelType>(
+                segments: const [
+                  ButtonSegment(
+                    value: ChatChannelType.group,
+                    label: Text('Group'),
+                    icon: Icon(Icons.group),
+                  ),
+                  ButtonSegment(
+                    value: ChatChannelType.direct,
+                    label: Text('Direct Message'),
+                    icon: Icon(Icons.person),
+                  ),
+                ],
+                selected: {_channelType},
+                onSelectionChanged: (s) => setState(() => _channelType = s.first),
+              ),
+              SizedBox(height: 24),
+
+              // Direct message fields
+              if (_channelType == ChatChannelType.direct) ...[
+                TextFormField(
+                  controller: _callsignController,
+                  decoration: InputDecoration(
+                    labelText: 'Callsign',
+                    hintText: 'Enter callsign (e.g., CR7BBQ)',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.person),
+                  ),
+                  textCapitalization: TextCapitalization.characters,
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) return 'Please enter a callsign';
+                    final callsign = value.trim().toUpperCase();
+                    if (widget.existingChannelIds.contains(callsign)) return 'Channel already exists';
+                    return null;
                   },
                 ),
-                const SizedBox(height: 24),
-
-                // Direct message fields
-                if (_channelType == ChatChannelType.direct) ...[
-                  TextFormField(
-                    controller: _callsignController,
-                    decoration: const InputDecoration(
-                      labelText: 'Callsign',
-                      hintText: 'Enter callsign (e.g., CR7BBQ)',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.person),
-                    ),
-                    textCapitalization: TextCapitalization.characters,
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter a callsign';
-                      }
-                      final callsign = value.trim().toUpperCase();
-                      if (widget.existingChannelIds.contains(callsign)) {
-                        return 'Channel with this callsign already exists';
-                      }
-                      return null;
-                    },
-                  ),
-                ],
-
-                // Group fields
-                if (_channelType == ChatChannelType.group) ...[
-                  TextFormField(
-                    controller: _nameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Group Name',
-                      hintText: 'Enter group name',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.group),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter a group name';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _descriptionController,
-                    decoration: const InputDecoration(
-                      labelText: 'Description (optional)',
-                      hintText: 'Enter group description',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.description),
-                    ),
-                    maxLines: 2,
-                  ),
-                  const SizedBox(height: 16),
-                  // Participants (simplified - can be enhanced)
-                  Text(
-                    'Participants',
-                    style: theme.textTheme.titleSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  if (widget.knownCallsigns.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: theme.colorScheme.outline,
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: widget.knownCallsigns.map((callsign) {
-                          final isSelected =
-                              _selectedParticipants.contains(callsign);
-                          return FilterChip(
-                            label: Text(callsign),
-                            selected: isSelected,
-                            onSelected: (selected) {
-                              setState(() {
-                                if (selected) {
-                                  _selectedParticipants.add(callsign);
-                                } else {
-                                  _selectedParticipants.remove(callsign);
-                                }
-                              });
-                            },
-                          );
-                        }).toList(),
-                      ),
-                    )
-                  else
-                    Text(
-                      'No known participants yet. Start chatting to add participants!',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                        fontStyle: FontStyle.italic,
-                      ),
-                    ),
-                ],
               ],
-            ),
+
+              // Group fields
+              if (_channelType == ChatChannelType.group) ...[
+                TextFormField(
+                  controller: _nameController,
+                  decoration: InputDecoration(
+                    labelText: 'Group Name',
+                    hintText: 'Enter group name',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.group),
+                  ),
+                  autofocus: true,
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) return 'Please enter a group name';
+                    return null;
+                  },
+                ),
+                SizedBox(height: 16),
+                TextFormField(
+                  controller: _descriptionController,
+                  decoration: InputDecoration(
+                    labelText: 'Description (optional)',
+                    hintText: 'What is this group about?',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.description),
+                  ),
+                  maxLines: 2,
+                ),
+                SizedBox(height: 24),
+
+                // Storage type
+                Text('Message Storage', style: theme.textTheme.titleSmall),
+                SizedBox(height: 8),
+                RadioListTile<bool>(
+                  title: Text('Single file'),
+                  subtitle: Text(
+                    'All messages in one file. Simpler, good for small groups with low activity.',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  value: false,
+                  groupValue: _dailyFiles,
+                  onChanged: (v) => setState(() => _dailyFiles = v!),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+                RadioListTile<bool>(
+                  title: Text('Daily files'),
+                  subtitle: Text(
+                    'One file per day. Better for very active rooms with many participants.',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  value: true,
+                  groupValue: _dailyFiles,
+                  onChanged: (v) => setState(() => _dailyFiles = v!),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+
+                SizedBox(height: 24),
+
+                // Participants
+                Text('Participants', style: theme.textTheme.titleSmall),
+                SizedBox(height: 8),
+                if (widget.knownCallsigns.isNotEmpty)
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: widget.knownCallsigns.map((callsign) {
+                      final isSelected = _selectedParticipants.contains(callsign);
+                      return FilterChip(
+                        label: Text(callsign),
+                        selected: isSelected,
+                        onSelected: (selected) {
+                          setState(() {
+                            if (selected) {
+                              _selectedParticipants.add(callsign);
+                            } else {
+                              _selectedParticipants.remove(callsign);
+                            }
+                          });
+                        },
+                      );
+                    }).toList(),
+                  )
+                else
+                  Text(
+                    'No known participants yet. They will appear here once devices connect.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+              ],
+            ],
           ),
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _isCreating ? null : () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _isCreating ? null : _handleCreate,
-          child: _isCreating
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
-                  ),
-                )
-              : const Text('Create'),
-        ),
-      ],
     );
   }
 
-  /// Handle create button press
   Future<void> _handleCreate() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
-    setState(() {
-      _isCreating = true;
-    });
+    setState(() => _isCreating = true);
 
     try {
       ChatChannel channel;
 
       if (_channelType == ChatChannelType.direct) {
-        // Create direct message channel
         final callsign = _callsignController.text.trim().toUpperCase();
         channel = ChatChannel.direct(callsign: callsign);
       } else {
-        // Create group channel
         final name = _nameController.text.trim();
         final description = _descriptionController.text.trim();
-        final id = _generateGroupId(name);
+        final id = GroupUtils.sanitizeGroupName(name);
 
-        // Check if ID already exists
         if (widget.existingChannelIds.contains(id)) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('A group with this name already exists'),
-                backgroundColor: Colors.red,
-              ),
+              SnackBar(content: Text('A group with this name already exists'), backgroundColor: Colors.red),
             );
           }
-          setState(() {
-            _isCreating = false;
-          });
+          setState(() => _isCreating = false);
           return;
         }
 
@@ -253,32 +242,31 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
           participants: _selectedParticipants,
           description: description.isNotEmpty ? description : null,
         );
+
+        // Set dailyFiles in the config
+        if (_dailyFiles && channel.config != null) {
+          channel = ChatChannel(
+            id: channel.id,
+            type: channel.type,
+            name: channel.name,
+            folder: channel.folder,
+            participants: channel.participants,
+            description: channel.description,
+            created: channel.created,
+            config: channel.config!.copyWith(dailyFiles: true),
+          );
+        }
       }
 
-      // Return the created channel
-      if (mounted) {
-        Navigator.pop(context, channel);
-      }
+      if (mounted) Navigator.pop(context, channel);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error creating channel: $e'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
+          SnackBar(content: Text('Error: $e'), backgroundColor: Theme.of(context).colorScheme.error),
         );
       }
     } finally {
-      if (mounted) {
-        setState(() {
-          _isCreating = false;
-        });
-      }
+      if (mounted) setState(() => _isCreating = false);
     }
-  }
-
-  /// Generate a unique group ID from name
-  String _generateGroupId(String name) {
-    return GroupUtils.sanitizeGroupName(name);
   }
 }
