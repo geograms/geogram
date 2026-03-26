@@ -66,6 +66,7 @@ import 'server/mixins/heartbeat_mixin.dart';
 import 'server/mixins/karma_mixin.dart';
 import 'cli/themes_embedded.dart';
 import 'server/station_client.dart';
+import 'server/update_mirror_utils.dart';
 
 /// App version - use central version.dart for consistency
 import 'version.dart' show appVersion;
@@ -676,6 +677,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
   // Update mirror state
   Map<String, dynamic>? _cachedRelease;
+  Map<String, dynamic>? _cachedBetaRelease;
   String? _updatesDirectory;
   bool _isDownloadingUpdates = false;
   Timer? _updatePollTimer;
@@ -9115,6 +9117,16 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         _log('INFO', 'Update mirror complete: version $version (no binaries available yet)');
       }
 
+      // Also check for beta releases (separate track)
+      _cachedBetaRelease = await UpdateMirrorUtils.pollBetaRelease(
+        mirrorUrl: _settings.updateMirrorUrl,
+        stableVersion: version,
+        downloadAssets: (release) => _downloadAllPlatformBinaries(release),
+        buildAssetUrls: _buildAssetUrls,
+        buildAssetFilenames: _buildAssetFilenames,
+        log: _log,
+      );
+
       // Sync AI models only on desktop/server (too heavy for Android)
       if (!Platform.isAndroid && !Platform.isIOS) {
         await _downloadWhisperModels();
@@ -9637,14 +9649,20 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     request.response.headers.contentType = ContentType.json;
 
-    if (_cachedRelease == null) {
-      // No updates cached yet
+    final channel = request.uri.queryParameters['channel'] ?? 'stable';
+    final release = UpdateMirrorUtils.selectRelease(
+      channel: channel,
+      stableRelease: _cachedRelease,
+      betaRelease: _cachedBetaRelease,
+    );
+
+    if (release == null) {
       request.response.write(jsonEncode({
         'status': 'no_updates_cached',
         'message': 'Station has not downloaded any updates yet',
       }));
     } else {
-      request.response.write(jsonEncode(_cachedRelease));
+      request.response.write(jsonEncode(release));
     }
   }
 

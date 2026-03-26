@@ -67,6 +67,7 @@ import '../server/mixins/heartbeat_mixin.dart';
 import '../server/mixins/karma_mixin.dart';
 import 'themes_embedded.dart';
 import '../server/station_client.dart';
+import '../server/update_mirror_utils.dart';
 
 /// App version - use central version.dart for consistency
 import '../version.dart' show appVersion;
@@ -778,7 +779,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
   // Update mirror state
   Map<String, dynamic>? _cachedRelease; // Latest stable release
-  Map<String, dynamic>? _cachedBetaRelease; // Latest beta (prerelease) release
+  Map<String, dynamic>? _cachedBetaRelease; // Latest beta release
   String? _updatesDirectory;
   bool _isDownloadingUpdates = false;
   Timer? _updatePollTimer;
@@ -10196,6 +10197,16 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       // Also sync Supertonic TTS models
       await _downloadSupertonicModels();
 
+      // Also check for beta releases (separate track)
+      _cachedBetaRelease = await UpdateMirrorUtils.pollBetaRelease(
+        mirrorUrl: _settings.updateMirrorUrl,
+        stableVersion: _settings.lastMirroredVersion ?? '',
+        downloadAssets: (release) => _downloadAllPlatformBinaries(release),
+        buildAssetUrls: _buildAssetUrls,
+        buildAssetFilenames: _buildAssetFilenames,
+        log: _log,
+      );
+
       // Prune old versions to stay under 5GB
       await _pruneOldUpdates();
     } catch (e) {
@@ -10768,10 +10779,13 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
     request.response.headers.contentType = ContentType.json;
 
     final channel = request.uri.queryParameters['channel'] ?? 'stable';
-    final release = (channel == 'beta') ? (_cachedBetaRelease ?? _cachedRelease) : _cachedRelease;
+    final release = UpdateMirrorUtils.selectRelease(
+      channel: channel,
+      stableRelease: _cachedRelease,
+      betaRelease: _cachedBetaRelease,
+    );
 
     if (release == null) {
-      // No updates cached yet
       request.response.write(jsonEncode({
         'status': 'no_updates_cached',
         'message': 'Station has not downloaded any updates yet',
