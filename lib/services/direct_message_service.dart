@@ -475,6 +475,9 @@ class DirectMessageService {
       }
     }
 
+    // Only list conversations that actually have messages
+    if (conversation.lastMessageTime == null) return;
+
     _conversations[otherCallsign] = conversation;
   }
 
