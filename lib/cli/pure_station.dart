@@ -10081,131 +10081,40 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
     try {
       _isDownloadingUpdates = true;
 
-      // Fetch multiple releases to find both latest stable and latest beta
-      final releasesUrl = 'https://api.github.com/repos/geograms/geogram/releases?per_page=5';
-      _log('INFO', 'Checking for updates from: $releasesUrl');
-
-      final response = await http.get(
-        Uri.parse(releasesUrl),
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Geogram-Station-Updater',
-        },
-      ).timeout(const Duration(seconds: 30));
-
-      if (response.statusCode != 200) {
-        _log('ERROR', 'GitHub API error: ${response.statusCode}');
-        return;
-      }
-
-      final releases = jsonDecode(response.body) as List<dynamic>;
-      if (releases.isEmpty) {
-        _log('INFO', 'No releases found on GitHub');
-        return;
-      }
-
-      // Find latest stable (first non-prerelease) and latest beta (first prerelease)
-      Map<String, dynamic>? latestStable;
-      Map<String, dynamic>? latestBeta;
-
-      for (final release in releases) {
-        final r = release as Map<String, dynamic>;
-        final isPrerelease = r['prerelease'] as bool? ?? false;
-        if (!isPrerelease && latestStable == null) {
-          latestStable = r;
-        }
-        if (isPrerelease && latestBeta == null) {
-          latestBeta = r;
-        }
-        if (latestStable != null && latestBeta != null) break;
-      }
+      final poll = await UpdateMirrorUtils.fetchReleases(_settings.updateMirrorUrl, log: _log);
 
       // Process stable release
-      if (latestStable != null) {
-        final tagName = latestStable['tag_name'] as String? ?? '';
-        final version = tagName.replaceFirst(RegExp(r'^v'), '');
-
-        final isNewVersion = _settings.lastMirroredVersion != version;
-        if (isNewVersion) {
-          _log('INFO', 'New stable version available: $version (current: ${_settings.lastMirroredVersion})');
-        } else {
-          _log('INFO', 'Checking for missing binaries in stable version $version');
+      if (poll.stableRelease != null && poll.stableGitHub != null) {
+        final version = poll.stableRelease!['version'] as String;
+        final isNew = _settings.lastMirroredVersion != version;
+        if (isNew) {
+          _log('INFO', 'New stable version: $version (current: ${_settings.lastMirroredVersion})');
         }
-
-        final downloadedCount = await _downloadAllPlatformBinaries(latestStable);
-
-        _cachedRelease = {
-          'status': 'available',
-          'version': version,
-          'tagName': tagName,
-          'name': latestStable['name'] as String?,
-          'body': latestStable['body'] as String?,
-          'publishedAt': latestStable['published_at'] as String?,
-          'htmlUrl': latestStable['html_url'] as String?,
-          'isPrerelease': false,
-          'assets': _buildAssetUrls(),
-          'assetFilenames': _buildAssetFilenames(),
-        };
+        await _downloadAllPlatformBinaries(poll.stableGitHub!);
+        _cachedRelease = poll.stableRelease!;
+        UpdateMirrorUtils.mergeLocalAssets(_cachedRelease!, _buildAssetUrls(), _buildAssetFilenames());
         await _saveCachedRelease();
-
         _settings = _settings.copyWith(lastMirroredVersion: version);
         await saveSettings();
-
-        if (downloadedCount > 0) {
-          _log('INFO', 'Stable update mirror complete: version $version ($downloadedCount new binaries)');
-        } else if (isNewVersion) {
-          _log('INFO', 'Stable update mirror complete: version $version (no binaries available yet)');
-        }
       }
 
       // Process beta release
-      if (latestBeta != null) {
-        final tagName = latestBeta['tag_name'] as String? ?? '';
-        final version = tagName.replaceFirst(RegExp(r'^v'), '');
-
-        if (_settings.lastMirroredBetaVersion != version) {
-          _log('INFO', 'New beta version available: $version (current: ${_settings.lastMirroredBetaVersion})');
-
-          final downloadedCount = await _downloadAllPlatformBinaries(latestBeta);
-
-          _cachedBetaRelease = {
-            'status': 'available',
-            'version': version,
-            'tagName': tagName,
-            'name': latestBeta['name'] as String?,
-            'body': latestBeta['body'] as String?,
-            'publishedAt': latestBeta['published_at'] as String?,
-            'htmlUrl': latestBeta['html_url'] as String?,
-            'isPrerelease': true,
-            'assets': _buildAssetUrls(),
-            'assetFilenames': _buildAssetFilenames(),
-          };
-          await _saveCachedBetaRelease();
-
-          _settings = _settings.copyWith(lastMirroredBetaVersion: version);
-          await saveSettings();
-
-          if (downloadedCount > 0) {
-            _log('INFO', 'Beta update mirror complete: version $version ($downloadedCount new binaries)');
-          }
-        }
+      if (poll.betaRelease != null && poll.betaGitHub != null) {
+        final version = poll.betaRelease!['version'] as String;
+        await _downloadAllPlatformBinaries(poll.betaGitHub!);
+        _cachedBetaRelease = poll.betaRelease!;
+        UpdateMirrorUtils.mergeLocalAssets(_cachedBetaRelease!, _buildAssetUrls(), _buildAssetFilenames());
+        await _saveCachedBetaRelease();
+        _settings = _settings.copyWith(lastMirroredBetaVersion: version);
+        await saveSettings();
+        _log('INFO', 'Beta version cached: $version');
+      } else {
+        _cachedBetaRelease = null;
       }
 
-      // Also sync whisper models
+      // Sync AI models
       await _downloadWhisperModels();
-
-      // Also sync Supertonic TTS models
       await _downloadSupertonicModels();
-
-      // Also check for beta releases (separate track)
-      _cachedBetaRelease = await UpdateMirrorUtils.pollBetaRelease(
-        mirrorUrl: _settings.updateMirrorUrl,
-        stableVersion: _settings.lastMirroredVersion ?? '',
-        downloadAssets: (release) => _downloadAllPlatformBinaries(release),
-        buildAssetUrls: _buildAssetUrls,
-        buildAssetFilenames: _buildAssetFilenames,
-        log: _log,
-      );
 
       // Prune old versions to stay under 5GB
       await _pruneOldUpdates();
@@ -10778,9 +10687,8 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
     request.response.headers.contentType = ContentType.json;
 
-    final channel = request.uri.queryParameters['channel'] ?? 'stable';
     final release = UpdateMirrorUtils.selectRelease(
-      channel: channel,
+      queryParams: request.uri.queryParameters,
       stableRelease: _cachedRelease,
       betaRelease: _cachedBetaRelease,
     );

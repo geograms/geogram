@@ -9057,80 +9057,45 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     );
   }
 
-  /// Poll GitHub and download new releases
+  /// Poll GitHub and download new releases (both stable and beta)
   Future<void> _pollAndDownloadUpdates() async {
     if (_isDownloadingUpdates) return;
 
     try {
       _isDownloadingUpdates = true;
-      _log('INFO', 'Checking for updates from: ${_settings.updateMirrorUrl}');
 
-      final response = await http.get(
-        Uri.parse(_settings.updateMirrorUrl),
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Geogram-Station-Updater',
-        },
-      ).timeout(const Duration(seconds: 30));
+      final poll = await UpdateMirrorUtils.fetchReleases(_settings.updateMirrorUrl, log: _log);
 
-      if (response.statusCode != 200) {
-        _log('ERROR', 'GitHub API error: ${response.statusCode}');
-        return;
+      // Process stable release
+      if (poll.stableRelease != null && poll.stableGitHub != null) {
+        final version = poll.stableRelease!['version'] as String;
+        final isNew = _settings.lastMirroredVersion != version;
+        if (isNew) {
+          _log('INFO', 'New stable version: $version (current: ${_settings.lastMirroredVersion})');
+        }
+        await _downloadAllPlatformBinaries(poll.stableGitHub!);
+        _cachedRelease = poll.stableRelease!;
+        UpdateMirrorUtils.mergeLocalAssets(_cachedRelease!, _buildAssetUrls(), _buildAssetFilenames());
+        await _saveCachedRelease();
+        _settings = _settings.copyWith(lastMirroredVersion: version);
+        await saveSettings();
       }
 
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      final tagName = json['tag_name'] as String? ?? '';
-      final version = tagName.replaceFirst(RegExp(r'^v'), '');
-
-      final isNewVersion = _settings.lastMirroredVersion != version;
-      if (isNewVersion) {
-        _log('INFO', 'New version available: $version (current: ${_settings.lastMirroredVersion})');
+      // Process beta release (on mobile: metadata only, no binary download)
+      if (poll.betaRelease != null && poll.betaGitHub != null) {
+        final version = poll.betaRelease!['version'] as String;
+        if (!(Platform.isAndroid || Platform.isIOS)) {
+          await _downloadAllPlatformBinaries(poll.betaGitHub!);
+          poll.betaRelease!['assets'] = _buildAssetUrls();
+          poll.betaRelease!['assetFilenames'] = _buildAssetFilenames();
+        }
+        _cachedBetaRelease = poll.betaRelease!;
+        _log('INFO', 'Beta version cached: $version');
       } else {
-        _log('INFO', 'Checking for missing binaries in version $version');
+        _cachedBetaRelease = null;
       }
 
-      // Download all platform binaries (will skip existing files)
-      // This ensures we eventually get all binaries even if GitHub Actions is still building
-      final downloadedCount = await _downloadAllPlatformBinaries(json);
-
-      // Update cached release info
-      _cachedRelease = {
-        'status': 'available',
-        'version': version,
-        'tagName': tagName,
-        'name': json['name'] as String?,
-        'body': json['body'] as String?,
-        'publishedAt': json['published_at'] as String?,
-        'htmlUrl': json['html_url'] as String?,
-        'assets': _buildAssetUrls(),
-        'assetFilenames': _buildAssetFilenames(),
-      };
-      await _saveCachedRelease();
-
-      // Update settings with new version
-      _settings = _settings.copyWith(lastMirroredVersion: version);
-      await saveSettings();
-
-      if (downloadedCount > 0) {
-        _log('INFO', 'Update mirror complete: version $version ($downloadedCount new binaries)');
-      } else if (isNewVersion) {
-        _log('INFO', 'Update mirror complete: version $version (no binaries available yet)');
-      }
-
-      // Also check for beta releases (separate track)
-      // On mobile, skip downloading beta binaries (memory-constrained) — just cache metadata
-      _cachedBetaRelease = await UpdateMirrorUtils.pollBetaRelease(
-        mirrorUrl: _settings.updateMirrorUrl,
-        stableVersion: version,
-        downloadAssets: (Platform.isAndroid || Platform.isIOS)
-            ? null  // Skip binary download on mobile
-            : (release) => _downloadAllPlatformBinaries(release),
-        buildAssetUrls: _buildAssetUrls,
-        buildAssetFilenames: _buildAssetFilenames,
-        log: _log,
-      );
-
-      // Sync AI models only on desktop/server (too heavy for Android)
+      // Sync AI models only on desktop/server
       if (!Platform.isAndroid && !Platform.isIOS) {
         await _downloadWhisperModels();
         await _downloadSupertonicModels();
@@ -9652,9 +9617,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     request.response.headers.contentType = ContentType.json;
 
-    final channel = request.uri.queryParameters['channel'] ?? 'stable';
     final release = UpdateMirrorUtils.selectRelease(
-      channel: channel,
+      queryParams: request.uri.queryParameters,
       stableRelease: _cachedRelease,
       betaRelease: _cachedBetaRelease,
     );
