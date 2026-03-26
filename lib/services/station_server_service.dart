@@ -1880,8 +1880,9 @@ class StationServerService with KarmaMixin, ConferenceMixin {
 
     try {
       final nameParam = request.uri.queryParameters['name']?.toLowerCase();
+      final stationDomain = _settings.description ?? request.headers.host ?? 'localhost';
       final response = Nip05RegistryService()
-          .buildNostrJsonResponse(nameParam, 'wss://p2p.radio');
+          .buildNostrJsonResponse(nameParam, 'wss://$stationDomain');
       request.response.write(jsonEncode(response));
     } catch (e) {
       LogService().log('NIP-05 handler error: $e');
@@ -7190,22 +7191,23 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
         }
       }
 
-      // Download the model
+      // Stream download to file to avoid buffering large models in memory
       try {
         LogService().log('Downloading whisper model: $filename...');
-        final response = await http.get(
+        final result = await streamDownloadToFile(
           Uri.parse(url),
+          file.path,
           headers: {'User-Agent': 'Geogram-Station-Updater'},
-        ).timeout(const Duration(minutes: 30));
+          timeout: const Duration(minutes: 30),
+        );
 
-        if (response.statusCode == 200) {
-          await file.writeAsBytes(response.bodyBytes);
-          final sizeMb = (response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1);
+        if (result.success) {
+          final sizeMb = (result.bytesWritten / (1024 * 1024)).toStringAsFixed(1);
           LogService().log('Downloaded whisper model $filename: ${sizeMb}MB');
           _availableWhisperModels.add(filename);
           downloaded++;
         } else {
-          LogService().log('Failed to download whisper model $filename: ${response.statusCode}');
+          LogService().log('Failed to download whisper model $filename');
         }
       } catch (e) {
         LogService().log('Error downloading whisper model $filename: $e');
@@ -7265,11 +7267,13 @@ h2 { font-size: 1.2rem; margin: 0 0 20px 0; }
 
   Future<void> _downloadFile(String url, String path) async {
     try {
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode == 200) {
-        await File(path).writeAsBytes(response.bodyBytes);
-      } else {
-        LogService().log('Failed to download file from $url: ${response.statusCode}');
+      final result = await streamDownloadToFile(
+        Uri.parse(url),
+        path,
+        timeout: const Duration(minutes: 30),
+      );
+      if (!result.success) {
+        LogService().log('Failed to download file from $url');
       }
     } catch (e) {
       LogService().log('Error downloading file from $url: $e');

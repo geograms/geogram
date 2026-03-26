@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/device_definition.dart';
 import '../../services/profile_storage.dart';
+import '../../util/managed_http_client.dart' show streamDownloadToFile;
 
 /// A single entry from the remote firmware catalog
 class CatalogDevice {
@@ -239,19 +240,19 @@ class _FirmwareDownloadDialogState extends State<FirmwareDownloadDialog> {
           _downloadProgress = 'Downloading firmware...';
         });
 
-        final firmwareResponse = await http.get(Uri.parse(firmwareUrl));
-        if (firmwareResponse.statusCode != 200) {
-          throw Exception(
-            'Failed to download firmware: HTTP ${firmwareResponse.statusCode}',
-          );
+        final firmwarePath = '${widget.basePath}/$relativeBase/firmware.bin';
+        final result = await streamDownloadToFile(
+          Uri.parse(firmwareUrl),
+          firmwarePath,
+          maxBytes: 100 * 1024 * 1024,
+        );
+        if (!result.success) {
+          throw Exception('Failed to download firmware');
         }
 
         if (storage != null) {
-          await storage.writeBytes('$relativeBase/firmware.bin',
-              Uint8List.fromList(firmwareResponse.bodyBytes));
-        } else {
-          await File('${widget.basePath}/$relativeBase/firmware.bin')
-              .writeAsBytes(firmwareResponse.bodyBytes);
+          final bytes = await File(firmwarePath).readAsBytes();
+          await storage.writeBytes('$relativeBase/firmware.bin', bytes);
         }
       }
 

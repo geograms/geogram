@@ -8,6 +8,7 @@ import 'package:mime/mime.dart';
 
 import '../station_settings.dart';
 import '../../models/update_settings.dart' show UpdateAssetType;
+import '../../util/managed_http_client.dart' show streamDownloadToFile;
 
 /// Handler for update mirror endpoints
 class UpdateHandler {
@@ -186,15 +187,18 @@ class UpdateHandler {
 
         try {
           log('INFO', 'Downloading: $name');
-          final response = await http.get(Uri.parse(downloadUrl))
-              .timeout(const Duration(minutes: 10));
+          final filePath = '$updatesDirectory/$name';
+          final result = await streamDownloadToFile(
+            Uri.parse(downloadUrl),
+            filePath,
+            headers: {'User-Agent': 'Geogram-Station-Updater'},
+            timeout: const Duration(minutes: 10),
+          );
 
-          if (response.statusCode == 200) {
-            final filePath = '$updatesDirectory/$name';
-            await File(filePath).writeAsBytes(response.bodyBytes);
+          if (result.success) {
             _downloadedAssets[name] = filePath;
             _assetFilenames[assetType.name] = name;
-            log('INFO', 'Downloaded: $name (${response.bodyBytes.length} bytes)');
+            log('INFO', 'Downloaded: $name (${result.bytesWritten} bytes)');
           }
         } catch (e) {
           log('WARN', 'Failed to download $name: $e');

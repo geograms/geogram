@@ -4,6 +4,7 @@
  */
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../models/station_node.dart';
 import '../services/station_node_service.dart';
 import '../services/log_service.dart';
@@ -149,7 +150,7 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
     // Default network settings (will be overridden by async load)
     _httpPort = 3456;  // Standard Geogram port
     _httpsPort = 3457;
-    _enableSsl = false;
+    _enableSsl = true;
     _sslAutoRenew = true;
 
     // Load network settings from file (async)
@@ -290,12 +291,29 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
             Text('NETWORK', style: TextStyle(fontWeight: FontWeight.bold)),
             SizedBox(height: 16),
 
-            // HTTP Port
+            // Domain — always visible
+            TextField(
+              decoration: InputDecoration(
+                labelText: 'Domain',
+                hintText: 'mystation.example.com',
+                border: OutlineInputBorder(),
+              ),
+              controller: _sslDomainController,
+              onChanged: (v) {
+                _sslDomain = v;
+                _hasChanges = true;
+                setState(() {});
+              },
+            ),
+            SizedBox(height: 16),
+
+            // Ports — stacked vertically
             Row(
               children: [
-                Expanded(child: Text('HTTP Port:')),
+                Text('HTTP Port:'),
+                SizedBox(width: 8),
                 SizedBox(
-                  width: 100,
+                  width: 80,
                   child: TextField(
                     keyboardType: TextInputType.number,
                     decoration: InputDecoration(
@@ -312,10 +330,35 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
                 ),
               ],
             ),
+            SizedBox(height: 8),
+            Row(
+              children: [
+                Text('HTTPS Port:'),
+                SizedBox(width: 8),
+                SizedBox(
+                  width: 80,
+                  child: TextField(
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                    ),
+                    controller: _httpsPortController,
+                    onChanged: (v) {
+                      _httpsPort = int.tryParse(v) ?? 3457;
+                      _hasChanges = true;
+                      setState(() {});
+                    },
+                  ),
+                ),
+              ],
+            ),
             SizedBox(height: 16),
 
-            // SSL Section
-            Text('SSL/HTTPS', style: TextStyle(fontWeight: FontWeight.w500)),
+            // SSL / Let's Encrypt section
+            Divider(),
+            SizedBox(height: 8),
+            Text('SSL / LET\'S ENCRYPT', style: TextStyle(fontWeight: FontWeight.bold)),
             SizedBox(height: 8),
             SwitchListTile(
               title: Text('Enable HTTPS'),
@@ -330,118 +373,50 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
               contentPadding: EdgeInsets.zero,
             ),
 
-            if (_enableSsl) ...[
-              SizedBox(height: 8),
-
-              // HTTPS Port
-              Row(
-                children: [
-                  Expanded(child: Text('HTTPS Port:')),
-                  SizedBox(
-                    width: 100,
-                    child: TextField(
-                      keyboardType: TextInputType.number,
-                      decoration: InputDecoration(
-                        border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                      ),
-                      controller: _httpsPortController,
-                      onChanged: (v) {
-                        _httpsPort = int.tryParse(v) ?? 3457;
-                        _hasChanges = true;
-                        setState(() {});
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              SizedBox(height: 16),
-
-              // Domain
-              TextField(
-                decoration: InputDecoration(
-                  labelText: 'Domain',
-                  hintText: 'e.g., station.example.com',
-                  border: OutlineInputBorder(),
-                ),
-                controller: _sslDomainController,
-                onChanged: (v) {
-                  _sslDomain = v;
+            // Auto-renew
+            SwitchListTile(
+              title: Text('Auto-renew certificate'),
+              subtitle: Text('Automatically renew before expiry'),
+              value: _sslAutoRenew,
+              onChanged: (value) {
+                setState(() {
+                  _sslAutoRenew = value;
                   _hasChanges = true;
-                  setState(() {});
-                },
-              ),
-              SizedBox(height: 12),
+                });
+              },
+              contentPadding: EdgeInsets.zero,
+            ),
+            SizedBox(height: 12),
 
-              // Email
-              TextField(
-                decoration: InputDecoration(
-                  labelText: 'Email (for Let\'s Encrypt)',
-                  hintText: 'your@email.com',
-                  border: OutlineInputBorder(),
+            // Certificate status and request button
+            Row(
+              children: [
+                ElevatedButton.icon(
+                  onPressed: _isRequestingCert ? null : _requestCertificate,
+                  icon: _isRequestingCert
+                      ? SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(Icons.security),
+                  label: Text('Request Certificate'),
                 ),
-                controller: _sslEmailController,
-                onChanged: (v) {
-                  _sslEmail = v;
-                  _hasChanges = true;
-                  setState(() {});
-                },
-              ),
-              SizedBox(height: 12),
-
-              // Auto-renew
-              SwitchListTile(
-                title: Text('Auto-renew certificate'),
-                subtitle: Text('Automatically renew before expiry'),
-                value: _sslAutoRenew,
-                onChanged: (value) {
-                  setState(() {
-                    _sslAutoRenew = value;
-                    _hasChanges = true;
-                  });
-                },
-                contentPadding: EdgeInsets.zero,
-              ),
-              SizedBox(height: 12),
-
-              // Certificate status and request button
-              if (_sslStatus != null)
-                Padding(
-                  padding: EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    _sslStatus!,
-                    style: TextStyle(
-                      color: _sslStatus!.contains('Error') ? Colors.red : Colors.green,
-                    ),
-                  ),
+                SizedBox(width: 12),
+                OutlinedButton(
+                  onPressed: _checkCertificateStatus,
+                  child: Text('Check Status'),
                 ),
-
-              Row(
-                children: [
-                  ElevatedButton.icon(
-                    onPressed: _isRequestingCert ? null : _requestCertificate,
-                    icon: _isRequestingCert
-                        ? SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Icon(Icons.security),
-                    label: Text('Request Certificate'),
-                  ),
-                  SizedBox(width: 12),
-                  OutlinedButton(
-                    onPressed: _checkCertificateStatus,
-                    child: Text('Check Status'),
-                  ),
-                ],
+              ],
+            ),
+            if (_sslDomain.isEmpty)
+              Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text(
+                  'Set a domain above before requesting',
+                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                ),
               ),
-              SizedBox(height: 8),
-              Text(
-                'Domain must be pointed to this server\'s IP address before requesting certificate',
-                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-              ),
-            ],
           ],
         ),
       ),
@@ -450,63 +425,103 @@ class _StationSettingsPageState extends State<StationSettingsPage> {
 
   Future<void> _requestCertificate() async {
     if (_sslDomain.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please enter a domain first')),
-      );
-      return;
-    }
-    if (_sslEmail.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please enter an email for Let\'s Encrypt')),
-      );
+      _showCertResult(false, 'Set a domain name first.');
       return;
     }
 
-    setState(() {
-      _isRequestingCert = true;
-      _sslStatus = 'Requesting certificate...';
-    });
+    final server = _stationNodeService.stationServer;
+    if (server == null) {
+      _showCertResult(false, 'Station server must be running.\nStart the station first.');
+      return;
+    }
+
+    // Auto-derive email from domain
+    _sslEmail = 'admin@$_sslDomain';
+
+    // Show progress dialog
+    if (!mounted) return;
+    final progressNotifier = ValueNotifier<String>('Checking domain reachability...');
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => ValueListenableBuilder<String>(
+        valueListenable: progressNotifier,
+        builder: (_, msg, __) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.lock, size: 20),
+              SizedBox(width: 8),
+              Text("Let's Encrypt", style: TextStyle(fontSize: 16)),
+            ],
+          ),
+          content: Row(
+            children: [
+              SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(width: 16),
+              Expanded(child: Text(msg, style: TextStyle(fontSize: 13))),
+            ],
+          ),
+        ),
+      ),
+    );
 
     try {
-      final server = _stationNodeService.stationServer;
-      if (server == null) {
-        throw Exception('Station server not running. Start the station first.');
-      }
+      progressNotifier.value = 'Requesting certificate for $_sslDomain...\nThis may take up to 2 minutes.';
 
-      // Update server settings before requesting
       server.settings.sslDomain = _sslDomain;
       server.settings.sslEmail = _sslEmail;
       server.settings.sslAutoRenew = _sslAutoRenew;
       await server.saveSettings();
 
-      // Create SSL manager and request certificate
       final sslManager = SslCertificateManager(server.settings, server.dataDir ?? '.');
       sslManager.setStationServer(server);
       await sslManager.initialize();
-
       final success = await sslManager.requestCertificate(staging: false);
 
-      setState(() {
-        _sslStatus = success
-            ? 'Certificate obtained successfully!'
-            : 'Certificate request failed. Check logs for details.';
-      });
+      if (mounted) Navigator.of(context).pop();
 
       if (success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('SSL Certificate obtained! Restart station to apply.')),
-        );
+        _showCertResult(true, 'SSL certificate obtained for $_sslDomain.\n\nRestart the station to use the new certificate.');
+      } else {
+        _showCertResult(false, 'Certificate request failed.\nCheck the station logs for details.');
       }
     } catch (e) {
       LogService().log('Error requesting certificate: $e');
-      setState(() {
-        _sslStatus = 'Error: $e';
-      });
-    } finally {
-      setState(() {
-        _isRequestingCert = false;
-      });
+      if (mounted) Navigator.of(context).pop();
+      _showCertResult(false, 'Certificate request failed:\n$e');
     }
+  }
+
+  void _showCertResult(bool success, String message) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              success ? Icons.check_circle : Icons.error,
+              color: success ? Colors.green : Colors.red,
+              size: 20,
+            ),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                success ? 'Certificate Ready' : 'Certificate Error',
+                style: TextStyle(fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+        content: Text(message, style: TextStyle(fontSize: 13)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _checkCertificateStatus() async {

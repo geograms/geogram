@@ -17,6 +17,7 @@ import 'package:image_picker/image_picker.dart';
 import '../models/device_definition.dart';
 import '../models/flash_progress.dart';
 import '../protocols/protocol_registry.dart';
+import '../../util/managed_http_client.dart' show streamDownloadToFile;
 import '../serial/serial_port.dart';
 import '../services/flasher_service.dart';
 
@@ -331,14 +332,17 @@ class _AddFirmwareWizardState extends State<AddFirmwareWizard> {
 
       switch (_firmwareSource) {
         case FirmwareSource.url:
-          // Download from URL
+          // Stream download to file to avoid buffering in memory
           final url = _firmwareUrlController.text.trim();
-          final response = await http.get(Uri.parse(url));
-          if (response.statusCode != 200) {
-            throw Exception('Failed to download firmware: HTTP ${response.statusCode}');
+          final result = await streamDownloadToFile(
+            Uri.parse(url),
+            destFile.path,
+            maxBytes: 100 * 1024 * 1024,
+          );
+          if (!result.success) {
+            throw Exception('Failed to download firmware');
           }
-          await destFile.writeAsBytes(response.bodyBytes);
-          firmwareSize = response.bodyBytes.length;
+          firmwareSize = result.bytesWritten;
           break;
         case FirmwareSource.file:
           // Copy local file

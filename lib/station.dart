@@ -30,6 +30,8 @@ import 'util/alert_folder_utils.dart';
 import 'util/feedback_folder_utils.dart';
 import 'util/nostr_key_generator.dart';
 import 'util/nostr_event.dart';
+import 'util/rsa_utils.dart' as rsa_utils;
+import 'util/rsa_utils.dart' show RSAPrivateKey, RSAPublicKey;
 import 'util/nostr_crypto.dart';
 import 'api/endpoints/chat_api_paths.dart';
 import 'util/chat_scripts.dart';
@@ -171,7 +173,7 @@ class PureRelaySettings implements StationSettingsReadable {
     this.networkId,
     this.parentStationUrl,
     this.setupComplete = false,
-    this.enableSsl = false,
+    this.enableSsl = true,
     this.sslDomain,
     this.sslEmail,
     this.sslAutoRenew = true,
@@ -229,7 +231,7 @@ class PureRelaySettings implements StationSettingsReadable {
       networkId: json['networkId'] as String?,
       parentStationUrl: json['parentStationUrl'] as String?,
       setupComplete: json['setupComplete'] as bool? ?? false,
-      enableSsl: json['enableSsl'] as bool? ?? false,
+      enableSsl: json['enableSsl'] as bool? ?? true,
       sslDomain: json['sslDomain'] as String?,
       sslEmail: json['sslEmail'] as String?,
       sslAutoRenew: json['sslAutoRenew'] as bool? ?? true,
@@ -1580,6 +1582,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     try {
       // Start HTTP server
+      _log('INFO', 'Binding HTTP server on port ${_settings.httpPort} (${Platform.operatingSystem})');
       _httpServer = await HttpServer.bind(
         InternetAddress.anyIPv4,
         _settings.httpPort,
@@ -1639,8 +1642,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       // Start health watchdog for auto-recovery
       startHealthWatchdog();
 
-      // Download console VM files in background
-      downloadAllConsoleVmFiles();
+      // Download console VM files in background (desktop/server only)
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        downloadAllConsoleVmFiles();
+      }
 
       // Configure email relay settings
       final emailRelay = EmailRelayService();
@@ -1690,41 +1695,60 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
       // Start HTTPS server if SSL is enabled
       if (_settings.enableSsl) {
-        // Check if we need to request certificates first
         final sslDir = _dataDir != null ? '$_dataDir/ssl' : null;
         final fullchainPath = sslDir != null ? '$sslDir/fullchain.pem' : null;
-        // Check for both privkey.pem and domain.key (SslCertificateManager uses domain.key)
         final keyPath = sslDir != null ? '$sslDir/privkey.pem' : null;
         final altKeyPath = sslDir != null ? '$sslDir/domain.key' : null;
 
         bool certsExist = false;
         if (fullchainPath != null && await File(fullchainPath).exists()) {
-          // Certificate exists, check for either key file
           if ((keyPath != null && await File(keyPath).exists()) ||
               (altKeyPath != null && await File(altKeyPath).exists())) {
             certsExist = true;
           }
         }
 
-        if (!certsExist && _settings.sslDomain != null && _settings.sslEmail != null) {
-          _log('INFO', 'SSL enabled but no certificates found. Requesting from Let\'s Encrypt...');
-          try {
-            final sslManager = SslCertificateManager(_settings, _dataDir ?? '.');
-            sslManager.setStationServer(this);
-            final success = await sslManager.requestCertificate(staging: false);
-            if (success) {
-              _log('INFO', 'SSL certificate obtained successfully');
-              // Update paths
-              _settings = _settings.copyWith(
-                sslCertPath: fullchainPath,
-                sslKeyPath: keyPath,
-              );
-              await saveSettings();
-            } else {
-              _log('ERROR', 'Failed to obtain SSL certificate');
+        if (!certsExist) {
+          if (_settings.sslDomain != null && _settings.sslDomain!.isNotEmpty) {
+            // Domain configured — try Let's Encrypt
+            final email = _settings.sslEmail ??
+                'admin@${_settings.sslDomain}';
+            _settings = _settings.copyWith(sslEmail: email);
+            _log('INFO', 'SSL enabled but no certificates found. Requesting from Let\'s Encrypt...');
+            try {
+              final sslManager = SslCertificateManager(_settings, _dataDir ?? '.');
+              sslManager.setStationServer(this);
+              final success = await sslManager.requestCertificate(staging: false);
+              if (success) {
+                _log('INFO', 'SSL certificate obtained successfully');
+                _settings = _settings.copyWith(
+                  sslCertPath: fullchainPath,
+                  sslKeyPath: keyPath,
+                );
+                await saveSettings();
+                certsExist = true;
+              } else {
+                _log('ERROR', 'Failed to obtain SSL certificate');
+              }
+            } catch (e) {
+              _log('ERROR', 'Failed to request SSL certificate: $e');
             }
-          } catch (e) {
-            _log('ERROR', 'Failed to request SSL certificate: $e');
+          }
+
+          // Still no certs — generate self-signed so HTTPS port is open
+          if (!certsExist && sslDir != null) {
+            _log('INFO', 'Generating self-signed certificate for HTTPS...');
+            try {
+              final sslManager = SslCertificateManager(_settings, _dataDir ?? '.');
+              final domain = _settings.sslDomain ?? 'localhost';
+              await sslManager.initialize();
+              final ok = await sslManager.generateSelfSigned(domain);
+              if (ok) {
+                _log('INFO', 'Self-signed certificate generated for $domain');
+              }
+            } catch (e) {
+              _log('ERROR', 'Failed to generate self-signed certificate: $e');
+            }
           }
         }
 
@@ -1749,8 +1773,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       await startKarmaService();
 
       return true;
-    } catch (e) {
-      _log('ERROR', 'Failed to start station server: $e');
+    } catch (e, st) {
+      _log('ERROR', 'Failed to start station server on port ${_settings.httpPort}: $e');
+      _log('ERROR', 'Stack trace: $st');
       return false;
     }
   }
@@ -6535,8 +6560,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     try {
       final nameParam = request.uri.queryParameters['name']?.toLowerCase();
+      final stationDomain = _settings.sslDomain ?? request.headers.host ?? 'localhost';
       final response = Nip05RegistryService()
-          .buildNostrJsonResponse(nameParam, 'wss://p2p.radio');
+          .buildNostrJsonResponse(nameParam, 'wss://$stationDomain');
       request.response.write(jsonEncode(response));
     } catch (e) {
       _log('ERROR', 'NIP-05 handler error: $e');
@@ -8363,7 +8389,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       {
         // Android QEMU archive (arm64 host, x86 guest) for native console
         'name': 'qemu-android-aarch64.tar.gz',
-        'url': 'https://p2p.radio/console/emu/qemu-android-aarch64.tar.gz',
+        'url': 'https://github.com/geograms/geogram/releases/download/console-vm/qemu-android-aarch64.tar.gz',
         'size': 128, // placeholder minimum; actual size validated after download
       },
     ];
@@ -8391,16 +8417,28 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         await file.delete();
       }
 
-      // Download file
+      // Stream download to file to avoid buffering large binaries in memory
       _log('INFO', 'Downloading console VM file: $filename');
       try {
-        final response = await http.get(Uri.parse(url)).timeout(const Duration(minutes: 5));
-        if (response.statusCode == 200) {
-          await file.writeAsBytes(response.bodyBytes);
-          downloadedCount++;
-          _log('INFO', 'Downloaded $filename successfully (${_formatBytes(response.bodyBytes.length)})');
-        } else {
-          throw Exception('HTTP ${response.statusCode}');
+        final request = http.Request('GET', Uri.parse(url));
+        final client = http.Client();
+        try {
+          final streamedResponse = await client.send(request).timeout(const Duration(minutes: 5));
+          if (streamedResponse.statusCode == 200) {
+            final sink = file.openWrite();
+            int totalBytes = 0;
+            await for (final chunk in streamedResponse.stream) {
+              sink.add(chunk);
+              totalBytes += chunk.length;
+            }
+            await sink.close();
+            downloadedCount++;
+            _log('INFO', 'Downloaded $filename successfully (${_formatBytes(totalBytes)})');
+          } else {
+            throw Exception('HTTP ${streamedResponse.statusCode}');
+          }
+        } finally {
+          client.close();
         }
       } catch (e) {
         failedCount++;
@@ -8554,10 +8592,20 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       logsRoot.createSync(recursive: true);
     }
 
-    // Crash log (single file)
-    _crashSink ??= File('${logsRoot.path}/crash.txt').openWrite(
-      mode: FileMode.append,
-    );
+    // Crash log (single file, capped at 5 MB to avoid unbounded growth)
+    if (_crashSink == null) {
+      final crashFile = File('${logsRoot.path}/crash.txt');
+      if (crashFile.existsSync() && crashFile.lengthSync() > 5 * 1024 * 1024) {
+        // Truncate by keeping only the last 1 MB
+        try {
+          final bytes = crashFile.readAsBytesSync();
+          crashFile.writeAsBytesSync(bytes.sublist(bytes.length - 1024 * 1024));
+        } catch (_) {
+          crashFile.writeAsStringSync(''); // fallback: clear it
+        }
+      }
+      _crashSink = crashFile.openWrite(mode: FileMode.append);
+    }
 
     // Daily log rotation per year/day
     final today = DateTime(now.year, now.month, now.day);
@@ -8776,14 +8824,19 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       return;
     }
 
-    _log('INFO', 'Starting update polling (interval: ${_settings.updateCheckIntervalSeconds}s)');
+    // On mobile, use longer polling interval to save memory and battery
+    final intervalSeconds = (Platform.isAndroid || Platform.isIOS)
+        ? (_settings.updateCheckIntervalSeconds < 600 ? 600 : _settings.updateCheckIntervalSeconds)
+        : _settings.updateCheckIntervalSeconds;
+
+    _log('INFO', 'Starting update polling (interval: ${intervalSeconds}s)');
 
     // Poll immediately on start
     _pollAndDownloadUpdates();
 
     // Then poll periodically
     _updatePollTimer = Timer.periodic(
-      Duration(seconds: _settings.updateCheckIntervalSeconds),
+      Duration(seconds: intervalSeconds),
       (_) => _pollAndDownloadUpdates(),
     );
   }
@@ -8848,11 +8901,11 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         _log('INFO', 'Update mirror complete: version $version (no binaries available yet)');
       }
 
-      // Also sync whisper models
-      await _downloadWhisperModels();
-
-      // Also sync Supertonic TTS models
-      await _downloadSupertonicModels();
+      // Sync AI models only on desktop/server (too heavy for Android)
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        await _downloadWhisperModels();
+        await _downloadSupertonicModels();
+      }
     } catch (e) {
       _log('ERROR', 'Error polling for updates: $e');
     } finally {
@@ -8934,19 +8987,30 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         }
       }
 
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {'User-Agent': 'Geogram-Station-Updater'},
-      ).timeout(const Duration(minutes: 10));
+      // Stream download to file to avoid buffering entire binary in memory
+      final request = http.Request('GET', Uri.parse(url))
+        ..headers['User-Agent'] = 'Geogram-Station-Updater';
+      final client = http.Client();
+      try {
+        final streamedResponse = await client.send(request).timeout(const Duration(minutes: 10));
 
-      if (response.statusCode == 200) {
-        await File(targetPath).writeAsBytes(response.bodyBytes);
-        final sizeMb = (response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1);
-        _log('INFO', 'Downloaded $filename: ${sizeMb}MB');
-        return true;
-      } else {
-        _log('ERROR', 'Failed to download $filename: ${response.statusCode}');
-        return false;
+        if (streamedResponse.statusCode == 200) {
+          final sink = File(targetPath).openWrite();
+          int totalBytes = 0;
+          await for (final chunk in streamedResponse.stream) {
+            sink.add(chunk);
+            totalBytes += chunk.length;
+          }
+          await sink.close();
+          final sizeMb = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
+          _log('INFO', 'Downloaded $filename: ${sizeMb}MB');
+          return true;
+        } else {
+          _log('ERROR', 'Failed to download $filename: ${streamedResponse.statusCode}');
+          return false;
+        }
+      } finally {
+        client.close();
       }
     } catch (e) {
       _log('ERROR', 'Error downloading $filename: $e');
@@ -9029,7 +9093,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       // Check if file exists with reasonable size
       if (await file.exists()) {
         final fileSize = await file.length();
-        if (fileSize > expectedSize * 0.9) {
+        if (fileSize > 100) {
           // File exists and is at least 90% of expected size
           _availableWhisperModels.add(filename);
           existed++;
@@ -9091,7 +9155,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
       if (await file.exists()) {
         final fileSize = await file.length();
-        if (fileSize > expectedSize * 0.9) {
+        if (fileSize > 100) {
           _availableWhisperModels.add(filename);
         }
       }
@@ -9261,11 +9325,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       final filePath = path.join(supertonicDir.path, filename);
       final file = File(filePath);
 
-      // Check if file exists with reasonable size
+      // Check if file exists with any meaningful content
       if (await file.exists()) {
         final fileSize = await file.length();
-        if (fileSize > expectedSize * 0.9) {
-          // File exists and is at least 90% of expected size
+        if (fileSize > 100) {
           _availableSupertonicModels.add(filename);
           existed++;
           continue;
@@ -9332,7 +9395,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
       if (await file.exists()) {
         final fileSize = await file.length();
-        if (fileSize > expectedSize * 0.9) {
+        if (fileSize > 100) {
           _availableSupertonicModels.add(filename);
         }
       }
@@ -9441,16 +9504,15 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 }
 
 /// SSL Certificate Manager for Let's Encrypt
+/// Pure-Dart implementation — no openssl CLI dependency (works on Android).
 class SslCertificateManager {
   PureRelaySettings _settings;
   final String _sslDir;
 
-  /// Update settings reference (called when station settings change)
   void updateSettings(PureRelaySettings newSettings) {
     _settings = newSettings;
   }
 
-  /// Get current settings
   PureRelaySettings get settings => _settings;
   Timer? _renewalTimer;
   final Map<String, String> _challengeResponses = {};
@@ -9470,34 +9532,25 @@ class SslCertificateManager {
       : _settings = settings,
         _sslDir = '$dataDir/ssl';
 
-  /// Initialize SSL directory
   Future<void> initialize() async {
     await Directory(_sslDir).create(recursive: true);
   }
 
-  /// Start auto-renewal timer (check every 12 hours)
   void startAutoRenewal() {
     if (!settings.sslAutoRenew) return;
-
     _renewalTimer?.cancel();
     _renewalTimer = Timer.periodic(const Duration(hours: 12), (_) async {
       await checkAndRenew();
     });
   }
 
-  /// Stop auto-renewal timer
   void stop() {
     _renewalTimer?.cancel();
     _renewalTimer = null;
   }
 
-  /// Check if certificate exists and is valid
-  bool hasCertificate() {
-    final certFile = File(certPath);
-    return certFile.existsSync();
-  }
+  bool hasCertificate() => File(certPath).existsSync();
 
-  /// Get certificate info
   Future<Map<String, dynamic>> getStatus() async {
     final status = <String, dynamic>{
       'domain': settings.sslDomain ?? '(not set)',
@@ -9506,34 +9559,22 @@ class SslCertificateManager {
       'autoRenew': settings.sslAutoRenew,
       'hasCertificate': hasCertificate(),
     };
-
     if (hasCertificate()) {
-      final certInfo = await _getCertificateInfo();
-      status.addAll(certInfo);
+      status.addAll(await _getCertificateInfo());
     }
-
     return status;
   }
 
-  /// Get certificate expiration info
   Future<Map<String, dynamic>> _getCertificateInfo() async {
     try {
-      // Read certificate and parse expiration
       final certFile = File(certPath);
-      if (!await certFile.exists()) {
-        return {'error': 'Certificate file not found'};
-      }
+      if (!await certFile.exists()) return {'error': 'Certificate file not found'};
 
       final certPem = await certFile.readAsString();
-
-      // Parse the certificate to extract expiration date
-      // This is a simplified check - in production you'd use proper X509 parsing
-      final expiry = _parseCertificateExpiry(certPem);
+      final expiry = rsa_utils.parseCertificateExpiry(certPem);
 
       if (expiry != null) {
-        final now = DateTime.now();
-        final daysUntilExpiry = expiry.difference(now).inDays;
-
+        final daysUntilExpiry = expiry.difference(DateTime.now()).inDays;
         return {
           'expiresAt': expiry.toIso8601String(),
           'daysUntilExpiry': daysUntilExpiry,
@@ -9541,126 +9582,96 @@ class SslCertificateManager {
           'certPath': certPath,
         };
       }
-
-      return {
-        'certPath': certPath,
-        'status': 'Certificate exists but could not parse expiry',
-      };
+      return {'certPath': certPath, 'status': 'Certificate exists but could not parse expiry'};
     } catch (e) {
       return {'error': e.toString()};
     }
   }
 
-  /// Parse certificate expiry from PEM using openssl
-  DateTime? _parseCertificateExpiry(String pemCert) {
-    try {
-      // Use -dateopt iso_8601 for unambiguous machine-readable output
-      final result = Process.runSync('openssl', [
-        'x509', '-noout', '-enddate', '-dateopt', 'iso_8601',
-        '-in', certPath,
-      ]);
-      if (result.exitCode == 0) {
-        // Output format: notAfter=2026-06-03T07:22:26Z
-        final output = (result.stdout as String).trim();
-        final match = RegExp(r'notAfter=(.+)').firstMatch(output);
-        if (match != null) {
-          return DateTime.parse(match.group(1)!.trim());
-        }
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  /// Check and renew if needed (30 days before expiry)
   Future<bool> checkAndRenew() async {
     if (!hasCertificate()) return false;
-
     final info = await _getCertificateInfo();
     final daysUntilExpiry = info['daysUntilExpiry'] as int?;
-
     if (daysUntilExpiry == null) {
       stdout.writeln('[SSL] Could not determine certificate expiry — skipping auto-renewal check');
       return true;
     }
-
     stdout.writeln('[SSL] Certificate expires in $daysUntilExpiry days');
-
     if (daysUntilExpiry <= 30) {
       stdout.writeln('[SSL] Certificate expiring soon — starting auto-renewal...');
       return await renewCertificate(staging: false);
     }
-
     return true;
   }
 
-  /// Request new certificate
   Future<bool> requestCertificate({bool staging = false}) async {
     if (settings.sslDomain == null || settings.sslDomain!.isEmpty) {
-      throw Exception('Domain not configured. Use: ssl domain <domain>');
+      throw Exception('Domain not configured');
     }
-
     if (settings.sslEmail == null || settings.sslEmail!.isEmpty) {
-      throw Exception('Email not configured. Use: ssl email <email>');
+      throw Exception('Email not configured');
     }
 
     final acmeUrl = staging ? stagingAcme : productionAcme;
 
-    try {
-      // Step 1: Generate account key if not exists
-      if (!File(accountKeyPath).existsSync()) {
-        await _generateKey(accountKeyPath);
-      }
+    // Ensure keys exist
+    await _ensureKeyExists(accountKeyPath, 2048);
+    await _ensureKeyExists(domainKeyPath, 2048);
 
-      // Step 2: Generate domain key if not exists
-      if (!File(domainKeyPath).existsSync()) {
-        await _generateKey(domainKeyPath);
-      }
-
-      // Step 3: Request certificate using ACME protocol
-      // Note: This is a simplified implementation
-      // In production, you'd use a proper ACME client library
-
-      final result = await _requestWithAcme(
-        acmeUrl: acmeUrl,
-        domain: settings.sslDomain!,
-        email: settings.sslEmail!,
-        staging: staging,
-      );
-
-      return result;
-    } catch (e) {
-      rethrow;
-    }
+    return await _requestWithAcme(
+      acmeUrl: acmeUrl,
+      domain: settings.sslDomain!,
+      email: settings.sslEmail!,
+      staging: staging,
+    );
   }
 
-  /// Renew existing certificate
   Future<bool> renewCertificate({bool staging = false}) async {
     return await requestCertificate(staging: staging);
   }
 
-  /// Generate RSA key using openssl
-  Future<void> _generateKey(String keyPath) async {
-    final result = await Process.run('openssl', [
-      'genrsa',
-      '-out', keyPath,
-      '4096',
-    ]);
+  // ---- Pure-Dart key generation (replaces openssl genrsa) ----
 
-    if (result.exitCode != 0) {
-      throw Exception('Failed to generate key: ${result.stderr}');
+  Future<void> _ensureKeyExists(String keyPath, int bits) async {
+    if (File(keyPath).existsSync()) return;
+    final pair = rsa_utils.generateRsaKeyPair(bits);
+    final pem = rsa_utils.encodePrivateKeyPem(pair.privateKey);
+    await File(keyPath).writeAsString(pem);
+  }
+
+  /// Load account private key from PEM file.
+  Future<RSAPrivateKey> _loadAccountKey() async {
+    final keyFile = File(accountKeyPath);
+    if (!await keyFile.exists()) {
+      await _ensureKeyExists(accountKeyPath, 2048);
     }
+    final pem = await keyFile.readAsString();
+    final key = rsa_utils.decodePrivateKeyPem(pem);
+    if (key == null) throw Exception('Failed to parse account key PEM');
+    return key;
+  }
+
+  /// Load domain private key from PEM file.
+  Future<RSAPrivateKey> _loadDomainKey() async {
+    final keyFile = File(domainKeyPath);
+    if (!await keyFile.exists()) {
+      await _ensureKeyExists(domainKeyPath, 2048);
+    }
+    final pem = await keyFile.readAsString();
+    final key = rsa_utils.decodePrivateKeyPem(pem);
+    if (key == null) throw Exception('Failed to parse domain key PEM');
+    return key;
   }
 
   // Reference to station server for challenge handling
   PureStationServer? _stationServer;
 
-  /// Set station server reference for ACME challenge handling
   void setStationServer(PureStationServer server) {
     _stationServer = server;
   }
 
-  /// Request certificate using native ACME protocol implementation
-  /// Works on all platforms (Linux, Windows, macOS, Android)
+  // ---- ACME protocol (pure Dart, no openssl) ----
+
   Future<bool> _requestWithAcme({
     required String acmeUrl,
     required String domain,
@@ -9674,62 +9685,45 @@ class SslCertificateManager {
     stdout.writeln('');
 
     try {
-      // Step 1: Get ACME directory
       stdout.writeln('[1/7] Fetching ACME directory...');
       final directory = await _fetchAcmeDirectory(acmeUrl);
 
-      // Step 2: Generate or load account key
       stdout.writeln('[2/7] Loading/generating account key...');
-      final accountKey = await _loadOrGenerateAccountKey();
+      final accountKey = await _loadAccountKey();
+      final accountPub = rsa_utils.publicKeyFromPrivate(accountKey);
 
-      // Step 3: Create/fetch ACME account
       stdout.writeln('[3/7] Creating ACME account...');
       final accountUrl = await _createAcmeAccount(
-        directory: directory,
-        accountKey: accountKey,
-        email: email,
+        directory: directory, accountKey: accountKey,
+        accountPub: accountPub, email: email,
       );
 
-      // Step 4: Create new order
       stdout.writeln('[4/7] Creating certificate order...');
       final order = await _createOrder(
-        directory: directory,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        domain: domain,
+        directory: directory, accountKey: accountKey,
+        accountUrl: accountUrl, domain: domain,
       );
 
-      // Step 5: Complete HTTP-01 challenges
       stdout.writeln('[5/7] Completing HTTP-01 challenge...');
       await _completeHttpChallenge(
-        directory: directory,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        order: order,
-        domain: domain,
+        directory: directory, accountKey: accountKey,
+        accountPub: accountPub, accountUrl: accountUrl,
+        order: order, domain: domain,
       );
 
-      // Step 6: Finalize order with CSR
       stdout.writeln('[6/7] Finalizing order...');
       await _finalizeOrder(
-        directory: directory,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        order: order,
-        domain: domain,
+        directory: directory, accountKey: accountKey,
+        accountUrl: accountUrl, order: order, domain: domain,
       );
 
-      // Step 7: Download certificate
       stdout.writeln('[7/7] Downloading certificate...');
       await _downloadCertificate(
-        directory: directory,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        order: order,
+        directory: directory, accountKey: accountKey,
+        accountUrl: accountUrl, order: order,
       );
 
-      stdout.writeln('');
-      stdout.writeln('Certificate successfully obtained!');
+      stdout.writeln('\nCertificate successfully obtained!');
       return true;
     } catch (e) {
       stdout.writeln('ACME request failed: $e');
@@ -9737,7 +9731,6 @@ class SslCertificateManager {
     }
   }
 
-  /// Fetch ACME directory
   Future<Map<String, dynamic>> _fetchAcmeDirectory(String url) async {
     final response = await http.get(Uri.parse(url));
     if (response.statusCode != 200) {
@@ -9746,76 +9739,40 @@ class SslCertificateManager {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
-  /// Load existing account key or generate new one
-  Future<Map<String, dynamic>> _loadOrGenerateAccountKey() async {
-    final keyFile = File(accountKeyPath);
-
-    if (await keyFile.exists()) {
-      // Parse existing PEM key
-      final pem = await keyFile.readAsString();
-      return _parsePrivateKeyPem(pem);
-    }
-
-    // Generate new key using openssl (more reliable cross-platform)
-    await _generateKey(accountKeyPath);
-    final pem = await keyFile.readAsString();
-    return _parsePrivateKeyPem(pem);
-  }
-
-  /// Parse PEM private key and extract components for JWK
-  Map<String, dynamic> _parsePrivateKeyPem(String pem) {
-    // For ACME, we need the key in a format we can use for JWS signing
-    // We'll use openssl to extract the public key components
-    return {
-      'pem': pem,
-      'path': accountKeyPath,
-    };
-  }
-
-  /// Create ACME account
   Future<String> _createAcmeAccount({
     required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
+    required RSAPrivateKey accountKey,
+    required RSAPublicKey accountPub,
     required String email,
   }) async {
     final newAccountUrl = directory['newAccount'] as String;
     final newNonceUrl = directory['newNonce'] as String;
 
-    // Get initial nonce
     final nonceResponse = await http.head(Uri.parse(newNonceUrl));
-    var nonce = nonceResponse.headers['replay-nonce'] ?? '';
+    final nonce = nonceResponse.headers['replay-nonce'] ?? '';
 
-    // Create account request
     final payload = {
       'termsOfServiceAgreed': true,
       'contact': ['mailto:$email'],
     };
 
     final response = await _signedAcmeRequest(
-      url: newAccountUrl,
-      payload: payload,
-      accountKey: accountKey,
-      nonce: nonce,
-      useJwk: true,
+      url: newAccountUrl, payload: payload, accountKey: accountKey,
+      accountPub: accountPub, nonce: nonce, useJwk: true,
     );
 
     if (response.statusCode != 200 && response.statusCode != 201) {
       throw Exception('Failed to create ACME account: ${response.statusCode} ${response.body}');
     }
 
-    // Account URL is in Location header
     final accountUrl = response.headers['location'];
-    if (accountUrl == null) {
-      throw Exception('No account URL in response');
-    }
-
+    if (accountUrl == null) throw Exception('No account URL in response');
     return accountUrl;
   }
 
-  /// Create new certificate order
   Future<Map<String, dynamic>> _createOrder({
     required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
+    required RSAPrivateKey accountKey,
     required String accountUrl,
     required String domain,
   }) async {
@@ -9823,20 +9780,15 @@ class SslCertificateManager {
     final newNonceUrl = directory['newNonce'] as String;
 
     final nonceResponse = await http.head(Uri.parse(newNonceUrl));
-    var nonce = nonceResponse.headers['replay-nonce'] ?? '';
+    final nonce = nonceResponse.headers['replay-nonce'] ?? '';
 
     final payload = {
-      'identifiers': [
-        {'type': 'dns', 'value': domain}
-      ],
+      'identifiers': [{'type': 'dns', 'value': domain}],
     };
 
     final response = await _signedAcmeRequest(
-      url: newOrderUrl,
-      payload: payload,
-      accountKey: accountKey,
-      accountUrl: accountUrl,
-      nonce: nonce,
+      url: newOrderUrl, payload: payload, accountKey: accountKey,
+      accountUrl: accountUrl, nonce: nonce,
     );
 
     if (response.statusCode != 201) {
@@ -9848,10 +9800,10 @@ class SslCertificateManager {
     return order;
   }
 
-  /// Complete HTTP-01 challenge
   Future<void> _completeHttpChallenge({
     required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
+    required RSAPrivateKey accountKey,
+    required RSAPublicKey accountPub,
     required String accountUrl,
     required Map<String, dynamic> order,
     required String domain,
@@ -9860,38 +9812,29 @@ class SslCertificateManager {
     final newNonceUrl = directory['newNonce'] as String;
 
     for (final authzUrl in authorizations) {
-      // Fetch authorization
       var nonceResponse = await http.head(Uri.parse(newNonceUrl));
       var nonce = nonceResponse.headers['replay-nonce'] ?? '';
 
       final authzResponse = await _signedAcmeRequest(
-        url: authzUrl as String,
-        payload: null, // POST-as-GET
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        nonce: nonce,
+        url: authzUrl as String, payload: null,
+        accountKey: accountKey, accountUrl: accountUrl, nonce: nonce,
       );
 
       final authz = jsonDecode(authzResponse.body) as Map<String, dynamic>;
       final challenges = authz['challenges'] as List;
 
-      // Find HTTP-01 challenge
       final http01 = challenges.firstWhere(
-        (c) => c['type'] == 'http-01',
-        orElse: () => null,
+        (c) => c['type'] == 'http-01', orElse: () => null,
       );
-
-      if (http01 == null) {
-        throw Exception('No HTTP-01 challenge available');
-      }
+      if (http01 == null) throw Exception('No HTTP-01 challenge available');
 
       final token = http01['token'] as String;
       final challengeUrl = http01['url'] as String;
 
-      // Compute key authorization
-      final keyAuthz = await _computeKeyAuthorization(token, accountKey);
+      // Pure-Dart key authorization: token.thumbprint
+      final thumbprint = rsa_utils.computeJwkThumbprint(accountPub);
+      final keyAuthz = '$token.$thumbprint';
 
-      // Set challenge response on station server
       if (_stationServer != null) {
         _stationServer!.setAcmeChallenge(token, keyAuthz);
         stdout.writeln('  Challenge token set: $token');
@@ -9899,23 +9842,17 @@ class SslCertificateManager {
         throw Exception('Station server not available for challenge');
       }
 
-      // Tell ACME server to verify
       nonceResponse = await http.head(Uri.parse(newNonceUrl));
       nonce = nonceResponse.headers['replay-nonce'] ?? '';
 
       final challengeResponse = await _signedAcmeRequest(
-        url: challengeUrl,
-        payload: {},
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        nonce: nonce,
+        url: challengeUrl, payload: {},
+        accountKey: accountKey, accountUrl: accountUrl, nonce: nonce,
       );
-
       if (challengeResponse.statusCode != 200) {
         throw Exception('Challenge request failed: ${challengeResponse.statusCode}');
       }
 
-      // Poll for completion
       stdout.writeln('  Waiting for challenge verification...');
       for (var i = 0; i < 30; i++) {
         await Future.delayed(const Duration(seconds: 2));
@@ -9924,11 +9861,8 @@ class SslCertificateManager {
         nonce = nonceResponse.headers['replay-nonce'] ?? '';
 
         final statusResponse = await _signedAcmeRequest(
-          url: authzUrl as String,
-          payload: null,
-          accountKey: accountKey,
-          accountUrl: accountUrl,
-          nonce: nonce,
+          url: authzUrl as String, payload: null,
+          accountKey: accountKey, accountUrl: accountUrl, nonce: nonce,
         );
 
         final status = jsonDecode(statusResponse.body) as Map<String, dynamic>;
@@ -9943,65 +9877,13 @@ class SslCertificateManager {
         stdout.write('.');
       }
 
-      // Cleanup challenge
       _stationServer?.clearAcmeChallenge(token);
     }
   }
 
-  /// Compute key authorization for challenge
-  Future<String> _computeKeyAuthorization(String token, Map<String, dynamic> accountKey) async {
-    // Key authorization = token.thumbprint
-    // For now, use a simplified approach with openssl
-    final thumbprint = await _computeJwkThumbprint(accountKey);
-    return '$token.$thumbprint';
-  }
-
-  /// Compute JWK thumbprint (SHA-256 of canonical JWK)
-  Future<String> _computeJwkThumbprint(Map<String, dynamic> accountKey) async {
-    // Extract public key components using openssl
-    final keyPath = accountKey['path'] as String;
-
-    // Get modulus (n) and exponent (e)
-    final nResult = await Process.run('openssl', [
-      'rsa', '-in', keyPath, '-noout', '-modulus'
-    ]);
-    final eResult = await Process.run('openssl', [
-      'rsa', '-in', keyPath, '-noout', '-text'
-    ]);
-
-    if (nResult.exitCode != 0) {
-      throw Exception('Failed to extract key modulus');
-    }
-
-    // Parse modulus
-    final modulusHex = (nResult.stdout as String).split('=')[1].trim();
-    final modulusBytes = _hexToBytes(modulusHex);
-    final n = base64Url.encode(modulusBytes).replaceAll('=', '');
-
-    // Public exponent is typically 65537 (0x010001)
-    final e = base64Url.encode([1, 0, 1]).replaceAll('=', '');
-
-    // Canonical JWK for thumbprint
-    final jwk = '{"e":"$e","kty":"RSA","n":"$n"}';
-
-    // SHA-256 hash
-    final hashResult = await Process.run('sh', ['-c', 'echo -n \'$jwk\' | openssl dgst -sha256 -binary | base64 | tr -d "=" | tr "/+" "_-"']);
-
-    return (hashResult.stdout as String).trim();
-  }
-
-  List<int> _hexToBytes(String hex) {
-    final result = <int>[];
-    for (var i = 0; i < hex.length; i += 2) {
-      result.add(int.parse(hex.substring(i, i + 2), radix: 16));
-    }
-    return result;
-  }
-
-  /// Finalize order with CSR
   Future<void> _finalizeOrder({
     required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
+    required RSAPrivateKey accountKey,
     required String accountUrl,
     required Map<String, dynamic> order,
     required String domain,
@@ -10009,50 +9891,29 @@ class SslCertificateManager {
     final finalizeUrl = order['finalize'] as String;
     final newNonceUrl = directory['newNonce'] as String;
 
-    // Generate domain key if needed
-    if (!File(domainKeyPath).existsSync()) {
-      await _generateKey(domainKeyPath);
-    }
+    // Load or generate domain key
+    final domainKey = await _loadDomainKey();
+    final domainPub = rsa_utils.publicKeyFromPrivate(domainKey);
 
-    // Generate CSR in DER format directly
-    final csrDerPath = '$_sslDir/domain.csr.der';
-    final csrResult = await Process.run('openssl', [
-      'req', '-new',
-      '-key', domainKeyPath,
-      '-outform', 'DER',
-      '-out', csrDerPath,
-      '-subj', '/CN=$domain',
-    ]);
-
-    if (csrResult.exitCode != 0) {
-      throw Exception('Failed to generate CSR: ${csrResult.stderr}');
-    }
-
-    // Read CSR binary file and encode as base64url
-    final csrDer = await File(csrDerPath).readAsBytes();
+    // Generate CSR in pure Dart
+    final csrDer = rsa_utils.generateCsrDer(domainKey, domainPub, domain);
     final csrB64 = base64Url.encode(csrDer).replaceAll('=', '');
 
-    // Finalize
     final nonceResponse = await http.head(Uri.parse(newNonceUrl));
     final nonce = nonceResponse.headers['replay-nonce'] ?? '';
 
     final response = await _signedAcmeRequest(
-      url: finalizeUrl,
-      payload: {'csr': csrB64},
-      accountKey: accountKey,
-      accountUrl: accountUrl,
-      nonce: nonce,
+      url: finalizeUrl, payload: {'csr': csrB64},
+      accountKey: accountKey, accountUrl: accountUrl, nonce: nonce,
     );
 
     if (response.statusCode != 200) {
       throw Exception('Failed to finalize order: ${response.statusCode} ${response.body}');
     }
 
-    // Update order with response
     final updatedOrder = jsonDecode(response.body) as Map<String, dynamic>;
     order.addAll(updatedOrder);
 
-    // Poll for ready status
     stdout.writeln('  Waiting for certificate issuance...');
     final orderUrl = order['url'] as String;
 
@@ -10063,11 +9924,8 @@ class SslCertificateManager {
       final checkNonce = checkNonceResponse.headers['replay-nonce'] ?? '';
 
       final statusResponse = await _signedAcmeRequest(
-        url: orderUrl,
-        payload: null,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        nonce: checkNonce,
+        url: orderUrl, payload: null,
+        accountKey: accountKey, accountUrl: accountUrl, nonce: checkNonce,
       );
 
       final status = jsonDecode(statusResponse.body) as Map<String, dynamic>;
@@ -10081,32 +9939,25 @@ class SslCertificateManager {
         throw Exception('Order became invalid');
       }
     }
-
     throw Exception('Timeout waiting for certificate');
   }
 
-  /// Download certificate
   Future<void> _downloadCertificate({
     required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
+    required RSAPrivateKey accountKey,
     required String accountUrl,
     required Map<String, dynamic> order,
   }) async {
     final certUrl = order['certificate'] as String?;
-    if (certUrl == null) {
-      throw Exception('No certificate URL in order');
-    }
+    if (certUrl == null) throw Exception('No certificate URL in order');
 
     final newNonceUrl = directory['newNonce'] as String;
     final nonceResponse = await http.head(Uri.parse(newNonceUrl));
     final nonce = nonceResponse.headers['replay-nonce'] ?? '';
 
     final response = await _signedAcmeRequest(
-      url: certUrl,
-      payload: null,
-      accountKey: accountKey,
-      accountUrl: accountUrl,
-      nonce: nonce,
+      url: certUrl, payload: null,
+      accountKey: accountKey, accountUrl: accountUrl, nonce: nonce,
       accept: 'application/pem-certificate-chain',
     );
 
@@ -10114,27 +9965,24 @@ class SslCertificateManager {
       throw Exception('Failed to download certificate: ${response.statusCode}');
     }
 
-    // Save certificate chain
     final certChain = response.body;
     await File(fullChainPath).writeAsString(certChain);
     await File(certPath).writeAsString(certChain);
-
     stdout.writeln('  Certificate saved to: $fullChainPath');
   }
 
-  /// Make signed ACME request using external openssl
+  // ---- Pure-Dart ACME signing (replaces openssl dgst -sign) ----
+
   Future<http.Response> _signedAcmeRequest({
     required String url,
     required dynamic payload,
-    required Map<String, dynamic> accountKey,
+    required RSAPrivateKey accountKey,
     required String nonce,
     String? accountUrl,
+    RSAPublicKey? accountPub,
     bool useJwk = false,
     String accept = 'application/json',
   }) async {
-    final keyPath = accountKey['path'] as String;
-
-    // Create protected header
     final protected = <String, dynamic>{
       'alg': 'RS256',
       'nonce': nonce,
@@ -10142,35 +9990,29 @@ class SslCertificateManager {
     };
 
     if (useJwk) {
-      // For new account, include JWK
-      protected['jwk'] = await _getJwk(keyPath);
+      final pub = accountPub ?? rsa_utils.publicKeyFromPrivate(accountKey);
+      protected['jwk'] = rsa_utils.rsaPublicKeyToJwk(pub);
     } else {
-      // For other requests, use kid
       protected['kid'] = accountUrl;
     }
 
-    final protectedB64 = base64Url.encode(utf8.encode(jsonEncode(protected))).replaceAll('=', '');
+    final protectedB64 = base64Url
+        .encode(utf8.encode(jsonEncode(protected)))
+        .replaceAll('=', '');
 
-    // Encode payload
     String payloadB64;
     if (payload == null) {
-      payloadB64 = ''; // POST-as-GET
+      payloadB64 = '';
     } else {
-      payloadB64 = base64Url.encode(utf8.encode(jsonEncode(payload))).replaceAll('=', '');
+      payloadB64 = base64Url
+          .encode(utf8.encode(jsonEncode(payload)))
+          .replaceAll('=', '');
     }
 
-    // Sign with openssl
     final signingInput = '$protectedB64.$payloadB64';
-    final signResult = await Process.run('sh', [
-      '-c',
-      'echo -n "$signingInput" | openssl dgst -sha256 -sign "$keyPath" | base64 | tr -d "\\n" | tr "/+" "_-" | tr -d "="'
-    ]);
-
-    if (signResult.exitCode != 0) {
-      throw Exception('Failed to sign request: ${signResult.stderr}');
-    }
-
-    final signature = (signResult.stdout as String).trim();
+    final sigBytes =
+        rsa_utils.rsaSign(utf8.encode(signingInput), accountKey);
+    final signature = base64Url.encode(sigBytes).replaceAll('=', '');
 
     final body = jsonEncode({
       'protected': protectedB64,
@@ -10188,77 +10030,33 @@ class SslCertificateManager {
     );
   }
 
-  /// Get JWK from key file
-  Future<Map<String, dynamic>> _getJwk(String keyPath) async {
-    // Extract public key components
-    final nResult = await Process.run('openssl', [
-      'rsa', '-in', keyPath, '-noout', '-modulus'
-    ]);
+  // ---- Challenge response storage ----
 
-    if (nResult.exitCode != 0) {
-      throw Exception('Failed to extract modulus');
-    }
+  String? getChallengeResponse(String token) => _challengeResponses[token];
 
-    final modulusHex = (nResult.stdout as String).split('=')[1].trim();
-    final modulusBytes = _hexToBytes(modulusHex);
-    final n = base64Url.encode(modulusBytes).replaceAll('=', '');
-
-    // Public exponent (65537)
-    final e = base64Url.encode([1, 0, 1]).replaceAll('=', '');
-
-    return {
-      'kty': 'RSA',
-      'n': n,
-      'e': e,
-    };
-  }
-
-  /// Get challenge response for ACME HTTP-01 validation
-  String? getChallengeResponse(String token) {
-    return _challengeResponses[token];
-  }
-
-  /// Set challenge response for ACME HTTP-01 validation
   void setChallengeResponse(String token, String response) {
     _challengeResponses[token] = response;
   }
 
-  /// Clear challenge response
   void clearChallengeResponse(String token) {
     _challengeResponses.remove(token);
   }
 
-  /// Generate self-signed certificate for testing
+  // ---- Self-signed certificate (pure Dart) ----
+
   Future<bool> generateSelfSigned(String domain) async {
     try {
-      // Generate private key
-      var result = await Process.run('openssl', [
-        'genrsa',
-        '-out', domainKeyPath,
-        '2048',
-      ]);
+      final pair = rsa_utils.generateRsaKeyPair(2048);
+      // Save private key
+      final keyPem = rsa_utils.encodePrivateKeyPem(pair.privateKey);
+      await File(domainKeyPath).writeAsString(keyPem);
 
-      if (result.exitCode != 0) {
-        throw Exception('Failed to generate key: ${result.stderr}');
-      }
-
-      // Generate self-signed certificate
-      result = await Process.run('openssl', [
-        'req',
-        '-new',
-        '-x509',
-        '-key', domainKeyPath,
-        '-out', certPath,
-        '-days', '365',
-        '-subj', '/CN=$domain/O=Geogram/C=XX',
-      ]);
-
-      if (result.exitCode != 0) {
-        throw Exception('Failed to generate certificate: ${result.stderr}');
-      }
-
-      // Copy to fullchain
-      await File(certPath).copy(fullChainPath);
+      // Generate self-signed cert
+      final certDer = rsa_utils.generateSelfSignedCertDer(
+          pair.privateKey, pair.publicKey, domain);
+      final certPem = rsa_utils.encodeCertPem(certDer);
+      await File(certPath).writeAsString(certPem);
+      await File(fullChainPath).writeAsString(certPem);
 
       return true;
     } catch (e) {

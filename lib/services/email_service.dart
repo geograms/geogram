@@ -595,7 +595,7 @@ class EmailService {
     final preferredStation = StationService().getPreferredStation()?.name;
     final station = sourceThread.station.isNotEmpty
         ? sourceThread.station
-        : (preferredStation ?? 'p2p.radio');
+        : (preferredStation ?? 'localhost');
     final localAddress =
         '${ProfileService().getProfile().callsign.toLowerCase()}@$station';
 
@@ -1565,7 +1565,7 @@ class EmailService {
         final profile = ProfileService().getProfile();
         final stationService = StationService();
         final preferredStation = stationService.getPreferredStation();
-        final station = preferredStation?.name ?? 'p2p.radio';
+        final station = preferredStation?.name ?? 'localhost';
 
         thread = EmailThread(
           station: station,

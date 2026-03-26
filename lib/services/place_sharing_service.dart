@@ -33,8 +33,8 @@ class PlaceSharingService {
       return [preferredStation.url];
     }
 
-    LogService().log('PlaceSharingService: No preferred station, using default wss://p2p.radio');
-    return ['wss://p2p.radio'];
+    LogService().log('PlaceSharingService: No preferred station configured');
+    return [];
   }
 
   /// Check if any configured relay is reachable

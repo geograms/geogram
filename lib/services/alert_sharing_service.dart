@@ -365,9 +365,9 @@ class AlertSharingService {
       return [preferredStation.url];
     }
 
-    // Fall back to default station
-    LogService().log('AlertSharingService: No preferred station, using default wss://p2p.radio');
-    return ['wss://p2p.radio'];
+    // No preferred station configured
+    LogService().log('AlertSharingService: No preferred station configured');
+    return [];
   }
 
   /// Update station share status in a report

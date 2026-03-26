@@ -643,6 +643,12 @@ void main() async {
         LogService().log('Peer discovery API disabled by security settings');
       }
 
+      // Auto-start station server if profile is station type
+      if (ProfileService().getProfile().isRelay) {
+        LogService().log('Station profile detected — initializing StationNodeService...');
+        await StationNodeService().initialize();
+      }
+
       // Check if first launch is complete (user has seen onboarding screen)
       final firstLaunchComplete =
           ConfigService().getNestedValue('firstLaunchComplete', false) as bool;
@@ -1197,9 +1203,10 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
         stationName = preferred.name;
         stationCallsign = preferred.callsign;
       } else {
-        stationUrl = 'wss://p2p.radio';
-        stationName = 'P2P Radio';
-        stationCallsign = 'p2p_radio';
+        // No preferred station configured — skip station connection
+        stationUrl = '';
+        stationName = '';
+        stationCallsign = '';
       }
 
       // Convert WebSocket URL to HTTP URL for API calls
@@ -1766,11 +1773,11 @@ class _HomePageState extends State<HomePage> {
       stationCallsign = preferred.callsign;
       print('HomePage: Using preferred station: $stationName');
     } else {
-      // Use default P2P Radio station
-      stationUrl = 'wss://p2p.radio';
-      stationName = 'P2P Radio';
-      stationCallsign = 'p2p_radio';
-      print('HomePage: No preferred station, using default P2P Radio');
+      // No preferred station configured — skip station connection
+      stationUrl = '';
+      stationName = '';
+      stationCallsign = '';
+      print('HomePage: No preferred station configured');
     }
 
     // Convert WebSocket URL to HTTP URL for API calls (same as UI does)

@@ -54,6 +54,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### App Metadata Parsing
 - [AppJsUtils.parseAppJsContent](#appjsutilsparseappjscontent) - Extract JSON from `window.APP_DATA = {...};` JavaScript format
 
+### Cryptography
+- [RsaUtils](#rsautils) - Pure-Dart RSA key generation, PEM encode/decode, DER encoding, RSA-SHA256 signing, CSR generation, X.509 cert parsing, JWK thumbprint — works on all platforms including Android (`lib/util/rsa_utils.dart`)
+
 ### Cross-Platform Patterns
 - [Platform-Adaptive WebView](#platform-adaptive-webview) - Render local HTML with JS on all platforms
 - [URL-Linkified SelectableText](#url-linkified-selectabletext) - Make URLs clickable in text widgets

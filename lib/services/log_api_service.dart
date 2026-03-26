@@ -12,6 +12,7 @@ import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'hotspot_portal_service.dart';
+import '../util/managed_http_client.dart' show streamDownloadToFile;
 import 'log_service.dart';
 import 'config_service.dart';
 import 'profile_service.dart';
@@ -712,7 +713,7 @@ class LogApiService with ChatModificationMixin {
     }
 
     // Blog HTML rendering endpoint: /blog/{filename}.html or /{identifier}/blog/{filename}.html
-    // Direct access (local device) or via p2p.radio proxy
+    // Direct access (local device) or via station proxy
     if ((urlPath.startsWith('blog/') || urlPath.contains('/blog/')) && urlPath.endsWith('.html')) {
       return await _handleBlogHtmlRequest(request, urlPath, headers);
     }
@@ -10150,8 +10151,8 @@ class LogApiService with ChatModificationMixin {
             );
           }
 
-          // Generate p2p.radio URL
-          final url = 'https://p2p.radio/${nickname.toLowerCase()}/blog/${post.id}.html';
+          // Generate blog URL (relative — station domain prepended by client)
+          final url = '/${nickname.toLowerCase()}/blog/${post.id}.html';
 
           LogService().log('LogApiService: Created test blog post: ${post.id}');
 
@@ -10213,7 +10214,7 @@ class LogApiService with ChatModificationMixin {
                 'status': p.isPublished ? 'published' : 'draft',
                 'tags': p.tags,
                 'timestamp': p.timestamp,
-                'url': 'https://p2p.radio/${nickname.toLowerCase()}/blog/${p.id}.html',
+                'url': '/${nickname.toLowerCase()}/blog/${p.id}.html',
               }).toList(),
               'total': posts.length,
             }),
@@ -10310,7 +10311,7 @@ class LogApiService with ChatModificationMixin {
             );
           }
 
-          final url = 'https://p2p.radio/${nickname.toLowerCase()}/blog/${post.id}.html';
+          final url = '/${nickname.toLowerCase()}/blog/${post.id}.html';
 
           return shelf.Response.ok(
             jsonEncode({
@@ -11071,7 +11072,7 @@ class LogApiService with ChatModificationMixin {
               body: jsonEncode({
                 'error': 'Missing remote_url',
                 'usage':
-                    '{"action":"transfer_http_download","remote_url":"http://p2p.radio/file.bin","local_path":"/tmp/file.bin"}',
+                    '{"action":"transfer_http_download","remote_url":"http://example.com/file.bin","local_path":"/tmp/file.bin"}',
               }),
               headers: headers,
             );
@@ -13007,17 +13008,20 @@ class LogApiService with ChatModificationMixin {
           final photoPath = '${imagesDir.path}/$sequentialPhotoName';
 
           if (imageUrl != null && imageUrl.isNotEmpty) {
-            // Download image from URL
+            // Stream download to file to avoid buffering large images in memory
             try {
-              final response = await http.get(Uri.parse(imageUrl));
-              if (response.statusCode == 200) {
-                await io.File(photoPath).writeAsBytes(response.bodyBytes);
+              final result = await streamDownloadToFile(
+                Uri.parse(imageUrl),
+                photoPath,
+                maxBytes: 50 * 1024 * 1024,
+              );
+              if (result.success) {
                 LogService().log('LogApiService: Downloaded photo from $imageUrl to $photoPath');
               } else {
                 return shelf.Response.internalServerError(
                   body: jsonEncode({
                     'success': false,
-                    'error': 'Failed to download image: HTTP ${response.statusCode}',
+                    'error': 'Failed to download image',
                   }),
                   headers: headers,
                 );
@@ -17039,7 +17043,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           final profile = ProfileService().getProfile();
           final stationService = StationService();
           final preferredStation = stationService.getPreferredStation();
-          final stationDomain = station ?? preferredStation?.name ?? 'p2p.radio';
+          final stationDomain = station ?? preferredStation?.name ?? 'localhost';
           final fromEmail = '${profile.callsign.toLowerCase()}@$stationDomain';
 
           final toList = to.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
@@ -17118,7 +17122,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           final profile = ProfileService().getProfile();
           final stationService = StationService();
           final preferredStation = stationService.getPreferredStation();
-          final stationDomain = station ?? preferredStation?.name ?? 'p2p.radio';
+          final stationDomain = station ?? preferredStation?.name ?? 'localhost';
           final fromEmail = '${profile.callsign.toLowerCase()}@$stationDomain';
 
           final toList = to.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
@@ -17293,7 +17297,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           final profile = ProfileService().getProfile();
           final stationService = StationService();
           final preferredStation = stationService.getPreferredStation();
-          final stationDomain = station ?? preferredStation?.name ?? 'p2p.radio';
+          final stationDomain = station ?? preferredStation?.name ?? 'localhost';
           final fromEmail = '${profile.callsign.toLowerCase()}@$stationDomain';
 
           final toList = to

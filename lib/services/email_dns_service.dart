@@ -11,9 +11,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
-import 'dart:typed_data';
-import 'package:pointycastle/export.dart';
+import '../util/rsa_utils.dart' as rsa_utils;
 
 /// Result of a single DNS check
 class DnsCheckResult {
@@ -108,42 +106,18 @@ class DkimKeyPair {
 
 /// DKIM RSA key generator
 ///
-/// Generates 2048-bit RSA key pairs for DKIM email signing.
-/// Uses pointycastle for RSA key generation.
+/// Generates RSA key pairs for DKIM email signing.
+/// Delegates to shared rsa_utils for crypto operations.
 class DkimKeyGenerator {
-  static final _secureRandom = SecureRandom('Fortuna')
-    ..seed(KeyParameter(
-      Uint8List.fromList(List.generate(32, (_) => Random.secure().nextInt(256))),
-    ));
-
   /// Generate a new DKIM RSA key pair
   ///
   /// [bitLength] - Key size: 1024 (compatible) or 2048 (more secure, but longer)
   ///               Default is 1024 for maximum DNS provider compatibility.
-  ///
-  /// Returns [DkimKeyPair] containing:
-  /// - privateKeyPem: RSA private key in PEM format for storage
-  /// - publicKeyBase64: Public key in base64 for DNS TXT record
-  /// - dnsRecord: Complete DKIM DNS record value
   static DkimKeyPair generate({int bitLength = 1024}) {
-    // Generate RSA key pair (1024-bit for DNS compatibility, 2048-bit for security)
-    final keyParams = RSAKeyGeneratorParameters(BigInt.from(65537), bitLength, 64);
-    final params = ParametersWithRandom(keyParams, _secureRandom);
-
-    final keyGenerator = RSAKeyGenerator()..init(params);
-    final keyPair = keyGenerator.generateKeyPair();
-
-    final publicKey = keyPair.publicKey as RSAPublicKey;
-    final privateKey = keyPair.privateKey as RSAPrivateKey;
-
-    // Encode private key to PEM format
-    final privateKeyPem = _encodePrivateKeyPem(privateKey);
-
-    // Encode public key to base64 for DNS record
-    final publicKeyBytes = _encodePublicKeyDer(publicKey);
+    final keyPair = rsa_utils.generateRsaKeyPair(bitLength);
+    final privateKeyPem = rsa_utils.encodePrivateKeyPem(keyPair.privateKey);
+    final publicKeyBytes = rsa_utils.encodePublicKeyDer(keyPair.publicKey);
     final publicKeyBase64 = base64.encode(publicKeyBytes);
-
-    // Create DNS record value
     final dnsRecord = 'v=DKIM1; k=rsa; p=$publicKeyBase64';
 
     return DkimKeyPair(
@@ -156,294 +130,15 @@ class DkimKeyGenerator {
   /// Derive public key from existing private key PEM
   static String? derivePublicKeyBase64(String privateKeyPem) {
     try {
-      final keyData = _decodePrivateKeyPem(privateKeyPem);
-      if (keyData == null) return null;
-
-      final publicKeyBytes = _encodePublicKeyDer(
-        RSAPublicKey(keyData.modulus, keyData.publicExponent),
-      );
+      final key = rsa_utils.decodePrivateKeyPem(privateKeyPem);
+      if (key == null) return null;
+      final pub = rsa_utils.publicKeyFromPrivate(key);
+      final publicKeyBytes = rsa_utils.encodePublicKeyDer(pub);
       return base64.encode(publicKeyBytes);
     } catch (_) {
       return null;
     }
   }
-
-  /// Encode RSA private key to PEM format
-  static String _encodePrivateKeyPem(RSAPrivateKey key) {
-    final bytes = _encodePrivateKeyDer(key);
-    final base64Str = base64.encode(bytes);
-
-    // Split into 64-character lines
-    final lines = <String>[];
-    for (var i = 0; i < base64Str.length; i += 64) {
-      final end = (i + 64 < base64Str.length) ? i + 64 : base64Str.length;
-      lines.add(base64Str.substring(i, end));
-    }
-
-    return '-----BEGIN RSA PRIVATE KEY-----\n${lines.join('\n')}\n-----END RSA PRIVATE KEY-----';
-  }
-
-  /// Encode RSA private key to DER format (PKCS#1)
-  static Uint8List _encodePrivateKeyDer(RSAPrivateKey key) {
-    final sequence = _DerSequence();
-    sequence.addInteger(BigInt.zero); // version
-    sequence.addInteger(key.modulus!);
-    sequence.addInteger(key.publicExponent!);
-    sequence.addInteger(key.privateExponent!);
-    sequence.addInteger(key.p!);
-    sequence.addInteger(key.q!);
-    sequence.addInteger(key.privateExponent! % (key.p! - BigInt.one)); // d mod (p-1)
-    sequence.addInteger(key.privateExponent! % (key.q! - BigInt.one)); // d mod (q-1)
-    sequence.addInteger(key.q!.modInverse(key.p!)); // q^-1 mod p
-
-    return sequence.encode();
-  }
-
-  /// Encode RSA public key to DER format (SubjectPublicKeyInfo)
-  static Uint8List _encodePublicKeyDer(RSAPublicKey key) {
-    // RSAPublicKey sequence (PKCS#1)
-    final rsaPublicKey = _DerSequence();
-    rsaPublicKey.addInteger(key.modulus!);
-    rsaPublicKey.addInteger(key.exponent!);
-    final rsaPublicKeyBytes = rsaPublicKey.encode();
-
-    // AlgorithmIdentifier for RSA: OID 1.2.840.113549.1.1.1 + NULL
-    final algorithmId = _DerSequence();
-    algorithmId.addOid([1, 2, 840, 113549, 1, 1, 1]); // rsaEncryption OID
-    algorithmId.addNull();
-    final algorithmIdBytes = algorithmId.encode();
-
-    // SubjectPublicKeyInfo
-    final publicKeyInfo = _DerSequence();
-    publicKeyInfo.addRaw(algorithmIdBytes);
-    publicKeyInfo.addBitString(rsaPublicKeyBytes);
-
-    return publicKeyInfo.encode();
-  }
-
-  /// Decode RSA private key from PEM format
-  static _RsaKeyData? _decodePrivateKeyPem(String pem) {
-    try {
-      // Remove PEM headers and decode base64
-      final lines = pem.split('\n')
-          .where((line) => !line.startsWith('-----'))
-          .join('');
-      final bytes = base64.decode(lines);
-
-      // Parse ASN.1 DER sequence
-      final elements = _parseDerSequence(bytes);
-      if (elements.length < 6) return null;
-
-      // PKCS#1 RSAPrivateKey structure
-      final modulus = _parseDerInteger(elements[1]);
-      final publicExponent = _parseDerInteger(elements[2]);
-      final privateExponent = _parseDerInteger(elements[3]);
-      final p = _parseDerInteger(elements[4]);
-      final q = _parseDerInteger(elements[5]);
-
-      if (modulus == null || publicExponent == null ||
-          privateExponent == null || p == null || q == null) {
-        return null;
-      }
-
-      return _RsaKeyData(
-        modulus: modulus,
-        publicExponent: publicExponent,
-        privateExponent: privateExponent,
-        p: p,
-        q: q,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Parse DER sequence and return list of element bytes
-  static List<Uint8List> _parseDerSequence(Uint8List bytes) {
-    final elements = <Uint8List>[];
-    if (bytes.isEmpty || bytes[0] != 0x30) return elements; // Not a sequence
-
-    int offset = 1;
-    int length;
-    (length, offset) = _parseDerLength(bytes, offset);
-    if (offset < 0) return elements;
-
-    final endOffset = offset + length;
-    while (offset < endOffset && offset < bytes.length) {
-      final elementStart = offset;
-      offset++; // skip tag
-      int elemLen;
-      (elemLen, offset) = _parseDerLength(bytes, offset);
-      if (offset < 0) break;
-      offset += elemLen;
-      elements.add(Uint8List.sublistView(bytes, elementStart, offset));
-    }
-
-    return elements;
-  }
-
-  /// Parse DER length and return (length, newOffset), or (-1, -1) on error
-  static (int, int) _parseDerLength(Uint8List bytes, int offset) {
-    if (offset >= bytes.length) return (-1, -1);
-    final firstByte = bytes[offset++];
-    if (firstByte < 0x80) {
-      return (firstByte, offset);
-    }
-    final numBytes = firstByte & 0x7f;
-    if (numBytes == 0 || offset + numBytes > bytes.length) return (-1, -1);
-    int length = 0;
-    for (int i = 0; i < numBytes; i++) {
-      length = (length << 8) | bytes[offset++];
-    }
-    return (length, offset);
-  }
-
-  /// Parse DER INTEGER and return BigInt
-  static BigInt? _parseDerInteger(Uint8List bytes) {
-    if (bytes.isEmpty || bytes[0] != 0x02) return null; // Not an integer
-
-    int offset = 1;
-    int length;
-    (length, offset) = _parseDerLength(bytes, offset);
-    if (offset < 0 || offset + length > bytes.length) return null;
-
-    // Convert bytes to BigInt (big-endian, signed)
-    final valueBytes = bytes.sublist(offset, offset + length);
-    BigInt value = BigInt.zero;
-    for (final byte in valueBytes) {
-      value = (value << 8) | BigInt.from(byte);
-    }
-    return value;
-  }
-}
-
-/// Helper class for DER encoding
-class _DerSequence {
-  final List<Uint8List> _elements = [];
-
-  void addInteger(BigInt value) {
-    final bytes = _encodeBigInt(value);
-    _elements.add(_wrapWithTagAndLength(0x02, bytes)); // INTEGER tag
-  }
-
-  void addNull() {
-    _elements.add(Uint8List.fromList([0x05, 0x00])); // NULL
-  }
-
-  void addOid(List<int> oid) {
-    // Encode OID: first two components combined, rest as base-128
-    final bytes = <int>[];
-    if (oid.length >= 2) {
-      bytes.add(oid[0] * 40 + oid[1]);
-      for (int i = 2; i < oid.length; i++) {
-        final component = oid[i];
-        if (component < 128) {
-          bytes.add(component);
-        } else {
-          // Base-128 encoding
-          final encoded = <int>[];
-          int value = component;
-          while (value > 0) {
-            encoded.insert(0, (value & 0x7f) | (encoded.isEmpty ? 0 : 0x80));
-            value >>= 7;
-          }
-          bytes.addAll(encoded);
-        }
-      }
-    }
-    _elements.add(_wrapWithTagAndLength(0x06, Uint8List.fromList(bytes))); // OID tag
-  }
-
-  void addBitString(Uint8List bytes) {
-    // BIT STRING: prepend with 0x00 (no unused bits)
-    final data = Uint8List(bytes.length + 1);
-    data[0] = 0x00;
-    data.setRange(1, data.length, bytes);
-    _elements.add(_wrapWithTagAndLength(0x03, data)); // BIT STRING tag
-  }
-
-  void addRaw(Uint8List bytes) {
-    _elements.add(bytes);
-  }
-
-  Uint8List encode() {
-    // Calculate total length of contents
-    int contentLength = 0;
-    for (final elem in _elements) {
-      contentLength += elem.length;
-    }
-
-    // Build sequence
-    final content = Uint8List(contentLength);
-    int offset = 0;
-    for (final elem in _elements) {
-      content.setRange(offset, offset + elem.length, elem);
-      offset += elem.length;
-    }
-
-    return _wrapWithTagAndLength(0x30, content); // SEQUENCE tag
-  }
-
-  static Uint8List _wrapWithTagAndLength(int tag, Uint8List content) {
-    final lengthBytes = _encodeLength(content.length);
-    final result = Uint8List(1 + lengthBytes.length + content.length);
-    result[0] = tag;
-    result.setRange(1, 1 + lengthBytes.length, lengthBytes);
-    result.setRange(1 + lengthBytes.length, result.length, content);
-    return result;
-  }
-
-  static Uint8List _encodeLength(int length) {
-    if (length < 128) {
-      return Uint8List.fromList([length]);
-    }
-    // Long form
-    final bytes = <int>[];
-    int value = length;
-    while (value > 0) {
-      bytes.insert(0, value & 0xff);
-      value >>= 8;
-    }
-    return Uint8List.fromList([0x80 | bytes.length, ...bytes]);
-  }
-
-  static Uint8List _encodeBigInt(BigInt value) {
-    // Convert BigInt to bytes (big-endian, two's complement)
-    if (value == BigInt.zero) {
-      return Uint8List.fromList([0x00]);
-    }
-
-    final bytes = <int>[];
-    BigInt v = value;
-    while (v > BigInt.zero) {
-      bytes.insert(0, (v & BigInt.from(0xff)).toInt());
-      v >>= 8;
-    }
-
-    // Add leading 0x00 if high bit is set (to ensure positive interpretation)
-    if (bytes.isNotEmpty && (bytes[0] & 0x80) != 0) {
-      bytes.insert(0, 0x00);
-    }
-
-    return Uint8List.fromList(bytes);
-  }
-}
-
-/// Simple data class to hold parsed RSA key components
-class _RsaKeyData {
-  final BigInt modulus;
-  final BigInt publicExponent;
-  final BigInt privateExponent;
-  final BigInt p;
-  final BigInt q;
-
-  _RsaKeyData({
-    required this.modulus,
-    required this.publicExponent,
-    required this.privateExponent,
-    required this.p,
-    required this.q,
-  });
 }
 
 /// Email DNS diagnostics service

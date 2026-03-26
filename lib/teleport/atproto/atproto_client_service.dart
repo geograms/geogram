@@ -759,7 +759,7 @@ class AtprotoClientService {
   bool _isLikelyLocalPostUri(String postUri) {
     final value = postUri.trim().toLowerCase();
     if (!value.startsWith('at://')) return false;
-    return value.contains('did:web:') || value.contains('.p2p.radio/');
+    return value.contains('did:web:');
   }
 
   Future<AtprotoThreadData> _buildLocalThreadFallback(String postUri) async {
@@ -826,7 +826,6 @@ class AtprotoClientService {
     if (normalizedId.isNotEmpty && value.startsWith('$normalizedId.')) {
       return true;
     }
-    if (value.contains('.p2p.radio')) return true;
     return false;
   }
 

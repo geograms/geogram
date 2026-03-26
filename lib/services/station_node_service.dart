@@ -19,6 +19,7 @@ import 'config_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
 import 'storage_config.dart';
+import 'log_api_service.dart';
 import '../util/task_monitor_helpers.dart';
 
 /// Service for managing this device as a station node
@@ -375,6 +376,11 @@ class StationNodeService {
 
       LogService().log('PureStorageConfig path: ${pureStorageConfig.stationConfigPath}');
 
+      // Stop LogApiService to release the HTTP port — the station server
+      // handles a superset of its routes while running.
+      await LogApiService().stop();
+      LogService().log('LogApiService stopped to free port for station server');
+
       // Load network settings from the file to get the correct port
       final networkSettings = await loadNetworkSettings();
       final savedHttpPort = networkSettings['httpPort'] as int;
@@ -510,6 +516,14 @@ class StationNodeService {
       await updateNetworkSettings(enabled: false);
 
       LogService().log('Station stopped');
+
+      // Restart LogApiService now that the station has released the port
+      try {
+        await LogApiService().start();
+        LogService().log('LogApiService restarted after station stop');
+      } catch (e) {
+        LogService().log('Failed to restart LogApiService: $e');
+      }
     } catch (e) {
       _stationNode = _stationNode!.copyWith(
         status: StationNodeStatus.error,
@@ -624,7 +638,7 @@ class StationNodeService {
       return {
         'httpPort': settings['httpPort'] ?? 3456,
         'httpsPort': settings['httpsPort'] ?? 3457,
-        'enableSsl': settings['enableSsl'] ?? false,
+        'enableSsl': settings['enableSsl'] ?? true,
         'sslDomain': settings['sslDomain'] ?? '',
         'sslEmail': settings['sslEmail'] ?? '',
         'sslAutoRenew': settings['sslAutoRenew'] ?? true,
@@ -641,7 +655,7 @@ class StationNodeService {
     return {
       'httpPort': 3456,
       'httpsPort': 3457,
-      'enableSsl': false,
+      'enableSsl': true,
       'sslDomain': '',
       'sslEmail': '',
       'sslAutoRenew': true,

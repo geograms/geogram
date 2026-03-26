@@ -167,7 +167,7 @@ class PureRelaySettings implements StationSettingsReadable {
     this.networkId,
     this.parentStationUrl,
     this.setupComplete = false,
-    this.enableSsl = false,
+    this.enableSsl = true,
     this.sslDomain,
     this.sslEmail,
     this.sslAutoRenew = true,
@@ -226,7 +226,7 @@ class PureRelaySettings implements StationSettingsReadable {
       networkId: json['networkId'] as String?,
       parentStationUrl: json['parentStationUrl'] as String?,
       setupComplete: json['setupComplete'] as bool? ?? false,
-      enableSsl: json['enableSsl'] as bool? ?? false,
+      enableSsl: json['enableSsl'] as bool? ?? true,
       sslDomain: json['sslDomain'] as String?,
       sslEmail: json['sslEmail'] as String?,
       sslAutoRenew: json['sslAutoRenew'] as bool? ?? true,
@@ -1859,41 +1859,60 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
       // Start HTTPS server if SSL is enabled
       if (_settings.enableSsl) {
-        // Check if we need to request certificates first
         final sslDir = _dataDir != null ? '$_dataDir/ssl' : null;
         final fullchainPath = sslDir != null ? '$sslDir/fullchain.pem' : null;
-        // Check for both privkey.pem and domain.key (SslCertificateManager uses domain.key)
         final keyPath = sslDir != null ? '$sslDir/privkey.pem' : null;
         final altKeyPath = sslDir != null ? '$sslDir/domain.key' : null;
 
         bool certsExist = false;
         if (fullchainPath != null && await File(fullchainPath).exists()) {
-          // Certificate exists, check for either key file
           if ((keyPath != null && await File(keyPath).exists()) ||
               (altKeyPath != null && await File(altKeyPath).exists())) {
             certsExist = true;
           }
         }
 
-        if (!certsExist && _settings.sslDomain != null && _settings.sslEmail != null) {
-          _log('INFO', 'SSL enabled but no certificates found. Requesting from Let\'s Encrypt...');
-          try {
-            final sslManager = SslCertificateManager(_settings, _dataDir ?? '.');
-            sslManager.setStationServer(this);
-            final success = await sslManager.requestCertificate(staging: false);
-            if (success) {
-              _log('INFO', 'SSL certificate obtained successfully');
-              // Update paths
-              _settings = _settings.copyWith(
-                sslCertPath: fullchainPath,
-                sslKeyPath: keyPath,
-              );
-              await saveSettings();
-            } else {
-              _log('ERROR', 'Failed to obtain SSL certificate');
+        if (!certsExist) {
+          if (_settings.sslDomain != null && _settings.sslDomain!.isNotEmpty) {
+            // Domain configured — try Let's Encrypt
+            final email = _settings.sslEmail ??
+                'admin@${_settings.sslDomain}';
+            _settings = _settings.copyWith(sslEmail: email);
+            _log('INFO', 'SSL enabled but no certificates found. Requesting from Let\'s Encrypt...');
+            try {
+              final sslManager = SslCertificateManager(_settings, _dataDir ?? '.');
+              sslManager.setStationServer(this);
+              final success = await sslManager.requestCertificate(staging: false);
+              if (success) {
+                _log('INFO', 'SSL certificate obtained successfully');
+                _settings = _settings.copyWith(
+                  sslCertPath: fullchainPath,
+                  sslKeyPath: keyPath,
+                );
+                await saveSettings();
+                certsExist = true;
+              } else {
+                _log('ERROR', 'Failed to obtain SSL certificate');
+              }
+            } catch (e) {
+              _log('ERROR', 'Failed to request SSL certificate: $e');
             }
-          } catch (e) {
-            _log('ERROR', 'Failed to request SSL certificate: $e');
+          }
+
+          // Still no certs — generate self-signed so HTTPS port is open
+          if (!certsExist && sslDir != null) {
+            _log('INFO', 'Generating self-signed certificate for HTTPS...');
+            try {
+              final sslManager = SslCertificateManager(_settings, _dataDir ?? '.');
+              final domain = _settings.sslDomain ?? 'localhost';
+              await sslManager.initialize();
+              final ok = await sslManager.generateSelfSigned(domain);
+              if (ok) {
+                _log('INFO', 'Self-signed certificate generated for $domain');
+              }
+            } catch (e) {
+              _log('ERROR', 'Failed to generate self-signed certificate: $e');
+            }
           }
         }
 
@@ -7250,8 +7269,9 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
     try {
       final nameParam = request.uri.queryParameters['name']?.toLowerCase();
+      final stationDomain = _settings.sslDomain ?? request.headers.host ?? 'localhost';
       final response = Nip05RegistryService()
-          .buildNostrJsonResponse(nameParam, 'wss://p2p.radio');
+          .buildNostrJsonResponse(nameParam, 'wss://$stationDomain');
       request.response.write(jsonEncode(response));
     } catch (e) {
       _log('ERROR', 'NIP-05 handler error: $e');
@@ -9378,7 +9398,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       {
         // Android QEMU archive (arm64 host, x86 guest) for native console
         'name': 'qemu-android-aarch64.tar.gz',
-        'url': 'https://p2p.radio/console/emu/qemu-android-aarch64.tar.gz',
+        'url': 'https://github.com/geograms/geogram/releases/download/console-vm/qemu-android-aarch64.tar.gz',
         'size': 128, // placeholder minimum; actual size validated after download
       },
     ];
@@ -9406,16 +9426,28 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
         await file.delete();
       }
 
-      // Download file
+      // Stream download to file to avoid buffering large binaries in memory
       _log('INFO', 'Downloading console VM file: $filename');
       try {
-        final response = await http.get(Uri.parse(url)).timeout(const Duration(minutes: 5));
-        if (response.statusCode == 200) {
-          await file.writeAsBytes(response.bodyBytes);
-          downloadedCount++;
-          _log('INFO', 'Downloaded $filename successfully (${_formatBytes(response.bodyBytes.length)})');
-        } else {
-          throw Exception('HTTP ${response.statusCode}');
+        final request = http.Request('GET', Uri.parse(url));
+        final client = http.Client();
+        try {
+          final streamedResponse = await client.send(request).timeout(const Duration(minutes: 5));
+          if (streamedResponse.statusCode == 200) {
+            final sink = file.openWrite();
+            int totalBytes = 0;
+            await for (final chunk in streamedResponse.stream) {
+              sink.add(chunk);
+              totalBytes += chunk.length;
+            }
+            await sink.close();
+            downloadedCount++;
+            _log('INFO', 'Downloaded $filename successfully (${_formatBytes(totalBytes)})');
+          } else {
+            throw Exception('HTTP ${streamedResponse.statusCode}');
+          }
+        } finally {
+          client.close();
         }
       } catch (e) {
         failedCount++;
@@ -9569,10 +9601,19 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       logsRoot.createSync(recursive: true);
     }
 
-    // Crash log (single file)
-    _crashSink ??= File('${logsRoot.path}/crash.txt').openWrite(
-      mode: FileMode.append,
-    );
+    // Crash log (single file, capped at 5 MB to avoid unbounded growth)
+    if (_crashSink == null) {
+      final crashFile = File('${logsRoot.path}/crash.txt');
+      if (crashFile.existsSync() && crashFile.lengthSync() > 5 * 1024 * 1024) {
+        try {
+          final bytes = crashFile.readAsBytesSync();
+          crashFile.writeAsBytesSync(bytes.sublist(bytes.length - 1024 * 1024));
+        } catch (_) {
+          crashFile.writeAsStringSync('');
+        }
+      }
+      _crashSink = crashFile.openWrite(mode: FileMode.append);
+    }
 
     // Daily log rotation per year/day
     final today = DateTime(now.year, now.month, now.day);
@@ -10221,19 +10262,30 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
         }
       }
 
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {'User-Agent': 'Geogram-Station-Updater'},
-      ).timeout(const Duration(minutes: 10));
+      // Stream download to file to avoid buffering entire binary in memory
+      final request = http.Request('GET', Uri.parse(url))
+        ..headers['User-Agent'] = 'Geogram-Station-Updater';
+      final client = http.Client();
+      try {
+        final streamedResponse = await client.send(request).timeout(const Duration(minutes: 10));
 
-      if (response.statusCode == 200) {
-        await File(targetPath).writeAsBytes(response.bodyBytes);
-        final sizeMb = (response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1);
-        _log('INFO', 'Downloaded $filename: ${sizeMb}MB');
-        return true;
-      } else {
-        _log('ERROR', 'Failed to download $filename: ${response.statusCode}');
-        return false;
+        if (streamedResponse.statusCode == 200) {
+          final sink = File(targetPath).openWrite();
+          int totalBytes = 0;
+          await for (final chunk in streamedResponse.stream) {
+            sink.add(chunk);
+            totalBytes += chunk.length;
+          }
+          await sink.close();
+          final sizeMb = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
+          _log('INFO', 'Downloaded $filename: ${sizeMb}MB');
+          return true;
+        } else {
+          _log('ERROR', 'Failed to download $filename: ${streamedResponse.statusCode}');
+          return false;
+        }
+      } finally {
+        client.close();
       }
     } catch (e) {
       _log('ERROR', 'Error downloading $filename: $e');
@@ -10316,7 +10368,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       // Check if file exists with reasonable size
       if (await file.exists()) {
         final fileSize = await file.length();
-        if (fileSize > expectedSize * 0.9) {
+        if (fileSize > 100) {
           // File exists and is at least 90% of expected size
           _availableWhisperModels.add(filename);
           existed++;
@@ -10378,7 +10430,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
       if (await file.exists()) {
         final fileSize = await file.length();
-        if (fileSize > expectedSize * 0.9) {
+        if (fileSize > 100) {
           _availableWhisperModels.add(filename);
         }
       }
@@ -10551,7 +10603,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       // Check if file exists with reasonable size
       if (await file.exists()) {
         final fileSize = await file.length();
-        if (fileSize > expectedSize * 0.9) {
+        if (fileSize > 100) {
           // File exists and is at least 90% of expected size
           _availableSupertonicModels.add(filename);
           existed++;
@@ -10619,7 +10671,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
       if (await file.exists()) {
         final fileSize = await file.length();
-        if (fileSize > expectedSize * 0.9) {
+        if (fileSize > 100) {
           _availableSupertonicModels.add(filename);
         }
       }

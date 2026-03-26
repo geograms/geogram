@@ -425,15 +425,16 @@ class UpdateService {
 
         try {
           LogService().log('Mirroring ${assetType.name}: $filename');
-          final response = await http.get(
+          final result = await streamDownloadToFile(
             Uri.parse(url),
+            targetFile.path,
             headers: {'User-Agent': 'Geogram-Updater'},
-          ).timeout(const Duration(minutes: 10));
+            timeout: const Duration(minutes: 10),
+          );
 
-          if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-            await targetFile.writeAsBytes(response.bodyBytes);
+          if (result.success) {
             downloaded++;
-            LogService().log('Mirrored $filename (${(response.bodyBytes.length / (1024 * 1024)).toStringAsFixed(1)}MB)');
+            LogService().log('Mirrored $filename (${(result.bytesWritten / (1024 * 1024)).toStringAsFixed(1)}MB)');
           }
         } catch (e) {
           LogService().log('Failed to mirror $filename: $e');

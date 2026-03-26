@@ -59,7 +59,7 @@ StationSettings fromCliSettings(Map<String, dynamic> cliSettings) {
     httpRequestTimeout: cliSettings['httpRequestTimeout'] as int? ?? 30000,
     maxConnectedDevices: cliSettings['maxConnectedDevices'] as int? ?? 100,
     enableAprs: cliSettings['enableAprs'] as bool? ?? false,
-    enableSsl: cliSettings['enableSsl'] as bool? ?? false,
+    enableSsl: cliSettings['enableSsl'] as bool? ?? true,
     sslDomain: cliSettings['sslDomain'] as String?,
     sslEmail: cliSettings['sslEmail'] as String?,
     sslAutoRenew: cliSettings['sslAutoRenew'] as bool? ?? true,

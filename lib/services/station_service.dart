@@ -64,15 +64,8 @@ class StationService {
   /// Shared HTTP client for connection pooling (avoids creating a new socket per request)
   final ManagedHttpClient _httpClient = ManagedHttpClient();
 
-  /// Default stations
-  static final List<Station> _defaultStations = [
-    Station(
-      url: 'wss://p2p.radio',
-      name: 'P2P Radio',
-      description: 'Public station for the geogram network',
-      status: 'preferred',
-    ),
-  ];
+  /// Default stations (empty — user must configure their preferred station)
+  static final List<Station> _defaultStations = <Station>[];
 
   /// Initialize station service
   Future<void> initialize() async {

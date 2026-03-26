@@ -32,6 +32,7 @@ import '../services/profile_storage.dart';
 import '../util/alert_folder_utils.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
+import '../util/managed_http_client.dart' show streamDownloadToFile;
 import '../widgets/transcribe_button_widget.dart';
 import 'location_picker_page.dart';
 import 'photo_viewer_page.dart';
@@ -816,15 +817,17 @@ class _ReportDetailPageState extends State<ReportDetailPage> {
         LogService().log('ReportDetailPage: Downloading photo from $photoUrl');
 
         try {
-          final photoResponse = await http.get(
+          final result = await streamDownloadToFile(
             Uri.parse(photoUrl),
-          ).timeout(const Duration(seconds: 60));
+            localFile.path,
+            timeout: const Duration(seconds: 60),
+            maxBytes: 50 * 1024 * 1024,
+          );
 
-          if (photoResponse.statusCode == 200) {
-            await localFile.writeAsBytes(photoResponse.bodyBytes);
+          if (result.success) {
             LogService().log('ReportDetailPage: Downloaded photo $photoName');
           } else {
-            LogService().log('ReportDetailPage: Failed to download photo $photoName: ${photoResponse.statusCode}');
+            LogService().log('ReportDetailPage: Failed to download photo $photoName');
           }
         } catch (e) {
           LogService().log('ReportDetailPage: Error downloading photo $photoName: $e');
