@@ -165,6 +165,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   // Contact nickname map for display in chat bubbles
   Map<String, String> _nicknameMap = {};
 
+  // Profile picture map for DM channel avatars (uppercase callsign -> ImageProvider)
+  Map<String, ImageProvider> _profilePicMap = {};
+
   // Local collection paths for group synchronization
   String? _localChatCollectionPath;
   String? _groupsAppPath;
@@ -201,9 +204,21 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // Merge: NIP-05 names as base, contact names override
       final merged = <String, String>{...nip05Map, ...contactMap};
 
+      // Build profile picture map for DM channel avatars
+      final contactService = ContactService();
+      final picMap = <String, ImageProvider>{};
+      for (final callsign in merged.keys) {
+        final picPath = contactService.getProfilePicturePath(callsign);
+        if (picPath != null && file_helper.fileExists(picPath)) {
+          final provider = file_helper.getFileImageProvider(picPath);
+          if (provider != null) picMap[callsign] = provider;
+        }
+      }
+
       if (mounted) {
         setState(() {
           _nicknameMap = merged;
+          _profilePicMap = picMap;
         });
       }
     } catch (e) {
@@ -3502,6 +3517,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     return DeviceChatSidebar(
       localChannels: localChannels,
       nicknameMap: _nicknameMap,
+      profilePicMap: _profilePicMap,
       remoteSources: remoteSources,
       selectedLocalChannelId: _selectedChannel?.id,
       selectedRemoteRoom: _selectedStationRoom != null
@@ -4088,18 +4104,21 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           ],
         ),
       ),
-      ...sortedChannels.map((channel) => ListTile(
+      ...sortedChannels.map((channel) {
+        final profilePic = channel.isDirect ? _profilePicMap[channel.name.toUpperCase()] : null;
+        return ListTile(
         leading: CircleAvatar(
           backgroundColor: channel.isGroup
               ? theme.colorScheme.primaryContainer
               : theme.colorScheme.secondaryContainer,
-          child: Icon(
+          backgroundImage: profilePic,
+          child: profilePic == null ? Icon(
             channel.isGroup ? Icons.group : Icons.person,
             color: channel.isGroup
                 ? theme.colorScheme.onPrimaryContainer
                 : theme.colorScheme.onSecondaryContainer,
             size: 20,
-          ),
+          ) : null,
         ),
         title: Row(
           children: [
@@ -4131,7 +4150,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 ? Text(_i18n.t('group_chat'))
                 : null),
         onTap: () => _selectChannelMobile(channel),
-      )),
+      );
+      }),
     ];
   }
 

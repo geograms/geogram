@@ -18,6 +18,9 @@ class DeviceChatSidebar extends StatefulWidget {
   /// Nickname map (uppercase callsign -> display name) for DM channels
   final Map<String, String> nicknameMap;
 
+  /// Profile picture map (uppercase callsign -> ImageProvider) for DM channels
+  final Map<String, ImageProvider> profilePicMap;
+
   /// List of connected device sources (stations, direct connections)
   final List<DeviceSourceWithRooms> remoteSources;
 
@@ -67,6 +70,7 @@ class DeviceChatSidebar extends StatefulWidget {
     Key? key,
     required this.localChannels,
     this.nicknameMap = const {},
+    this.profilePicMap = const {},
     required this.remoteSources,
     this.selectedLocalChannelId,
     this.selectedRemoteRoom,
@@ -673,15 +677,25 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
   }
 
   Widget _buildChannelIcon(ThemeData theme, ChatChannel channel) {
+    // For DM channels, show profile picture if available
+    if (channel.isDirect) {
+      final profilePic = widget.profilePicMap[channel.name.toUpperCase()];
+      return CircleAvatar(
+        radius: 14,
+        backgroundColor: theme.colorScheme.secondaryContainer,
+        backgroundImage: profilePic,
+        child: profilePic == null
+            ? Icon(Icons.person, size: 16, color: theme.colorScheme.onSecondaryContainer)
+            : null,
+      );
+    }
+
     IconData icon;
     Color color;
 
     if (channel.isMain) {
       icon = Icons.forum;
       color = theme.colorScheme.primary;
-    } else if (channel.isDirect) {
-      icon = Icons.person;
-      color = theme.colorScheme.secondary;
     } else {
       icon = Icons.group;
       color = theme.colorScheme.tertiary;
