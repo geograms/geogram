@@ -2358,6 +2358,24 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       verified: msg.verified,
     ));
 
+    // Fire Now tab notification locally (station device doesn't receive
+    // WebSocket updates since it skips self-connection)
+    if (msg.senderCallsign != _settings.callsign) {
+      final roomName = _chatRooms[msg.roomId]?.name ?? msg.roomId;
+      final summary = msg.content.length > 100
+          ? msg.content.substring(0, 100)
+          : msg.content;
+      _eventBus.fire(NowItemEvent(
+        id: 'chat:${msg.roomId}:${DateTime.now().toIso8601String()}',
+        appType: 'chat',
+        sourceId: msg.roomId,
+        sourceName: roomName,
+        callsign: msg.senderCallsign,
+        summary: summary,
+        priority: NowPriority.chat,
+      ));
+    }
+
     // Record chat message karma (with anti-gaming validation)
     karmaRecordChatMessage(
       callsign: msg.senderCallsign,
