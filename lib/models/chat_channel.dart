@@ -281,6 +281,10 @@ class ChatChannelConfig {
   /// When set, membership is resolved dynamically from GroupsService
   final String? groupId;
 
+  /// Use daily log files ({year}/{date}_chat.txt) instead of single messages.txt.
+  /// Better for high-traffic rooms. Station server rooms use this by default.
+  final bool dailyFiles;
+
   ChatChannelConfig({
     required this.id,
     required this.name,
@@ -299,6 +303,7 @@ class ChatChannelConfig {
     this.banned = const [],
     this.pendingApplicants = const [],
     this.groupId,
+    this.dailyFiles = false,
   });
 
   /// Check if this config uses dynamic group membership
@@ -392,6 +397,7 @@ class ChatChannelConfig {
           .map((a) => MembershipApplication.fromJson(a as Map<String, dynamic>))
           .toList(),
       groupId: json['group_id'] as String?,
+      dailyFiles: json['daily_files'] as bool? ?? false,
     );
   }
 
@@ -408,7 +414,6 @@ class ChatChannelConfig {
       'max_file_size': maxFileSize,
       'max_size_text': maxSizeText,
       'moderators': moderators,
-      // Role-based access control fields
       if (owner != null) 'owner': owner,
       if (admins.isNotEmpty) 'admins': admins,
       if (moderatorNpubs.isNotEmpty) 'moderator_npubs': moderatorNpubs,
@@ -417,6 +422,7 @@ class ChatChannelConfig {
       if (pendingApplicants.isNotEmpty)
         'pending_applicants': pendingApplicants.map((a) => a.toJson()).toList(),
       if (groupId != null) 'group_id': groupId,
+      if (dailyFiles) 'daily_files': true,
     };
   }
 
@@ -439,6 +445,7 @@ class ChatChannelConfig {
     List<String>? banned,
     List<MembershipApplication>? pendingApplicants,
     String? groupId,
+    bool? dailyFiles,
   }) {
     return ChatChannelConfig(
       id: id ?? this.id,
@@ -459,6 +466,7 @@ class ChatChannelConfig {
       pendingApplicants: pendingApplicants ??
           this.pendingApplicants.map((a) => a.copy()).toList(),
       groupId: groupId ?? this.groupId,
+      dailyFiles: dailyFiles ?? this.dailyFiles,
     );
   }
 

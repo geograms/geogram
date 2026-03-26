@@ -530,8 +530,9 @@ class ChatService {
 
     List<ChatMessage> messages = [];
 
-    if (channel.isMain) {
-      // Load from daily files in year folders
+    final useDailyFiles = channel.isMain || (channel.config?.dailyFiles ?? false);
+    if (useDailyFiles) {
+      // Load from daily files in year folders ({folder}/{year}/{date}_chat.txt)
       messages = await _loadMainChannelMessagesStorage(channel.folder, startDate, endDate);
     } else {
       // Load from single messages.txt file

@@ -1530,6 +1530,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       'max_file_size': 500,
       'max_size_text': 500,
       'moderators': <String>[],
+      'daily_files': true,
     };
     await configFile.writeAsString(
       const JsonEncoder.withIndent('  ').convert(config),
