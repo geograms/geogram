@@ -205,14 +205,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       final merged = <String, String>{...nip05Map, ...contactMap};
 
       // Build profile picture map for DM channel avatars
+      // Uses bytes via ProfileStorage to support both encrypted and filesystem storage
       final contactService = ContactService();
       final picMap = <String, ImageProvider>{};
       for (final callsign in merged.keys) {
-        final picPath = contactService.getProfilePicturePath(callsign);
-        if (picPath != null && file_helper.fileExists(picPath)) {
-          final provider = file_helper.getFileImageProvider(picPath);
-          if (provider != null) picMap[callsign] = provider;
-        }
+        final bytes = await contactService.getProfilePictureBytes(callsign);
+        if (bytes != null) picMap[callsign] = MemoryImage(bytes);
       }
 
       if (mounted) {

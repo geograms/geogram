@@ -1707,6 +1707,20 @@ class ContactService {
     return null;
   }
 
+  /// Get profile picture bytes for a contact (async, works with all storage types)
+  Future<Uint8List?> getProfilePictureBytes(String callsign) async {
+    if (_appPath == null) return null;
+
+    final extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    for (var ext in extensions) {
+      final relativePath = 'media/$callsign.$ext';
+      if (await _storage.exists(relativePath)) {
+        return _storage.readBytes(relativePath);
+      }
+    }
+    return null;
+  }
+
   /// Save profile picture for a contact
   Future<String?> saveProfilePicture(String callsign, File sourceFile) async {
     if (_appPath == null) return null;
