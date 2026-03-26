@@ -23,6 +23,7 @@ import '../services/profile_storage.dart';
 import '../services/station_service.dart';
 import '../services/station_node_service.dart';
 import '../services/station_cache_service.dart';
+import '../services/direct_message_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
@@ -675,7 +676,28 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       await _chatService.refreshChannels();
-      _channels = _chatService.channels;
+      _channels = List.from(_chatService.channels);
+
+      // Load DM conversations and add them as direct channels
+      try {
+        final dmService = DirectMessageService();
+        final conversations = await dmService.listConversations();
+        for (final conv in conversations) {
+          // Skip if already in channels (avoid duplicates)
+          if (_channels.any((ch) => ch.id == conv.otherCallsign)) continue;
+          _channels.add(ChatChannel(
+            id: conv.otherCallsign,
+            type: ChatChannelType.direct,
+            name: conv.otherCallsign,
+            folder: conv.path,
+            participants: [conv.otherCallsign],
+            created: conv.lastMessageTime ?? DateTime.now(),
+            lastMessageTime: conv.lastMessageTime,
+          ));
+        }
+      } catch (e) {
+        // DM loading is optional — don't fail if it errors
+      }
 
       // Start watching for file changes now that channels are loaded
       _chatService.startWatching();
