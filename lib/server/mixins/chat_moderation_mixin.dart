@@ -71,18 +71,37 @@ mixin ChatModerationMixin {
   }
 
   /// Ensure the station owner is set as chat admin if not already configured.
+  /// [additionalModerators] are extra npubs (e.g. operator, profile) that
+  /// should also have moderator access.
   /// Call after loading chat security. Returns true if security was updated.
-  Future<bool> ensureChatAdmin(String ownerNpub) async {
-    if (chatSecurity.adminNpub != null || ownerNpub.isEmpty) return false;
-    final updated = ChatSecurity(
-      adminNpub: ownerNpub,
-      moderators: Map<String, List<String>>.from(chatSecurity.toJson()['moderators'] as Map? ?? {}),
-    );
-    for (final m in chatSecurity.getGlobalModerators()) {
-      updated.addGlobalModerator(m);
+  Future<bool> ensureChatAdmin(String ownerNpub, {List<String> additionalModerators = const []}) async {
+    bool changed = false;
+
+    // Set admin if missing
+    if (chatSecurity.adminNpub == null && ownerNpub.isNotEmpty) {
+      final updated = ChatSecurity(
+        adminNpub: ownerNpub,
+        moderators: Map<String, List<String>>.from(chatSecurity.toJson()['moderators'] as Map? ?? {}),
+      );
+      for (final m in chatSecurity.getGlobalModerators()) {
+        updated.addGlobalModerator(m);
+      }
+      await saveChatSecurity(updated);
+      changed = true;
     }
-    await saveChatSecurity(updated);
-    return true;
+
+    // Ensure additional npubs are global moderators
+    for (final npub in additionalModerators) {
+      if (npub.isNotEmpty && !chatSecurity.isGlobalModerator(npub) && !chatSecurity.isAdmin(npub)) {
+        chatSecurity.addGlobalModerator(npub);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await saveChatSecurity(chatSecurity);
+    }
+    return changed;
   }
 
   /// Check whether [actorNpub] is authorized to modify a message authored by

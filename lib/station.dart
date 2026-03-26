@@ -649,6 +649,13 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   ChatSecurity _chatSecurityData = ChatSecurity();
   final List<LogEntry> _logs = [];
   final ServerStats _stats = ServerStats();
+
+  /// Operator npubs that should have moderator access to station chat.
+  /// Set by station_node_service before start().
+  List<String> _operatorNpubs = [];
+  void setOperatorNpubs(List<String> npubs) {
+    _operatorNpubs = npubs;
+  }
   final EventBus _eventBus = EventBus();
   bool _running = false;
   bool _quietMode = false;
@@ -1117,8 +1124,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       _log('ERROR', 'Failed to load chat security: $e');
     }
 
-    // Ensure station owner is always the chat admin
-    if (await ensureChatAdmin(_settings.npub)) {
+    // Ensure station owner is always the chat admin, and grant moderator
+    // access to the operator npub (the device profile that manages the station)
+    if (await ensureChatAdmin(_settings.npub, additionalModerators: _operatorNpubs)) {
       _log('INFO', 'Set station owner as chat admin: ${_settings.callsign}');
     }
   }

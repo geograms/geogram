@@ -420,6 +420,12 @@ class StationNodeService {
       }
       _stationServer!.settings.maxCacheSizeMB = _stationNode!.config.storage?.allocatedMb ?? 10000;
 
+      // Grant the operator's npub moderator access to station chat
+      _stationServer!.setOperatorNpubs([
+        _stationNode!.operatorNpub,
+        ProfileService().getProfile().npub,
+      ].where((n) => n.isNotEmpty).toList());
+
       // Save settings and start server
       await _stationServer!.saveSettings();
 
