@@ -70,6 +70,21 @@ mixin ChatModerationMixin {
     }
   }
 
+  /// Ensure the station owner is set as chat admin if not already configured.
+  /// Call after loading chat security. Returns true if security was updated.
+  Future<bool> ensureChatAdmin(String ownerNpub) async {
+    if (chatSecurity.adminNpub != null || ownerNpub.isEmpty) return false;
+    final updated = ChatSecurity(
+      adminNpub: ownerNpub,
+      moderators: Map<String, List<String>>.from(chatSecurity.toJson()['moderators'] as Map? ?? {}),
+    );
+    for (final m in chatSecurity.getGlobalModerators()) {
+      updated.addGlobalModerator(m);
+    }
+    await saveChatSecurity(updated);
+    return true;
+  }
+
   /// Check whether [actorNpub] is authorized to modify a message authored by
   /// [messageNpub] in [roomId]. Returns `true` if the actor is the author or
   /// a moderator.

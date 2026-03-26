@@ -1116,6 +1116,11 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     } catch (e) {
       _log('ERROR', 'Failed to load chat security: $e');
     }
+
+    // Ensure station owner is always the chat admin
+    if (await ensureChatAdmin(_settings.npub)) {
+      _log('INFO', 'Set station owner as chat admin: ${_settings.callsign}');
+    }
   }
 
   /// Load messages for a room from text files ({room_id}/{year}/{date}_chat.txt)
