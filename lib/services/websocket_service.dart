@@ -91,6 +91,13 @@ class WebSocketService {
   /// Connect to station and send hello
   Future<bool> connectAndHello(String url) async {
     final profile = ProfileService().getProfile();
+
+    // Skip self-connection: if this device IS the station, don't connect to itself
+    if (profile.isRelay) {
+      LogService().log('Skipping station connection: this device is the station');
+      return false;
+    }
+
     try {
       // Normalize URL to WebSocket protocol
       var wsUrl = url;
