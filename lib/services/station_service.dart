@@ -695,11 +695,13 @@ class StationService {
   }) async {
     final station = _resolveStation(stationUrl, stationCallsign: stationCallsign);
 
-    // Skip ConnectionManager P2P probing for internet stations — LAN/WebRTC
-    // transports will never reach a public server, so the 2-4s timeout is waste.
+    // Skip ConnectionManager for internet stations and localhost (direct HTTP).
+    // LAN/WebRTC transports can't reach public servers, and localhost is the
+    // local station server — no need for P2P probing.
     final isInternet = _isInternetUrl(stationUrl);
+    final isLocalhost = stationUrl.contains('localhost') || stationUrl.contains('127.0.0.1');
 
-    if (!isInternet &&
+    if (!isInternet && !isLocalhost &&
         station.callsign != null &&
         station.callsign!.isNotEmpty &&
         ConnectionManager().isInitialized) {

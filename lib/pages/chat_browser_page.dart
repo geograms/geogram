@@ -21,6 +21,7 @@ import '../services/app_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/station_service.dart';
+import '../services/station_node_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/log_service.dart';
@@ -761,6 +762,29 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       } else {
         unawaited(_fetchRelayRoomsFromRemote(cacheKey, widget.remoteDeviceUrl!));
       }
+      return;
+    }
+
+    // If this device IS the station, use the local server directly
+    final localServer = StationNodeService().stationServer;
+    if (ProfileService().getProfile().isRelay && localServer != null && localServer.isRunning) {
+      final localPort = localServer.settings.httpPort;
+      final localUrl = 'http://localhost:$localPort';
+      final localCallsign = localServer.settings.callsign;
+      LogService().log('DEBUG _loadRelayRooms: using local station at $localUrl');
+      _lastStationUrl = localUrl;
+      _lastRelayCacheKey = localCallsign;
+
+      final cachedRooms = await _cacheService.loadChatRooms(localCallsign, localUrl);
+      if (cachedRooms.isNotEmpty) {
+        _setStateIfMounted(() {
+          _stationRooms = cachedRooms;
+          _connectionStatus = _StationConnectionStatus.online;
+          _loadingRelayRooms = false;
+        });
+      }
+
+      unawaited(_fetchRelayRoomsFromRemote(localCallsign, localUrl));
       return;
     }
 
@@ -2015,6 +2039,119 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
          message.npub == currentProfile.npub);
     if (isOwnMessage) return true;
     return _selectedStationRoom?.isModerator ?? false;
+  }
+
+  void _showRoomManageDialog(BuildContext context, StationChatRoom room) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: Icon(Icons.edit),
+              title: Text('Rename'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showRenameRoomDialog(context, room);
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.delete, color: Colors.red),
+              title: Text('Delete', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _confirmDeleteRoom(context, room);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRenameRoomDialog(BuildContext context, StationChatRoom room) {
+    final controller = TextEditingController(text: room.name);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Rename Room'),
+        content: TextField(controller: controller, autofocus: true),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
+          TextButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                Navigator.pop(ctx);
+                _renameStationRoom(room, name);
+              }
+            },
+            child: Text('Rename'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDeleteRoom(BuildContext context, StationChatRoom room) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete "${room.name}"?'),
+        content: Text('This will permanently delete the room and all messages.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _deleteStationRoom(room);
+            },
+            child: Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCreateRoomMobileDialog(BuildContext context) {
+    final idController = TextEditingController();
+    final nameController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_i18n.t('create_room')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: InputDecoration(labelText: 'Room name'),
+              autofocus: true,
+            ),
+            TextField(
+              controller: idController,
+              decoration: InputDecoration(labelText: 'Room ID (lowercase, no spaces)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
+          TextButton(
+            onPressed: () {
+              final name = nameController.text.trim();
+              var id = idController.text.trim().toLowerCase().replaceAll(' ', '-');
+              if (id.isEmpty) id = name.toLowerCase().replaceAll(' ', '-');
+              if (name.isNotEmpty && id.isNotEmpty) {
+                Navigator.pop(ctx);
+                _createStationRoom(id, name);
+              }
+            },
+            child: Text(_i18n.t('create')),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _createStationRoom(String id, String name, {String? description}) async {
@@ -3380,7 +3517,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // For remote device mode, don't show local channels
     final localChannels = widget.isRemoteDevice ? <ChatChannel>[] : _channels;
 
-    final isModerator = _stationRooms.any((r) => r.isModerator);
+    // Station owner is always moderator of their own rooms
+    final isModerator = ProfileService().getProfile().isRelay ||
+        _stationRooms.any((r) => r.isModerator);
 
     return DeviceChatSidebar(
       localChannels: localChannels,
@@ -3659,11 +3798,27 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  // + button for station owner to create rooms
+                  if (ProfileService().getProfile().isRelay ||
+                      _stationRooms.any((r) => r.isModerator))
+                    SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        iconSize: 20,
+                        icon: Icon(Icons.add, color: theme.colorScheme.primary),
+                        tooltip: _i18n.t('create_room'),
+                        onPressed: () => _showCreateRoomMobileDialog(context),
+                      ),
+                    ),
                 ],
               ),
             ),
             ..._stationRooms.map((room) {
               final unreadCount = _unreadCounts[room.id] ?? 0;
+              final canManage = (ProfileService().getProfile().isRelay ||
+                  _stationRooms.any((r) => r.isModerator)) && room.id != 'general';
               return ListTile(
                 leading: Badge(
                   isLabelVisible: unreadCount > 0,
@@ -3686,9 +3841,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                       )
                     : Text('${room.messageCount} messages'),
                 onTap: () {
-                  _forcedOfflineMode = false; // Main station is online
+                  _forcedOfflineMode = false;
                   _selectRelayRoom(room);
                 },
+                onLongPress: canManage ? () => _showRoomManageDialog(context, room) : null,
               );
             }),
     ];

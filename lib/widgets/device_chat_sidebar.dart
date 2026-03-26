@@ -337,7 +337,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                   ),
                 ),
               // Add room button for station devices when moderator
-              if (!device.isLocal && widget.isModerator && widget.onCreateRoom != null)
+              if (widget.isModerator && widget.onCreateRoom != null)
                 SizedBox(
                   width: 28,
                   height: 28,

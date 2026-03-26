@@ -1708,7 +1708,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       });
 
       // Start update mirror polling
-      _startUpdatePolling();
+      // Update mirror polling — skip on mobile to save memory and FDs
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        _startUpdatePolling();
+      }
 
       // Start heartbeat timer for connection stability
       startHeartbeat();

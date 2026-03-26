@@ -388,6 +388,13 @@ class StationNodeService {
 
       // Create and initialize the station server
       _stationServer = PureStationServer();
+
+      // Set operator npubs BEFORE initialize (which loads chat security)
+      _stationServer!.setOperatorNpubs([
+        _stationNode!.operatorNpub,
+        ProfileService().getProfile().npub,
+      ].where((n) => n.isNotEmpty).toList());
+
       await _stationServer!.initialize();
 
       LogService().log('After initialize, server httpPort: ${_stationServer!.settings.httpPort}');
@@ -407,9 +414,11 @@ class StationNodeService {
       }
       _stationServer!.settings.sslAutoRenew = networkSettings['sslAutoRenew'] as bool;
 
-      // Configure server settings from station node config
-      _stationServer!.settings.npub = _stationNode!.stationNpub;
-      _stationServer!.settings.nsec = _stationNode!.stationNsec ?? '';
+      // Use the device profile identity so the station runs under the same
+      // callsign the app knows (e.g. X3XSK2), not a separate station identity.
+      final profile = ProfileService().getProfile();
+      _stationServer!.settings.npub = profile.npub;
+      _stationServer!.settings.nsec = profile.nsec;
       _stationServer!.settings.name = _stationNode!.name;
       _stationServer!.settings.description = _stationNode!.networkName;
       _stationServer!.settings.stationRole = _stationNode!.isRoot ? 'root' : 'node';
@@ -419,12 +428,6 @@ class StationNodeService {
         _stationServer!.settings.longitude = _stationNode!.config.coverage!.longitude;
       }
       _stationServer!.settings.maxCacheSizeMB = _stationNode!.config.storage?.allocatedMb ?? 10000;
-
-      // Grant the operator's npub moderator access to station chat
-      _stationServer!.setOperatorNpubs([
-        _stationNode!.operatorNpub,
-        ProfileService().getProfile().npub,
-      ].where((n) => n.isNotEmpty).toList());
 
       // Save settings and start server
       await _stationServer!.saveSettings();
