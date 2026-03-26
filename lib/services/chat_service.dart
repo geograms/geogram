@@ -530,12 +530,21 @@ class ChatService {
 
     List<ChatMessage> messages = [];
 
-    final useDailyFiles = channel.isMain || (channel.config?.dailyFiles ?? false);
+    // Determine storage format: daily files or single messages.txt
+    // Check config flag, isMain, or auto-detect by looking for year directories
+    var useDailyFiles = channel.isMain || (channel.config?.dailyFiles ?? false);
+    if (!useDailyFiles) {
+      // Auto-detect: if a year directory exists (e.g., {folder}/2026/), use daily files
+      final entries = await _storage.listDirectory(channel.folder);
+      if (entries != null) {
+        useDailyFiles = entries.any((e) =>
+            e.isDirectory && RegExp(r'^\d{4}$').hasMatch(e.name));
+      }
+    }
+
     if (useDailyFiles) {
-      // Load from daily files in year folders ({folder}/{year}/{date}_chat.txt)
       messages = await _loadMainChannelMessagesStorage(channel.folder, startDate, endDate);
     } else {
-      // Load from single messages.txt file
       messages = await _loadSingleFileMessagesStorage(channel.folder);
     }
 
