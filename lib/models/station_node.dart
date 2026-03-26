@@ -51,7 +51,7 @@ class StationStorageConfig {
   final int blossomMaxFileMb;
 
   const StationStorageConfig({
-    this.allocatedMb = 10000,
+    this.allocatedMb = 16384,
     this.binaryPolicy = BinaryPolicy.textOnly,
     this.thumbnailMaxKb = 10,
     this.retentionDays = 365,
@@ -64,7 +64,7 @@ class StationStorageConfig {
 
   factory StationStorageConfig.fromJson(Map<String, dynamic> json) {
     return StationStorageConfig(
-      allocatedMb: json['allocatedMb'] as int? ?? 10000,
+      allocatedMb: json['allocatedMb'] as int? ?? 16384,
       binaryPolicy: BinaryPolicy.values.firstWhere(
         (e) => e.name == json['binaryPolicy'],
         orElse: () => BinaryPolicy.textOnly,

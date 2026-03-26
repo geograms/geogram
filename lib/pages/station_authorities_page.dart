@@ -224,7 +224,7 @@ class _StationAuthoritiesPageState extends State<StationAuthoritiesPage> with Si
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Network Authorities'),
+        title: Text('Moderators'),
         actions: [
           IconButton(
             icon: Icon(Icons.refresh),

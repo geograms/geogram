@@ -21,10 +21,8 @@ import '../services/hotspot_portal_service.dart';
 import '../services/log_service.dart';
 import 'station_setup_root_page.dart';
 import 'station_setup_remote_page.dart';
-import 'station_logs_page.dart';
 import 'station_metrics_page.dart';
 import 'station_authorities_page.dart';
-import 'station_topology_page.dart';
 
 /// Dashboard for managing station node
 class StationDashboardPage extends StatefulWidget {
@@ -253,13 +251,6 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
           ],
         ],
       ),
-      floatingActionButton: (_stationNode != null || _remoteStations.isNotEmpty) && !_showSettings
-          ? FloatingActionButton(
-              onPressed: _showAddStationDialog,
-              child: Icon(Icons.add),
-              tooltip: 'Add Station',
-            )
-          : null,
     );
   }
 
@@ -425,44 +416,6 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
     );
   }
 
-  void _showAddStationDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Add Station'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_stationNode == null)
-              ListTile(
-                leading: Icon(Icons.hub),
-                title: Text('Create Local Station'),
-                subtitle: Text('Run a station on this device'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _createRootStation();
-                },
-              ),
-            ListTile(
-              leading: Icon(Icons.cloud),
-              title: Text('Connect to Remote Station'),
-              subtitle: Text('Manage a station running elsewhere'),
-              onTap: () {
-                Navigator.pop(context);
-                _connectToRemoteStation();
-              },
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-        ],
-      ),
-    );
-  }
 
   void _confirmRemoveRemoteStation(StationNode remote) {
     showDialog(
@@ -973,11 +926,6 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
               'Used: ${_formatStorage(used)} / ${_formatStorage(allocated)}',
               style: TextStyle(fontSize: 12, color: Colors.grey[600]),
             ),
-            SizedBox(height: 4),
-            Text(
-              'Policy: ${_stationNode!.config.storage.binaryPolicy.name}',
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            ),
           ],
         ),
       ),
@@ -1334,15 +1282,6 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => StationLogsPage()),
-                    );
-                  },
-                  icon: Icon(Icons.article),
-                  label: Text('View Logs'),
-                ),
                 if (_stationNode!.isRoot)
                   OutlinedButton.icon(
                     onPressed: () {
@@ -1351,22 +1290,8 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
                       );
                     },
                     icon: Icon(Icons.admin_panel_settings),
-                    label: Text('Manage Authorities'),
+                    label: Text('Moderators'),
                   ),
-                OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => StationTopologyPage()),
-                    );
-                  },
-                  icon: Icon(Icons.account_tree),
-                  label: Text('Network Topology'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _confirmDeleteStation,
-                  icon: Icon(Icons.delete_outline, color: Colors.red),
-                  label: Text('Delete Station', style: TextStyle(color: Colors.red)),
-                ),
               ],
             ),
           ],
@@ -1469,37 +1394,6 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
   }
 
 
-  void _confirmDeleteStation() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Delete Station?'),
-        content: Text(
-          'This will delete all station configuration and data. '
-          'If this is a root station, the network will be destroyed. '
-          'This action cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await _stationNodeService.deleteStation();
-              setState(() => _stationNode = null);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Station deleted')),
-              );
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
 
   String _formatUptime(Duration duration) {
     if (duration.inDays > 0) {
@@ -1539,9 +1433,9 @@ class _StationSettingsPanelState extends State<StationSettingsPanel> {
   bool _isSaving = false;
   bool _hasChanges = false;
 
-  // Storage settings
+  // Storage settings — logarithmic steps in GB: 1, 2, 4, 8, 16, 32, 64, 128
+  static const _storageStepsGb = [1, 2, 4, 8, 16, 32, 64, 128];
   late int _allocatedMb;
-  late BinaryPolicy _binaryPolicy;
   late int _thumbnailMaxKb;
   late bool _foreverRetention;
   late int _retentionDays;
@@ -1593,7 +1487,10 @@ class _StationSettingsPanelState extends State<StationSettingsPanel> {
 
     // Storage
     _allocatedMb = _config.storage.allocatedMb;
-    _binaryPolicy = _config.storage.binaryPolicy;
+    // Snap to nearest valid step
+    if (!_storageStepsGb.contains((_allocatedMb / 1024).round())) {
+      _allocatedMb = 16 * 1024; // default 16 GB
+    }
     _thumbnailMaxKb = _config.storage.thumbnailMaxKb;
     _retentionDays = _config.storage.retentionDays;
     _foreverRetention = _retentionDays == 0;
@@ -1925,6 +1822,10 @@ class _StationSettingsPanelState extends State<StationSettingsPanel> {
   }
 
   Widget _buildStorageSection() {
+    final currentGb = _allocatedMb / 1024;
+    final stepIndex = _storageStepsGb.indexWhere((g) => g * 1024 == _allocatedMb);
+    final sliderIndex = stepIndex >= 0 ? stepIndex : _storageStepsGb.indexOf(16);
+
     return Card(
       child: Padding(
         padding: EdgeInsets.all(12),
@@ -1933,55 +1834,23 @@ class _StationSettingsPanelState extends State<StationSettingsPanel> {
           children: [
             Text('STORAGE', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
             SizedBox(height: 12),
-            Text('Allocated: ${_formatStorage(_allocatedMb)}', style: TextStyle(fontSize: 13)),
+            Text('Allocated: ${currentGb.round()} GB', style: TextStyle(fontSize: 13)),
             Slider(
-              value: _allocatedMb.toDouble(),
-              min: 50,
-              max: 10000,
-              divisions: 199,
+              value: sliderIndex.toDouble(),
+              min: 0,
+              max: (_storageStepsGb.length - 1).toDouble(),
+              divisions: _storageStepsGb.length - 1,
+              label: '${_storageStepsGb[sliderIndex]} GB',
               onChanged: (value) {
                 setState(() {
-                  _allocatedMb = value.round();
+                  _allocatedMb = _storageStepsGb[value.round()] * 1024;
                   _hasChanges = true;
                 });
               },
             ),
             Wrap(
               spacing: 4,
-              children: [
-                _buildPresetChip('50 MB', 50),
-                _buildPresetChip('500 MB', 500),
-                _buildPresetChip('1 GB', 1000),
-                _buildPresetChip('5 GB', 5000),
-              ],
-            ),
-            SizedBox(height: 12),
-            Text('Binary Policy', style: TextStyle(fontSize: 13)),
-            SizedBox(height: 8),
-            Wrap(
-              spacing: 4,
-              children: [
-                ChoiceChip(
-                  label: Text('Text', style: TextStyle(fontSize: 11)),
-                  selected: _binaryPolicy == BinaryPolicy.textOnly,
-                  onSelected: (_) => _setBinaryPolicy(BinaryPolicy.textOnly),
-                ),
-                ChoiceChip(
-                  label: Text('Thumbs', style: TextStyle(fontSize: 11)),
-                  selected: _binaryPolicy == BinaryPolicy.thumbnailsOnly,
-                  onSelected: (_) => _setBinaryPolicy(BinaryPolicy.thumbnailsOnly),
-                ),
-                ChoiceChip(
-                  label: Text('On-demand', style: TextStyle(fontSize: 11)),
-                  selected: _binaryPolicy == BinaryPolicy.onDemand,
-                  onSelected: (_) => _setBinaryPolicy(BinaryPolicy.onDemand),
-                ),
-                ChoiceChip(
-                  label: Text('Full', style: TextStyle(fontSize: 11)),
-                  selected: _binaryPolicy == BinaryPolicy.fullCache,
-                  onSelected: (_) => _setBinaryPolicy(BinaryPolicy.fullCache),
-                ),
-              ],
+              children: _storageStepsGb.map((gb) => _buildPresetChip('$gb GB', gb * 1024)).toList(),
             ),
           ],
         ),
@@ -1989,21 +1858,14 @@ class _StationSettingsPanelState extends State<StationSettingsPanel> {
     );
   }
 
-  void _setBinaryPolicy(BinaryPolicy policy) {
-    setState(() {
-      _binaryPolicy = policy;
-      _hasChanges = true;
-    });
-  }
-
-  Widget _buildPresetChip(String label, int value) {
-    final isSelected = _allocatedMb == value;
+  Widget _buildPresetChip(String label, int valueMb) {
+    final isSelected = _allocatedMb == valueMb;
     return ActionChip(
       label: Text(label, style: TextStyle(fontSize: 11)),
-      backgroundColor: isSelected ? Theme.of(context).primaryColor.withOpacity(0.2) : null,
+      backgroundColor: isSelected ? Theme.of(context).primaryColor.withValues(alpha: 0.2) : null,
       onPressed: () {
         setState(() {
-          _allocatedMb = value;
+          _allocatedMb = valueMb;
           _hasChanges = true;
         });
       },
@@ -2067,7 +1929,7 @@ class _StationSettingsPanelState extends State<StationSettingsPanel> {
     try {
       final newStorage = StationStorageConfig(
         allocatedMb: _allocatedMb,
-        binaryPolicy: _binaryPolicy,
+        binaryPolicy: _config.storage.binaryPolicy,
         thumbnailMaxKb: _thumbnailMaxKb,
         retentionDays: _foreverRetention ? 0 : _retentionDays,
         chatRetentionDays: _foreverChatRetention ? 0 : _chatRetentionDays,
@@ -2114,12 +1976,5 @@ class _StationSettingsPanelState extends State<StationSettingsPanel> {
         setState(() => _isSaving = false);
       }
     }
-  }
-
-  String _formatStorage(int mb) {
-    if (mb >= 1000) {
-      return '${(mb / 1000).toStringAsFixed(1)} GB';
-    }
-    return '$mb MB';
   }
 }
