@@ -1119,8 +1119,9 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
           description: 'General discussion',
           creatorCallsign: _settings.callsign,
         );
-        await _saveChatData();
       }
+      // Always re-save to keep channels.json in sync (station is authoritative)
+      await _saveChatData();
     }
 
     _log('INFO', 'Pure Station Server initialized');

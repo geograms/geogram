@@ -20,6 +20,7 @@ import 'log_service.dart';
 import 'profile_service.dart';
 import 'storage_config.dart';
 import 'log_api_service.dart';
+import '../services/chat_service.dart';
 import '../util/task_monitor_helpers.dart';
 
 /// Service for managing this device as a station node
@@ -388,6 +389,10 @@ class StationNodeService {
 
       // Create and initialize the station server
       _stationServer = PureStationServer();
+
+      // Debug: expose ChatService state via station debug API
+      _stationServer!.setChatServiceDebugCallback(() => ChatService().getDebugInfo());
+      _stationServer!.setChatServiceLoadCallback((id) => ChatService().debugLoadMessages(id));
 
       // Set operator npubs BEFORE initialize (which loads chat security)
       _stationServer!.setOperatorNpubs([

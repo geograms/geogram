@@ -656,6 +656,16 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   void setOperatorNpubs(List<String> npubs) {
     _operatorNpubs = npubs;
   }
+
+  /// Debug callbacks for ChatService (set by station_node_service)
+  Future<Map<String, dynamic>> Function()? _chatServiceDebugCallback;
+  Future<Map<String, dynamic>> Function(String channelId)? _chatServiceLoadCallback;
+  void setChatServiceDebugCallback(Future<Map<String, dynamic>> Function() cb) {
+    _chatServiceDebugCallback = cb;
+  }
+  void setChatServiceLoadCallback(Future<Map<String, dynamic>> Function(String) cb) {
+    _chatServiceLoadCallback = cb;
+  }
   final EventBus _eventBus = EventBus();
   bool _running = false;
   bool _quietMode = false;
@@ -966,8 +976,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
           description: 'General discussion',
           creatorCallsign: _settings.callsign,
         );
-        await _saveChatData();
       }
+
+      // Always re-save to keep channels.json in sync (station is authoritative)
+      await _saveChatData();
     }
 
     _log('INFO', 'Pure Station Server initialized');
@@ -2554,6 +2566,58 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         await _handleRelayStatus(request);
       } else if (path == '/api/stats') {
         await _handleStats(request);
+      } else if (path == '/api/debug/chat') {
+        // Debug: dump chat room state for diagnosing issues
+        final chatPath = _getChatDataPath();
+        final channelsFile = File('$chatPath/extra/channels.json');
+        final channelsExists = await channelsFile.exists();
+        String? channelsContent;
+        if (channelsExists) channelsContent = await channelsFile.readAsString();
+
+        final roomDetails = <Map<String, dynamic>>[];
+        for (final room in _chatRooms.values) {
+          final roomDir = Directory('$chatPath/${room.id}');
+          final configFile = File('$chatPath/${room.id}/config.json');
+          String? configContent;
+          if (await configFile.exists()) configContent = await configFile.readAsString();
+          final yearDirs = <String>[];
+          final messageFiles = <String>[];
+          if (await roomDir.exists()) {
+            await for (final e in roomDir.list()) {
+              if (e is Directory) {
+                final name = e.path.split('/').last;
+                if (RegExp(r'^\d{4}$').hasMatch(name)) {
+                  yearDirs.add(name);
+                  await for (final f in e.list()) {
+                    if (f is File) messageFiles.add(f.path.split('/').last);
+                  }
+                }
+              }
+            }
+          }
+          roomDetails.add({
+            'id': room.id,
+            'name': room.name,
+            'message_count': room.messages.length,
+            'has_config': configContent != null,
+            'config_has_daily_files': configContent?.contains('daily_files') ?? false,
+            'year_dirs': yearDirs,
+            'message_files': messageFiles,
+            'chat_path': '$chatPath/${room.id}',
+          });
+        }
+
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'chat_path': chatPath,
+          'channels_json_exists': channelsExists,
+          'channels_json': channelsExists ? jsonDecode(channelsContent!) : null,
+          'station_rooms': roomDetails,
+          'callsign': _settings.callsign,
+          'data_dir': _dataDir,
+          'chat_service': _chatServiceDebugCallback != null ? await _chatServiceDebugCallback!() : null,
+          'chat_service_load_test': _chatServiceLoadCallback != null ? await _chatServiceLoadCallback!('general') : null,
+        }));
       } else if (path == '/api/logs') {
         await _handleLogs(request);
       } else if (path == '/api/updates/latest') {

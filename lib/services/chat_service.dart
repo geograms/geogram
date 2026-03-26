@@ -77,6 +77,70 @@ class ChatService {
   /// Whether using encrypted storage
   bool get useEncryptedStorage => _storage.isEncrypted;
 
+  /// Debug: return storage info for diagnosing issues
+  Future<Map<String, dynamic>> getDebugInfo() async {
+    final channelDebug = <Map<String, dynamic>>[];
+    for (final ch in _channels) {
+      final dirExists = await _storage.directoryExists(ch.folder);
+      List<StorageEntry> entries = [];
+      if (dirExists) {
+        entries = await _storage.listDirectory(ch.folder);
+      }
+      channelDebug.add({
+        'id': ch.id,
+        'folder': ch.folder,
+        'dirExists': dirExists,
+        'entries': entries.map((e) => '${e.name}${e.isDirectory ? "/" : ""}').toList(),
+      });
+    }
+    return {
+      'appPath': _appPath,
+      'storageType': _storage.runtimeType.toString(),
+      'channelCount': _channels.length,
+      'channels': channelDebug,
+    };
+  }
+
+  /// Debug: try loading messages for a channel and return detailed result
+  Future<Map<String, dynamic>> debugLoadMessages(String channelId) async {
+    try {
+      final channel = getChannel(channelId);
+      if (channel == null) return {'error': 'channel not found'};
+
+      final dirExists = await _storage.directoryExists(channel.folder);
+      final entries = await _storage.listDirectory(channel.folder);
+      final yearFolders = entries.where((e) => e.isDirectory && RegExp(r'^\d{4}$').hasMatch(e.name)).toList();
+
+      final yearDetails = <String, dynamic>{};
+      for (final yf in yearFolders) {
+        final yearEntries = await _storage.listDirectory('${channel.folder}/${yf.name}');
+        final chatFiles = yearEntries.where((e) => !e.isDirectory && e.name.endsWith('_chat.txt')).toList();
+        yearDetails[yf.name] = {
+          'allEntries': yearEntries.map((e) => e.name).toList(),
+          'chatFiles': chatFiles.map((e) => e.name).toList(),
+        };
+        // Try reading first chat file
+        if (chatFiles.isNotEmpty) {
+          final content = await _storage.readString('${channel.folder}/${yf.name}/${chatFiles.first.name}');
+          yearDetails['${yf.name}_firstFileLength'] = content?.length ?? -1;
+          yearDetails['${yf.name}_firstFilePreview'] = content != null && content.length > 100 ? content.substring(0, 100) : content;
+        }
+      }
+
+      final msgs = await loadMessages(channelId, limit: 5);
+      return {
+        'channelId': channelId,
+        'folder': channel.folder,
+        'dirExists': dirExists,
+        'yearFolders': yearFolders.map((e) => e.name).toList(),
+        'yearDetails': yearDetails,
+        'messageCount': msgs.length,
+      };
+    } catch (e) {
+      return {'channelId': channelId, 'error': e.toString()};
+    }
+  }
+
   /// Set the profile storage for file operations
   /// MUST be called before initializeApp
   void setStorage(ProfileStorage storage) {
@@ -468,9 +532,7 @@ class ChatService {
   /// Treats 'general' as an alias for 'main' (the default main channel)
   ChatChannel? getChannel(String channelId) {
     try {
-      // Treat 'general' as an alias for 'main' (common naming convention)
-      final normalizedId = channelId.toLowerCase() == 'general' ? 'main' : channelId;
-      return _channels.firstWhere((ch) => ch.id == normalizedId);
+      return _channels.firstWhere((ch) => ch.id == channelId);
     } catch (e) {
       return null;
     }
@@ -520,31 +582,30 @@ class ChatService {
     DateTime? endDate,
     int limit = 100,
   }) async {
-    if (_appPath == null) return [];
+    if (_appPath == null) {
+      print('ChatService.loadMessages: _appPath is null');
+      return [];
+    }
 
     final channel = getChannel(channelId);
-    if (channel == null) return [];
+    if (channel == null) {
+      print('ChatService.loadMessages: channel $channelId not found');
+      return [];
+    }
 
     // Check if channel exists via storage abstraction
-    if (!await _storage.directoryExists(channel.folder)) return [];
+    final dirExists = await _storage.directoryExists(channel.folder);
+    if (!dirExists) {
+      print('ChatService.loadMessages: directory ${channel.folder} not found via storage (appPath=$_appPath, storage=${_storage.runtimeType})');
+      return [];
+    }
 
     List<ChatMessage> messages = [];
 
-    // Determine storage format: daily files or single messages.txt
-    // Check config flag, isMain, or auto-detect by looking for year directories
-    var useDailyFiles = channel.isMain || (channel.config?.dailyFiles ?? false);
-    if (!useDailyFiles) {
-      // Auto-detect: if a year directory exists (e.g., {folder}/2026/), use daily files
-      final entries = await _storage.listDirectory(channel.folder);
-      if (entries != null) {
-        useDailyFiles = entries.any((e) =>
-            e.isDirectory && RegExp(r'^\d{4}$').hasMatch(e.name));
-      }
-    }
-
-    if (useDailyFiles) {
-      messages = await _loadMainChannelMessagesStorage(channel.folder, startDate, endDate);
-    } else {
+    // Try daily files first (used by station server and main channel),
+    // fall back to single messages.txt
+    messages = await _loadMainChannelMessagesStorage(channel.folder, startDate, endDate);
+    if (messages.isEmpty) {
       messages = await _loadSingleFileMessagesStorage(channel.folder);
     }
 

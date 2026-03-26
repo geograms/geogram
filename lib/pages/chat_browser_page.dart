@@ -657,10 +657,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       // Pass current user's npub to initialize admin if needed
       final currentProfile = _profileService.getProfile();
+      debugPrint('ChatBrowser: storagePath=$storagePath');
       await _chatService.initializeApp(
         storagePath,
         creatorNpub: currentProfile.npub,
       );
+      debugPrint('ChatBrowser: ${_chatService.channels.length} channels: ${_chatService.channels.map((c) => c.id).join(", ")}');
 
       _localChatCollectionPath = storagePath;
       _groupsAppPath =
@@ -767,7 +769,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // If this device IS the station, skip — rooms show as local channels
     if (ProfileService().getProfile().isRelay) {
-      _setStateIfMounted(() => _loadingRelayRooms = false);
+      _setStateIfMounted(() {
+        _stationRooms = [];
+        _cachedDeviceSources = [];
+        _loadingRelayRooms = false;
+      });
       return;
     }
 
@@ -3669,6 +3675,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Build station rooms section widgets
   List<Widget> _buildStationSection(ThemeData theme) {
+    // Station profile: rooms are local channels, no separate section
+    if (ProfileService().getProfile().isRelay) return [];
     // Show connecting placeholder when rooms haven't loaded yet but a station is configured
     if (_stationRooms.isEmpty) {
       if (_connectionStatus == _StationConnectionStatus.connecting && _lastStationUrl != null) {
