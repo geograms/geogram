@@ -15,13 +15,14 @@ import '../models/station_node.dart';
 import 'package:http/http.dart' as http;
 import '../services/station_node_service.dart';
 import '../services/wifi_direct_service.dart';
-import '../station.dart' show SslCertificateManager;
+import '../station.dart' show SslCertificateManager, ServerStats;
 import '../services/i18n_service.dart';
 import '../services/hotspot_portal_service.dart';
 import '../services/log_service.dart';
 import 'station_setup_root_page.dart';
 import 'station_setup_remote_page.dart';
 import 'station_logs_page.dart';
+import 'station_metrics_page.dart';
 import 'station_authorities_page.dart';
 import 'station_topology_page.dart';
 
@@ -214,11 +215,13 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(child: _buildStatCard('Connected Devices', '${_stationNode!.stats.connectedDevices}', Icons.devices)),
+                      Expanded(child: _buildConnectedDevicesCard()),
                       SizedBox(width: 16),
                       Expanded(child: _buildStorageCard()),
                     ],
                   ),
+                  SizedBox(height: 16),
+                  _buildMetricsPreviewCard(),
                   SizedBox(height: 16),
                   _buildActionsCard(),
                 ],
@@ -789,6 +792,155 @@ class _StationDashboardPageState extends State<StationDashboardPage> {
         ),
       ),
     );
+  }
+
+  Widget _buildConnectedDevicesCard() {
+    final count = _stationNode!.stats.connectedDevices;
+    return GestureDetector(
+      onTap: _showConnectedDevices,
+      child: Card(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Icon(Icons.devices, size: 32, color: Colors.white),
+              SizedBox(height: 8),
+              Text('$count', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+              Text('Connected Devices', style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showConnectedDevices() {
+    final server = _stationNodeService.stationServer;
+    if (server == null || !server.isRunning) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Station not running')),
+      );
+      return;
+    }
+
+    final clients = server.clients.values.toList();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Connected Devices (${clients.length})', style: TextStyle(fontSize: 16)),
+        content: clients.isEmpty
+            ? Text('No devices connected', style: TextStyle(color: Colors.grey[600]))
+            : SizedBox(
+                width: double.maxFinite,
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: clients.length,
+                  separatorBuilder: (_, __) => Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final c = clients[i];
+                    final uptime = DateTime.now().difference(c.connectedAt);
+                    final uptimeStr = uptime.inHours > 0
+                        ? '${uptime.inHours}h ${uptime.inMinutes % 60}m'
+                        : '${uptime.inMinutes}m';
+                    return ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.symmetric(horizontal: 4),
+                      leading: Icon(
+                        c.verified ? Icons.verified_user : Icons.person_outline,
+                        color: c.verified ? Colors.green : Colors.grey,
+                        size: 20,
+                      ),
+                      title: Text(
+                        c.callsign ?? c.id,
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        [
+                          if (c.nickname != null) c.nickname!,
+                          if (c.platform != null) c.platform!,
+                          if (c.remoteAddress != null) c.remoteAddress!,
+                          'up $uptimeStr',
+                        ].join(' · '),
+                        style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    );
+                  },
+                ),
+              ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricsPreviewCard() {
+    final server = _stationNodeService.stationServer;
+    final stats = server?.stats;
+    final requestsToday = stats?.requestsToday ?? 0;
+    final bytesToday = stats?.bytesServedToday ?? 0;
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(context,
+          MaterialPageRoute(builder: (_) => const StationMetricsPage()),
+        );
+      },
+      child: Card(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.bar_chart, size: 16, color: Colors.grey[600]),
+                  SizedBox(width: 6),
+                  Text('TODAY', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  Spacer(),
+                  Icon(Icons.chevron_right, size: 16, color: Colors.grey[400]),
+                ],
+              ),
+              SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('$requestsToday', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                        Text('Requests', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_formatBandwidth(bytesToday), style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                        Text('Bandwidth', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatBandwidth(int bytes) {
+    if (bytes >= 1073741824) return '${(bytes / 1073741824).toStringAsFixed(1)} GB';
+    if (bytes >= 1048576) return '${(bytes / 1048576).toStringAsFixed(1)} MB';
+    if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '$bytes B';
   }
 
   Widget _buildStorageCard() {

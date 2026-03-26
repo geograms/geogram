@@ -441,6 +441,62 @@ class ServerStats implements StationStatsReadable {
   DateTime? lastMessage;
   DateTime? lastTileRequest;
 
+  // Time-bucketed request counts (auto-reset on date change)
+  int requestsToday = 0;
+  int requestsThisWeek = 0;
+  int requestsThisMonth = 0;
+  int _currentDay = -1;
+  int _currentWeek = -1;
+  int _currentMonth = -1;
+
+  // Bandwidth tracking (bytes served)
+  int bytesServedTotal = 0;
+  int bytesServedToday = 0;
+
+  // Per-device request counts: callsign → count
+  final Map<String, int> deviceRequestCounts = {};
+
+  /// Record an HTTP request with optional bandwidth and device attribution
+  void recordRequest({int bytes = 0, String? callsign}) {
+    final now = DateTime.now();
+    final day = now.day + now.month * 100 + now.year * 10000;
+    final week = (now.millisecondsSinceEpoch ~/ (7 * 86400000));
+    final month = now.month + now.year * 100;
+
+    if (day != _currentDay) {
+      requestsToday = 0;
+      bytesServedToday = 0;
+      _currentDay = day;
+    }
+    if (week != _currentWeek) {
+      requestsThisWeek = 0;
+      _currentWeek = week;
+    }
+    if (month != _currentMonth) {
+      requestsThisMonth = 0;
+      _currentMonth = month;
+    }
+
+    requestsToday++;
+    requestsThisWeek++;
+    requestsThisMonth++;
+    totalApiRequests++;
+
+    bytesServedTotal += bytes;
+    bytesServedToday += bytes;
+
+    if (callsign != null && callsign.isNotEmpty) {
+      deviceRequestCounts[callsign] = (deviceRequestCounts[callsign] ?? 0) + 1;
+    }
+  }
+
+  /// Top devices sorted by request count (descending)
+  List<MapEntry<String, int>> get topDevices {
+    final sorted = deviceRequestCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return sorted;
+  }
+
   Map<String, dynamic> toJson() => {
         'total_connections': totalConnections,
         'total_messages': totalMessages,
@@ -452,6 +508,11 @@ class ServerStats implements StationStatsReadable {
         'last_connection': lastConnection?.toIso8601String(),
         'last_message': lastMessage?.toIso8601String(),
         'last_tile_request': lastTileRequest?.toIso8601String(),
+        'requests_today': requestsToday,
+        'requests_this_week': requestsThisWeek,
+        'requests_this_month': requestsThisMonth,
+        'bytes_served_total': bytesServedTotal,
+        'bytes_served_today': bytesServedToday,
       };
 }
 
@@ -2332,8 +2393,16 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     final method = request.method;
     final ip = request.connectionInfo?.remoteAddress.address ?? 'unknown';
     final stopwatch = Stopwatch()..start();
-    _stats.totalApiRequests++;
     recordRequestForWatchdog();  // Track for health watchdog
+
+    // Extract callsign from URL path (e.g., /X1SU86/blog/ → X1SU86)
+    String? reqCallsign;
+    if (path.length > 1) {
+      final firstSeg = path.substring(1).split('/').first;
+      if (firstSeg.length >= 4 && firstSeg.startsWith('X')) {
+        reqCallsign = firstSeg;
+      }
+    }
 
     try {
       // Exempt safe, high-traffic paths from rate limiting:
@@ -2551,6 +2620,11 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     await request.response.close();
     stopwatch.stop();
+
+    // Track metrics: request count, bandwidth, per-device attribution
+    final responseBytes = request.response.contentLength > 0 ? request.response.contentLength : 0;
+    _stats.recordRequest(bytes: responseBytes, callsign: reqCallsign);
+
     _logAccess(ip, method, path, request.response.statusCode, stopwatch.elapsedMilliseconds,
         request.headers.value('user-agent'));
   }
