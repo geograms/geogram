@@ -765,26 +765,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       return;
     }
 
-    // If this device IS the station, use the local server directly
-    final localServer = StationNodeService().stationServer;
-    if (ProfileService().getProfile().isRelay && localServer != null && localServer.isRunning) {
-      final localPort = localServer.settings.httpPort;
-      final localUrl = 'http://localhost:$localPort';
-      final localCallsign = localServer.settings.callsign;
-      LogService().log('DEBUG _loadRelayRooms: using local station at $localUrl');
-      _lastStationUrl = localUrl;
-      _lastRelayCacheKey = localCallsign;
-
-      final cachedRooms = await _cacheService.loadChatRooms(localCallsign, localUrl);
-      if (cachedRooms.isNotEmpty) {
-        _setStateIfMounted(() {
-          _stationRooms = cachedRooms;
-          _connectionStatus = _StationConnectionStatus.online;
-          _loadingRelayRooms = false;
-        });
-      }
-
-      unawaited(_fetchRelayRoomsFromRemote(localCallsign, localUrl));
+    // If this device IS the station, skip — rooms show as local channels
+    if (ProfileService().getProfile().isRelay) {
+      _setStateIfMounted(() => _loadingRelayRooms = false);
       return;
     }
 
@@ -3798,9 +3781,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // + button for station owner to create rooms
+                  // + and cog buttons for station owner
                   if (ProfileService().getProfile().isRelay ||
-                      _stationRooms.any((r) => r.isModerator))
+                      _stationRooms.any((r) => r.isModerator)) ...[
                     SizedBox(
                       width: 32,
                       height: 32,
@@ -3812,6 +3795,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                         onPressed: () => _showCreateRoomMobileDialog(context),
                       ),
                     ),
+                    SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        iconSize: 20,
+                        icon: Icon(Icons.settings, color: theme.colorScheme.primary),
+                        tooltip: _i18n.t('settings'),
+                        onPressed: _openSettings,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

@@ -1052,7 +1052,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   }
 
 
-  /// Load chat rooms from disk ({callsign}/chat/{room_id}/config.json)
+  /// Load chat rooms from extra/channels.json (shared with ChatService)
   Future<void> _loadChatData([String? callsign]) async {
     final chatPath = _getChatDataPath(callsign);
     try {
@@ -1060,48 +1060,69 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       if (!await chatDir.exists()) {
         await chatDir.create(recursive: true);
         _log('INFO', 'Created chat directory at ${chatDir.path}');
-        return;
       }
 
-      // List room directories
-      final roomDirs = await chatDir.list().where((e) => e is Directory).toList();
-      if (roomDirs.isEmpty) {
-        _log('INFO', 'No chat rooms found in $chatPath');
-        return;
+      // Ensure extra directory exists
+      final extraDir = Directory('$chatPath/extra');
+      if (!await extraDir.exists()) {
+        await extraDir.create(recursive: true);
       }
 
-      int loadedCount = 0;
-      for (final entity in roomDirs) {
-        final roomDir = entity as Directory;
-        final roomId = roomDir.path.split('/').last;
-        final configFile = File('${roomDir.path}/config.json');
-
-        if (!await configFile.exists()) {
-          _log('WARN', 'Chat room directory $roomId has no config.json, skipping');
-          continue;
-        }
-
+      // Load from channels.json (same file as ChatService)
+      final channelsFile = File('$chatPath/extra/channels.json');
+      if (await channelsFile.exists()) {
         try {
-          final content = await configFile.readAsString();
-          final roomConfig = jsonDecode(content) as Map<String, dynamic>;
+          final content = await channelsFile.readAsString();
+          final json = jsonDecode(content) as Map<String, dynamic>;
+          final channelsList = json['channels'] as List? ?? [];
 
-          final room = ChatRoom(
-            id: roomConfig['id'] as String? ?? roomId,
-            name: roomConfig['name'] as String? ?? roomId,
-            description: roomConfig['description'] as String? ?? '',
-            creatorCallsign: _settings.callsign,
-          );
-          _chatRooms[room.id] = room;
+          for (final ch in channelsList) {
+            final data = ch as Map<String, dynamic>;
+            final id = data['id'] as String? ?? '';
+            if (id.isEmpty) continue;
 
-          // Load messages from text files
-          await _loadRoomMessages(room);
-          loadedCount++;
+            final room = ChatRoom(
+              id: id,
+              name: data['name'] as String? ?? id,
+              description: data['description'] as String? ?? '',
+              creatorCallsign: _settings.callsign,
+            );
+            _chatRooms[room.id] = room;
+            await _loadRoomMessages(room);
+          }
+          _log('INFO', 'Loaded ${_chatRooms.length} chat rooms from channels.json');
         } catch (e) {
-          _log('ERROR', 'Failed to load chat room from ${configFile.path}: $e');
+          _log('ERROR', 'Failed to parse channels.json: $e');
+        }
+      } else {
+        // Migrate: scan room directories for backward compatibility
+        final roomDirs = await chatDir.list().where((e) => e is Directory).toList();
+        for (final entity in roomDirs) {
+          final roomDir = entity as Directory;
+          final roomId = roomDir.path.split('/').last;
+          if (roomId == 'extra') continue;
+          final configFile = File('${roomDir.path}/config.json');
+          if (!await configFile.exists()) continue;
+
+          try {
+            final content = await configFile.readAsString();
+            final cfg = jsonDecode(content) as Map<String, dynamic>;
+            final room = ChatRoom(
+              id: cfg['id'] as String? ?? roomId,
+              name: cfg['name'] as String? ?? roomId,
+              description: cfg['description'] as String? ?? '',
+              creatorCallsign: _settings.callsign,
+            );
+            _chatRooms[room.id] = room;
+            await _loadRoomMessages(room);
+          } catch (_) {}
+        }
+        // Write channels.json so ChatService can see them
+        if (_chatRooms.isNotEmpty) {
+          await _saveChatData(callsign);
+          _log('INFO', 'Migrated ${_chatRooms.length} rooms to channels.json');
         }
       }
-
-      _log('INFO', 'Loaded $loadedCount chat rooms from $chatPath');
 
       // Load chat security (moderators, etc.)
       await _loadChatSecurity(chatPath);
@@ -1387,8 +1408,30 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     _log('INFO', 'Saved chat room config to ${configFile.path}');
   }
 
-  /// Save all chat rooms (configs only)
+  /// Save all chat rooms to extra/channels.json (shared with ChatService)
   Future<void> _saveChatData([String? callsign]) async {
+    final chatPath = _getChatDataPath(callsign);
+    final channelsFile = File('$chatPath/extra/channels.json');
+
+    final channels = _chatRooms.values.map((room) => {
+      'id': room.id,
+      'type': 'group',
+      'name': room.name,
+      'folder': room.id,
+      'participants': ['*'],
+      'description': room.description ?? '',
+      'created': room.createdAt.toIso8601String(),
+    }).toList();
+
+    await channelsFile.parent.create(recursive: true);
+    await channelsFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert({
+        'version': '1.0',
+        'channels': channels,
+      }),
+    );
+
+    // Also save individual room configs (for backward compat and config details)
     for (final room in _chatRooms.values) {
       await _saveRoomConfig(room, callsign);
     }
