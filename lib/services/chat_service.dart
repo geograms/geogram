@@ -90,7 +90,9 @@ class ChatService {
         'id': ch.id,
         'folder': ch.folder,
         'dirExists': dirExists,
-        'entries': entries.map((e) => '${e.name}${e.isDirectory ? "/" : ""}').toList(),
+        'entries': entries
+            .map((e) => '${e.name}${e.isDirectory ? "/" : ""}')
+            .toList(),
       });
     }
     return {
@@ -109,21 +111,32 @@ class ChatService {
 
       final dirExists = await _storage.directoryExists(channel.folder);
       final entries = await _storage.listDirectory(channel.folder);
-      final yearFolders = entries.where((e) => e.isDirectory && RegExp(r'^\d{4}$').hasMatch(e.name)).toList();
+      final yearFolders = entries
+          .where((e) => e.isDirectory && RegExp(r'^\d{4}$').hasMatch(e.name))
+          .toList();
 
       final yearDetails = <String, dynamic>{};
       for (final yf in yearFolders) {
-        final yearEntries = await _storage.listDirectory('${channel.folder}/${yf.name}');
-        final chatFiles = yearEntries.where((e) => !e.isDirectory && e.name.endsWith('_chat.txt')).toList();
+        final yearEntries = await _storage.listDirectory(
+          '${channel.folder}/${yf.name}',
+        );
+        final chatFiles = yearEntries
+            .where((e) => !e.isDirectory && e.name.endsWith('_chat.txt'))
+            .toList();
         yearDetails[yf.name] = {
           'allEntries': yearEntries.map((e) => e.name).toList(),
           'chatFiles': chatFiles.map((e) => e.name).toList(),
         };
         // Try reading first chat file
         if (chatFiles.isNotEmpty) {
-          final content = await _storage.readString('${channel.folder}/${yf.name}/${chatFiles.first.name}');
+          final content = await _storage.readString(
+            '${channel.folder}/${yf.name}/${chatFiles.first.name}',
+          );
           yearDetails['${yf.name}_firstFileLength'] = content?.length ?? -1;
-          yearDetails['${yf.name}_firstFilePreview'] = content != null && content.length > 100 ? content.substring(0, 100) : content;
+          yearDetails['${yf.name}_firstFilePreview'] =
+              content != null && content.length > 100
+              ? content.substring(0, 100)
+              : content;
         }
       }
 
@@ -156,7 +169,10 @@ class ChatService {
   /// [filename] is the attachment filename
   ///
   /// Returns the file bytes, or null if not found.
-  Future<Uint8List?> getAttachmentBytes(String channelFolder, String filename) async {
+  Future<Uint8List?> getAttachmentBytes(
+    String channelFolder,
+    String filename,
+  ) async {
     final relativePath = '$channelFolder/files/$filename';
     return await _storage.readBytes(relativePath);
   }
@@ -180,7 +196,9 @@ class ChatService {
     await _loadHiddenMessages();
 
     // If this is a new collection (no admin set) and creator npub provided, set as admin
-    if (_security.adminNpub == null && creatorNpub != null && creatorNpub.isNotEmpty) {
+    if (_security.adminNpub == null &&
+        creatorNpub != null &&
+        creatorNpub.isNotEmpty) {
       final newSecurity = ChatSecurity(adminNpub: creatorNpub);
       await saveSecurity(newSecurity);
     }
@@ -262,7 +280,10 @@ class ChatService {
     stopWatching(); // Clear any existing watchers
 
     if (_appPath == null) {
-      if (!kIsWeb) stderr.writeln('ChatService: Cannot start watching - no collection path');
+      if (!kIsWeb)
+        stderr.writeln(
+          'ChatService: Cannot start watching - no collection path',
+        );
       return;
     }
 
@@ -277,31 +298,47 @@ class ChatService {
       return;
     }
 
-    stderr.writeln('ChatService: Starting file watchers for ${_channels.length} channels at $_appPath');
+    stderr.writeln(
+      'ChatService: Starting file watchers for ${_channels.length} channels at $_appPath',
+    );
 
     // Watch main channel folder and subfolders
     for (final channel in _channels) {
       final channelDir = Directory(p.join(_appPath!, channel.folder));
-      stderr.writeln('ChatService: Checking channel ${channel.id} at ${channelDir.path}');
+      stderr.writeln(
+        'ChatService: Checking channel ${channel.id} at ${channelDir.path}',
+      );
       if (channelDir.existsSync()) {
         try {
           final subscription = channelDir
-              .watch(events: FileSystemEvent.modify | FileSystemEvent.create, recursive: true)
+              .watch(
+                events: FileSystemEvent.modify | FileSystemEvent.create,
+                recursive: true,
+              )
               .listen((event) {
-            stderr.writeln('ChatService: File change detected: ${event.path}');
-            // Only notify for chat files
-            if (event.path.endsWith('_chat.txt') || event.path.endsWith('messages.txt')) {
-              stderr.writeln('ChatService: Notifying change for channel ${channel.id}');
-              _changeController.add(ChatFileChange(channel.id, DateTime.now()));
-            }
-          });
+                stderr.writeln(
+                  'ChatService: File change detected: ${event.path}',
+                );
+                // Only notify for chat files
+                if (event.path.endsWith('_chat.txt') ||
+                    event.path.endsWith('messages.txt')) {
+                  stderr.writeln(
+                    'ChatService: Notifying change for channel ${channel.id}',
+                  );
+                  _changeController.add(
+                    ChatFileChange(channel.id, DateTime.now()),
+                  );
+                }
+              });
           _watchSubscriptions.add(subscription);
           stderr.writeln('ChatService: Started watching ${channelDir.path}');
         } catch (e) {
           stderr.writeln('ChatService: Failed to watch ${channelDir.path}: $e');
         }
       } else {
-        stderr.writeln('ChatService: Channel dir does not exist: ${channelDir.path}');
+        stderr.writeln(
+          'ChatService: Channel dir does not exist: ${channelDir.path}',
+        );
       }
     }
   }
@@ -312,6 +349,10 @@ class ChatService {
       sub.cancel();
     }
     _watchSubscriptions.clear();
+  }
+
+  bool _usesDailyFiles(ChatChannel channel) {
+    return channel.isMain || channel.config?.dailyFiles == true;
   }
 
   /// Reset all chat state for a profile switch
@@ -403,10 +444,7 @@ class ChatService {
       };
     });
 
-    final json = {
-      'version': '1.0',
-      'participants': participantsMap,
-    };
+    final json = {'version': '1.0', 'participants': participantsMap};
     final content = const JsonEncoder.withIndent('  ').convert(json);
 
     await _storage.createDirectory('extra');
@@ -447,10 +485,7 @@ class ChatService {
 
     _security = security;
 
-    final json = {
-      'version': '1.0',
-      ..._security.toJson(),
-    };
+    final json = {'version': '1.0', ..._security.toJson()};
     final content = const JsonEncoder.withIndent('  ').convert(json);
 
     await _storage.createDirectory('extra');
@@ -469,18 +504,23 @@ class ChatService {
     }
 
     // Create config.json content
-    var config = channel.config ??
+    var config =
+        channel.config ??
         ChatChannelConfig.defaults(
           id: channel.id,
           name: channel.name,
           description: channel.description,
         );
 
-    if (channel.isGroup && config.owner == null && _security.adminNpub != null) {
+    if (channel.isGroup &&
+        config.owner == null &&
+        _security.adminNpub != null) {
       config = config.copyWith(owner: _security.adminNpub);
     }
 
-    final configContent = const JsonEncoder.withIndent('  ').convert(config.toJson());
+    final configContent = const JsonEncoder.withIndent(
+      '  ',
+    ).convert(config.toJson());
 
     // Use ProfileStorage abstraction for all channel creation
     final channelFolder = channel.folder;
@@ -492,8 +532,8 @@ class ChatService {
     // Create config.json
     await _storage.writeString('$channelFolder/config.json', configContent);
 
-    // For main channel, create year folder structure
-    if (channel.isMain) {
+    // Create year folder structure for any daily-file room.
+    if (_usesDailyFiles(channel)) {
       final year = DateTime.now().year.toString();
       await _storage.createDirectory('$channelFolder/$year');
       await _storage.createDirectory('$channelFolder/$year/files');
@@ -596,16 +636,22 @@ class ChatService {
     // Check if channel exists via storage abstraction
     final dirExists = await _storage.directoryExists(channel.folder);
     if (!dirExists) {
-      print('ChatService.loadMessages: directory ${channel.folder} not found via storage (appPath=$_appPath, storage=${_storage.runtimeType})');
+      print(
+        'ChatService.loadMessages: directory ${channel.folder} not found via storage (appPath=$_appPath, storage=${_storage.runtimeType})',
+      );
       return [];
     }
 
     List<ChatMessage> messages = [];
 
-    // Try daily files first (used by station server and main channel),
-    // fall back to single messages.txt
-    messages = await _loadMainChannelMessagesStorage(channel.folder, startDate, endDate);
-    if (messages.isEmpty) {
+    if (_usesDailyFiles(channel)) {
+      messages = await _loadMainChannelMessagesStorage(
+        channel.folder,
+        startDate,
+        endDate,
+      );
+    }
+    if (messages.isEmpty && !_usesDailyFiles(channel)) {
       messages = await _loadSingleFileMessagesStorage(channel.folder);
     }
 
@@ -628,7 +674,9 @@ class ChatService {
   }
 
   /// Load messages from single file (ProfileStorage)
-  Future<List<ChatMessage>> _loadSingleFileMessagesStorage(String channelFolder) async {
+  Future<List<ChatMessage>> _loadSingleFileMessagesStorage(
+    String channelFolder,
+  ) async {
     final messagesPath = '$channelFolder/messages.txt';
     final content = await _storage.readString(messagesPath);
     if (content == null) return [];
@@ -651,7 +699,9 @@ class ChatService {
 
     for (var yearFolder in yearFolders) {
       // Find all chat files in year folder
-      final yearEntries = await _storage.listDirectory('$channelFolder/${yearFolder.name}');
+      final yearEntries = await _storage.listDirectory(
+        '$channelFolder/${yearFolder.name}',
+      );
       final chatFiles = yearEntries
           .where((e) => !e.isDirectory && e.name.endsWith('_chat.txt'))
           .toList();
@@ -678,7 +728,9 @@ class ChatService {
         }
 
         // Parse messages from file
-        final content = await _storage.readString('$channelFolder/${yearFolder.name}/${file.name}');
+        final content = await _storage.readString(
+          '$channelFolder/${yearFolder.name}/${file.name}',
+        );
         if (content != null) {
           messages.addAll(parseMessageText(content));
         }
@@ -749,13 +801,17 @@ class ChatService {
   /// Uses unified ChatFormat parser for consistency with server
   static List<ChatMessage> parseMessageText(String content) {
     final parsed = ChatFormat.parse(content);
-    return parsed.map((p) => ChatMessage(
-      author: p.author,
-      timestamp: p.timestamp,
-      content: p.content,
-      metadata: p.metadata,
-      reactions: p.reactions,
-    )).toList();
+    return parsed
+        .map(
+          (p) => ChatMessage(
+            author: p.author,
+            timestamp: p.timestamp,
+            content: p.content,
+            metadata: p.metadata,
+            reactions: p.reactions,
+          ),
+        )
+        .toList();
   }
 
   /// Save a message to appropriate file
@@ -772,9 +828,12 @@ class ChatService {
     // Use ProfileStorage abstraction for message saving
     String messageFilePath;
 
-    if (channel.isMain) {
+    if (_usesDailyFiles(channel)) {
       // Get daily file path
-      messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, message.dateTime);
+      messageFilePath = await _getDailyMessageFilePathStorage(
+        channel.folder,
+        message.dateTime,
+      );
     } else {
       // Ensure channel directory exists for non-main channels
       await _storage.createDirectory(channel.folder);
@@ -808,24 +867,26 @@ class ChatService {
     await _saveChannels();
 
     if (EventBus().hasSubscribers<ChatMessageEvent>()) {
-      EventBus().fire(ChatMessageEvent(
-        roomId: channelId,
-        callsign: message.author,
-        content: message.content,
-        npub: message.npub,
-        signature: message.signature,
-        verified: message.isVerified,
-      ));
+      EventBus().fire(
+        ChatMessageEvent(
+          roomId: channelId,
+          callsign: message.author,
+          content: message.content,
+          npub: message.npub,
+          signature: message.signature,
+          verified: message.isVerified,
+        ),
+      );
     }
 
     final currentProfile = ProfileService().getProfile();
     final legacyAllowedNpubs = channel.isPublic
         ? const <String>[]
         : channel.participants
-            .where((participant) => participant != '*')
-            .map((participant) => _participants[participant] ?? '')
-            .where((npub) => npub.isNotEmpty)
-            .toList();
+              .where((participant) => participant != '*')
+              .map((participant) => _participants[participant] ?? '')
+              .where((npub) => npub.isNotEmpty)
+              .toList();
     await StationActivityPublisherService().publishChatMessage(
       channel,
       message,
@@ -836,7 +897,10 @@ class ChatService {
   }
 
   /// Get daily message file path for main channel (ProfileStorage)
-  Future<String> _getDailyMessageFilePathStorage(String channelFolder, DateTime date) async {
+  Future<String> _getDailyMessageFilePathStorage(
+    String channelFolder,
+    DateTime date,
+  ) async {
     final year = date.year.toString();
     final yearPath = '$channelFolder/$year';
 
@@ -844,13 +908,15 @@ class ChatService {
     await _storage.createDirectory(yearPath);
     await _storage.createDirectory('$yearPath/files');
 
-    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final dateStr =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     return '$yearPath/${dateStr}_chat.txt';
   }
 
   /// Generate file header
   String _generateFileHeader(ChatChannel channel, DateTime date) {
-    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+    final dateStr =
+        '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
     return '# ${channel.id.toUpperCase()}: ${channel.name} from $dateStr\n';
   }
 
@@ -878,8 +944,13 @@ class ChatService {
 
     // Update config.json if config changed
     if (channel.config != null && _appPath != null) {
-      final configContent = const JsonEncoder.withIndent('  ').convert(channel.config!.toJson());
-      await _storage.writeString('${channel.folder}/config.json', configContent);
+      final configContent = const JsonEncoder.withIndent(
+        '  ',
+      ).convert(channel.config!.toJson());
+      await _storage.writeString(
+        '${channel.folder}/config.json',
+        configContent,
+      );
     }
   }
 
@@ -901,9 +972,11 @@ class ChatService {
     final lowerQuery = query.toLowerCase();
 
     return allMessages
-        .where((msg) =>
-            msg.content.toLowerCase().contains(lowerQuery) ||
-            msg.author.toLowerCase().contains(lowerQuery))
+        .where(
+          (msg) =>
+              msg.content.toLowerCase().contains(lowerQuery) ||
+              msg.author.toLowerCase().contains(lowerQuery),
+        )
         .take(limit)
         .toList();
   }
@@ -928,7 +1001,7 @@ class ChatService {
       throw Exception('Channel not found: $channelId');
     }
 
-    if (channel.isMain) {
+    if (_usesDailyFiles(channel)) {
       // Delete from daily file
       await _deleteFromDailyFileStorage(channel, message);
     } else {
@@ -942,7 +1015,10 @@ class ChatService {
     ChatChannel channel,
     ChatMessage message,
   ) async {
-    final messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, message.dateTime);
+    final messageFilePath = await _getDailyMessageFilePathStorage(
+      channel.folder,
+      message.dateTime,
+    );
     final content = await _storage.readString(messageFilePath);
     if (content == null) {
       throw Exception('Message file not found');
@@ -951,11 +1027,18 @@ class ChatService {
     var messages = parseMessageText(content);
 
     // Remove the target message
-    messages.removeWhere((msg) =>
-        msg.timestamp == message.timestamp && msg.author == message.author);
+    messages.removeWhere(
+      (msg) =>
+          msg.timestamp == message.timestamp && msg.author == message.author,
+    );
 
     // Rewrite file
-    await _rewriteMessageFileStorage(messageFilePath, channel, messages, message.dateTime);
+    await _rewriteMessageFileStorage(
+      messageFilePath,
+      channel,
+      messages,
+      message.dateTime,
+    );
   }
 
   /// Delete message from single file using storage (DM or group)
@@ -972,11 +1055,18 @@ class ChatService {
     var messages = parseMessageText(content);
 
     // Remove the target message
-    messages.removeWhere((msg) =>
-        msg.timestamp == message.timestamp && msg.author == message.author);
+    messages.removeWhere(
+      (msg) =>
+          msg.timestamp == message.timestamp && msg.author == message.author,
+    );
 
     // Rewrite file
-    await _rewriteMessageFileStorage(messageFilePath, channel, messages, message.dateTime);
+    await _rewriteMessageFileStorage(
+      messageFilePath,
+      channel,
+      messages,
+      message.dateTime,
+    );
   }
 
   /// Rewrite message file with updated messages using storage
@@ -1040,15 +1130,18 @@ class ChatService {
 
     List<ChatMessage> messages;
 
-    if (channel.isMain && messageDate != null) {
+    if (_usesDailyFiles(channel) && messageDate != null) {
       // Load from specific daily file
-      final messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, messageDate);
+      final messageFilePath = await _getDailyMessageFilePathStorage(
+        channel.folder,
+        messageDate,
+      );
       final content = await _storage.readString(messageFilePath);
       if (content == null) {
         return null;
       }
       messages = parseMessageText(content);
-    } else if (!channel.isMain) {
+    } else if (!_usesDailyFiles(channel)) {
       // Load from single messages.txt
       final messageFilePath = '${channel.folder}/messages.txt';
       final content = await _storage.readString(messageFilePath);
@@ -1057,7 +1150,7 @@ class ChatService {
       }
       messages = parseMessageText(content);
     } else {
-      // Main channel but couldn't parse date - load all messages
+      // Daily-file room but couldn't parse date - load all messages
       messages = await loadMessages(channelId, limit: 10000);
     }
 
@@ -1112,9 +1205,12 @@ class ChatService {
     int targetIndex = -1;
     String messageFilePath;
 
-    if (channel.isMain) {
+    if (_usesDailyFiles(channel)) {
       // Load from daily file
-      messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, messageDate);
+      messageFilePath = await _getDailyMessageFilePathStorage(
+        channel.folder,
+        messageDate,
+      );
     } else {
       // Load from single messages.txt
       messageFilePath = '${channel.folder}/messages.txt';
@@ -1128,7 +1224,8 @@ class ChatService {
 
     // Find the target message
     for (int i = 0; i < messages.length; i++) {
-      if (messages[i].timestamp == timestamp && messages[i].author == authorCallsign) {
+      if (messages[i].timestamp == timestamp &&
+          messages[i].author == authorCallsign) {
         targetMessage = messages[i];
         targetIndex = i;
         break;
@@ -1179,7 +1276,12 @@ class ChatService {
     messages[targetIndex] = updatedMessage;
 
     // Rewrite the file
-    await _rewriteMessageFileStorage(messageFilePath, channel, messages, messageDate);
+    await _rewriteMessageFileStorage(
+      messageFilePath,
+      channel,
+      messages,
+      messageDate,
+    );
 
     // Append to modification log for offline client sync
     await _appendModificationLog(channelId, {
@@ -1228,9 +1330,12 @@ class ChatService {
     ChatMessage? targetMessage;
     String messageFilePath;
 
-    if (channel.isMain) {
+    if (_usesDailyFiles(channel)) {
       // Load from daily file
-      messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, messageDate);
+      messageFilePath = await _getDailyMessageFilePathStorage(
+        channel.folder,
+        messageDate,
+      );
     } else {
       // Load from single messages.txt
       messageFilePath = '${channel.folder}/messages.txt';
@@ -1264,11 +1369,17 @@ class ChatService {
     }
 
     // Remove the message from the list
-    messages.removeWhere((msg) =>
-        msg.timestamp == timestamp && msg.author == authorCallsign);
+    messages.removeWhere(
+      (msg) => msg.timestamp == timestamp && msg.author == authorCallsign,
+    );
 
     // Rewrite the file
-    await _rewriteMessageFileStorage(messageFilePath, channel, messages, messageDate);
+    await _rewriteMessageFileStorage(
+      messageFilePath,
+      channel,
+      messages,
+      messageDate,
+    );
 
     // Append to modification log for offline client sync
     await _appendModificationLog(channelId, {
@@ -1322,8 +1433,11 @@ class ChatService {
     int targetIndex = -1;
     String messageFilePath;
 
-    if (channel.isMain) {
-      messageFilePath = await _getDailyMessageFilePathStorage(channel.folder, messageDate);
+    if (_usesDailyFiles(channel)) {
+      messageFilePath = await _getDailyMessageFilePathStorage(
+        channel.folder,
+        messageDate,
+      );
     } else {
       messageFilePath = '${channel.folder}/messages.txt';
     }
@@ -1345,10 +1459,19 @@ class ChatService {
       return null;
     }
 
-    final updatedMessage = _toggleMessageReaction(messages[targetIndex], reactionKey, actorKey);
+    final updatedMessage = _toggleMessageReaction(
+      messages[targetIndex],
+      reactionKey,
+      actorKey,
+    );
     messages[targetIndex] = updatedMessage;
 
-    await _rewriteMessageFileStorage(messageFilePath, channel, messages, messageDate);
+    await _rewriteMessageFileStorage(
+      messageFilePath,
+      channel,
+      messages,
+      messageDate,
+    );
 
     return updatedMessage;
   }
@@ -1368,7 +1491,8 @@ class ChatService {
           .toSet()
           .toList();
       if (normalizedUsers.isNotEmpty) {
-        updatedReactions[ReactionUtils.normalizeReactionKey(key)] = normalizedUsers;
+        updatedReactions[ReactionUtils.normalizeReactionKey(key)] =
+            normalizedUsers;
       }
     });
 
@@ -1376,11 +1500,15 @@ class ChatService {
 
     // Check if user already has this specific reaction (for toggle-off)
     final currentList = updatedReactions[normalizedKey] ?? <String>[];
-    final alreadyHasThisReaction = currentList.any((u) => u.toUpperCase() == normalizedActor);
+    final alreadyHasThisReaction = currentList.any(
+      (u) => u.toUpperCase() == normalizedActor,
+    );
 
     // Remove user from ALL reaction types first (enforce one reaction per user)
     for (final key in updatedReactions.keys.toList()) {
-      updatedReactions[key]?.removeWhere((u) => u.toUpperCase() == normalizedActor);
+      updatedReactions[key]?.removeWhere(
+        (u) => u.toUpperCase() == normalizedActor,
+      );
       if (updatedReactions[key]?.isEmpty ?? true) {
         updatedReactions.remove(key);
       }
@@ -1472,7 +1600,9 @@ class ChatService {
       groupId: groupId, // Link to group for dynamic membership
       admins: [],
       moderatorNpubs: [],
-      members: [ownerNpub], // Owner is initially a member, will be resolved dynamically
+      members: [
+        ownerNpub,
+      ], // Owner is initially a member, will be resolved dynamically
       banned: [],
       pendingApplicants: [],
     );
@@ -1492,7 +1622,11 @@ class ChatService {
   }
 
   /// Add a member to a restricted room (moderator+ required)
-  Future<void> addMember(String roomId, String actorNpub, String memberNpub) async {
+  Future<void> addMember(
+    String roomId,
+    String actorNpub,
+    String memberNpub,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1505,7 +1639,9 @@ class ChatService {
 
     // Check permissions
     if (!config.canManageMembers(actorNpub)) {
-      throw PermissionDeniedException('Only moderators and above can add members');
+      throw PermissionDeniedException(
+        'Only moderators and above can add members',
+      );
     }
 
     // Check if user is banned
@@ -1535,7 +1671,11 @@ class ChatService {
   }
 
   /// Remove a member from a restricted room (moderator+ required)
-  Future<void> removeMember(String roomId, String actorNpub, String targetNpub) async {
+  Future<void> removeMember(
+    String roomId,
+    String actorNpub,
+    String targetNpub,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1565,14 +1705,18 @@ class ChatService {
     } else {
       // Moderator+ can remove regular members
       if (!config.canManageMembers(actorNpub)) {
-        throw PermissionDeniedException('Only moderators and above can remove members');
+        throw PermissionDeniedException(
+          'Only moderators and above can remove members',
+        );
       }
     }
 
     // Remove from all role lists
     final updatedAdmins = List<String>.from(config.admins)..remove(targetNpub);
-    final updatedModerators = List<String>.from(config.moderatorNpubs)..remove(targetNpub);
-    final updatedMembers = List<String>.from(config.members)..remove(targetNpub);
+    final updatedModerators = List<String>.from(config.moderatorNpubs)
+      ..remove(targetNpub);
+    final updatedMembers = List<String>.from(config.members)
+      ..remove(targetNpub);
 
     final updatedConfig = config.copyWith(
       admins: updatedAdmins,
@@ -1584,7 +1728,11 @@ class ChatService {
   }
 
   /// Ban a user from a restricted room (moderator+ required)
-  Future<void> banMember(String roomId, String actorNpub, String targetNpub) async {
+  Future<void> banMember(
+    String roomId,
+    String actorNpub,
+    String targetNpub,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1602,7 +1750,9 @@ class ChatService {
 
     // Check permissions
     if (!config.canBan(actorNpub)) {
-      throw PermissionDeniedException('Only moderators and above can ban users');
+      throw PermissionDeniedException(
+        'Only moderators and above can ban users',
+      );
     }
 
     // Cannot ban someone of equal or higher rank
@@ -1615,8 +1765,10 @@ class ChatService {
 
     // Remove from all role lists and add to banned
     final updatedAdmins = List<String>.from(config.admins)..remove(targetNpub);
-    final updatedModerators = List<String>.from(config.moderatorNpubs)..remove(targetNpub);
-    final updatedMembers = List<String>.from(config.members)..remove(targetNpub);
+    final updatedModerators = List<String>.from(config.moderatorNpubs)
+      ..remove(targetNpub);
+    final updatedMembers = List<String>.from(config.members)
+      ..remove(targetNpub);
     final updatedBanned = List<String>.from(config.banned);
     if (!updatedBanned.contains(targetNpub)) {
       updatedBanned.add(targetNpub);
@@ -1639,7 +1791,11 @@ class ChatService {
   }
 
   /// Unban a user from a restricted room (moderator+ required)
-  Future<void> unbanMember(String roomId, String actorNpub, String targetNpub) async {
+  Future<void> unbanMember(
+    String roomId,
+    String actorNpub,
+    String targetNpub,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1652,7 +1808,9 @@ class ChatService {
 
     // Check permissions
     if (!config.canBan(actorNpub)) {
-      throw PermissionDeniedException('Only moderators and above can unban users');
+      throw PermissionDeniedException(
+        'Only moderators and above can unban users',
+      );
     }
 
     // Remove from banned list
@@ -1664,7 +1822,11 @@ class ChatService {
   }
 
   /// Promote a member to moderator (admin+ required)
-  Future<void> promoteToModerator(String roomId, String actorNpub, String targetNpub) async {
+  Future<void> promoteToModerator(
+    String roomId,
+    String actorNpub,
+    String targetNpub,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1677,7 +1839,9 @@ class ChatService {
 
     // Check permissions
     if (!config.canManageRoles(actorNpub)) {
-      throw PermissionDeniedException('Only admins and above can promote to moderator');
+      throw PermissionDeniedException(
+        'Only admins and above can promote to moderator',
+      );
     }
 
     // Target must be a member
@@ -1691,7 +1855,8 @@ class ChatService {
     }
 
     // Add to moderators
-    final updatedModerators = List<String>.from(config.moderatorNpubs)..add(targetNpub);
+    final updatedModerators = List<String>.from(config.moderatorNpubs)
+      ..add(targetNpub);
 
     final updatedConfig = config.copyWith(moderatorNpubs: updatedModerators);
 
@@ -1699,7 +1864,11 @@ class ChatService {
   }
 
   /// Promote a member/moderator to admin (owner only)
-  Future<void> promoteToAdmin(String roomId, String actorNpub, String targetNpub) async {
+  Future<void> promoteToAdmin(
+    String roomId,
+    String actorNpub,
+    String targetNpub,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1726,7 +1895,8 @@ class ChatService {
     }
 
     // Remove from moderators if present, add to admins
-    final updatedModerators = List<String>.from(config.moderatorNpubs)..remove(targetNpub);
+    final updatedModerators = List<String>.from(config.moderatorNpubs)
+      ..remove(targetNpub);
     final updatedAdmins = List<String>.from(config.admins)..add(targetNpub);
 
     final updatedConfig = config.copyWith(
@@ -1738,7 +1908,11 @@ class ChatService {
   }
 
   /// Demote an admin/moderator (admin+ required, owner for demoting admins)
-  Future<void> demote(String roomId, String actorNpub, String targetNpub) async {
+  Future<void> demote(
+    String roomId,
+    String actorNpub,
+    String targetNpub,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1761,7 +1935,8 @@ class ChatService {
         throw PermissionDeniedException('Only the owner can demote admins');
       }
       // Remove from admins
-      final updatedAdmins = List<String>.from(config.admins)..remove(targetNpub);
+      final updatedAdmins = List<String>.from(config.admins)
+        ..remove(targetNpub);
       final updatedConfig = config.copyWith(admins: updatedAdmins);
       await updateChannel(channel.copyWith(config: updatedConfig));
     } else if (config.isModerator(targetNpub)) {
@@ -1770,7 +1945,8 @@ class ChatService {
         throw PermissionDeniedException('Only admins can demote moderators');
       }
       // Remove from moderators
-      final updatedModerators = List<String>.from(config.moderatorNpubs)..remove(targetNpub);
+      final updatedModerators = List<String>.from(config.moderatorNpubs)
+        ..remove(targetNpub);
       final updatedConfig = config.copyWith(moderatorNpubs: updatedModerators);
       await updateChannel(channel.copyWith(config: updatedConfig));
     }
@@ -1778,7 +1954,12 @@ class ChatService {
   }
 
   /// Apply for membership in a restricted room
-  Future<void> applyForMembership(String roomId, String applicantNpub, String? callsign, String? message) async {
+  Future<void> applyForMembership(
+    String roomId,
+    String applicantNpub,
+    String? callsign,
+    String? message,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1812,8 +1993,9 @@ class ChatService {
       message: message,
     );
 
-    final updatedApplicants = List<MembershipApplication>.from(config.pendingApplicants)
-      ..add(application);
+    final updatedApplicants = List<MembershipApplication>.from(
+      config.pendingApplicants,
+    )..add(application);
 
     final updatedConfig = config.copyWith(pendingApplicants: updatedApplicants);
 
@@ -1821,7 +2003,11 @@ class ChatService {
   }
 
   /// Approve a membership application (moderator+ required)
-  Future<void> approveApplication(String roomId, String actorNpub, String applicantNpub) async {
+  Future<void> approveApplication(
+    String roomId,
+    String actorNpub,
+    String applicantNpub,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1834,7 +2020,9 @@ class ChatService {
 
     // Check permissions
     if (!config.canManageApplications(actorNpub)) {
-      throw PermissionDeniedException('Only moderators and above can approve applications');
+      throw PermissionDeniedException(
+        'Only moderators and above can approve applications',
+      );
     }
 
     // Check if application exists
@@ -1843,7 +2031,8 @@ class ChatService {
     }
 
     // Add to members and remove from applicants
-    final updatedMembers = List<String>.from(config.members)..add(applicantNpub);
+    final updatedMembers = List<String>.from(config.members)
+      ..add(applicantNpub);
     final updatedApplicants = config.pendingApplicants
         .where((a) => a.npub != applicantNpub)
         .toList();
@@ -1857,7 +2046,11 @@ class ChatService {
   }
 
   /// Reject a membership application (moderator+ required)
-  Future<void> rejectApplication(String roomId, String actorNpub, String applicantNpub) async {
+  Future<void> rejectApplication(
+    String roomId,
+    String actorNpub,
+    String applicantNpub,
+  ) async {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1870,7 +2063,9 @@ class ChatService {
 
     // Check permissions
     if (!config.canManageApplications(actorNpub)) {
-      throw PermissionDeniedException('Only moderators and above can reject applications');
+      throw PermissionDeniedException(
+        'Only moderators and above can reject applications',
+      );
     }
 
     // Remove from applicants
@@ -1884,7 +2079,10 @@ class ChatService {
   }
 
   /// Get list of pending applications for a room (moderator+ required)
-  List<MembershipApplication> getPendingApplications(String roomId, String actorNpub) {
+  List<MembershipApplication> getPendingApplications(
+    String roomId,
+    String actorNpub,
+  ) {
     final channel = getChannel(roomId);
     if (channel == null) {
       throw Exception('Room not found: $roomId');
@@ -1897,7 +2095,9 @@ class ChatService {
 
     // Check permissions
     if (!config.canManageApplications(actorNpub)) {
-      throw PermissionDeniedException('Only moderators and above can view applications');
+      throw PermissionDeniedException(
+        'Only moderators and above can view applications',
+      );
     }
 
     return List<MembershipApplication>.from(config.pendingApplicants);
@@ -1925,8 +2125,12 @@ class ChatService {
       'admins': config.admins,
       'moderators': config.moderatorNpubs,
       'members': config.members,
-      'banned': config.isModerator(actorNpub) ? config.banned : [], // Only mods see banned list
-      'pendingCount': config.isModerator(actorNpub) ? config.pendingApplicants.length : 0,
+      'banned': config.isModerator(actorNpub)
+          ? config.banned
+          : [], // Only mods see banned list
+      'pendingCount': config.isModerator(actorNpub)
+          ? config.pendingApplicants.length
+          : 0,
     };
   }
 

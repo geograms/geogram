@@ -285,6 +285,21 @@ class ChatChannelConfig {
   /// Better for high-traffic rooms. Station server rooms use this by default.
   final bool dailyFiles;
 
+  /// Distribution mode for the room (`distributed` uses peer-to-peer sync).
+  final String? distributionMode;
+
+  /// Public room signer key used for invite/admission capability verification.
+  final String? roomNpub;
+
+  /// Current room state (`active`, `paused`, `closed`).
+  final String roomState;
+
+  /// Join policy (`approval_required` for distributed rooms).
+  final String joinPolicy;
+
+  /// Optional peer hints embedded in invites/bootstrap metadata.
+  final List<String> seedPeerHints;
+
   ChatChannelConfig({
     required this.id,
     required this.name,
@@ -304,10 +319,21 @@ class ChatChannelConfig {
     this.pendingApplicants = const [],
     this.groupId,
     this.dailyFiles = false,
+    this.distributionMode,
+    this.roomNpub,
+    this.roomState = 'active',
+    this.joinPolicy = 'approval_required',
+    this.seedPeerHints = const [],
   });
 
   /// Check if this config uses dynamic group membership
   bool get usesDynamicMembership => groupId != null && groupId!.isNotEmpty;
+
+  /// Check if this room is distributed across participants.
+  bool get isDistributed => distributionMode == 'distributed';
+
+  /// Whether the room currently accepts new messages.
+  bool get isWritableState => roomState == 'active';
 
   // === Role Check Methods ===
 
@@ -337,6 +363,9 @@ class ChatChannelConfig {
 
   /// Check if npub can access the room (member and not banned)
   bool canAccess(String? npub) => isMember(npub) && !isBanned(npub);
+
+  /// Check if npub can write in the room right now.
+  bool canWrite(String? npub) => canAccess(npub) && isWritableState;
 
   /// Check if npub can manage members (add/remove)
   bool canManageMembers(String? npub) => isModerator(npub);
@@ -389,8 +418,7 @@ class ChatChannelConfig {
       // Role-based access control fields
       owner: json['owner'] as String?,
       admins: List<String>.from(json['admins'] as List? ?? []),
-      moderatorNpubs:
-          List<String>.from(json['moderator_npubs'] as List? ?? []),
+      moderatorNpubs: List<String>.from(json['moderator_npubs'] as List? ?? []),
       members: List<String>.from(json['members'] as List? ?? []),
       banned: List<String>.from(json['banned'] as List? ?? []),
       pendingApplicants: (json['pending_applicants'] as List? ?? [])
@@ -398,6 +426,13 @@ class ChatChannelConfig {
           .toList(),
       groupId: json['group_id'] as String?,
       dailyFiles: json['daily_files'] as bool? ?? false,
+      distributionMode: json['distribution_mode'] as String?,
+      roomNpub: json['room_npub'] as String?,
+      roomState: json['room_state'] as String? ?? 'active',
+      joinPolicy: json['join_policy'] as String? ?? 'approval_required',
+      seedPeerHints: List<String>.from(
+        json['seed_peer_hints'] as List? ?? const [],
+      ),
     );
   }
 
@@ -423,6 +458,11 @@ class ChatChannelConfig {
         'pending_applicants': pendingApplicants.map((a) => a.toJson()).toList(),
       if (groupId != null) 'group_id': groupId,
       if (dailyFiles) 'daily_files': true,
+      if (distributionMode != null) 'distribution_mode': distributionMode,
+      if (roomNpub != null) 'room_npub': roomNpub,
+      if (roomState != 'active') 'room_state': roomState,
+      if (joinPolicy != 'approval_required') 'join_policy': joinPolicy,
+      if (seedPeerHints.isNotEmpty) 'seed_peer_hints': seedPeerHints,
     };
   }
 
@@ -446,6 +486,11 @@ class ChatChannelConfig {
     List<MembershipApplication>? pendingApplicants,
     String? groupId,
     bool? dailyFiles,
+    String? distributionMode,
+    String? roomNpub,
+    String? roomState,
+    String? joinPolicy,
+    List<String>? seedPeerHints,
   }) {
     return ChatChannelConfig(
       id: id ?? this.id,
@@ -463,10 +508,16 @@ class ChatChannelConfig {
       moderatorNpubs: moderatorNpubs ?? List<String>.from(this.moderatorNpubs),
       members: members ?? List<String>.from(this.members),
       banned: banned ?? List<String>.from(this.banned),
-      pendingApplicants: pendingApplicants ??
+      pendingApplicants:
+          pendingApplicants ??
           this.pendingApplicants.map((a) => a.copy()).toList(),
       groupId: groupId ?? this.groupId,
       dailyFiles: dailyFiles ?? this.dailyFiles,
+      distributionMode: distributionMode ?? this.distributionMode,
+      roomNpub: roomNpub ?? this.roomNpub,
+      roomState: roomState ?? this.roomState,
+      joinPolicy: joinPolicy ?? this.joinPolicy,
+      seedPeerHints: seedPeerHints ?? List<String>.from(this.seedPeerHints),
     );
   }
 

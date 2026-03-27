@@ -214,6 +214,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [ChatFileDownloadManager](#chatfiledownloadmanager) - Connection-aware file downloads with progress and resume
 - [TransferService](#transferservice) - Centralized multi-transport transfers with caching and resume
 - [MirrorSyncService](#mirrorsyncservice) - Simple one-way folder sync with NOSTR authentication
+- [DistributedChatService](#distributedchatservice) - Reuses ChatService for distributed restricted rooms with control logs, admissions, and room-key sharing
 - [MirrorAutoSyncService](#mirrorautosyncservice) - Periodic auto-sync timer with station relay fallback
 - [DnsResponder](#dnsresponder) - Captive portal DNS responder (UDP port 53, resolves all queries to gateway IP)
 - [HotspotPortalService](#hotspotportalservice) - Captive portal HTTP server with portal home page and download page
@@ -4213,6 +4214,57 @@ bool isIgnored(String relativePath, List<String> patterns);
 - SHA1 file hashing for change detection
 - Bidirectional sync (`sendReceive`): mtime-wins conflict resolution
 - One-way sync (`receiveOnly`): source always overwrites destination
+
+---
+
+### DistributedChatService
+
+**File:** `lib/services/distributed_chat_service.dart`
+**Companion model:** `lib/models/distributed_chat.dart`
+**Spec:** `docs/docs/dchat.md`
+
+Reusable orchestration layer for distributed restricted chat rooms. It keeps the
+existing chat storage model intact and adds:
+
+- `DistributedChatInvite` deep links (`geogram://dchat?payload=...`)
+- append-only control log at `roomId/extra/dchat/control.jsonl`
+- admission capabilities signed with a room signer key
+- ECIES-encrypted room-key sharing for admins/moderators
+- peer-to-peer room repair/bootstrap via `syncRoomFromPeer()`
+
+**Reuses existing pieces instead of duplicating them:**
+- `ChatService` for room configs, membership rules, moderation, and message I/O
+- `ChatChannelConfig.dailyFiles` for per-day room files
+- chat-format/NOSTR signatures for message persistence
+- `BackupEncryption` for encrypted room-secret handoff
+
+**Core methods:**
+```dart
+final service = DistributedChatService(
+  appPath: chatAppPath,
+  storage: profileStorage,
+  profileCallsign: myCallsign,
+  profileNpub: myNpub,
+  profileNsec: myNsec,
+);
+
+await service.createDistributedRoom(roomId: 'mesh-camp', name: 'Mesh Camp');
+final invite = await service.createInvite('mesh-camp');
+await service.acceptInviteAndRequestJoin(invite);
+await service.approveApplicant('mesh-camp', applicantNpub);
+await service.promoteToModerator('mesh-camp', moderatorNpub);
+await service.syncRoomFromPeer(otherService, 'mesh-camp');
+```
+
+**Current scope:**
+- Durable local storage and replay for distributed rooms
+- Approval queue, moderation, pause/close, and kick/ban propagation
+- "Kicked users keep old messages but stop receiving new ones" enforcement
+
+**Not yet the full transport layer:**
+- Live DHT / peer-relay delivery still needs to wrap these events/messages in the
+  existing connection stack
+- Attachments should travel through room-subtree sync, not a new message format
 - Per-app ignore patterns with glob matching (`*`, `**`, `?`)
 - File upload to peer via `POST /api/mirror/upload`
 - Token-based session management (1 hour expiry)
