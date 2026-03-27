@@ -1,0 +1,23 @@
+{
+  "id":              "tools.geogram.install",
+  "version":         "1.0.0",
+  "kind":            "app",
+  "description":     "Wapp installer and updater",
+  "summary":         "Browse, install, and update wapps from a local or remote repository.\nReads index.json to detect available versions.",
+  "icon":            "media/icons/install.svg",
+  "tags":            ["tools", "installer", "shop", "system"],
+  "entry_ui":        "screens/home.ui.json",
+  "tick_interval_ms": 1000,
+  "permissions":     ["storage", "network"],
+  "provides": {
+    "functions": [],
+    "events":    ["wapp.installed", "wapp.removed"],
+    "variables": []
+  },
+  "requires": {
+    "hal":       ["log", "kv", "http", "file", "msg", "platform"],
+    "events":    [],
+    "libraries": [],
+    "variables": []
+  }
+}

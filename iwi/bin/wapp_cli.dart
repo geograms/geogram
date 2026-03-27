@@ -531,6 +531,10 @@ Future<void> main(List<String> args) async {
   final lib = loadBridgeLibrary(scriptDir);
   final bridge = WasmBridge(lib);
 
+  // Set globals for renderer-side message handling
+  _bridge = bridge;
+  _moduleId = moduleId;
+
   // Storage dir
   final storageDir = '${Directory.systemTemp.path}/geogram_cli/$moduleId';
   Directory(storageDir).createSync(recursive: true);
@@ -1246,6 +1250,11 @@ bool _handleSearchSelection(
   return true;
 }
 
+// ── Globals for renderer-side message handling ───────────────────────
+
+WasmBridge? _bridge;
+String _moduleId = '';
+
 // ── Event handlers ───────────────────────────────────────────────────
 
 void _handleEvent(Map<String, dynamic> event) {
@@ -1296,7 +1305,104 @@ void _handleModuleMessage(Map<String, dynamic> event) {
     final target = data['target'] as String? ?? '';
     final value = data['value'] ?? '';
     stdout.writeln('$_cyan$target$_reset = $value');
+  } else if (msgType == 'wapp.fetch_index') {
+    _handleFetchIndex(data);
+  } else if (msgType == 'wapp.install') {
+    _handleWappInstall(data);
+  } else if (msgType == 'wapp.remove') {
+    final name = data['name'] as String? ?? '';
+    stdout.writeln('${_yellow}Wapp "$name" removed.$_reset');
   } else {
     stdout.writeln('${_grey}$dataStr$_reset');
   }
+}
+
+/// Handle wapp.fetch_index — read index.json from local path and send
+/// the contents back to the module.
+void _handleFetchIndex(Map<String, dynamic> data) {
+  final source = data['source'] as String? ?? '';
+  if (source.isEmpty) return;
+
+  var path = source;
+  if (!path.endsWith('.json')) {
+    if (!path.endsWith('/')) path += '/';
+    path += 'index.json';
+  }
+
+  final file = File(path);
+  if (!file.existsSync()) {
+    stderr.writeln('${_red}Index not found: $path$_reset');
+    return;
+  }
+
+  final contents = file.readAsStringSync();
+  // Send the index data back to the module
+  _bridge?.send({
+    '@type': 'sendMessage',
+    'moduleId': _moduleId,
+    'data': {'type': 'wapp.index', 'data': jsonDecode(contents)},
+  });
+}
+
+/// Handle wapp.install — copy .wapp file from source to a local
+/// install directory.
+void _handleWappInstall(Map<String, dynamic> data) {
+  final source = data['source'] as String? ?? '';
+  final file = data['file'] as String? ?? '';
+  final name = data['name'] as String? ?? '';
+  final version = data['version'] as String? ?? '';
+
+  if (source.isEmpty || file.isEmpty) return;
+
+  String srcPath;
+  if (source.startsWith('http://') || source.startsWith('https://')) {
+    // For URL sources, download the .wapp file
+    var baseUrl = source;
+    if (baseUrl.endsWith('.json')) {
+      baseUrl = baseUrl.substring(0, baseUrl.lastIndexOf('/'));
+    }
+    if (!baseUrl.endsWith('/')) baseUrl += '/';
+    final url = '$baseUrl$file';
+    stdout.writeln('${_dim}Downloading $url...$_reset');
+    try {
+      final client = HttpClient()..userAgent = 'Geogram/1.0';
+      final req = client.getUrl(Uri.parse(url));
+      req.then((r) => r.close()).then((resp) {
+        final installDir =
+            '${Directory.systemTemp.path}/geogram_cli/wapps/$name';
+        Directory(installDir).createSync(recursive: true);
+        final destPath = '$installDir/$name-$version.wapp';
+        final sink = File(destPath).openWrite();
+        resp.pipe(sink).then((_) {
+          client.close();
+          stdout.writeln(
+              '$_green$name v$version installed → $destPath$_reset');
+        });
+      });
+    } catch (e) {
+      stderr.writeln('${_red}Download failed: $e$_reset');
+    }
+    return;
+  }
+
+  // Local source — copy the file
+  var basePath = source;
+  if (basePath.endsWith('.json')) {
+    basePath = basePath.substring(0, basePath.lastIndexOf('/'));
+  }
+  if (!basePath.endsWith('/')) basePath += '/';
+  srcPath = '$basePath$file';
+
+  final srcFile = File(srcPath);
+  if (!srcFile.existsSync()) {
+    stderr.writeln('${_red}File not found: $srcPath$_reset');
+    return;
+  }
+
+  final installDir =
+      '${Directory.systemTemp.path}/geogram_cli/wapps/$name';
+  Directory(installDir).createSync(recursive: true);
+  final destPath = '$installDir/$name-$version.wapp';
+  srcFile.copySync(destPath);
+  stdout.writeln('$_green$name v$version installed → $destPath$_reset');
 }

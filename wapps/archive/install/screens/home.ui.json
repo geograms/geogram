@@ -1,0 +1,50 @@
+[
+  {
+    "$": "screen",
+    "name": "Shop",
+    "tip": "Browse and install wapps from a repository.",
+    "children": [
+      {
+        "$": "group",
+        "name": "output-list",
+        "$type": "output",
+        "tip": "Wapp catalog and status messages."
+      }
+    ]
+  },
+  {
+    "$": "screen",
+    "name": "Settings",
+    "tip": "Installer settings.",
+    "children": [
+      {
+        "$": "group",
+        "name": "Source",
+        "tip": "Wapp repository location.",
+        "children": [
+          {
+            "$": "field",
+            "name": "source",
+            "$type": "string",
+            "label": "Repository",
+            "default": "",
+            "tip": "URL or local path to the directory containing index.json."
+          }
+        ]
+      },
+      {
+        "$": "action",
+        "name": "save",
+        "label": "Save",
+        "style": "primary",
+        "tip": "Apply settings."
+      },
+      {
+        "$": "action",
+        "name": "cancel",
+        "label": "Cancel",
+        "style": "secondary"
+      }
+    ]
+  }
+]
