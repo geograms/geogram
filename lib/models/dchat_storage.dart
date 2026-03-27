@@ -23,6 +23,7 @@ class DChatRoomMetadata {
   final String roomId;
   final String title;
   final String? description;
+  final String? icon;
   final String ownerNpub;
   final String? roomNpub;
   final List<String> seedPeerHints;
@@ -37,6 +38,7 @@ class DChatRoomMetadata {
     required this.roomId,
     required this.title,
     this.description,
+    this.icon,
     required this.ownerNpub,
     this.roomNpub,
     this.seedPeerHints = const [],
@@ -53,6 +55,8 @@ class DChatRoomMetadata {
     String? title,
     String? description,
     bool clearDescription = false,
+    String? icon,
+    bool clearIcon = false,
     String? ownerNpub,
     String? roomNpub,
     bool clearRoomNpub = false,
@@ -69,6 +73,7 @@ class DChatRoomMetadata {
       roomId: roomId ?? this.roomId,
       title: title ?? this.title,
       description: clearDescription ? null : (description ?? this.description),
+      icon: clearIcon ? null : (icon ?? this.icon),
       ownerNpub: ownerNpub ?? this.ownerNpub,
       roomNpub: clearRoomNpub ? null : (roomNpub ?? this.roomNpub),
       seedPeerHints: seedPeerHints ?? List<String>.from(this.seedPeerHints),
@@ -82,6 +87,26 @@ class DChatRoomMetadata {
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }
+}
+
+class DChatTopicRecord {
+  final String topicId;
+  final String title;
+  final String? description;
+  final String? icon;
+  final String createdByNpub;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  const DChatTopicRecord({
+    required this.topicId,
+    required this.title,
+    this.description,
+    this.icon,
+    required this.createdByNpub,
+    required this.createdAt,
+    required this.updatedAt,
+  });
 }
 
 class DChatMemberRecord {
@@ -136,6 +161,7 @@ class DChatEpochKeyBox {
 
 class DChatMessageRecord {
   final String messageId;
+  final String topicId;
   final int epoch;
   final int lamport;
   final String authorNpub;
@@ -149,6 +175,7 @@ class DChatMessageRecord {
 
   const DChatMessageRecord({
     required this.messageId,
+    this.topicId = 'general',
     required this.epoch,
     required this.lamport,
     required this.authorNpub,

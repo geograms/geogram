@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import '../models/chat_channel.dart';
 import '../util/group_utils.dart';
 
+enum _GroupConversationMode { standard, decentralized }
+
 /// Full-screen page for creating a new chat channel (DM or group)
 class NewChannelDialog extends StatefulWidget {
   final List<String> existingChannelIds;
@@ -25,10 +27,12 @@ class NewChannelDialog extends StatefulWidget {
 class _NewChannelDialogState extends State<NewChannelDialog> {
   final _formKey = GlobalKey<FormState>();
   ChatChannelType _channelType = ChatChannelType.group;
+  _GroupConversationMode _groupMode = _GroupConversationMode.standard;
   bool _dailyFiles = false;
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _callsignController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
+  final TextEditingController _iconController = TextEditingController();
   final List<String> _selectedParticipants = [];
   bool _isCreating = false;
 
@@ -37,6 +41,7 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
     _nameController.dispose();
     _callsignController.dispose();
     _descriptionController.dispose();
+    _iconController.dispose();
     super.dispose();
   }
 
@@ -57,7 +62,14 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
             child: FilledButton(
               onPressed: _isCreating ? null : _handleCreate,
               child: _isCreating
-                  ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  ? SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
                   : Text('Create'),
             ),
           ),
@@ -87,7 +99,8 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
                   ),
                 ],
                 selected: {_channelType},
-                onSelectionChanged: (s) => setState(() => _channelType = s.first),
+                onSelectionChanged: (s) =>
+                    setState(() => _channelType = s.first),
               ),
               SizedBox(height: 24),
 
@@ -103,9 +116,13 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
                   ),
                   textCapitalization: TextCapitalization.characters,
                   validator: (value) {
-                    if (value == null || value.trim().isEmpty) return 'Please enter a callsign';
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Please enter a callsign';
+                    }
                     final callsign = value.trim().toUpperCase();
-                    if (widget.existingChannelIds.contains(callsign)) return 'Channel already exists';
+                    if (widget.existingChannelIds.contains(callsign)) {
+                      return 'Channel already exists';
+                    }
                     return null;
                   },
                 ),
@@ -123,7 +140,9 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
                   ),
                   autofocus: true,
                   validator: (value) {
-                    if (value == null || value.trim().isEmpty) return 'Please enter a group name';
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Please enter a group name';
+                    }
                     return null;
                   },
                 ),
@@ -139,64 +158,106 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
                   maxLines: 2,
                 ),
                 SizedBox(height: 24),
-
-                // Storage type
-                Text('Message Storage', style: theme.textTheme.titleSmall),
-                SizedBox(height: 8),
-                RadioListTile<bool>(
-                  title: Text('Single file'),
-                  subtitle: Text(
-                    'All messages in one file. Simpler, good for small groups with low activity.',
-                    style: theme.textTheme.bodySmall,
+                TextFormField(
+                  controller: _iconController,
+                  decoration: InputDecoration(
+                    labelText: 'Icon (optional)',
+                    hintText: 'Emoji or short symbol, e.g. 🛰️',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.emoji_emotions_outlined),
                   ),
-                  value: false,
-                  groupValue: _dailyFiles,
-                  onChanged: (v) => setState(() => _dailyFiles = v!),
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
+                  maxLength: 8,
                 ),
-                RadioListTile<bool>(
-                  title: Text('Daily files'),
-                  subtitle: Text(
-                    'One file per day. Better for very active rooms with many participants.',
-                    style: theme.textTheme.bodySmall,
-                  ),
-                  value: true,
-                  groupValue: _dailyFiles,
-                  onChanged: (v) => setState(() => _dailyFiles = v!),
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                ),
-
-                SizedBox(height: 24),
-
-                // Participants
-                Text('Participants', style: theme.textTheme.titleSmall),
                 SizedBox(height: 8),
-                if (widget.knownCallsigns.isNotEmpty)
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: widget.knownCallsigns.map((callsign) {
-                      final isSelected = _selectedParticipants.contains(callsign);
-                      return FilterChip(
-                        label: Text(callsign),
-                        selected: isSelected,
-                        onSelected: (selected) {
-                          setState(() {
-                            if (selected) {
-                              _selectedParticipants.add(callsign);
-                            } else {
-                              _selectedParticipants.remove(callsign);
-                            }
-                          });
-                        },
-                      );
-                    }).toList(),
-                  )
-                else
+
+                Text('Hosting', style: theme.textTheme.titleSmall),
+                SizedBox(height: 8),
+                SegmentedButton<_GroupConversationMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: _GroupConversationMode.standard,
+                      label: Text('Centralized'),
+                      icon: Icon(Icons.storage),
+                    ),
+                    ButtonSegment(
+                      value: _GroupConversationMode.decentralized,
+                      label: Text('Decentralized'),
+                      icon: Icon(Icons.hub),
+                    ),
+                  ],
+                  selected: {_groupMode},
+                  onSelectionChanged: (selection) {
+                    setState(() {
+                      _groupMode = selection.first;
+                    });
+                  },
+                ),
+                SizedBox(height: 16),
+
+                if (_groupMode == _GroupConversationMode.standard) ...[
+                  Text('Message Storage', style: theme.textTheme.titleSmall),
+                  SizedBox(height: 8),
+                  RadioListTile<bool>(
+                    title: Text('Single file'),
+                    subtitle: Text(
+                      'All messages in one file. Simpler, good for small groups with low activity.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    value: false,
+                    groupValue: _dailyFiles,
+                    onChanged: (v) => setState(() => _dailyFiles = v!),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                  RadioListTile<bool>(
+                    title: Text('Daily files'),
+                    subtitle: Text(
+                      'One file per day. Better for very active rooms with many participants.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    value: true,
+                    groupValue: _dailyFiles,
+                    onChanged: (v) => setState(() => _dailyFiles = v!),
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                  ),
+                  SizedBox(height: 24),
+                  Text('Participants', style: theme.textTheme.titleSmall),
+                  SizedBox(height: 8),
+                  if (widget.knownCallsigns.isNotEmpty)
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: widget.knownCallsigns.map((callsign) {
+                        final isSelected = _selectedParticipants.contains(
+                          callsign,
+                        );
+                        return FilterChip(
+                          label: Text(callsign),
+                          selected: isSelected,
+                          onSelected: (selected) {
+                            setState(() {
+                              if (selected) {
+                                _selectedParticipants.add(callsign);
+                              } else {
+                                _selectedParticipants.remove(callsign);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    )
+                  else
+                    Text(
+                      'No known participants yet. They will appear here once devices connect.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                ] else
                   Text(
-                    'No known participants yet. They will appear here once devices connect.',
+                    'Members will join later through invite links and moderator approval. Conversation topics are created inside the room after it is created.',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                       fontStyle: FontStyle.italic,
@@ -224,37 +285,59 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
       } else {
         final name = _nameController.text.trim();
         final description = _descriptionController.text.trim();
+        final icon = _iconController.text.trim();
         final id = GroupUtils.sanitizeGroupName(name);
 
         if (widget.existingChannelIds.contains(id)) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('A group with this name already exists'), backgroundColor: Colors.red),
+              SnackBar(
+                content: Text('A group with this name already exists'),
+                backgroundColor: Colors.red,
+              ),
             );
           }
           setState(() => _isCreating = false);
           return;
         }
 
-        channel = ChatChannel.group(
-          id: id,
-          name: name,
-          participants: _selectedParticipants,
-          description: description.isNotEmpty ? description : null,
-        );
-
-        // Set dailyFiles in the config
-        if (_dailyFiles && channel.config != null) {
+        if (_groupMode == _GroupConversationMode.decentralized) {
           channel = ChatChannel(
-            id: channel.id,
-            type: channel.type,
-            name: channel.name,
-            folder: channel.folder,
-            participants: channel.participants,
-            description: channel.description,
-            created: channel.created,
-            config: channel.config!.copyWith(dailyFiles: true),
+            id: id,
+            type: ChatChannelType.group,
+            name: name,
+            folder: 'dchat/$id',
+            participants: const [],
+            description: description.isNotEmpty ? description : null,
+            created: DateTime.now(),
+            config: ChatChannelConfig(
+              id: id,
+              name: name,
+              description: description.isNotEmpty ? description : null,
+              visibility: 'RESTRICTED',
+              fileUpload: false,
+              dailyFiles: true,
+              distributionMode: 'distributed',
+              joinPolicy: 'approval_required',
+              icon: icon.isNotEmpty ? icon : null,
+            ),
           );
+        } else {
+          channel = ChatChannel.group(
+            id: id,
+            name: name,
+            participants: _selectedParticipants,
+            description: description.isNotEmpty ? description : null,
+          );
+
+          if (channel.config != null) {
+            channel = channel.copyWith(
+              config: channel.config!.copyWith(
+                dailyFiles: _dailyFiles,
+                icon: icon.isNotEmpty ? icon : null,
+              ),
+            );
+          }
         }
       }
 
@@ -262,7 +345,10 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Theme.of(context).colorScheme.error),
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
         );
       }
     } finally {

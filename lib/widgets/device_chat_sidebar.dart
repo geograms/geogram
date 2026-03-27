@@ -61,13 +61,15 @@ class DeviceChatSidebar extends StatefulWidget {
   final bool isModerator;
 
   /// Callback to create a new station room (null hides the button)
-  final Future<void> Function(String id, String name, {String? description})? onCreateRoom;
+  final Future<void> Function(String id, String name, {String? description})?
+  onCreateRoom;
 
   /// Callback to delete a station room
   final Future<void> Function(StationChatRoom room)? onDeleteRoom;
 
   /// Callback to rename a station room
-  final Future<void> Function(StationChatRoom room, String newName)? onRenameRoom;
+  final Future<void> Function(StationChatRoom room, String newName)?
+  onRenameRoom;
 
   const DeviceChatSidebar({
     Key? key,
@@ -121,10 +123,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
       decoration: BoxDecoration(
         color: theme.colorScheme.surface,
         border: Border(
-          right: BorderSide(
-            color: theme.colorScheme.outlineVariant,
-            width: 1,
-          ),
+          right: BorderSide(color: theme.colorScheme.outlineVariant, width: 1),
         ),
       ),
       child: Column(
@@ -169,11 +168,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
       padding: const EdgeInsets.all(16),
       child: Row(
         children: [
-          Icon(
-            Icons.chat,
-            color: theme.colorScheme.primary,
-            size: 24,
-          ),
+          Icon(Icons.chat, color: theme.colorScheme.primary, size: 24),
           const SizedBox(width: 12),
           Text(
             _i18n.t('chat_rooms'),
@@ -198,7 +193,8 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     // - There are no remote sources (local only mode)
     final defaultExpanded = !device.isLocal || widget.remoteSources.isEmpty;
     final isExpanded = _expandedDevices[device.id] ?? defaultExpanded;
-    final hasItems = (localChannels?.isNotEmpty ?? false) ||
+    final hasItems =
+        (localChannels?.isNotEmpty ?? false) ||
         (remoteRooms?.isNotEmpty ?? false);
 
     return Column(
@@ -209,9 +205,13 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
         // Expanded content
         if (isExpanded) ...[
           if (localChannels != null)
-            ...localChannels.map((channel) => _buildLocalChannelTile(theme, channel)),
+            ...localChannels.map(
+              (channel) => _buildLocalChannelTile(theme, channel),
+            ),
           if (remoteRooms != null)
-            ...remoteRooms.map((room) => _buildRemoteRoomTile(theme, device, room)),
+            ...remoteRooms.map(
+              (room) => _buildRemoteRoomTile(theme, device, room),
+            ),
         ],
       ],
     );
@@ -242,9 +242,8 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     final url = device.url;
 
     // Check if name is a proper nickname (not empty, not a URL, not same as callsign)
-    final hasNickname = name.isNotEmpty &&
-        !_isUrlLike(name) &&
-        name != callsign;
+    final hasNickname =
+        name.isNotEmpty && !_isUrlLike(name) && name != callsign;
 
     if (hasNickname) {
       // Show "Nickname (domain)" when we have a proper nickname and URL
@@ -275,8 +274,8 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     final statusColor = device.isOnline
         ? Colors.green
         : isConnecting
-            ? Colors.grey
-            : Colors.grey;
+        ? Colors.grey
+        : Colors.grey;
 
     return Material(
       color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
@@ -322,11 +321,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                 ),
               const SizedBox(width: 8),
               // Device icon
-              Icon(
-                icon,
-                size: 18,
-                color: theme.colorScheme.primary,
-              ),
+              Icon(icon, size: 18, color: theme.colorScheme.primary),
               const SizedBox(width: 8),
               // Device name and callsign
               Expanded(
@@ -366,10 +361,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                   child: IconButton(
                     padding: EdgeInsets.zero,
                     iconSize: 18,
-                    icon: Icon(
-                      Icons.add,
-                      color: theme.colorScheme.primary,
-                    ),
+                    icon: Icon(Icons.add, color: theme.colorScheme.primary),
                     tooltip: _i18n.t('create_room'),
                     onPressed: () => _showCreateRoomDialog(context),
                   ),
@@ -405,9 +397,13 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                   children: [
                     Flexible(
                       child: Text(
-                        channel.isDirect ? _dmDisplayName(channel) : channel.name,
+                        channel.isDirect
+                            ? _dmDisplayName(channel)
+                            : channel.name,
                         style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          fontWeight: isSelected
+                              ? FontWeight.bold
+                              : FontWeight.normal,
                           color: isSelected
                               ? theme.colorScheme.onPrimaryContainer
                               : null,
@@ -422,7 +418,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                         child: Icon(
                           Icons.notifications_off,
                           size: 14,
-                          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                          color: theme.colorScheme.onSurfaceVariant.withValues(
+                            alpha: 0.5,
+                          ),
                         ),
                       ),
                   ],
@@ -441,7 +439,10 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
               // Unread badge
               if (unreadCount > 0)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: theme.colorScheme.primary,
                     borderRadius: BorderRadius.circular(10),
@@ -470,7 +471,8 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     DeviceSource device,
     StationChatRoom room,
   ) {
-    final isSelected = widget.selectedRemoteRoom?.deviceId == device.id &&
+    final isSelected =
+        widget.selectedRemoteRoom?.deviceId == device.id &&
         widget.selectedRemoteRoom?.roomId == room.id;
     final unreadCount = widget.unreadCounts[room.id] ?? 0;
     final isMuted = widget.mutedRooms.contains(room.id);
@@ -489,7 +491,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
               Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.tertiaryContainer.withValues(alpha: 0.5),
+                  color: theme.colorScheme.tertiaryContainer.withValues(
+                    alpha: 0.5,
+                  ),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Icon(
@@ -510,7 +514,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                           child: Text(
                             room.name,
                             style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              fontWeight: isSelected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
                               color: isSelected
                                   ? theme.colorScheme.onPrimaryContainer
                                   : null,
@@ -525,7 +531,8 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                             child: Icon(
                               Icons.notifications_off,
                               size: 14,
-                              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                              color: theme.colorScheme.onSurfaceVariant
+                                  .withValues(alpha: 0.5),
                             ),
                           ),
                       ],
@@ -546,7 +553,10 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
               // Unread badge
               if (unreadCount > 0)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: theme.colorScheme.tertiary,
                     borderRadius: BorderRadius.circular(10),
@@ -570,7 +580,12 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     );
   }
 
-  Widget _buildRemoteRoomMenuButton(ThemeData theme, DeviceSource device, StationChatRoom room, bool isMuted) {
+  Widget _buildRemoteRoomMenuButton(
+    ThemeData theme,
+    DeviceSource device,
+    StationChatRoom room,
+    bool isMuted,
+  ) {
     final canManage = widget.isModerator && room.id != 'general';
 
     return SizedBox(
@@ -604,9 +619,18 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(isMuted ? Icons.notifications_active : Icons.notifications_off, size: 18),
+                Icon(
+                  isMuted
+                      ? Icons.notifications_active
+                      : Icons.notifications_off,
+                  size: 18,
+                ),
                 const SizedBox(width: 8),
-                Text(isMuted ? _i18n.t('unmute_notifications') : _i18n.t('mute_notifications')),
+                Text(
+                  isMuted
+                      ? _i18n.t('unmute_notifications')
+                      : _i18n.t('mute_notifications'),
+                ),
               ],
             ),
           ),
@@ -632,7 +656,10 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                 children: [
                   Icon(Icons.delete, size: 18, color: theme.colorScheme.error),
                   const SizedBox(width: 8),
-                  Text(_i18n.t('delete_room'), style: TextStyle(color: theme.colorScheme.error)),
+                  Text(
+                    _i18n.t('delete_room'),
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
                 ],
               ),
             ),
@@ -642,8 +669,15 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     );
   }
 
-  Widget _buildChannelMenuButton(ThemeData theme, ChatChannel channel, bool isMuted) {
-    final canDelete = !channel.isMain && widget.onDeleteLocalChannel != null;
+  Widget _buildChannelMenuButton(
+    ThemeData theme,
+    ChatChannel channel,
+    bool isMuted,
+  ) {
+    final canDelete =
+        !channel.isMain &&
+        !(channel.config?.isDistributed ?? false) &&
+        widget.onDeleteLocalChannel != null;
 
     return SizedBox(
       width: 24,
@@ -671,11 +705,17 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  isMuted ? Icons.notifications_active : Icons.notifications_off,
+                  isMuted
+                      ? Icons.notifications_active
+                      : Icons.notifications_off,
                   size: 18,
                 ),
                 const SizedBox(width: 8),
-                Text(isMuted ? _i18n.t('unmute_notifications') : _i18n.t('mute_notifications')),
+                Text(
+                  isMuted
+                      ? _i18n.t('unmute_notifications')
+                      : _i18n.t('mute_notifications'),
+                ),
               ],
             ),
           ),
@@ -706,7 +746,10 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
         title: Text('${_i18n.t('delete')} "${channel.name}"?'),
         content: Text(_i18n.t('delete_channel_confirm')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(_i18n.t('cancel')),
+          ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
@@ -728,8 +771,26 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
         backgroundColor: theme.colorScheme.secondaryContainer,
         backgroundImage: profilePic,
         child: profilePic == null
-            ? Icon(Icons.person, size: 16, color: theme.colorScheme.onSecondaryContainer)
+            ? Icon(
+                Icons.person,
+                size: 16,
+                color: theme.colorScheme.onSecondaryContainer,
+              )
             : null,
+      );
+    }
+
+    final customIcon = channel.icon?.trim();
+    if (customIcon != null && customIcon.isNotEmpty) {
+      return Container(
+        width: 28,
+        height: 28,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: theme.colorScheme.primaryContainer.withValues(alpha: 0.8),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(customIcon, style: const TextStyle(fontSize: 16)),
       );
     }
 
@@ -739,6 +800,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
     if (channel.isMain) {
       icon = Icons.forum;
       color = theme.colorScheme.primary;
+    } else if (channel.config?.isDistributed ?? false) {
+      icon = Icons.hub;
+      color = theme.colorScheme.secondary;
     } else {
       icon = Icons.group;
       color = theme.colorScheme.tertiary;
@@ -750,11 +814,7 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(6),
       ),
-      child: Icon(
-        icon,
-        size: 16,
-        color: color,
-      ),
+      child: Icon(icon, size: 16, color: color),
     );
   }
 
@@ -805,10 +865,17 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
             onPressed: () {
               final name = nameController.text.trim();
               if (name.isEmpty) return;
-              final id = name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
+              final id = name.toLowerCase().replaceAll(
+                RegExp(r'[^a-z0-9]+'),
+                '-',
+              );
               final desc = descController.text.trim();
               Navigator.pop(ctx);
-              widget.onCreateRoom?.call(id, name, description: desc.isEmpty ? null : desc);
+              widget.onCreateRoom?.call(
+                id,
+                name,
+                description: desc.isEmpty ? null : desc,
+              );
             },
             child: Text(_i18n.t('create')),
           ),
@@ -893,8 +960,5 @@ class SelectedRemoteRoom {
   final String deviceId;
   final String roomId;
 
-  SelectedRemoteRoom({
-    required this.deviceId,
-    required this.roomId,
-  });
+  SelectedRemoteRoom({required this.deviceId, required this.roomId});
 }

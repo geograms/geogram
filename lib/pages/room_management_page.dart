@@ -4,9 +4,12 @@
  */
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/chat_channel.dart';
+import '../services/app_service.dart';
 import '../services/chat_service.dart';
 import '../services/devices_service.dart';
+import '../services/distributed_chat_service.dart';
 import '../services/profile_service.dart';
 import '../services/i18n_service.dart';
 import 'add_member_page.dart';
@@ -15,10 +18,7 @@ import 'add_member_page.dart';
 class RoomManagementPage extends StatefulWidget {
   final ChatChannel channel;
 
-  const RoomManagementPage({
-    Key? key,
-    required this.channel,
-  }) : super(key: key);
+  const RoomManagementPage({Key? key, required this.channel}) : super(key: key);
 
   @override
   State<RoomManagementPage> createState() => _RoomManagementPageState();
@@ -30,6 +30,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
   final DevicesService _devicesService = DevicesService();
   final ProfileService _profileService = ProfileService();
   final I18nService _i18n = I18nService();
+  DistributedChatService? _distributedChatService;
 
   late TabController _tabController;
   bool _isLoading = false;
@@ -37,10 +38,13 @@ class _RoomManagementPageState extends State<RoomManagementPage>
   String? _userNpub;
   String? _userRole;
 
+  bool get _isDistributedRoom => widget.channel.config?.isDistributed ?? false;
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _initializeDistributedService();
     _loadData();
   }
 
@@ -50,6 +54,27 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     super.dispose();
   }
 
+  void _initializeDistributedService() {
+    if (!_isDistributedRoom) {
+      return;
+    }
+
+    final chatApp = AppService().getAppByType('chat');
+    final storage = AppService().profileStorage;
+    final profile = _profileService.getProfile();
+    if (chatApp?.storagePath == null || storage == null) {
+      return;
+    }
+
+    _distributedChatService = DistributedChatService(
+      appPath: chatApp!.storagePath!,
+      storage: storage,
+      profileCallsign: profile.callsign,
+      profileNpub: profile.npub,
+      profileNsec: profile.nsec.isNotEmpty ? profile.nsec : null,
+    );
+  }
+
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
 
@@ -57,12 +82,18 @@ class _RoomManagementPageState extends State<RoomManagementPage>
       final profile = _profileService.getProfile();
       _userNpub = profile.npub;
 
-      // Reload channel to get latest config
-      await _chatService.refreshChannels();
-      final channel = _chatService.channels.firstWhere(
-        (c) => c.id == widget.channel.id,
-        orElse: () => widget.channel,
-      );
+      ChatChannel channel;
+      if (_isDistributedRoom && _distributedChatService != null) {
+        channel =
+            await _distributedChatService!.getRoom(widget.channel.id) ??
+            widget.channel;
+      } else {
+        await _chatService.refreshChannels();
+        channel = _chatService.channels.firstWhere(
+          (c) => c.id == widget.channel.id,
+          orElse: () => widget.channel,
+        );
+      }
 
       _config = channel.config;
       _userRole = _determineUserRole();
@@ -82,8 +113,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     return 'none';
   }
 
-  bool get _canManageMembers =>
-      _config?.canManageMembers(_userNpub) ?? false;
+  bool get _canManageMembers => _config?.canManageMembers(_userNpub) ?? false;
 
   bool get _canManageRoles => _config?.canManageRoles(_userNpub) ?? false;
 
@@ -98,21 +128,23 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.channel.name),
+        actions: [
+          if (_isDistributedRoom && (_config?.canAccess(_userNpub) ?? false))
+            IconButton(
+              onPressed: _showInviteDialog,
+              icon: const Icon(Icons.link),
+              tooltip: 'Copy invite link',
+            ),
+        ],
         bottom: TabBar(
           controller: _tabController,
           tabs: [
-            Tab(
-              icon: const Icon(Icons.people),
-              text: _i18n.t('members'),
-            ),
+            Tab(icon: const Icon(Icons.people), text: _i18n.t('members')),
             Tab(
               icon: const Icon(Icons.pending_actions),
               text: _i18n.t('pending'),
             ),
-            Tab(
-              icon: const Icon(Icons.block),
-              text: _i18n.t('banned'),
-            ),
+            Tab(icon: const Icon(Icons.block), text: _i18n.t('banned')),
           ],
         ),
       ),
@@ -135,19 +167,28 @@ class _RoomManagementPageState extends State<RoomManagementPage>
                 ),
               ],
             ),
-      floatingActionButton: _canManageMembers
-          ? FloatingActionButton(
-              onPressed: _showAddMemberDialog,
-              child: const Icon(Icons.person_add),
-            )
-          : null,
+      floatingActionButton: _isDistributedRoom
+          ? ((_config?.canAccess(_userNpub) ?? false)
+                ? FloatingActionButton(
+                    onPressed: _showInviteDialog,
+                    child: const Icon(Icons.link),
+                  )
+                : null)
+          : (_canManageMembers
+                ? FloatingActionButton(
+                    onPressed: _showAddMemberDialog,
+                    child: const Icon(Icons.person_add),
+                  )
+                : null),
     );
   }
 
   Widget _buildRoomInfoHeader(ThemeData theme) {
     final visibility = _config?.visibility ?? 'PUBLIC';
     final isRestricted = visibility == 'RESTRICTED';
-    final canChangeVisibility = _canManageAdmins; // Only owner can change visibility
+    final canChangeVisibility =
+        !_isDistributedRoom &&
+        _canManageAdmins; // Only owner can change visibility
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -162,12 +203,31 @@ class _RoomManagementPageState extends State<RoomManagementPage>
         children: [
           Row(
             children: [
+              if ((_config?.icon ?? '').isNotEmpty) ...[
+                Container(
+                  width: 40,
+                  height: 40,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _config!.icon!,
+                    style: const TextStyle(fontSize: 20),
+                  ),
+                ),
+                const SizedBox(width: 12),
+              ],
               // Visibility badge - tappable if user can change it
               InkWell(
                 onTap: canChangeVisibility ? _showVisibilityDialog : null,
                 borderRadius: BorderRadius.circular(8),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: isRestricted
                         ? theme.colorScheme.primaryContainer
@@ -189,9 +249,11 @@ class _RoomManagementPageState extends State<RoomManagementPage>
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        isRestricted
-                            ? _i18n.t('restricted_room')
-                            : _i18n.t('public_room'),
+                        _isDistributedRoom
+                            ? 'Decentralized room'
+                            : (isRestricted
+                                  ? _i18n.t('restricted_room')
+                                  : _i18n.t('public_room')),
                         style: theme.textTheme.titleSmall?.copyWith(
                           fontWeight: FontWeight.bold,
                           color: isRestricted
@@ -216,8 +278,10 @@ class _RoomManagementPageState extends State<RoomManagementPage>
               const Spacer(),
               // User's role badge
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: _getRoleColor(theme).withOpacity(0.1),
                   borderRadius: BorderRadius.circular(16),
@@ -241,6 +305,27 @@ class _RoomManagementPageState extends State<RoomManagementPage>
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
+            ),
+          ],
+          if (_isDistributedRoom) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildStatChip(
+                  theme,
+                  Icons.hub,
+                  _config?.roomState ?? 'active',
+                  'State',
+                ),
+                _buildStatChip(
+                  theme,
+                  Icons.vpn_key,
+                  _config?.joinPolicy ?? 'approval_required',
+                  'Join policy',
+                ),
+              ],
             ),
           ],
           const SizedBox(height: 12),
@@ -275,7 +360,11 @@ class _RoomManagementPageState extends State<RoomManagementPage>
   }
 
   Widget _buildStatChip(
-      ThemeData theme, IconData icon, String count, String label) {
+    ThemeData theme,
+    IconData icon,
+    String count,
+    String label,
+  ) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -323,35 +412,41 @@ class _RoomManagementPageState extends State<RoomManagementPage>
 
     // Add owner
     if (_config!.owner != null) {
-      allMembers.add(_MemberInfo(
-        npub: _config!.owner!,
-        role: 'owner',
-        callsign: _npubToCallsign(_config!.owner!),
-        nickname: _getNicknameForNpub(_config!.owner!),
-      ));
+      allMembers.add(
+        _MemberInfo(
+          npub: _config!.owner!,
+          role: 'owner',
+          callsign: _npubToCallsign(_config!.owner!),
+          nickname: _getNicknameForNpub(_config!.owner!),
+        ),
+      );
     }
 
     // Add admins
     for (final npub in _config!.admins) {
       if (npub != _config!.owner) {
-        allMembers.add(_MemberInfo(
-          npub: npub,
-          role: 'admin',
-          callsign: _npubToCallsign(npub),
-          nickname: _getNicknameForNpub(npub),
-        ));
+        allMembers.add(
+          _MemberInfo(
+            npub: npub,
+            role: 'admin',
+            callsign: _npubToCallsign(npub),
+            nickname: _getNicknameForNpub(npub),
+          ),
+        );
       }
     }
 
     // Add moderators
     for (final npub in _config!.moderatorNpubs) {
       if (!_config!.admins.contains(npub) && npub != _config!.owner) {
-        allMembers.add(_MemberInfo(
-          npub: npub,
-          role: 'moderator',
-          callsign: _npubToCallsign(npub),
-          nickname: _getNicknameForNpub(npub),
-        ));
+        allMembers.add(
+          _MemberInfo(
+            npub: npub,
+            role: 'moderator',
+            callsign: _npubToCallsign(npub),
+            nickname: _getNicknameForNpub(npub),
+          ),
+        );
       }
     }
 
@@ -360,12 +455,14 @@ class _RoomManagementPageState extends State<RoomManagementPage>
       if (!_config!.moderatorNpubs.contains(npub) &&
           !_config!.admins.contains(npub) &&
           npub != _config!.owner) {
-        allMembers.add(_MemberInfo(
-          npub: npub,
-          role: 'member',
-          callsign: _npubToCallsign(npub),
-          nickname: _getNicknameForNpub(npub),
-        ));
+        allMembers.add(
+          _MemberInfo(
+            npub: npub,
+            role: 'member',
+            callsign: _npubToCallsign(npub),
+            nickname: _getNicknameForNpub(npub),
+          ),
+        );
       }
     }
 
@@ -408,7 +505,10 @@ class _RoomManagementPageState extends State<RoomManagementPage>
 
     return ListTile(
       leading: CircleAvatar(
-        backgroundColor: _getMemberRoleColor(theme, member.role).withOpacity(0.1),
+        backgroundColor: _getMemberRoleColor(
+          theme,
+          member.role,
+        ).withOpacity(0.1),
         child: Icon(
           _getMemberRoleIcon(member.role),
           color: _getMemberRoleColor(theme, member.role),
@@ -467,52 +567,60 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     // Role management options
     if (_canManageRoles) {
       if (member.role == 'member') {
-        menuItems.add(PopupMenuItem(
-          value: 'promote_moderator',
-          child: ListTile(
-            leading: const Icon(Icons.arrow_upward),
-            title: Text(_i18n.t('promote_to_moderator')),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
+        menuItems.add(
+          PopupMenuItem(
+            value: 'promote_moderator',
+            child: ListTile(
+              leading: const Icon(Icons.arrow_upward),
+              title: Text(_i18n.t('promote_to_moderator')),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+            ),
           ),
-        ));
+        );
       }
       if (member.role == 'moderator') {
-        menuItems.add(PopupMenuItem(
-          value: 'demote_member',
-          child: ListTile(
-            leading: const Icon(Icons.arrow_downward),
-            title: Text(_i18n.t('demote_to_member')),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
+        menuItems.add(
+          PopupMenuItem(
+            value: 'demote_member',
+            child: ListTile(
+              leading: const Icon(Icons.arrow_downward),
+              title: Text(_i18n.t('demote_to_member')),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+            ),
           ),
-        ));
+        );
       }
     }
 
     // Admin promotion/demotion (owner only)
     if (_canManageAdmins) {
       if (member.role == 'moderator') {
-        menuItems.add(PopupMenuItem(
-          value: 'promote_admin',
-          child: ListTile(
-            leading: const Icon(Icons.admin_panel_settings),
-            title: Text(_i18n.t('promote_to_admin')),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
+        menuItems.add(
+          PopupMenuItem(
+            value: 'promote_admin',
+            child: ListTile(
+              leading: const Icon(Icons.admin_panel_settings),
+              title: Text(_i18n.t('promote_to_admin')),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+            ),
           ),
-        ));
+        );
       }
       if (member.role == 'admin') {
-        menuItems.add(PopupMenuItem(
-          value: 'demote_moderator',
-          child: ListTile(
-            leading: const Icon(Icons.arrow_downward),
-            title: Text(_i18n.t('demote_to_moderator')),
-            dense: true,
-            contentPadding: EdgeInsets.zero,
+        menuItems.add(
+          PopupMenuItem(
+            value: 'demote_moderator',
+            child: ListTile(
+              leading: const Icon(Icons.arrow_downward),
+              title: Text(_i18n.t('demote_to_moderator')),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+            ),
           ),
-        ));
+        );
       }
     }
 
@@ -521,33 +629,37 @@ class _RoomManagementPageState extends State<RoomManagementPage>
       if (menuItems.isNotEmpty) {
         menuItems.add(const PopupMenuDivider());
       }
-      menuItems.add(PopupMenuItem(
-        value: 'remove',
-        child: ListTile(
-          leading: Icon(Icons.person_remove, color: theme.colorScheme.error),
-          title: Text(
-            _i18n.t('remove_member'),
-            style: TextStyle(color: theme.colorScheme.error),
+      menuItems.add(
+        PopupMenuItem(
+          value: 'remove',
+          child: ListTile(
+            leading: Icon(Icons.person_remove, color: theme.colorScheme.error),
+            title: Text(
+              _i18n.t('remove_member'),
+              style: TextStyle(color: theme.colorScheme.error),
+            ),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
           ),
-          dense: true,
-          contentPadding: EdgeInsets.zero,
         ),
-      ));
+      );
     }
 
     if (_canBan && member.role != 'admin') {
-      menuItems.add(PopupMenuItem(
-        value: 'ban',
-        child: ListTile(
-          leading: Icon(Icons.block, color: theme.colorScheme.error),
-          title: Text(
-            _i18n.t('ban_user'),
-            style: TextStyle(color: theme.colorScheme.error),
+      menuItems.add(
+        PopupMenuItem(
+          value: 'ban',
+          child: ListTile(
+            leading: Icon(Icons.block, color: theme.colorScheme.error),
+            title: Text(
+              _i18n.t('ban_user'),
+              style: TextStyle(color: theme.colorScheme.error),
+            ),
+            dense: true,
+            contentPadding: EdgeInsets.zero,
           ),
-          dense: true,
-          contentPadding: EdgeInsets.zero,
         ),
-      ));
+      );
     }
 
     if (menuItems.isEmpty) return null;
@@ -804,10 +916,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
       children: [
         Text(
           label,
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 12,
-          ),
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
         ),
         const SizedBox(height: 4),
         SelectableText(
@@ -820,6 +929,10 @@ class _RoomManagementPageState extends State<RoomManagementPage>
 
   Future<void> _showAddMemberDialog() async {
     if (_config == null || _userNpub == null) return;
+    if (_isDistributedRoom) {
+      await _showInviteDialog();
+      return;
+    }
 
     final result = await Navigator.push<bool>(
       context,
@@ -838,17 +951,44 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     }
   }
 
-  Future<void> _addMember(String npub) async {
-    setState(() => _isLoading = true);
+  Future<void> _showInviteDialog() async {
+    if (!_isDistributedRoom || _distributedChatService == null) {
+      return;
+    }
 
     try {
-      await _chatService.addMember(widget.channel.id, _userNpub!, npub);
-      _showSuccess(_i18n.t('member_added'));
-      await _loadData();
+      final invite = await _distributedChatService!.createInvite(
+        widget.channel.id,
+      );
+      final encodedInvite = invite.encode();
+      if (!mounted) {
+        return;
+      }
+
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Invite link'),
+          content: SizedBox(width: 420, child: SelectableText(encodedInvite)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(_i18n.t('close')),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: encodedInvite));
+                Navigator.pop(context);
+                _showSuccess('Invite link copied');
+              },
+              icon: const Icon(Icons.copy),
+              label: const Text('Copy'),
+            ),
+          ],
+        ),
+      );
     } catch (e) {
-      _showError('Failed to add member: $e');
-    } finally {
-      setState(() => _isLoading = false);
+      _showError('Failed to create invite: $e');
     }
   }
 
@@ -877,7 +1017,18 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     setState(() => _isLoading = true);
 
     try {
-      await _chatService.promoteToModerator(widget.channel.id, _userNpub!, npub);
+      if (_isDistributedRoom) {
+        await _distributedChatService!.promoteToModerator(
+          widget.channel.id,
+          npub,
+        );
+      } else {
+        await _chatService.promoteToModerator(
+          widget.channel.id,
+          _userNpub!,
+          npub,
+        );
+      }
       _showSuccess(_i18n.t('promoted_to_moderator'));
       await _loadData();
     } catch (e) {
@@ -891,7 +1042,11 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     setState(() => _isLoading = true);
 
     try {
-      await _chatService.promoteToAdmin(widget.channel.id, _userNpub!, npub);
+      if (_isDistributedRoom) {
+        await _distributedChatService!.promoteToAdmin(widget.channel.id, npub);
+      } else {
+        await _chatService.promoteToAdmin(widget.channel.id, _userNpub!, npub);
+      }
       _showSuccess(_i18n.t('promoted_to_admin'));
       await _loadData();
     } catch (e) {
@@ -905,7 +1060,19 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     setState(() => _isLoading = true);
 
     try {
-      await _chatService.demote(widget.channel.id, _userNpub!, npub);
+      if (_isDistributedRoom) {
+        final isAdmin = _config?.admins.contains(npub) ?? false;
+        if (isAdmin) {
+          await _distributedChatService!.demoteAdmin(widget.channel.id, npub);
+        } else {
+          await _distributedChatService!.demoteModerator(
+            widget.channel.id,
+            npub,
+          );
+        }
+      } else {
+        await _chatService.demote(widget.channel.id, _userNpub!, npub);
+      }
       _showSuccess(_i18n.t('user_demoted'));
       await _loadData();
     } catch (e) {
@@ -942,7 +1109,11 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     setState(() => _isLoading = true);
 
     try {
-      await _chatService.removeMember(widget.channel.id, _userNpub!, npub);
+      if (_isDistributedRoom) {
+        await _distributedChatService!.removeMember(widget.channel.id, npub);
+      } else {
+        await _chatService.removeMember(widget.channel.id, _userNpub!, npub);
+      }
       _showSuccess(_i18n.t('member_removed'));
       await _loadData();
     } catch (e) {
@@ -979,7 +1150,11 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     setState(() => _isLoading = true);
 
     try {
-      await _chatService.banMember(widget.channel.id, _userNpub!, npub);
+      if (_isDistributedRoom) {
+        await _distributedChatService!.banMember(widget.channel.id, npub);
+      } else {
+        await _chatService.banMember(widget.channel.id, _userNpub!, npub);
+      }
       _showSuccess(_i18n.t('user_banned'));
       await _loadData();
     } catch (e) {
@@ -993,7 +1168,11 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     setState(() => _isLoading = true);
 
     try {
-      await _chatService.unbanMember(widget.channel.id, _userNpub!, npub);
+      if (_isDistributedRoom) {
+        await _distributedChatService!.unbanMember(widget.channel.id, npub);
+      } else {
+        await _chatService.unbanMember(widget.channel.id, _userNpub!, npub);
+      }
       _showSuccess(_i18n.t('user_unbanned'));
       await _loadData();
     } catch (e) {
@@ -1007,8 +1186,18 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     setState(() => _isLoading = true);
 
     try {
-      await _chatService.approveApplication(
-          widget.channel.id, _userNpub!, applicant.npub);
+      if (_isDistributedRoom) {
+        await _distributedChatService!.approveApplicant(
+          widget.channel.id,
+          applicant.npub,
+        );
+      } else {
+        await _chatService.approveApplication(
+          widget.channel.id,
+          _userNpub!,
+          applicant.npub,
+        );
+      }
       _showSuccess(_i18n.t('application_approved'));
       await _loadData();
     } catch (e) {
@@ -1022,8 +1211,18 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     setState(() => _isLoading = true);
 
     try {
-      await _chatService.rejectApplication(
-          widget.channel.id, _userNpub!, applicant.npub);
+      if (_isDistributedRoom) {
+        await _distributedChatService!.rejectApplicant(
+          widget.channel.id,
+          applicant.npub,
+        );
+      } else {
+        await _chatService.rejectApplication(
+          widget.channel.id,
+          _userNpub!,
+          applicant.npub,
+        );
+      }
       _showSuccess(_i18n.t('application_rejected'));
       await _loadData();
     } catch (e) {
@@ -1161,6 +1360,12 @@ class _RoomManagementPageState extends State<RoomManagementPage>
   }
 
   Future<void> _changeVisibility(String newVisibility) async {
+    if (_isDistributedRoom) {
+      _showError(
+        'Visibility changes are not supported for decentralized rooms',
+      );
+      return;
+    }
     setState(() => _isLoading = true);
 
     try {
@@ -1182,7 +1387,8 @@ class _RoomManagementPageState extends State<RoomManagementPage>
             ? _userNpub
             : channel.config!.owner,
         // Add current user to members if making restricted
-        members: newVisibility == 'RESTRICTED' &&
+        members:
+            newVisibility == 'RESTRICTED' &&
                 !channel.config!.members.contains(_userNpub)
             ? [...channel.config!.members, _userNpub!]
             : channel.config!.members,
@@ -1191,9 +1397,11 @@ class _RoomManagementPageState extends State<RoomManagementPage>
       // Update the channel
       await _chatService.updateChannel(channel.copyWith(config: updatedConfig));
 
-      _showSuccess(newVisibility == 'RESTRICTED'
-          ? _i18n.t('room_made_restricted')
-          : _i18n.t('room_made_public'));
+      _showSuccess(
+        newVisibility == 'RESTRICTED'
+            ? _i18n.t('room_made_restricted')
+            : _i18n.t('room_made_public'),
+      );
       await _loadData();
     } catch (e) {
       _showError('Failed to change visibility: $e');
@@ -1216,10 +1424,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
   void _showSuccess(String message) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.green,
-        ),
+        SnackBar(content: Text(message), backgroundColor: Colors.green),
       );
     }
   }

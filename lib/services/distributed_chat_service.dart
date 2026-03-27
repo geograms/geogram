@@ -118,19 +118,63 @@ class DistributedChatService {
     if (snapshot == null) {
       return null;
     }
-    return _snapshotToChannel(snapshot);
+    final latestMessages = await _loadMessageRecords(roomId, limit: 1);
+    return _snapshotToChannel(snapshot).copyWith(
+      lastMessageTime: latestMessages.isNotEmpty
+          ? latestMessages.last.authoredAt.toLocal()
+          : null,
+    );
+  }
+
+  Future<List<ChatChannel>> listRooms() async {
+    final entries = await storage.listDirectory('dchat');
+    final rooms = <ChatChannel>[];
+    for (final entry in entries) {
+      if (!entry.isDirectory) {
+        continue;
+      }
+      final room = await getRoom(entry.name);
+      if (room != null) {
+        rooms.add(room);
+      }
+    }
+    rooms.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return rooms;
   }
 
   Future<List<ChatMessage>> loadMessages(
     String roomId, {
     int limit = 1000,
+    String? topicId,
   }) async {
     final records = await _loadMessageRecords(
       roomId,
       limit: limit,
       includeDeleted: false,
+      topicId: topicId,
     );
     return _decodeReadableMessages(roomId, records);
+  }
+
+  Future<List<DChatTopicRecord>> listTopics(String roomId) async {
+    return _withStore(roomId, (store) async {
+      if (!await store.exists()) {
+        return const <DChatTopicRecord>[];
+      }
+      final topics = await store.listTopics();
+      if (topics.isNotEmpty) {
+        return topics;
+      }
+      return [
+        DChatTopicRecord(
+          topicId: 'general',
+          title: 'General',
+          createdByNpub: '',
+          createdAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+          updatedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        ),
+      ];
+    });
   }
 
   Future<List<DistributedChatControlEvent>> loadControlEvents(
@@ -157,6 +201,7 @@ class DistributedChatService {
     required String roomId,
     required String name,
     String? description,
+    String? icon,
     List<String> seedPeerHints = const [],
   }) async {
     _requireSigner();
@@ -176,6 +221,7 @@ class DistributedChatService {
       payload: {
         'name': name,
         if (description != null) 'description': description,
+        if (icon != null && icon.trim().isNotEmpty) 'icon': icon.trim(),
         'owner_npub': profileNpub,
         'room_npub': roomKeys.npub,
         'distribution_mode': 'distributed',
@@ -184,6 +230,20 @@ class DistributedChatService {
       },
     );
     await _importControlEvent(created);
+    final existingTopics = await _withStore(roomId, (store) async {
+      if (!await store.exists()) {
+        return const <DChatTopicRecord>[];
+      }
+      return store.listTopics();
+    });
+    if (!existingTopics.any((topic) => topic.topicId == 'general')) {
+      await createTopic(
+        roomId,
+        title: 'General',
+        topicId: 'general',
+        createdAt: created.createdAt.toUtc(),
+      );
+    }
     await _rotateEpoch(
       roomId,
       summary: 'room_created',
@@ -206,6 +266,7 @@ class DistributedChatService {
       roomDescription: room.description,
       ownerNpub: config.owner ?? profileNpub,
       roomNpub: config.roomNpub!,
+      roomIcon: config.icon,
       joinPolicy: config.joinPolicy,
       distributionMode: config.distributionMode ?? 'distributed',
       hostCallsign: profileCallsign,
@@ -213,6 +274,59 @@ class DistributedChatService {
           ? seedPeerHints
           : config.seedPeerHints,
     );
+  }
+
+  Future<DChatTopicRecord> createTopic(
+    String roomId, {
+    required String title,
+    String? description,
+    String? icon,
+    String? topicId,
+    DateTime? createdAt,
+  }) async {
+    _requireSigner();
+    final config = await _requireDistributedConfig(roomId);
+    if (!config.canWrite(profileNpub)) {
+      throw PermissionDeniedException('You cannot create topics in this room');
+    }
+
+    final normalizedTitle = title.trim();
+    if (normalizedTitle.isEmpty) {
+      throw Exception('Topic title is required');
+    }
+    final normalizedTopicId = topicId == null || topicId.trim().isEmpty
+        ? _sanitizeTopicId(normalizedTitle)
+        : _sanitizeTopicId(topicId);
+    final existingTopics = await _withStore(roomId, (store) async {
+      if (!await store.exists()) {
+        return const <DChatTopicRecord>[];
+      }
+      return store.listTopics();
+    });
+    if (existingTopics.any((topic) => topic.topicId == normalizedTopicId)) {
+      throw Exception('Topic already exists: $normalizedTopicId');
+    }
+
+    final event = DistributedChatControlEvent.create(
+      type: DistributedChatControlType.topicCreated,
+      roomId: roomId,
+      actorNsec: profileNsec!,
+      actorCallsign: profileCallsign,
+      createdAt: createdAt == null
+          ? null
+          : createdAt.millisecondsSinceEpoch ~/ 1000,
+      payload: {
+        'topic_id': normalizedTopicId,
+        'title': normalizedTitle,
+        if (description != null && description.trim().isNotEmpty)
+          'description': description.trim(),
+        if (icon != null && icon.trim().isNotEmpty) 'icon': icon.trim(),
+      },
+    );
+    await _importControlEvent(event);
+    return (await listTopics(
+      roomId,
+    )).firstWhere((topic) => topic.topicId == normalizedTopicId);
   }
 
   Future<ChatChannel> acceptInviteAndRequestJoin(
@@ -488,6 +602,7 @@ class DistributedChatService {
     String roomId,
     String content, {
     Map<String, String>? metadata,
+    String? topicId,
   }) async {
     _requireSigner();
     final snapshot = await _requireSnapshot(roomId);
@@ -507,6 +622,9 @@ class DistributedChatService {
     }
 
     final plaintext = Uint8List.fromList(utf8.encode(content));
+    final normalizedTopicId = (topicId == null || topicId.trim().isEmpty)
+        ? 'general'
+        : topicId;
     final encrypted = BackupEncryption.encryptBytesWithSharedKey(
       plaintext,
       epochKey,
@@ -516,6 +634,7 @@ class DistributedChatService {
     final envelope = <String, dynamic>{
       'epoch': epoch,
       'enc': _epochEncryptionScheme,
+      'topic_id': normalizedTopicId,
       'ciphertext_sha1': ciphertextSha1,
       'nonce': base64Encode(encrypted.nonce),
     };
@@ -529,6 +648,7 @@ class DistributedChatService {
         ['t', 'chat'],
         ['room', roomId],
         ['callsign', profileCallsign],
+        ['topic', normalizedTopicId],
         ['epoch', epoch.toString()],
         ['enc', _epochEncryptionScheme],
         ['ciphertext_sha1', ciphertextSha1],
@@ -543,6 +663,7 @@ class DistributedChatService {
       }
       final record = DChatMessageRecord(
         messageId: messageEvent.id ?? messageEvent.calculateId(),
+        topicId: normalizedTopicId,
         epoch: epoch,
         lamport: await store.nextMessageLamport(),
         authorNpub: profileNpub,
@@ -575,6 +696,7 @@ class DistributedChatService {
         if (messageEvent.id != null) 'event_id': messageEvent.id!,
         'enc': _epochEncryptionScheme,
         'epoch': epoch.toString(),
+        'topic_id': normalizedTopicId,
       },
     );
   }
@@ -668,6 +790,7 @@ class DistributedChatService {
           metadata.copyWith(
             title: invite.roomName,
             description: invite.roomDescription,
+            icon: invite.roomIcon,
             ownerNpub: invite.ownerNpub,
             roomNpub: invite.roomNpub,
             seedPeerHints: mergedHints,
@@ -685,6 +808,7 @@ class DistributedChatService {
           roomId: invite.roomId,
           title: invite.roomName,
           description: invite.roomDescription,
+          icon: invite.roomIcon,
           ownerNpub: invite.ownerNpub,
           roomNpub: invite.roomNpub,
           seedPeerHints: invite.seedPeerHints,
@@ -849,6 +973,9 @@ class DistributedChatService {
       case DistributedChatControlType.epochRotated:
         await _applyEpochRotated(event);
         break;
+      case DistributedChatControlType.topicCreated:
+        await _applyTopicCreated(event);
+        break;
       case DistributedChatControlType.memberRemoved:
         await _applyMemberRemoved(event);
         break;
@@ -899,10 +1026,12 @@ class DistributedChatService {
           roomId: event.roomId,
           title:
               event.payload['name'] as String? ??
+              event.payload['title'] as String? ??
               existing?.title ??
               event.roomId,
           description:
               event.payload['description'] as String? ?? existing?.description,
+          icon: event.payload['icon'] as String? ?? existing?.icon,
           ownerNpub: ownerNpub,
           roomNpub: event.payload['room_npub'] as String? ?? existing?.roomNpub,
           seedPeerHints: mergedHints,
@@ -928,6 +1057,41 @@ class DistributedChatService {
           removedAt: null,
           addedBy: ownerNpub,
           updatedAt: createdAt,
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyTopicCreated(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final topicId = event.topicId;
+    final topicTitle = event.topicTitle;
+    if (config == null || topicId == null || topicTitle == null) {
+      return;
+    }
+    if (!config.canWrite(event.actorNpub)) {
+      throw PermissionDeniedException(
+        'Only active members can create room topics',
+      );
+    }
+
+    final normalizedTopicId = _sanitizeTopicId(topicId);
+    final normalizedTitle = topicTitle.trim();
+    if (normalizedTitle.isEmpty) {
+      throw Exception('Topic title is required');
+    }
+
+    await _withStore(event.roomId, (store) async {
+      await store.upsertTopic(
+        DChatTopicRecord(
+          topicId: normalizedTopicId,
+          title: normalizedTitle,
+          description: event.topicDescription?.trim(),
+          icon: event.topicIcon?.trim(),
+          createdByNpub: event.actorNpub,
+          createdAt: event.createdAt.toUtc(),
+          updatedAt: event.createdAt.toUtc(),
         ),
       );
     });
@@ -1606,6 +1770,7 @@ class DistributedChatService {
       roomState: snapshot.metadata.state,
       joinPolicy: snapshot.metadata.joinPolicy,
       seedPeerHints: snapshot.metadata.seedPeerHints,
+      icon: snapshot.metadata.icon,
     );
   }
 
@@ -1642,6 +1807,7 @@ class DistributedChatService {
     String roomId, {
     int limit = 1000,
     bool includeDeleted = false,
+    String? topicId,
   }) async {
     return _withStore(roomId, (store) async {
       if (!await store.exists()) {
@@ -1650,6 +1816,7 @@ class DistributedChatService {
       return store.listMessageRecords(
         limit: limit,
         includeDeleted: includeDeleted,
+        topicId: topicId,
       );
     });
   }
@@ -1742,6 +1909,14 @@ class DistributedChatService {
       }
     }
 
+    final eventTopicId =
+        _eventTagValue(event.tags, 'topic') ??
+        envelope?['topic_id']?.toString() ??
+        'general';
+    if (_sanitizeTopicId(eventTopicId) != _sanitizeTopicId(record.topicId)) {
+      throw Exception('Message topic mismatch for ${record.messageId}');
+    }
+
     await _withStore(roomId, (store) async {
       if (await store.hasMessage(record.messageId)) {
         return;
@@ -1752,6 +1927,7 @@ class DistributedChatService {
       }
       final normalized = DChatMessageRecord(
         messageId: record.messageId,
+        topicId: _sanitizeTopicId(record.topicId),
         epoch: record.epoch,
         lamport: await store.nextMessageLamport(),
         authorNpub: record.authorNpub,
@@ -1797,6 +1973,7 @@ class DistributedChatService {
         if (event.id != null) 'event_id': event.id!,
         if (record.encryptionScheme != null) 'enc': record.encryptionScheme!,
         'epoch': record.epoch.toString(),
+        'topic_id': record.topicId,
       },
     );
   }
@@ -1873,6 +2050,34 @@ class DistributedChatService {
       return int.tryParse(raw);
     }
     return null;
+  }
+
+  String _sanitizeTopicId(String raw) {
+    final source = raw.trim().toLowerCase();
+    final buffer = StringBuffer();
+    var previousWasSeparator = false;
+
+    for (final codePoint in source.runes) {
+      final char = String.fromCharCode(codePoint);
+      final isAlphaNum = RegExp(r'[a-z0-9]').hasMatch(char);
+      if (isAlphaNum) {
+        buffer.write(char);
+        previousWasSeparator = false;
+        continue;
+      }
+
+      final isSeparator = char == '-' || char == '_' || char == ' ';
+      if (isSeparator && buffer.isNotEmpty && !previousWasSeparator) {
+        buffer.write('-');
+        previousWasSeparator = true;
+      }
+    }
+
+    final sanitized = buffer.toString().replaceAll(RegExp(r'^-+|-+$'), '');
+    if (sanitized.isEmpty) {
+      throw Exception('Topic id cannot be empty');
+    }
+    return sanitized.length > 64 ? sanitized.substring(0, 64) : sanitized;
   }
 
   List<String> _activeEpochRecipients(ChatChannelConfig config) {

@@ -63,6 +63,7 @@ class DChatRoomStore {
           room_id,
           title,
           description,
+          icon,
           owner_npub,
           room_npub,
           seed_peer_hints_json,
@@ -72,10 +73,11 @@ class DChatRoomStore {
           join_policy,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(room_id) DO UPDATE SET
           title = excluded.title,
           description = excluded.description,
+          icon = excluded.icon,
           owner_npub = excluded.owner_npub,
           room_npub = excluded.room_npub,
           seed_peer_hints_json = excluded.seed_peer_hints_json,
@@ -89,6 +91,7 @@ class DChatRoomStore {
           metadata.roomId,
           metadata.title,
           metadata.description,
+          metadata.icon,
           metadata.ownerNpub,
           metadata.roomNpub,
           jsonEncode(metadata.seedPeerHints),
@@ -114,6 +117,7 @@ class DChatRoomStore {
           room_id,
           title,
           description,
+          icon,
           owner_npub,
           room_npub,
           seed_peer_hints_json,
@@ -187,6 +191,61 @@ class DChatRoomStore {
         ORDER BY joined_at ASC, member_npub ASC;
         ''');
       return rows.map(_memberFromRow).toList();
+    });
+  }
+
+  Future<void> upsertTopic(DChatTopicRecord topic) async {
+    await open();
+    await _roomDatabase.write((db) {
+      db.execute(
+        '''
+        INSERT INTO topics (
+          topic_id,
+          title,
+          description,
+          icon,
+          created_by_npub,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(topic_id) DO UPDATE SET
+          title = excluded.title,
+          description = excluded.description,
+          icon = excluded.icon,
+          updated_at = excluded.updated_at;
+        ''',
+        [
+          topic.topicId,
+          topic.title,
+          topic.description,
+          topic.icon,
+          topic.createdByNpub,
+          _millis(topic.createdAt),
+          _millis(topic.updatedAt),
+        ],
+      );
+    });
+  }
+
+  Future<List<DChatTopicRecord>> listTopics() async {
+    if (!await exists()) {
+      return const [];
+    }
+    await open();
+    return _roomDatabase.read((db) {
+      final rows = db.select('''
+        SELECT
+          topic_id,
+          title,
+          description,
+          icon,
+          created_by_npub,
+          created_at,
+          updated_at
+        FROM topics
+        ORDER BY created_at ASC, topic_id ASC;
+        ''');
+      return rows.map(_topicFromRow).toList();
     });
   }
 
@@ -359,6 +418,7 @@ class DChatRoomStore {
         '''
         INSERT OR REPLACE INTO messages (
           message_id,
+          topic_id,
           epoch,
           lamport,
           author_npub,
@@ -369,10 +429,11 @@ class DChatRoomStore {
           ciphertext_sha1,
           raw_event_json,
           deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         ''',
         [
           message.messageId,
+          message.topicId,
           message.epoch,
           message.lamport,
           message.authorNpub,
@@ -419,17 +480,30 @@ class DChatRoomStore {
   Future<List<DChatMessageRecord>> listMessageRecords({
     int limit = 200,
     bool includeDeleted = false,
+    String? topicId,
   }) async {
     if (!await exists()) {
       return const [];
     }
     await open();
     return _roomDatabase.read((db) {
-      final whereClause = includeDeleted ? '' : 'WHERE deleted_at IS NULL';
+      final whereParts = <String>[];
+      final args = <Object?>[];
+      if (!includeDeleted) {
+        whereParts.add('deleted_at IS NULL');
+      }
+      if (topicId != null && topicId.isNotEmpty) {
+        whereParts.add('topic_id = ?');
+        args.add(topicId);
+      }
+      final whereClause = whereParts.isEmpty
+          ? ''
+          : 'WHERE ${whereParts.join(' AND ')}';
       final rows = db.select(
         '''
         SELECT
           message_id,
+          topic_id,
           epoch,
           lamport,
           author_npub,
@@ -445,7 +519,7 @@ class DChatRoomStore {
         ORDER BY epoch DESC, lamport DESC, authored_at DESC, message_id DESC
         LIMIT ?;
         ''',
-        [limit.clamp(1, 5000)],
+        [...args, limit.clamp(1, 5000)],
       );
       return rows.reversed.map(_messageFromRow).toList();
     });
@@ -795,6 +869,7 @@ class DChatRoomStore {
         room_id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         description TEXT,
+        icon TEXT,
         owner_npub TEXT NOT NULL,
         room_npub TEXT,
         seed_peer_hints_json TEXT NOT NULL DEFAULT '[]',
@@ -851,8 +926,20 @@ class DChatRoomStore {
       );
     ''');
     db.execute('''
+      CREATE TABLE IF NOT EXISTS topics (
+        topic_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT,
+        icon TEXT,
+        created_by_npub TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    ''');
+    db.execute('''
       CREATE TABLE IF NOT EXISTS messages (
         message_id TEXT PRIMARY KEY,
+        topic_id TEXT NOT NULL DEFAULT 'general',
         epoch INTEGER NOT NULL,
         lamport INTEGER NOT NULL,
         author_npub TEXT NOT NULL,
@@ -903,7 +990,15 @@ class DChatRoomStore {
         last_synced_at INTEGER
       );
     ''');
-    db.execute('PRAGMA user_version = 1;');
+    if (!_hasColumn(db, 'room_meta', 'icon')) {
+      db.execute('ALTER TABLE room_meta ADD COLUMN icon TEXT;');
+    }
+    if (!_hasColumn(db, 'messages', 'topic_id')) {
+      db.execute(
+        "ALTER TABLE messages ADD COLUMN topic_id TEXT NOT NULL DEFAULT 'general';",
+      );
+    }
+    db.execute('PRAGMA user_version = 2;');
   }
 
   void _initDeviceSchema(dynamic db) {
@@ -967,6 +1062,7 @@ class DChatRoomStore {
       roomId: row['room_id'] as String,
       title: row['title'] as String,
       description: row['description'] as String?,
+      icon: row['icon'] as String?,
       ownerNpub: row['owner_npub'] as String,
       roomNpub: row['room_npub'] as String?,
       seedPeerHints: _decodeStringList(
@@ -1003,6 +1099,18 @@ class DChatRoomStore {
     );
   }
 
+  DChatTopicRecord _topicFromRow(Map<String, Object?> row) {
+    return DChatTopicRecord(
+      topicId: row['topic_id'] as String,
+      title: row['title'] as String,
+      description: row['description'] as String?,
+      icon: row['icon'] as String?,
+      createdByNpub: row['created_by_npub'] as String,
+      createdAt: _fromMillis(row['created_at'] as int),
+      updatedAt: _fromMillis(row['updated_at'] as int),
+    );
+  }
+
   DChatEpochKeyBox _epochKeyBoxFromRow(Map<String, Object?> row) {
     return DChatEpochKeyBox(
       epoch: row['epoch'] as int,
@@ -1015,6 +1123,7 @@ class DChatRoomStore {
   DChatMessageRecord _messageFromRow(Map<String, Object?> row) {
     return DChatMessageRecord(
       messageId: row['message_id'] as String,
+      topicId: row['topic_id'] as String? ?? 'general',
       epoch: row['epoch'] as int,
       lamport: row['lamport'] as int,
       authorNpub: row['author_npub'] as String,
@@ -1198,4 +1307,14 @@ class DChatRoomStore {
   }
 
   String _epochKeyName(int epoch) => 'epoch_key.$epoch';
+
+  bool _hasColumn(dynamic db, String tableName, String columnName) {
+    final rows = db.select('PRAGMA table_info($tableName);');
+    for (final row in rows) {
+      if (row['name'] == columnName) {
+        return true;
+      }
+    }
+    return false;
+  }
 }

@@ -129,6 +129,9 @@ class ChatChannel {
     }
   }
 
+  /// Optional custom icon for room/topic display.
+  String? get icon => config?.icon;
+
   /// Get display subtitle (participant count or last message preview)
   String get subtitle {
     if (isDirect) {
@@ -300,6 +303,9 @@ class ChatChannelConfig {
   /// Optional peer hints embedded in invites/bootstrap metadata.
   final List<String> seedPeerHints;
 
+  /// Optional custom room icon (typically an emoji).
+  final String? icon;
+
   ChatChannelConfig({
     required this.id,
     required this.name,
@@ -324,6 +330,7 @@ class ChatChannelConfig {
     this.roomState = 'active',
     this.joinPolicy = 'approval_required',
     this.seedPeerHints = const [],
+    this.icon,
   });
 
   /// Check if this config uses dynamic group membership
@@ -433,6 +440,7 @@ class ChatChannelConfig {
       seedPeerHints: List<String>.from(
         json['seed_peer_hints'] as List? ?? const [],
       ),
+      icon: json['icon'] as String?,
     );
   }
 
@@ -463,6 +471,7 @@ class ChatChannelConfig {
       if (roomState != 'active') 'room_state': roomState,
       if (joinPolicy != 'approval_required') 'join_policy': joinPolicy,
       if (seedPeerHints.isNotEmpty) 'seed_peer_hints': seedPeerHints,
+      if (icon != null) 'icon': icon,
     };
   }
 
@@ -491,6 +500,7 @@ class ChatChannelConfig {
     String? roomState,
     String? joinPolicy,
     List<String>? seedPeerHints,
+    String? icon,
   }) {
     return ChatChannelConfig(
       id: id ?? this.id,
@@ -518,6 +528,7 @@ class ChatChannelConfig {
       roomState: roomState ?? this.roomState,
       joinPolicy: joinPolicy ?? this.joinPolicy,
       seedPeerHints: seedPeerHints ?? List<String>.from(this.seedPeerHints),
+      icon: icon ?? this.icon,
     );
   }
 

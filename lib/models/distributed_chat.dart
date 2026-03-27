@@ -10,6 +10,7 @@ enum DistributedChatControlType {
   joinRejected,
   roomKeyShared,
   epochRotated,
+  topicCreated,
   memberRemoved,
   memberBanned,
   memberUnbanned,
@@ -38,6 +39,8 @@ extension DistributedChatControlTypeX on DistributedChatControlType {
         return 'room_key_shared';
       case DistributedChatControlType.epochRotated:
         return 'epoch_rotated';
+      case DistributedChatControlType.topicCreated:
+        return 'topic_created';
       case DistributedChatControlType.memberRemoved:
         return 'member_removed';
       case DistributedChatControlType.memberBanned:
@@ -78,6 +81,7 @@ class DistributedChatInvite {
   final String? roomDescription;
   final String ownerNpub;
   final String roomNpub;
+  final String? roomIcon;
   final String joinPolicy;
   final String distributionMode;
   final String? hostCallsign;
@@ -89,6 +93,7 @@ class DistributedChatInvite {
     this.roomDescription,
     required this.ownerNpub,
     required this.roomNpub,
+    this.roomIcon,
     this.joinPolicy = 'approval_required',
     this.distributionMode = 'distributed',
     this.hostCallsign,
@@ -102,6 +107,7 @@ class DistributedChatInvite {
       if (roomDescription != null) 'room_description': roomDescription,
       'owner_npub': ownerNpub,
       'room_npub': roomNpub,
+      if (roomIcon != null) 'room_icon': roomIcon,
       'join_policy': joinPolicy,
       'distribution_mode': distributionMode,
       if (hostCallsign != null) 'host_callsign': hostCallsign,
@@ -116,6 +122,7 @@ class DistributedChatInvite {
       roomDescription: json['room_description'] as String?,
       ownerNpub: json['owner_npub'] as String,
       roomNpub: json['room_npub'] as String,
+      roomIcon: json['room_icon'] as String?,
       joinPolicy: json['join_policy'] as String? ?? 'approval_required',
       distributionMode: json['distribution_mode'] as String? ?? 'distributed',
       hostCallsign: json['host_callsign'] as String?,
@@ -334,6 +341,14 @@ class DistributedChatControlEvent {
     }
     return boxes;
   }
+
+  String? get topicId => payload['topic_id'] as String?;
+
+  String? get topicTitle => payload['title'] as String?;
+
+  String? get topicDescription => payload['description'] as String?;
+
+  String? get topicIcon => payload['icon'] as String?;
 
   bool verify() => event.verify();
 

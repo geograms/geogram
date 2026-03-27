@@ -236,6 +236,59 @@ void main() {
       },
       timeout: const Timeout(Duration(seconds: 60)),
     );
+
+    test('stores room icons and filters messages by topic', () async {
+      const roomId = 'ops-hub';
+
+      final created = await admin.service.createDistributedRoom(
+        roomId: roomId,
+        name: 'Ops Hub',
+        description: 'Field coordination',
+        icon: '🛰️',
+      );
+      expect(created.icon, '🛰️');
+
+      final topic = await admin.service.createTopic(
+        roomId,
+        title: 'Logistics',
+        description: 'Supplies and transport',
+        icon: '📦',
+      );
+      expect(topic.topicId, 'logistics');
+      expect(topic.icon, '📦');
+
+      await admin.service.sendMessage(roomId, 'General status');
+      await admin.service.sendMessage(
+        roomId,
+        'Truck leaving in 10',
+        topicId: topic.topicId,
+      );
+
+      final generalMessages = await admin.service.loadMessages(
+        roomId,
+        limit: 20,
+        topicId: 'general',
+      );
+      final logisticsMessages = await admin.service.loadMessages(
+        roomId,
+        limit: 20,
+        topicId: topic.topicId,
+      );
+      final topics = await admin.service.listTopics(roomId);
+      final room = await admin.service.getRoom(roomId);
+
+      expect(generalMessages.map((message) => message.content), [
+        'General status',
+      ]);
+      expect(logisticsMessages.map((message) => message.content), [
+        'Truck leaving in 10',
+      ]);
+      expect(
+        topics.map((entry) => entry.topicId),
+        containsAll(['general', 'logistics']),
+      );
+      expect(room?.config?.icon, '🛰️');
+    });
   });
 }
 

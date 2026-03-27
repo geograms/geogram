@@ -14,6 +14,7 @@ import '../models/app.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
 import '../models/chat_settings.dart';
+import '../models/dchat_storage.dart';
 import '../models/station_chat_room.dart';
 import '../models/update_notification.dart';
 import '../services/chat_service.dart';
@@ -21,9 +22,9 @@ import '../services/app_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/station_service.dart';
-import '../services/station_node_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/direct_message_service.dart';
+import '../services/distributed_chat_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/log_service.dart';
 import '../services/i18n_service.dart';
@@ -34,7 +35,6 @@ import '../services/chat_file_download_manager.dart';
 import '../models/device_source.dart';
 import '../util/chat_format.dart';
 import '../util/nostr_crypto.dart';
-import '../util/nostr_event.dart';
 import '../util/event_bus.dart';
 import '../widgets/device_chat_sidebar.dart';
 import '../widgets/message_list_widget.dart';
@@ -48,7 +48,6 @@ import '../services/contact_service.dart';
 import '../services/nip05_resolver_service.dart';
 import '../services/websocket_service.dart';
 import '../services/station_chat_queue_service.dart';
-import '../services/signing_service.dart';
 import '../services/station_server_service.dart';
 import '../models/contact.dart';
 import 'chat_settings_page.dart';
@@ -92,7 +91,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   final ProfileService _profileService = ProfileService();
   final StationService _stationService = StationService();
   final RelayCacheService _cacheService = RelayCacheService();
-  final ChatNotificationService _chatNotificationService = ChatNotificationService();
+  final ChatNotificationService _chatNotificationService =
+      ChatNotificationService();
   final I18nService _i18n = I18nService();
   final ChatFileDownloadManager _downloadManager = ChatFileDownloadManager();
 
@@ -114,14 +114,20 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   List<StationChatMessage> _stationMessages = [];
   final Map<String, List<StationChatMessage>> _stationMessageCache = {};
   bool _loadingRelayRooms = false;
-  _StationConnectionStatus _connectionStatus = _StationConnectionStatus.connecting;
-  bool get _stationReachable => _connectionStatus == _StationConnectionStatus.online;
-  bool _forcedOfflineMode = false; // True when viewing a device explicitly marked as offline
+  _StationConnectionStatus _connectionStatus =
+      _StationConnectionStatus.connecting;
+  bool get _stationReachable =>
+      _connectionStatus == _StationConnectionStatus.online;
+  bool _forcedOfflineMode =
+      false; // True when viewing a device explicitly marked as offline
   bool _isStationSending = false; // Sending message to station room
-  String? _syncProgressText; // "Loading Jan 15..." shown during progressive sync
+  String?
+  _syncProgressText; // "Loading Jan 15..." shown during progressive sync
   bool _isStationRecording = false; // Recording voice for station room
-  final Set<String> _recentlyUploadedFiles = {}; // Track files we just uploaded to skip re-downloading
-  final Set<String> _pendingDeletions = {}; // Track messages being deleted to prevent sync race condition
+  final Set<String> _recentlyUploadedFiles =
+      {}; // Track files we just uploaded to skip re-downloading
+  final Set<String> _pendingDeletions =
+      {}; // Track messages being deleted to prevent sync race condition
 
   String _deletionKey(String timestamp, String author) =>
       '$timestamp|${author.toUpperCase()}';
@@ -173,6 +179,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   // Local collection paths for group synchronization
   String? _localChatCollectionPath;
   String? _groupsAppPath;
+  DistributedChatService? _distributedChatService;
+  List<DChatTopicRecord> _distributedTopics = const [];
+  String _selectedDistributedTopicId = 'general';
 
   @override
   void initState() {
@@ -269,14 +278,19 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       } else if (event.action == DebugAction.sendChatMessage) {
         final content = event.params?['content'] as String? ?? '';
         final imagePath = event.params?['image_path'] as String?;
-        print('DEBUG ChatBrowserPage: received sendChatMessage content="$content" image=$imagePath');
+        print(
+          'DEBUG ChatBrowserPage: received sendChatMessage content="$content" image=$imagePath',
+        );
         _handleDebugSendMessage(content, imagePath);
       }
     });
   }
 
   /// Handle sending a message from debug API
-  Future<void> _handleDebugSendMessage(String content, String? imagePath) async {
+  Future<void> _handleDebugSendMessage(
+    String content,
+    String? imagePath,
+  ) async {
     if (_selectedStationRoom == null) {
       print('DEBUG ChatBrowserPage: no room selected, cannot send message');
       return;
@@ -294,12 +308,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (resolvedImagePath != null) {
       final file = File(resolvedImagePath);
       if (!await file.exists()) {
-        print('DEBUG ChatBrowserPage: image file not found at $resolvedImagePath');
+        print(
+          'DEBUG ChatBrowserPage: image file not found at $resolvedImagePath',
+        );
         return;
       }
     }
 
-    print('DEBUG ChatBrowserPage: sending message to room ${_selectedStationRoom!.id}');
+    print(
+      'DEBUG ChatBrowserPage: sending message to room ${_selectedStationRoom!.id}',
+    );
     await _sendMessage(content, resolvedImagePath);
     print('DEBUG ChatBrowserPage: message sent');
   }
@@ -309,11 +327,61 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     setState(callback);
   }
 
+  bool _isDistributedChannel(ChatChannel? channel) =>
+      channel?.config?.isDistributed ?? false;
+
+  DChatTopicRecord? get _selectedDistributedTopic {
+    for (final topic in _distributedTopics) {
+      if (topic.topicId == _selectedDistributedTopicId) {
+        return topic;
+      }
+    }
+    return null;
+  }
+
+  Future<List<ChatChannel>> _loadMergedLocalChannels() async {
+    await _chatService.refreshChannels();
+    final channelsById = <String, ChatChannel>{
+      for (final channel in _chatService.channels) channel.id: channel,
+    };
+
+    if (_distributedChatService != null) {
+      final distributedRooms = await _distributedChatService!.listRooms();
+      for (final room in distributedRooms) {
+        channelsById[room.id] = room;
+      }
+    }
+
+    try {
+      final dmService = DirectMessageService();
+      final conversations = await dmService.listConversations();
+      for (final conv in conversations) {
+        if (channelsById.containsKey(conv.otherCallsign)) {
+          continue;
+        }
+        channelsById[conv.otherCallsign] = ChatChannel(
+          id: conv.otherCallsign,
+          type: ChatChannelType.direct,
+          name: conv.otherCallsign,
+          folder: conv.path,
+          participants: [conv.otherCallsign],
+          created: conv.lastMessageTime ?? DateTime.now(),
+          lastMessageTime: conv.lastMessageTime,
+        );
+      }
+    } catch (_) {
+      // DM loading is optional.
+    }
+
+    return channelsById.values.toList();
+  }
+
   /// Subscribe to file changes for real-time updates from CLI
   void _subscribeToFileChanges() {
     _fileChangeSubscription = _chatService.onFileChange.listen((change) {
       // Reload messages if the changed channel is currently selected
-      if (_selectedChannel != null && _selectedChannel!.id == change.channelId) {
+      if (_selectedChannel != null &&
+          _selectedChannel!.id == change.channelId) {
         _refreshLocalMessages();
       }
     });
@@ -325,10 +393,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (_selectedChannel == null) return;
 
     try {
-      final messages = await _chatService.loadMessages(
-        _selectedChannel!.id,
-        limit: _localMessageLimit,
-      );
+      final messages = _isDistributedChannel(_selectedChannel)
+          ? await _distributedChatService!.loadMessages(
+              _selectedChannel!.id,
+              limit: _localMessageLimit,
+              topicId: _selectedDistributedTopicId,
+            )
+          : await _chatService.loadMessages(
+              _selectedChannel!.id,
+              limit: _localMessageLimit,
+            );
 
       if (mounted) {
         setState(() {
@@ -342,7 +416,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   void _subscribeToUnreadCounts() {
     _unreadCounts = _chatNotificationService.unreadCounts;
-    _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((counts) {
+    _unreadSubscription = _chatNotificationService.unreadCountsStream.listen((
+      counts,
+    ) {
       _setStateIfMounted(() {
         _unreadCounts = counts;
       });
@@ -381,7 +457,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // Only handle chat updates
     if (update.appType == 'chat') {
       // Refresh if we're viewing the room that got updated
-      if (_selectedStationRoom != null && _selectedStationRoom!.id == update.path) {
+      if (_selectedStationRoom != null &&
+          _selectedStationRoom!.id == update.path) {
         // Debounce to prevent duplicate refreshes (server sends multiple WebSocket messages)
         _updateDebounceTimer?.cancel();
         _updateDebounceTimer = Timer(const Duration(milliseconds: 300), () {
@@ -399,7 +476,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _isRefreshingMessages = true;
     try {
       final roomId = _selectedStationRoom?.id;
-      final hasCached = roomId != null &&
+      final hasCached =
+          roomId != null &&
           _stationMessageCache.containsKey(roomId) &&
           (_stationMessageCache[roomId]?.isNotEmpty ?? false);
 
@@ -440,8 +518,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (messages.isNotEmpty) {
         // Filter pending deletions
         if (_pendingDeletions.isNotEmpty) {
-          messages.removeWhere((msg) =>
-              _pendingDeletions.contains(_deletionKey(msg.timestamp, msg.callsign)));
+          messages.removeWhere(
+            (msg) => _pendingDeletions.contains(
+              _deletionKey(msg.timestamp, msg.callsign),
+            ),
+          );
         }
 
         _stationMessageCache[roomId] = messages;
@@ -457,7 +538,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         });
       }
     } catch (e) {
-      LogService().log('Quick fetch failed, falling back to progressive sync: $e');
+      LogService().log(
+        'Quick fetch failed, falling back to progressive sync: $e',
+      );
       // Fall back to progressive sync on failure
       await _progressiveSyncStationMessages();
     }
@@ -526,9 +609,15 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       DateTime? after;
       final latestDateTime = latestCached?.dateTime;
       if (latestDateTime != null) {
-        after = DateTime(latestDateTime.year, latestDateTime.month, latestDateTime.day);
+        after = DateTime(
+          latestDateTime.year,
+          latestDateTime.month,
+          latestDateTime.day,
+        );
       }
-      final limit = after == null ? _stationMessageLimit : _stationIncrementalLimit;
+      final limit = after == null
+          ? _stationMessageLimit
+          : _stationIncrementalLimit;
 
       final newMessages = await _stationService.fetchRoomMessages(
         _selectedStationRoom!.stationUrl,
@@ -541,7 +630,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       // Inline merge: combine new messages into in-memory cache directly,
       // avoiding the write-to-disk → read-from-disk round-trip.
-      final existing = List<StationChatMessage>.from(cached ?? _stationMessages);
+      final existing = List<StationChatMessage>.from(
+        cached ?? _stationMessages,
+      );
       final existingKeys = <String>{};
       for (final msg in existing) {
         existingKeys.add('${msg.timestamp}|${msg.callsign}');
@@ -553,9 +644,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           existing.removeWhere((m) {
             if (m.metadata['status'] != 'pending') return false;
             if (msg.eventId != null && msg.eventId!.isNotEmpty) {
-              return m.eventId == msg.eventId || m.metadata['event_id'] == msg.eventId;
+              return m.eventId == msg.eventId ||
+                  m.metadata['event_id'] == msg.eventId;
             }
-            if (m.callsign.toUpperCase() != msg.callsign.toUpperCase()) return false;
+            if (m.callsign.toUpperCase() != msg.callsign.toUpperCase()) {
+              return false;
+            }
             if (m.content != msg.content) return false;
             final dtA = ChatFormat.parseTimestamp(m.timestamp);
             final dtB = ChatFormat.parseTimestamp(msg.timestamp);
@@ -571,8 +665,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       // Filter out messages that are currently being deleted to prevent race condition
       if (_pendingDeletions.isNotEmpty) {
-        existing.removeWhere((msg) =>
-            _pendingDeletions.contains(_deletionKey(msg.timestamp, msg.callsign)));
+        existing.removeWhere(
+          (msg) => _pendingDeletions.contains(
+            _deletionKey(msg.timestamp, msg.callsign),
+          ),
+        );
       }
 
       final deduped = _dedupeStationMessages(existing);
@@ -624,7 +721,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       // Poll for new messages if viewing a room (fallback when WebSocket not connected)
-      if (_selectedStationRoom != null && _updateSubscription == null && !_isRefreshingMessages) {
+      if (_selectedStationRoom != null &&
+          _updateSubscription == null &&
+          !_isRefreshingMessages) {
         // WebSocket not connected - poll for updates
         _refreshRelayMessages();
       }
@@ -641,7 +740,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Initialize chat service and load data
   Future<void> _initializeChat() async {
-    LogService().log('DEBUG _initializeChat: STARTING, isRemoteDevice=${widget.isRemoteDevice}');
+    LogService().log(
+      'DEBUG _initializeChat: STARTING, isRemoteDevice=${widget.isRemoteDevice}',
+    );
     _setStateIfMounted(() {
       _isLoading = true;
       _error = null;
@@ -650,7 +751,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     try {
       // For remote device, skip local channel initialization
       if (widget.isRemoteDevice) {
-        LogService().log('DEBUG _initializeChat: Remote device mode - loading from ${widget.remoteDeviceUrl}');
+        LogService().log(
+          'DEBUG _initializeChat: Remote device mode - loading from ${widget.remoteDeviceUrl}',
+        );
         _setStateIfMounted(() {
           _isInitialized = true;
         });
@@ -692,11 +795,28 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         storagePath,
         creatorNpub: currentProfile.npub,
       );
-      debugPrint('ChatBrowser: ${_chatService.channels.length} channels: ${_chatService.channels.map((c) => c.id).join(", ")}');
+      debugPrint(
+        'ChatBrowser: ${_chatService.channels.length} channels: ${_chatService.channels.map((c) => c.id).join(", ")}',
+      );
+
+      if (profileStorage != null) {
+        _distributedChatService = DistributedChatService(
+          appPath: storagePath,
+          storage: profileStorage,
+          profileCallsign: currentProfile.callsign,
+          profileNpub: currentProfile.npub,
+          profileNsec: currentProfile.nsec.isNotEmpty
+              ? currentProfile.nsec
+              : null,
+        );
+      } else {
+        _distributedChatService = null;
+      }
 
       _localChatCollectionPath = storagePath;
-      _groupsAppPath =
-          await GroupSyncService().findCollectionPathByType('groups');
+      _groupsAppPath = await GroupSyncService().findCollectionPathByType(
+        'groups',
+      );
       if (_groupsAppPath != null) {
         await GroupSyncService().syncGroupsCollection(
           groupsAppPath: _groupsAppPath!,
@@ -704,29 +824,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         );
       }
 
-      await _chatService.refreshChannels();
-      _channels = List.from(_chatService.channels);
-
-      // Load DM conversations and add them as direct channels
-      try {
-        final dmService = DirectMessageService();
-        final conversations = await dmService.listConversations();
-        for (final conv in conversations) {
-          // Skip if already in channels (avoid duplicates)
-          if (_channels.any((ch) => ch.id == conv.otherCallsign)) continue;
-          _channels.add(ChatChannel(
-            id: conv.otherCallsign,
-            type: ChatChannelType.direct,
-            name: conv.otherCallsign,
-            folder: conv.path,
-            participants: [conv.otherCallsign],
-            created: conv.lastMessageTime ?? DateTime.now(),
-            lastMessageTime: conv.lastMessageTime,
-          ));
-        }
-      } catch (e) {
-        // DM loading is optional — don't fail if it errors
-      }
+      _channels = await _loadMergedLocalChannels();
 
       // Start watching for file changes now that channels are loaded
       _chatService.startWatching();
@@ -739,12 +837,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       await _loadRelayRooms();
 
       // Initialize ContactService for nickname resolution
-      final contactsAppPath = await GroupSyncService().findCollectionPathByType('contacts');
+      final contactsAppPath = await GroupSyncService().findCollectionPathByType(
+        'contacts',
+      );
       if (contactsAppPath != null) {
         final contactService = ContactService();
         if (profileStorage != null) {
-          contactService.setStorage(ScopedProfileStorage.fromAbsolutePath(
-            profileStorage, contactsAppPath));
+          contactService.setStorage(
+            ScopedProfileStorage.fromAbsolutePath(
+              profileStorage,
+              contactsAppPath,
+            ),
+          );
         } else {
           contactService.setStorage(FilesystemProfileStorage(contactsAppPath));
         }
@@ -779,7 +883,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Load station chat rooms from preferred station (uses HTTP API, doesn't require WebSocket)
   Future<void> _loadRelayRooms() async {
-    LogService().log('DEBUG _loadRelayRooms: STARTING, isRemoteDevice=${widget.isRemoteDevice}');
+    LogService().log(
+      'DEBUG _loadRelayRooms: STARTING, isRemoteDevice=${widget.isRemoteDevice}',
+    );
 
     _setStateIfMounted(() {
       _loadingRelayRooms = true;
@@ -787,18 +893,26 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Initialize cache service
     await _cacheService.initialize();
-    LogService().log('DEBUG _loadRelayRooms: cache initialized, will check for cached devices');
+    LogService().log(
+      'DEBUG _loadRelayRooms: cache initialized, will check for cached devices',
+    );
 
     // If browsing a remote device, use its URL directly
     if (widget.isRemoteDevice && widget.remoteDeviceUrl != null) {
-      LogService().log('DEBUG _loadRelayRooms: Remote device mode - using URL ${widget.remoteDeviceUrl}');
+      LogService().log(
+        'DEBUG _loadRelayRooms: Remote device mode - using URL ${widget.remoteDeviceUrl}',
+      );
 
       // Use widget-provided callsign as the canonical cache key (consistent for save and load)
-      final cacheKey = widget.remoteDeviceCallsign ?? widget.remoteDeviceName ?? 'remote';
+      final cacheKey =
+          widget.remoteDeviceCallsign ?? widget.remoteDeviceName ?? 'remote';
       _lastStationUrl = widget.remoteDeviceUrl;
       _lastRelayCacheKey = cacheKey;
 
-      final cachedRooms = await _cacheService.loadChatRooms(cacheKey, _lastStationUrl ?? '');
+      final cachedRooms = await _cacheService.loadChatRooms(
+        cacheKey,
+        _lastStationUrl ?? '',
+      );
       if (cachedRooms.isNotEmpty) {
         _setStateIfMounted(() {
           _stationRooms = cachedRooms;
@@ -813,7 +927,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (widget.initialRoomId != null) {
         await _fetchRelayRoomsFromRemote(cacheKey, widget.remoteDeviceUrl!);
       } else {
-        unawaited(_fetchRelayRoomsFromRemote(cacheKey, widget.remoteDeviceUrl!));
+        unawaited(
+          _fetchRelayRoomsFromRemote(cacheKey, widget.remoteDeviceUrl!),
+        );
       }
       return;
     }
@@ -830,7 +946,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Use preferred station for HTTP API calls - doesn't require WebSocket connection
     final station = _stationService.getPreferredStation();
-    LogService().log('DEBUG _loadRelayRooms: station=${station?.name}, url=${station?.url}');
+    LogService().log(
+      'DEBUG _loadRelayRooms: station=${station?.name}, url=${station?.url}',
+    );
 
     // If station has a valid URL, try to fetch from it via HTTP API
     String? cacheKey;
@@ -839,7 +957,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _lastStationUrl = station.url;
       _lastRelayCacheKey = cacheKey;
 
-      final cachedRooms = await _cacheService.loadChatRooms(cacheKey, station.url);
+      final cachedRooms = await _cacheService.loadChatRooms(
+        cacheKey,
+        station.url,
+      );
       if (cachedRooms.isNotEmpty) {
         _setStateIfMounted(() {
           _stationRooms = cachedRooms;
@@ -853,7 +974,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // Load ALL cached devices with their rooms
     await _loadAllCachedDevices();
 
-    LogService().log('DEBUG _loadRelayRooms: final _stationRooms.length=${_stationRooms.length}, cachedDevices=${_cachedDeviceSources.length}');
+    LogService().log(
+      'DEBUG _loadRelayRooms: final _stationRooms.length=${_stationRooms.length}, cachedDevices=${_cachedDeviceSources.length}',
+    );
 
     if (station != null && station.url.isNotEmpty && cacheKey != null) {
       // Fire room fetch in background — don't block UI
@@ -889,7 +1012,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             }
           }
         }
-        _connectionStatus = rooms.isNotEmpty ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
+        _connectionStatus = rooms.isNotEmpty
+            ? _StationConnectionStatus.online
+            : _StationConnectionStatus.offline;
         _loadingRelayRooms = false;
       });
 
@@ -927,7 +1052,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             }
           }
         }
-        _connectionStatus = rooms.isNotEmpty ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
+        _connectionStatus = rooms.isNotEmpty
+            ? _StationConnectionStatus.online
+            : _StationConnectionStatus.offline;
         _loadingRelayRooms = false;
       });
 
@@ -946,7 +1073,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Load all cached devices and their chat rooms for offline viewing
   Future<void> _loadAllCachedDevices() async {
     final cachedDevices = await _cacheService.getCachedDevices();
-    LogService().log('DEBUG _loadAllCachedDevices: found ${cachedDevices.length} cached devices');
+    LogService().log(
+      'DEBUG _loadAllCachedDevices: found ${cachedDevices.length} cached devices',
+    );
 
     final List<CachedDeviceRooms> allCachedSources = [];
 
@@ -955,17 +1084,23 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       final cachedUrl = await _cacheService.getCachedRelayUrl(deviceCallsign);
       final cacheTime = await _cacheService.getCacheTime(deviceCallsign);
 
-      LogService().log('DEBUG _loadAllCachedDevices: device=$deviceCallsign, rooms=${cachedRooms.length}, url=$cachedUrl, cacheTime=$cacheTime');
+      LogService().log(
+        'DEBUG _loadAllCachedDevices: device=$deviceCallsign, rooms=${cachedRooms.length}, url=$cachedUrl, cacheTime=$cacheTime',
+      );
 
       if (cachedRooms.isNotEmpty) {
-        allCachedSources.add(CachedDeviceRooms(
-          callsign: deviceCallsign,
-          name: cachedRooms.first.stationName.isNotEmpty ? cachedRooms.first.stationName : deviceCallsign,
-          url: cachedUrl,
-          rooms: cachedRooms,
-          isOnline: false, // Offline since we're loading from cache
-          lastActivity: cacheTime,
-        ));
+        allCachedSources.add(
+          CachedDeviceRooms(
+            callsign: deviceCallsign,
+            name: cachedRooms.first.stationName.isNotEmpty
+                ? cachedRooms.first.stationName
+                : deviceCallsign,
+            url: cachedUrl,
+            rooms: cachedRooms,
+            isOnline: false, // Offline since we're loading from cache
+            lastActivity: cacheTime,
+          ),
+        );
       }
     }
 
@@ -985,7 +1120,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (_stationRooms.isEmpty && allCachedSources.isNotEmpty) {
       final mostRecent = allCachedSources.first;
       _lastRelayCacheKey = mostRecent.callsign;
-      _lastStationUrl = mostRecent.url ?? (mostRecent.rooms.isNotEmpty ? mostRecent.rooms.first.stationUrl : null);
+      _lastStationUrl =
+          mostRecent.url ??
+          (mostRecent.rooms.isNotEmpty
+              ? mostRecent.rooms.first.stationUrl
+              : null);
       _stationRooms = mostRecent.rooms;
     }
 
@@ -996,23 +1135,52 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Select a channel and load its messages
   Future<void> _selectChannel(ChatChannel channel) async {
+    final previousTopicId = channel.id == _selectedChannel?.id
+        ? _selectedDistributedTopicId
+        : 'general';
     _setStateIfMounted(() {
       _selectedChannel = channel;
       _selectedStationRoom = null; // Deselect station room
       _isLoading = true;
       _localMessageLimit = _pageSize;
       _quotedMessage = null;
+      _distributedTopics = const [];
+      _selectedDistributedTopicId = 'general';
     });
 
     try {
-      // Load messages for selected channel
-      final messages = await _chatService.loadMessages(
-        channel.id,
-        limit: _localMessageLimit,
-      );
+      ChatChannel resolvedChannel = channel;
+      List<ChatMessage> messages;
+      List<DChatTopicRecord> topics = const [];
+      var selectedTopicId = 'general';
+
+      if (_isDistributedChannel(channel) && _distributedChatService != null) {
+        resolvedChannel =
+            await _distributedChatService!.getRoom(channel.id) ?? channel;
+        topics = await _distributedChatService!.listTopics(channel.id);
+        if (topics.isNotEmpty &&
+            topics.any((topic) => topic.topicId == previousTopicId)) {
+          selectedTopicId = previousTopicId;
+        } else if (topics.isNotEmpty) {
+          selectedTopicId = topics.first.topicId;
+        }
+        messages = await _distributedChatService!.loadMessages(
+          channel.id,
+          limit: _localMessageLimit,
+          topicId: selectedTopicId,
+        );
+      } else {
+        messages = await _chatService.loadMessages(
+          channel.id,
+          limit: _localMessageLimit,
+        );
+      }
 
       _setStateIfMounted(() {
+        _selectedChannel = resolvedChannel;
         _messages = messages;
+        _distributedTopics = topics;
+        _selectedDistributedTopicId = selectedTopicId;
       });
     } catch (e) {
       _showError('Failed to load messages: $e');
@@ -1032,10 +1200,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     });
 
     try {
-      final messages = await _chatService.loadMessages(
-        _selectedChannel!.id,
-        limit: _localMessageLimit,
-      );
+      final messages = _isDistributedChannel(_selectedChannel)
+          ? await _distributedChatService!.loadMessages(
+              _selectedChannel!.id,
+              limit: _localMessageLimit,
+              topicId: _selectedDistributedTopicId,
+            )
+          : await _chatService.loadMessages(
+              _selectedChannel!.id,
+              limit: _localMessageLimit,
+            );
 
       _setStateIfMounted(() {
         _messages = messages;
@@ -1063,7 +1237,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       return;
     }
 
-    await _loadMessagesFromCache(_selectedStationRoom!.id, limit: _stationMessageLimit);
+    await _loadMessagesFromCache(
+      _selectedStationRoom!.id,
+      limit: _stationMessageLimit,
+    );
   }
 
   /// Select a channel for mobile view (just sets it, layout handles display)
@@ -1072,7 +1249,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   /// Select a station room from a specific device (handles cached devices)
-  Future<void> _selectRelayRoomFromDevice(DeviceSource device, StationChatRoom room) async {
+  Future<void> _selectRelayRoomFromDevice(
+    DeviceSource device,
+    StationChatRoom room,
+  ) async {
     // Update cache key to match the device we're selecting from
     if (device.callsign != null && device.callsign!.isNotEmpty) {
       _lastRelayCacheKey = device.callsign;
@@ -1082,7 +1262,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
 
     // Set reachability based on device status - this determines if we try online or cache first
-    _connectionStatus = device.isOnline ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
+    _connectionStatus = device.isOnline
+        ? _StationConnectionStatus.online
+        : _StationConnectionStatus.offline;
 
     await _selectRelayRoom(room);
   }
@@ -1090,8 +1272,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Auto-select a room by ID (used for debug API and initialRoomId)
   void _autoSelectRoom(String roomId) {
     // First check local channels (for folder group chats)
-    final localChannels = _chatService.channels;
-    final localChannel = localChannels.cast<ChatChannel?>().firstWhere(
+    final localChannel = _channels.cast<ChatChannel?>().firstWhere(
       (c) => c?.id == roomId,
       orElse: () => null,
     );
@@ -1152,9 +1333,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _messagePollingTimer = null;
 
     // Refresh in the background to fetch any new files, then restart polling
-    unawaited(_refreshRelayMessages().whenComplete(() {
-      if (mounted) _startMessagePolling();
-    }));
+    unawaited(
+      _refreshRelayMessages().whenComplete(() {
+        if (mounted) _startMessagePolling();
+      }),
+    );
   }
 
   /// Load messages from cache for a room
@@ -1167,8 +1350,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       );
       // Filter out messages that are currently being deleted to prevent race condition
       if (_pendingDeletions.isNotEmpty) {
-        cachedMessages.removeWhere((msg) =>
-            _pendingDeletions.contains(_deletionKey(msg.timestamp, msg.callsign)));
+        cachedMessages.removeWhere(
+          (msg) => _pendingDeletions.contains(
+            _deletionKey(msg.timestamp, msg.callsign),
+          ),
+        );
       }
       final deduped = _dedupeStationMessages(cachedMessages);
       _stationMessageCache[roomId] = deduped;
@@ -1185,7 +1371,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  void _applyStationMessageLimit(List<StationChatMessage> messages, {int? limit}) {
+  void _applyStationMessageLimit(
+    List<StationChatMessage> messages, {
+    int? limit,
+  }) {
     final effectiveLimit = limit ?? _stationMessageLimit;
     final deduped = _dedupeStationMessages(messages);
     final trimmed = deduped.length > effectiveLimit
@@ -1198,10 +1387,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Fire event to notify MessageListWidget to scroll to bottom
     if (trimmed.isNotEmpty) {
-      EventBus().fire(ChatMessagesLoadedEvent(
-        roomId: _selectedStationRoom?.id,
-        messageCount: trimmed.length,
-      ));
+      EventBus().fire(
+        ChatMessagesLoadedEvent(
+          roomId: _selectedStationRoom?.id,
+          messageCount: trimmed.length,
+        ),
+      );
     }
 
     // Ensure contacts exist for message authors (async, non-blocking)
@@ -1212,7 +1403,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   static const String _chatContactsGroup = 'chat_contacts';
 
   /// Ensure contacts exist for all message authors in the chat_contacts group
-  Future<void> _ensureChatContactsForMessages(List<StationChatMessage> messages) async {
+  Future<void> _ensureChatContactsForMessages(
+    List<StationChatMessage> messages,
+  ) async {
     if (messages.isEmpty) return;
 
     final contactService = ContactService();
@@ -1258,7 +1451,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       // Create contacts for new authors
       final now = DateTime.now();
-      final timestamp = '${now.year.toString().padLeft(4, '0')}-'
+      final timestamp =
+          '${now.year.toString().padLeft(4, '0')}-'
           '${now.month.toString().padLeft(2, '0')}-'
           '${now.day.toString().padLeft(2, '0')} '
           '${now.hour.toString().padLeft(2, '0')}:'
@@ -1285,7 +1479,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           ],
         );
 
-        final error = await contactService.saveContact(contact, groupPath: _chatContactsGroup);
+        final error = await contactService.saveContact(
+          contact,
+          groupPath: _chatContactsGroup,
+        );
         if (error != null) {
           LogService().log('Failed to create chat contact $callsign: $error');
         } else {
@@ -1299,10 +1496,17 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Download and cache raw chat files from the station
   /// Returns true if files were downloaded successfully
-  Future<bool> _downloadAndCacheChatFiles(String stationUrl, String roomId, String cacheKey) async {
+  Future<bool> _downloadAndCacheChatFiles(
+    String stationUrl,
+    String roomId,
+    String cacheKey,
+  ) async {
     try {
       // Fetch list of available chat files from station
-      final files = await _stationService.fetchRoomChatFiles(stationUrl, roomId);
+      final files = await _stationService.fetchRoomChatFiles(
+        stationUrl,
+        roomId,
+      );
       LogService().log('Found ${files.length} chat files for room $roomId');
 
       if (files.isEmpty) {
@@ -1375,7 +1579,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         _syncProgressText = 'Loading messages...';
       });
 
-      final files = await _stationService.fetchRoomChatFiles(stationUrl, roomId);
+      final files = await _stationService.fetchRoomChatFiles(
+        stationUrl,
+        roomId,
+      );
       if (files.isEmpty) {
         // Genuinely no messages - clear loading state
         _setStateIfMounted(() {
@@ -1386,8 +1593,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       // 2. Sort newest-first by filename (YYYY-MM-DD_chat.txt sorts correctly)
-      files.sort((a, b) =>
-        (b['filename'] as String).compareTo(a['filename'] as String));
+      files.sort(
+        (a, b) => (b['filename'] as String).compareTo(a['filename'] as String),
+      );
 
       // 3. Identify files that need downloading
       final toDownload = <Map<String, dynamic>>[];
@@ -1397,7 +1605,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         final expectedSize = fileInfo['size'] as int?;
 
         final isCached = await _cacheService.hasCachedChatFile(
-          cacheKey, roomId, year, filename, expectedSize: expectedSize,
+          cacheKey,
+          roomId,
+          year,
+          filename,
+          expectedSize: expectedSize,
         );
 
         if (!isCached) {
@@ -1407,24 +1619,34 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
       // If nothing to download but cache exists, ensure UI shows it
       if (toDownload.isEmpty) {
-        if (mounted && _selectedStationRoom?.id == roomId && _stationMessages.isEmpty) {
+        if (mounted &&
+            _selectedStationRoom?.id == roomId &&
+            _stationMessages.isEmpty) {
           await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
         }
       } else {
         // Download first (newest) file with await for fast initial display
         _setStateIfMounted(() {
-          _syncProgressText = 'Loading ${_formatDateFromFilename(toDownload.first['filename'] as String)}...';
+          _syncProgressText =
+              'Loading ${_formatDateFromFilename(toDownload.first['filename'] as String)}...';
         });
 
         Future<void> downloadFile(Map<String, dynamic> fileInfo) async {
           final year = fileInfo['year'] as String;
           final filename = fileInfo['filename'] as String;
           final content = await _stationService.fetchRoomChatFile(
-            stationUrl, roomId, year, filename,
+            stationUrl,
+            roomId,
+            year,
+            filename,
           );
           if (content != null && content.isNotEmpty) {
             await _cacheService.saveRawChatFile(
-              cacheKey, roomId, year, filename, content,
+              cacheKey,
+              roomId,
+              year,
+              filename,
+              content,
             );
           }
         }
@@ -1438,7 +1660,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         final remaining = toDownload.skip(1).toList();
         for (var i = 0; i < remaining.length; i += 3) {
           final batch = remaining.sublist(
-            i, i + 3 > remaining.length ? remaining.length : i + 3,
+            i,
+            i + 3 > remaining.length ? remaining.length : i + 3,
           );
           _setStateIfMounted(() {
             _syncProgressText = 'Loading history...';
@@ -1447,7 +1670,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         }
 
         // Reload cache after all downloads
-        if (remaining.isNotEmpty && mounted && _selectedStationRoom?.id == roomId) {
+        if (remaining.isNotEmpty &&
+            mounted &&
+            _selectedStationRoom?.id == roomId) {
           await _loadMessagesFromCache(roomId, limit: _stationMessageLimit);
         }
       }
@@ -1468,20 +1693,34 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Format a chat filename like "2025-11-29_chat.txt" into "Nov 29, 2025"
   static const _monthNames = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
 
   String _formatDateFromFilename(String filename) {
     // Extract date portion: "2025-11-29_chat.txt" -> "2025-11-29"
-    final dateStr = filename.length >= 10 ? filename.substring(0, 10) : filename;
+    final dateStr = filename.length >= 10
+        ? filename.substring(0, 10)
+        : filename;
     final parsed = DateTime.tryParse(dateStr);
     if (parsed == null) return dateStr;
     return '${_monthNames[parsed.month - 1]} ${parsed.day}, ${parsed.year}';
   }
 
   /// Convert station messages to ChatMessage format for display
-  List<ChatMessage> _convertStationMessages(List<StationChatMessage> stationMessages) {
+  List<ChatMessage> _convertStationMessages(
+    List<StationChatMessage> stationMessages,
+  ) {
     return stationMessages.map((rm) {
       // Build metadata map with verification info
       final metadata = <String, String>{};
@@ -1562,7 +1801,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 uploadedFilename,
                 bytes,
               );
-              LogService().log('Cached uploaded file locally: $uploadedFilename');
+              LogService().log(
+                'Cached uploaded file locally: $uploadedFilename',
+              );
             }
           } else {
             throw Exception(_i18n.t('file_upload_failed'));
@@ -1606,6 +1847,24 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (_selectedChannel == null) return;
 
     try {
+      if (_isDistributedChannel(_selectedChannel)) {
+        if (filePath != null) {
+          throw Exception(
+            'File attachments are not available for decentralized chat yet',
+          );
+        }
+        final message = await _distributedChatService!.sendMessage(
+          _selectedChannel!.id,
+          content,
+          topicId: _selectedDistributedTopicId,
+        );
+        _setStateIfMounted(() {
+          _messages.add(message);
+          _quotedMessage = null;
+        });
+        return;
+      }
+
       // Load chat settings
       final settings = await _loadChatSettings();
 
@@ -1682,7 +1941,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   /// Send a message to a station chat room as a signed NOSTR event
-  Future<void> _sendRelayMessage(String content, {Map<String, String>? metadata}) async {
+  Future<void> _sendRelayMessage(
+    String content, {
+    Map<String, String>? metadata,
+  }) async {
     if (_selectedStationRoom == null) return;
     final currentProfile = _profileService.getProfile();
 
@@ -1761,7 +2023,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         );
       }
 
-      final sendMetadata = _stationService.sanitizeChatMetadataForSend(pendingMeta);
+      final sendMetadata = _stationService.sanitizeChatMetadataForSend(
+        pendingMeta,
+      );
       final sent = await _stationService.sendSignedChatEvent(
         _selectedStationRoom!.stationUrl,
         _selectedStationRoom!.id,
@@ -1780,7 +2044,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         StationServerService().karmaRecord(
           callsign: currentProfile.callsign,
           action: 'chat_message',
-          meta: {'room_id': _selectedStationRoom!.id, 'msg_length': content.length},
+          meta: {
+            'room_id': _selectedStationRoom!.id,
+            'msg_length': content.length,
+          },
         );
       } else {
         final queued = QueuedStationChatMessage(
@@ -1823,14 +2090,17 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   bool _isUnsignedOrPending(StationChatMessage msg) {
-    final hasSignature = (msg.signature ?? '').isNotEmpty ||
+    final hasSignature =
+        (msg.signature ?? '').isNotEmpty ||
         (msg.metadata['signature'] ?? '').isNotEmpty ||
         msg.hasSignature;
     if (!hasSignature) return true;
     return msg.metadata['status'] == 'pending';
   }
 
-  List<StationChatMessage> _dedupeStationMessages(List<StationChatMessage> messages) {
+  List<StationChatMessage> _dedupeStationMessages(
+    List<StationChatMessage> messages,
+  ) {
     final merged = <String, StationChatMessage>{};
     for (final msg in messages) {
       final key = _stationMessageKey(msg);
@@ -1846,7 +2116,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
     }
 
-    final list = merged.values.toList()..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final list = merged.values.toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
     // Remove unsigned/pending duplicates near a signed version
     final result = <StationChatMessage>[];
@@ -1854,7 +2125,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       bool replaced = false;
       for (int i = 0; i < result.length; i++) {
         final existing = result[i];
-        if (existing.callsign.toUpperCase() != msg.callsign.toUpperCase()) continue;
+        if (existing.callsign.toUpperCase() != msg.callsign.toUpperCase()) {
+          continue;
+        }
         if (existing.content != msg.content) continue;
 
         final dtA = ChatFormat.parseTimestamp(existing.timestamp);
@@ -1909,7 +2182,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         return msg.eventId == eventId || msg.metadata['event_id'] == eventId;
       }
       return msg.metadata['status'] == 'pending' &&
-          msg.callsign.toUpperCase() == _profileService.getProfile().callsign.toUpperCase() &&
+          msg.callsign.toUpperCase() ==
+              _profileService.getProfile().callsign.toUpperCase() &&
           msg.content.isNotEmpty;
     }
 
@@ -1941,7 +2215,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         signature: updatedMeta['signature'] ?? existing.signature,
         eventId: updatedMeta['event_id'] ?? existing.eventId,
         createdAt: existing.createdAt,
-        hasSignature: (updatedMeta['signature'] ?? existing.signature)?.isNotEmpty == true,
+        hasSignature:
+            (updatedMeta['signature'] ?? existing.signature)?.isNotEmpty ==
+            true,
         verified: verified,
       );
       cached[index] = updatedMessage;
@@ -1951,7 +2227,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _stationMessageCache[roomId] = cached;
       _applyStationMessageLimit(cached);
       if (_lastRelayCacheKey != null && _lastRelayCacheKey!.isNotEmpty) {
-        await _cacheService.mergeMessages(_lastRelayCacheKey!, roomId, [updatedMessage]);
+        await _cacheService.mergeMessages(_lastRelayCacheKey!, roomId, [
+          updatedMessage,
+        ]);
       }
     }
   }
@@ -1967,8 +2245,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       final storagePath = widget.app!.storagePath;
       if (storagePath == null) return ChatSettings();
 
-      final settingsFile =
-          File(path.join(storagePath, 'extra', 'settings.json'));
+      final settingsFile = File(
+        path.join(storagePath, 'extra', 'settings.json'),
+      );
       if (!await settingsFile.exists()) {
         return ChatSettings();
       }
@@ -2007,7 +2286,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       String filesPath;
       if (_selectedChannel!.id == 'main') {
         final year = DateTime.now().year.toString();
-        filesPath = path.join(storagePath, _selectedChannel!.folder, year, 'files');
+        filesPath = path.join(
+          storagePath,
+          _selectedChannel!.folder,
+          year,
+          'files',
+        );
       } else {
         filesPath = path.join(storagePath, _selectedChannel!.folder, 'files');
       }
@@ -2058,13 +2342,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final currentProfile = _profileService.getProfile();
     final userNpub = currentProfile.npub;
 
-    final isOwnMessage = message.author.toUpperCase() == currentProfile.callsign.toUpperCase() ||
+    final isOwnMessage =
+        message.author.toUpperCase() == currentProfile.callsign.toUpperCase() ||
         (message.npub != null &&
-         message.npub!.isNotEmpty &&
-         userNpub.isNotEmpty &&
-         message.npub == userNpub);
+            message.npub!.isNotEmpty &&
+            userNpub.isNotEmpty &&
+            message.npub == userNpub);
 
     if (isOwnMessage) return true;
+
+    if (_isDistributedChannel(_selectedChannel)) {
+      return _selectedChannel!.config?.isModerator(userNpub) ?? false;
+    }
 
     // Check if user is admin or moderator
     return _chatService.security.canModerate(userNpub, _selectedChannel!.id);
@@ -2072,11 +2361,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   bool _canDeleteStationMessage(ChatMessage message) {
     final currentProfile = _profileService.getProfile();
-    final isOwnMessage = message.author.toUpperCase() == currentProfile.callsign.toUpperCase() ||
+    final isOwnMessage =
+        message.author.toUpperCase() == currentProfile.callsign.toUpperCase() ||
         (message.npub != null &&
-         message.npub!.isNotEmpty &&
-         currentProfile.npub.isNotEmpty &&
-         message.npub == currentProfile.npub);
+            message.npub!.isNotEmpty &&
+            currentProfile.npub.isNotEmpty &&
+            message.npub == currentProfile.npub);
     if (isOwnMessage) return true;
     return _selectedStationRoom?.isModerator ?? false;
   }
@@ -2118,7 +2408,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         title: Text('Rename Room'),
         content: TextField(controller: controller, autofocus: true),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(_i18n.t('cancel')),
+          ),
           TextButton(
             onPressed: () {
               final name = controller.text.trim();
@@ -2139,9 +2432,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Delete "${room.name}"?'),
-        content: Text('This will permanently delete the room and all messages.'),
+        content: Text(
+          'This will permanently delete the room and all messages.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(_i18n.t('cancel')),
+          ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
@@ -2158,11 +2456,20 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _showNewChannelDialog();
   }
 
-  Future<void> _createStationRoom(String id, String name, {String? description}) async {
+  Future<void> _createStationRoom(
+    String id,
+    String name, {
+    String? description,
+  }) async {
     final stationUrl = _lastStationUrl;
     if (stationUrl == null) return;
 
-    final success = await _stationService.createStationRoom(stationUrl, id, name, description: description);
+    final success = await _stationService.createStationRoom(
+      stationUrl,
+      id,
+      name,
+      description: description,
+    );
     if (success) {
       await _loadRelayRooms();
     }
@@ -2172,7 +2479,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final stationUrl = _lastStationUrl;
     if (stationUrl == null) return;
 
-    final success = await _stationService.deleteStationRoom(stationUrl, room.id);
+    final success = await _stationService.deleteStationRoom(
+      stationUrl,
+      room.id,
+    );
     if (success) {
       // If we deleted the selected room, deselect it
       if (_selectedStationRoom?.id == room.id) {
@@ -2186,6 +2496,13 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   Future<void> _deleteLocalChannel(ChatChannel channel) async {
+    if (_isDistributedChannel(channel)) {
+      _showError(
+        'Distributed rooms are managed through their room controls, not local delete',
+      );
+      return;
+    }
+
     try {
       await _chatService.deleteChannel(channel.id);
       // If we deleted the selected channel, deselect it
@@ -2194,10 +2511,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _selectedChannel = null;
         });
       }
-      await _chatService.refreshChannels();
-      _setStateIfMounted(() {
-        _channels = List.from(_chatService.channels);
-      });
+      _channels = await _loadMergedLocalChannels();
+      _setStateIfMounted(() {});
     } catch (e) {
       _showError('Failed to delete channel: $e');
     }
@@ -2212,14 +2527,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // Optimistic update: rename immediately in the UI
     _applyRoomRename(room.id, newName);
 
-    final success = await _stationService.renameStationRoom(stationUrl, room.id, newName);
+    final success = await _stationService.renameStationRoom(
+      stationUrl,
+      room.id,
+      newName,
+    );
     if (!success) {
       // Revert on failure
       _applyRoomRename(room.id, oldName);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('rename_room_failed'))),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_i18n.t('rename_room_failed'))));
       }
     }
   }
@@ -2248,8 +2567,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Look up eventId from cache for NIP-09 kind 5 deletion
     final stationMsg = cached.cast<StationChatMessage?>().firstWhere(
-      (m) => m?.timestamp == message.timestamp &&
-             m?.callsign.toUpperCase() == message.author.toUpperCase(),
+      (m) =>
+          m?.timestamp == message.timestamp &&
+          m?.callsign.toUpperCase() == message.author.toUpperCase(),
       orElse: () => null,
     );
 
@@ -2258,9 +2578,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Optimistic: remove from UI immediately
     final updated = List<StationChatMessage>.from(cached);
-    updated.removeWhere((msg) =>
-        msg.timestamp == message.timestamp &&
-        msg.callsign.toUpperCase() == message.author.toUpperCase());
+    updated.removeWhere(
+      (msg) =>
+          msg.timestamp == message.timestamp &&
+          msg.callsign.toUpperCase() == message.author.toUpperCase(),
+    );
     _stationMessageCache[roomId] = updated;
     _applyStationMessageLimit(updated);
 
@@ -2300,10 +2622,15 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   bool _canEditStationMessage(ChatMessage message) {
-    return _canDeleteStationMessage(message); // Same logic: own messages or moderator
+    return _canDeleteStationMessage(
+      message,
+    ); // Same logic: own messages or moderator
   }
 
-  Future<void> _editStationMessage(ChatMessage message, String newContent) async {
+  Future<void> _editStationMessage(
+    ChatMessage message,
+    String newContent,
+  ) async {
     if (_selectedStationRoom == null) return;
     if (!_canEditStationMessage(message)) return;
 
@@ -2311,8 +2638,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       final roomId = _selectedStationRoom!.id;
       final cached = _stationMessageCache[roomId] ?? _stationMessages;
       final stationMsg = cached.cast<StationChatMessage?>().firstWhere(
-        (m) => m?.timestamp == message.timestamp &&
-               m?.callsign.toUpperCase() == message.author.toUpperCase(),
+        (m) =>
+            m?.timestamp == message.timestamp &&
+            m?.callsign.toUpperCase() == message.author.toUpperCase(),
         orElse: () => null,
       );
 
@@ -2334,9 +2662,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       final messageList = List<StationChatMessage>.from(
         _stationMessageCache[roomId] ?? _stationMessages,
       );
-      final index = messageList.indexWhere((msg) =>
-          msg.timestamp == message.timestamp &&
-          msg.callsign.toUpperCase() == message.author.toUpperCase());
+      final index = messageList.indexWhere(
+        (msg) =>
+            msg.timestamp == message.timestamp &&
+            msg.callsign.toUpperCase() == message.author.toUpperCase(),
+      );
 
       if (index != -1) {
         final existing = messageList[index];
@@ -2385,18 +2715,28 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     try {
       final currentProfile = _profileService.getProfile();
       final userNpub = currentProfile.npub;
-
-      await _chatService.deleteMessageByTimestamp(
-        channelId: _selectedChannel!.id,
-        timestamp: message.timestamp,
-        authorCallsign: message.author,
-        actorNpub: userNpub,
-      );
+      if (_isDistributedChannel(_selectedChannel)) {
+        await _distributedChatService!.deleteMessage(
+          _selectedChannel!.id,
+          timestamp: message.timestamp,
+          authorCallsign: message.author,
+        );
+      } else {
+        await _chatService.deleteMessageByTimestamp(
+          channelId: _selectedChannel!.id,
+          timestamp: message.timestamp,
+          authorCallsign: message.author,
+          actorNpub: userNpub,
+        );
+      }
 
       // Remove from local list
       _setStateIfMounted(() {
-        _messages.removeWhere((msg) =>
-            msg.timestamp == message.timestamp && msg.author == message.author);
+        _messages.removeWhere(
+          (msg) =>
+              msg.timestamp == message.timestamp &&
+              msg.author == message.author,
+        );
       });
 
       _showSuccess('Message deleted');
@@ -2405,8 +2745,15 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  Future<void> _toggleLocalReaction(ChatMessage message, String reaction) async {
+  Future<void> _toggleLocalReaction(
+    ChatMessage message,
+    String reaction,
+  ) async {
     if (_selectedChannel == null) return;
+    if (_isDistributedChannel(_selectedChannel)) {
+      _showError('Reactions are not available for decentralized chat yet');
+      return;
+    }
 
     try {
       final currentProfile = _profileService.getProfile();
@@ -2423,8 +2770,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       _setStateIfMounted(() {
-        final index = _messages.indexWhere((msg) =>
-            msg.timestamp == updated.timestamp && msg.author == updated.author);
+        final index = _messages.indexWhere(
+          (msg) =>
+              msg.timestamp == updated.timestamp &&
+              msg.author == updated.author,
+        );
         if (index != -1) {
           _messages[index] = updated;
         }
@@ -2439,7 +2789,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
   }
 
-  Future<void> _toggleStationReaction(ChatMessage message, String reaction) async {
+  Future<void> _toggleStationReaction(
+    ChatMessage message,
+    String reaction,
+  ) async {
     if (_selectedStationRoom == null) return;
 
     final roomId = _selectedStationRoom!.id;
@@ -2450,9 +2803,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final messageList = List<StationChatMessage>.from(
       _stationMessageCache[roomId] ?? _stationMessages,
     );
-    final index = messageList.indexWhere((msg) =>
-        msg.timestamp == message.timestamp &&
-        msg.callsign.toUpperCase() == message.author.toUpperCase());
+    final index = messageList.indexWhere(
+      (msg) =>
+          msg.timestamp == message.timestamp &&
+          msg.callsign.toUpperCase() == message.author.toUpperCase(),
+    );
 
     if (index == -1) return;
 
@@ -2468,11 +2823,15 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Check if user already has this specific reaction (for toggle-off)
     final reactionList = optimisticReactions[reaction] ?? <String>[];
-    final alreadyHasThisReaction = reactionList.any((c) => c.toUpperCase() == myCallsign);
+    final alreadyHasThisReaction = reactionList.any(
+      (c) => c.toUpperCase() == myCallsign,
+    );
 
     // Remove user from ALL reaction types first (enforce one reaction per user)
     for (final key in optimisticReactions.keys.toList()) {
-      optimisticReactions[key]?.removeWhere((c) => c.toUpperCase() == myCallsign);
+      optimisticReactions[key]?.removeWhere(
+        (c) => c.toUpperCase() == myCallsign,
+      );
       if (optimisticReactions[key]?.isEmpty ?? true) {
         optimisticReactions.remove(key);
       }
@@ -2548,9 +2907,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       final currentList = List<StationChatMessage>.from(
         _stationMessageCache[roomId] ?? _stationMessages,
       );
-      final currentIndex = currentList.indexWhere((msg) =>
-          msg.timestamp == message.timestamp &&
-          msg.callsign.toUpperCase() == message.author.toUpperCase());
+      final currentIndex = currentList.indexWhere(
+        (msg) =>
+            msg.timestamp == message.timestamp &&
+            msg.callsign.toUpperCase() == message.author.toUpperCase(),
+      );
       if (currentIndex != -1) {
         currentList[currentIndex] = serverMessage;
         _stationMessageCache[roomId] = currentList;
@@ -2584,9 +2945,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final currentList = List<StationChatMessage>.from(
       _stationMessageCache[roomId] ?? _stationMessages,
     );
-    final currentIndex = currentList.indexWhere((msg) =>
-        msg.timestamp == existing.timestamp &&
-        msg.callsign.toUpperCase() == existing.callsign.toUpperCase());
+    final currentIndex = currentList.indexWhere(
+      (msg) =>
+          msg.timestamp == existing.timestamp &&
+          msg.callsign.toUpperCase() == existing.callsign.toUpperCase(),
+    );
     if (currentIndex != -1) {
       final revertedMessage = StationChatMessage(
         timestamp: existing.timestamp,
@@ -2646,7 +3009,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   }
 
   /// Send voice message to station room
-  Future<void> _sendStationVoiceMessage(String filePath, int durationSeconds) async {
+  Future<void> _sendStationVoiceMessage(
+    String filePath,
+    int durationSeconds,
+  ) async {
     if (_selectedStationRoom == null || !_stationReachable) return;
 
     setState(() {
@@ -2719,23 +3085,29 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (!message.hasVoice || message.voiceFile == null) return null;
 
     // Voice files use the same storage as regular file attachments
-    final (path, _) = await _getStationAttachmentData(ChatMessage(
-      author: message.author,
-      content: message.content,
-      timestamp: message.timestamp,
-      metadata: {'file': message.voiceFile!},
-    ));
+    final (path, _) = await _getStationAttachmentData(
+      ChatMessage(
+        author: message.author,
+        content: message.content,
+        timestamp: message.timestamp,
+        metadata: {'file': message.voiceFile!},
+      ),
+    );
     return path;
   }
 
   /// Get attachment data for station room messages
   /// Station rooms use filesystem cache, so returns (path, null)
-  Future<(String?, Uint8List?)> _getStationAttachmentData(ChatMessage message) async {
+  Future<(String?, Uint8List?)> _getStationAttachmentData(
+    ChatMessage message,
+  ) async {
     if (!message.hasFile) return (null, null);
 
     final filename = message.attachedFile;
     if (filename == null) return (null, null);
-    if (_lastRelayCacheKey == null || _selectedStationRoom == null) return (null, null);
+    if (_lastRelayCacheKey == null || _selectedStationRoom == null) {
+      return (null, null);
+    }
 
     // Check if already cached
     final cachedPath = await _cacheService.getChatFilePath(
@@ -2750,7 +3122,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // Skip downloading files we just uploaded (bandwidth optimization)
     if (_recentlyUploadedFiles.contains(filename)) {
-      LogService().log('Skipping download of recently uploaded file: $filename');
+      LogService().log(
+        'Skipping download of recently uploaded file: $filename',
+      );
       return (null, null);
     }
 
@@ -2758,7 +3132,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     // Auto-download only if file is <= 3 MB and message is <= 7 days old
     final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
     final messageAge = DateTime.now().difference(message.dateTime);
-    final shouldAutoDownload = fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
+    final shouldAutoDownload =
+        fileSize <= 3 * 1024 * 1024 && messageAge.inDays <= 7;
 
     if (!shouldAutoDownload || !_stationReachable) {
       return (null, null);
@@ -2785,9 +3160,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final (filePath, _) = await _getStationAttachmentData(message);
     if (filePath == null) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(_i18n.t('image_not_available'))),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(_i18n.t('image_not_available'))));
       }
       return;
     }
@@ -2817,17 +3192,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => PhotoViewerPage(
-          imagePaths: imagePaths,
-          initialIndex: initialIndex,
-        ),
+        builder: (context) =>
+            PhotoViewerPage(imagePaths: imagePaths, initialIndex: initialIndex),
       ),
     );
   }
 
   /// Get source ID for station room download manager
-  String get _stationSourceId =>
-      _selectedStationRoom != null ? 'STATION_${_selectedStationRoom!.id}'.toUpperCase() : '';
+  String get _stationSourceId => _selectedStationRoom != null
+      ? 'STATION_${_selectedStationRoom!.id}'.toUpperCase()
+      : '';
 
   /// Check if download button should be shown for a station message
   bool _shouldShowStationDownloadButton(ChatMessage message) {
@@ -2838,7 +3212,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (filename == null) return false;
 
     // Check if file already downloaded locally
-    final downloadId = _downloadManager.generateDownloadId(_stationSourceId, filename);
+    final downloadId = _downloadManager.generateDownloadId(
+      _stationSourceId,
+      filename,
+    );
     final downloadState = _downloadManager.getDownload(downloadId);
     if (downloadState?.status == ChatDownloadStatus.completed) return false;
 
@@ -2846,7 +3223,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
     if (fileSize <= 0) return false;
 
-    return !_downloadManager.shouldAutoDownload(ConnectionBandwidth.lan, fileSize);
+    return !_downloadManager.shouldAutoDownload(
+      ConnectionBandwidth.lan,
+      fileSize,
+    );
   }
 
   /// Get file size for a station message
@@ -2859,7 +3239,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   ChatDownload? _getStationDownloadState(ChatMessage message) {
     if (!message.hasFile || message.attachedFile == null) return null;
     if (_selectedStationRoom == null) return null;
-    final downloadId = _downloadManager.generateDownloadId(_stationSourceId, message.attachedFile!);
+    final downloadId = _downloadManager.generateDownloadId(
+      _stationSourceId,
+      message.attachedFile!,
+    );
     return _downloadManager.getDownload(downloadId);
   }
 
@@ -2870,7 +3253,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     final filename = message.attachedFile!;
     final fileSize = int.tryParse(message.getMeta('file_size') ?? '0') ?? 0;
-    final downloadId = _downloadManager.generateDownloadId(_stationSourceId, filename);
+    final downloadId = _downloadManager.generateDownloadId(
+      _stationSourceId,
+      filename,
+    );
 
     await _downloadManager.downloadFile(
       id: downloadId,
@@ -2900,17 +3286,22 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Future<void> _onStationCancelDownload(ChatMessage message) async {
     if (!message.hasFile || message.attachedFile == null) return;
 
-    final downloadId = _downloadManager.generateDownloadId(_stationSourceId, message.attachedFile!);
+    final downloadId = _downloadManager.generateDownloadId(
+      _stationSourceId,
+      message.attachedFile!,
+    );
     await _downloadManager.cancelDownload(downloadId);
   }
 
   bool _isMessageHidden(ChatMessage message) {
     if (_selectedChannel == null) return false;
+    if (_isDistributedChannel(_selectedChannel)) return false;
     return _chatService.isMessageHidden(_selectedChannel!.id, message);
   }
 
   Future<void> _hideMessage(ChatMessage message) async {
     if (_selectedChannel == null) return;
+    if (_isDistributedChannel(_selectedChannel)) return;
 
     try {
       await _chatService.hideMessage(_selectedChannel!.id, message);
@@ -2922,6 +3313,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   Future<void> _unhideMessage(ChatMessage message) async {
     if (_selectedChannel == null) return;
+    if (_isDistributedChannel(_selectedChannel)) return;
 
     try {
       await _chatService.unhideMessage(_selectedChannel!.id, message);
@@ -2995,7 +3387,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Returns (path, bytes) tuple:
   /// - For filesystem storage: (path, null)
   /// - For encrypted storage: (null, bytes) - bytes stay in RAM only
-  Future<(String?, Uint8List?)> _resolveAttachedFileData(ChatMessage message) async {
+  Future<(String?, Uint8List?)> _resolveAttachedFileData(
+    ChatMessage message,
+  ) async {
     if (!message.hasFile) return (null, null);
     if (widget.isRemoteDevice || widget.app == null) return (null, null);
 
@@ -3016,7 +3410,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
     // For encrypted storage, return bytes in RAM (never write to disk)
     if (_chatService.useEncryptedStorage) {
-      final bytes = await _chatService.getAttachmentBytes(channelFolder, filename);
+      final bytes = await _chatService.getAttachmentBytes(
+        channelFolder,
+        filename,
+      );
       return (null, bytes);
     }
 
@@ -3073,10 +3470,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => PhotoViewerPage(
-          imagePaths: imagePaths,
-          initialIndex: initialIndex,
-        ),
+        builder: (context) =>
+            PhotoViewerPage(imagePaths: imagePaths, initialIndex: initialIndex),
       ),
     );
   }
@@ -3099,28 +3494,41 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _isLoading = true;
         });
 
-        // Create channel
-        final channel = await _chatService.createChannel(result);
-
-        if (channel.isGroup &&
-            !channel.isMain &&
-            _groupsAppPath != null &&
-            _localChatCollectionPath != null) {
-          await GroupSyncService().syncGroupsCollection(
-            groupsAppPath: _groupsAppPath!,
-            chatAppPath: _localChatCollectionPath!,
+        late final ChatChannel channel;
+        if (_isDistributedChannel(result)) {
+          channel = await _distributedChatService!.createDistributedRoom(
+            roomId: result.id,
+            name: result.name,
+            description: result.description,
+            icon: result.icon,
           );
+        } else {
+          channel = await _chatService.createChannel(result);
+
+          if (channel.isGroup &&
+              !channel.isMain &&
+              _groupsAppPath != null &&
+              _localChatCollectionPath != null) {
+            await GroupSyncService().syncGroupsCollection(
+              groupsAppPath: _groupsAppPath!,
+              chatAppPath: _localChatCollectionPath!,
+            );
+          }
         }
 
-        // Refresh channels
-        await _chatService.refreshChannels();
-
         _setStateIfMounted(() {
-          _channels = _chatService.channels;
+          _channels = [];
         });
+        _channels = await _loadMergedLocalChannels();
+        _setStateIfMounted(() {});
 
         // Select the new channel
-        final updatedChannel = _chatService.getChannel(channel.id) ?? channel;
+        final updatedChannel =
+            _channels.cast<ChatChannel?>().firstWhere(
+              (item) => item?.id == channel.id,
+              orElse: () => null,
+            ) ??
+            channel;
         await _selectChannel(updatedChannel);
 
         _showSuccess('Channel created successfully');
@@ -3157,12 +3565,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       ),
     ).then((_) {
       // Reload security settings when returning
-      _chatService.refreshChannels();
-      // Re-fetch the selected channel to get updated config (e.g., visibility change)
-      if (_selectedChannel != null) {
-        _selectedChannel = _chatService.getChannel(_selectedChannel!.id);
-      }
-      _setStateIfMounted(() {});
+      _loadMergedLocalChannels().then((channels) {
+        _channels = channels;
+        if (_selectedChannel != null) {
+          _selectedChannel = channels.cast<ChatChannel?>().firstWhere(
+            (channel) => channel?.id == _selectedChannel!.id,
+            orElse: () => _selectedChannel,
+          );
+        }
+        _setStateIfMounted(() {});
+      });
     });
   }
 
@@ -3181,21 +3593,17 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => RoomManagementPage(
-          channel: _selectedChannel!,
-        ),
+        builder: (context) => RoomManagementPage(channel: _selectedChannel!),
       ),
     ).then((_) {
       // Reload channel data when returning
-      _chatService.refreshChannels();
-      _setStateIfMounted(() {
-        _channels = _chatService.channels;
-        // Update selected channel with refreshed data
-        final updated = _chatService.channels.firstWhere(
-          (c) => c.id == _selectedChannel!.id,
-          orElse: () => _selectedChannel!,
+      _loadMergedLocalChannels().then((channels) {
+        _channels = channels;
+        _selectedChannel = channels.cast<ChatChannel?>().firstWhere(
+          (channel) => channel?.id == _selectedChannel!.id,
+          orElse: () => _selectedChannel,
         );
-        _selectedChannel = updated;
+        _setStateIfMounted(() {});
       });
     });
   }
@@ -3216,10 +3624,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   void _showSuccess(String message) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: Colors.green,
-        ),
+        SnackBar(content: Text(message), backgroundColor: Colors.green),
       );
     }
   }
@@ -3242,7 +3647,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final isWideScreen = screenWidth >= 600;
 
     // In portrait mode, intercept back button when viewing a channel
-    final shouldInterceptBack = !isWideScreen && (_selectedChannel != null || _selectedStationRoom != null);
+    final shouldInterceptBack =
+        !isWideScreen &&
+        (_selectedChannel != null || _selectedStationRoom != null);
 
     return PopScope(
       canPop: !shouldInterceptBack,
@@ -3252,57 +3659,61 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         }
       },
       child: Scaffold(
-      appBar: AppBar(
-        backgroundColor: theme.colorScheme.surface,
-        surfaceTintColor: Colors.transparent,
-        scrolledUnderElevation: 0,
-        leading: !isWideScreen && (_selectedChannel != null || _selectedStationRoom != null)
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back),
-                onPressed: () {
-                  setState(() {
-                    _selectedChannel = null;
-                    _selectedStationRoom = null;
-                  });
-                },
-              )
-            : null,
-        title: LayoutBuilder(
-          builder: (context, constraints) {
-            // Get the title based on context (remote device or local collection)
-            final baseTitle = widget.isRemoteDevice
-                ? (widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? _i18n.t('chat'))
-                : widget.app?.title ?? _i18n.t('chat');
+        appBar: AppBar(
+          backgroundColor: theme.colorScheme.surface,
+          surfaceTintColor: Colors.transparent,
+          scrolledUnderElevation: 0,
+          leading:
+              !isWideScreen &&
+                  (_selectedChannel != null || _selectedStationRoom != null)
+              ? IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () {
+                    setState(() {
+                      _selectedChannel = null;
+                      _selectedStationRoom = null;
+                    });
+                  },
+                )
+              : null,
+          title: LayoutBuilder(
+            builder: (context, constraints) {
+              // Get the title based on context (remote device or local collection)
+              final baseTitle = widget.isRemoteDevice
+                  ? (widget.remoteDeviceName ??
+                        widget.remoteDeviceCallsign ??
+                        _i18n.t('chat'))
+                  : widget.app?.title ?? _i18n.t('chat');
 
-            // In narrow screen, show collection title when on channel list
-            if (!isWideScreen && _selectedChannel == null && _selectedStationRoom == null) {
-              return Text(baseTitle);
-            }
+              // In narrow screen, show collection title when on channel list
+              if (!isWideScreen &&
+                  _selectedChannel == null &&
+                  _selectedStationRoom == null) {
+                return Text(baseTitle);
+              }
 
-            // Show station room name if selected
-            if (_selectedStationRoom != null) {
-              return Text(_selectedStationRoom!.name);
-            }
+              // Show station room name if selected
+              if (_selectedStationRoom != null) {
+                return Text(_selectedStationRoom!.name);
+              }
 
-            return Text(
-              _selectedChannel?.name ?? baseTitle,
-            );
-          },
+              return Text(_selectedChannel?.name ?? baseTitle);
+            },
+          ),
+          actions: [
+            // Show room info/management for group channels
+            if (!widget.isRemoteDevice &&
+                _selectedChannel != null &&
+                _selectedChannel!.isGroup &&
+                _selectedChannel!.config != null)
+              IconButton(
+                icon: const Icon(Icons.group),
+                onPressed: _openRoomManagement,
+                tooltip: _i18n.t('room_management'),
+              ),
+          ],
         ),
-        actions: [
-          // Show room info/management for group channels
-          if (!widget.isRemoteDevice &&
-              _selectedChannel != null &&
-              _selectedChannel!.isGroup &&
-              _selectedChannel!.config != null)
-            IconButton(
-              icon: const Icon(Icons.group),
-              onPressed: _openRoomManagement,
-              tooltip: _i18n.t('room_management'),
-            ),
-        ],
-      ),
-      body: _buildBody(theme),
+        body: _buildBody(theme),
       ),
     );
   }
@@ -3310,9 +3721,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   /// Build main body
   Widget _buildBody(ThemeData theme) {
     if (!_isInitialized && _isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
+      return const Center(child: CircularProgressIndicator());
     }
 
     if (_error != null) {
@@ -3320,11 +3729,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.error_outline,
-              size: 64,
-              color: theme.colorScheme.error,
-            ),
+            Icon(Icons.error_outline, size: 64, color: theme.colorScheme.error),
             const SizedBox(height: 16),
             Text(
               _error!,
@@ -3341,9 +3746,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       );
     }
 
-    if (_channels.isEmpty && _stationRooms.isEmpty && _cachedDeviceSources.isEmpty) {
+    if (_channels.isEmpty &&
+        _stationRooms.isEmpty &&
+        _cachedDeviceSources.isEmpty) {
       // Show connecting indicator while initial station fetch is in progress
-      if (_connectionStatus == _StationConnectionStatus.connecting || _loadingRelayRooms) {
+      if (_connectionStatus == _StationConnectionStatus.connecting ||
+          _loadingRelayRooms) {
         return Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -3383,40 +3791,43 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 child: _selectedChannel == null && _selectedStationRoom == null
                     ? _buildNoChannelSelected(theme)
                     : _selectedStationRoom != null
-                        ? _buildRelayRoomChat(theme)
-                        : Column(
-                            children: [
-                              // Message list
-                              Expanded(
-                                child: MessageListWidget(
-                                  messages: _messages,
-                                  isGroupChat: _selectedChannel!.isGroup,
-                                  isLoading: _isLoading,
-                                  onLoadMore: _loadMoreLocalMessages,
-                                  onFileOpen: _openAttachedFile,
-                                  onMessageDelete: _deleteMessage,
-                                  canDeleteMessage: _canDeleteMessage,
-                                  onMessageQuote: _setQuotedMessage,
-                                  onMessageHide: _hideMessage,
-                                  isMessageHidden: _isMessageHidden,
-                                  onMessageUnhide: _unhideMessage,
-                                  getAttachmentData: _resolveAttachedFileData,
-                                  onImageOpen: _openAttachedImage,
-                                  onMessageReact: _toggleLocalReaction,
-                                  nicknameMap: _nicknameMap,
-                                ),
-                              ),
-                              // Message input
-                              MessageInputWidget(
-                                onSend: _sendMessage,
-                                maxLength: _selectedChannel!.config?.maxSizeText ?? 500,
-                                allowFiles:
-                                    _selectedChannel!.config?.fileUpload ?? true,
-                                quotedMessage: _quotedMessage,
-                                onClearQuote: _clearQuotedMessage,
-                              ),
-                            ],
+                    ? _buildRelayRoomChat(theme)
+                    : _isDistributedChannel(_selectedChannel)
+                    ? _buildDistributedRoomChat(theme)
+                    : Column(
+                        children: [
+                          // Message list
+                          Expanded(
+                            child: MessageListWidget(
+                              messages: _messages,
+                              isGroupChat: _selectedChannel!.isGroup,
+                              isLoading: _isLoading,
+                              onLoadMore: _loadMoreLocalMessages,
+                              onFileOpen: _openAttachedFile,
+                              onMessageDelete: _deleteMessage,
+                              canDeleteMessage: _canDeleteMessage,
+                              onMessageQuote: _setQuotedMessage,
+                              onMessageHide: _hideMessage,
+                              isMessageHidden: _isMessageHidden,
+                              onMessageUnhide: _unhideMessage,
+                              getAttachmentData: _resolveAttachedFileData,
+                              onImageOpen: _openAttachedImage,
+                              onMessageReact: _toggleLocalReaction,
+                              nicknameMap: _nicknameMap,
+                            ),
                           ),
+                          // Message input
+                          MessageInputWidget(
+                            onSend: _sendMessage,
+                            maxLength:
+                                _selectedChannel!.config?.maxSizeText ?? 500,
+                            allowFiles:
+                                _selectedChannel!.config?.fileUpload ?? true,
+                            quotedMessage: _quotedMessage,
+                            onClearQuote: _clearQuotedMessage,
+                          ),
+                        ],
+                      ),
               ),
             ],
           );
@@ -3428,6 +3839,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           } else if (_selectedStationRoom != null) {
             // Show station room messages
             return _buildRelayRoomChat(theme);
+          } else if (_isDistributedChannel(_selectedChannel)) {
+            return _buildDistributedRoomChat(theme);
           } else {
             // Show chat messages (no duplicate header, using AppBar)
             return Column(
@@ -3472,7 +3885,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   Widget _buildChannelSidebar(ThemeData theme) {
     // Build remote device sources from station rooms
     final remoteSources = <DeviceSourceWithRooms>[];
-    final addedCallsigns = <String>{}; // Track added devices to avoid duplicates
+    final addedCallsigns =
+        <String>{}; // Track added devices to avoid duplicates
 
     // Add the primary/connected station first (if online or has rooms)
     if (_stationRooms.isNotEmpty) {
@@ -3482,27 +3896,36 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       String? deviceCallsign;
 
       if (widget.isRemoteDevice) {
-        deviceName = widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? 'Remote Device';
+        deviceName =
+            widget.remoteDeviceName ??
+            widget.remoteDeviceCallsign ??
+            'Remote Device';
         deviceCallsign = widget.remoteDeviceCallsign;
       } else {
         final stationName = _stationRooms.first.stationName;
         final connectedStation = _stationService.getConnectedStation();
-        deviceName = stationName.isNotEmpty ? stationName : (connectedStation?.name ?? 'Station');
+        deviceName = stationName.isNotEmpty
+            ? stationName
+            : (connectedStation?.name ?? 'Station');
         deviceCallsign = connectedStation?.callsign;
       }
 
-      remoteSources.add(DeviceSourceWithRooms(
-        device: DeviceSource.station(
-          id: 'station_${_lastStationUrl ?? 'default'}',
-          name: deviceName,
-          callsign: deviceCallsign,
-          url: _lastStationUrl ?? '',
-          isOnline: _stationReachable,
-          latency: null,
+      remoteSources.add(
+        DeviceSourceWithRooms(
+          device: DeviceSource.station(
+            id: 'station_${_lastStationUrl ?? 'default'}',
+            name: deviceName,
+            callsign: deviceCallsign,
+            url: _lastStationUrl ?? '',
+            isOnline: _stationReachable,
+            latency: null,
+          ),
+          rooms: _stationRooms,
+          isLoading:
+              _loadingRelayRooms ||
+              _connectionStatus == _StationConnectionStatus.connecting,
         ),
-        rooms: _stationRooms,
-        isLoading: _loadingRelayRooms || _connectionStatus == _StationConnectionStatus.connecting,
-      ));
+      );
 
       // Mark this device as added
       if (deviceCallsign != null) {
@@ -3520,18 +3943,20 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         continue;
       }
 
-      remoteSources.add(DeviceSourceWithRooms(
-        device: DeviceSource.station(
-          id: 'cached_${cachedDevice.callsign}',
-          name: cachedDevice.name ?? cachedDevice.callsign,
-          callsign: cachedDevice.callsign,
-          url: cachedDevice.url ?? '',
-          isOnline: false, // Cached devices are offline
-          latency: null,
+      remoteSources.add(
+        DeviceSourceWithRooms(
+          device: DeviceSource.station(
+            id: 'cached_${cachedDevice.callsign}',
+            name: cachedDevice.name ?? cachedDevice.callsign,
+            callsign: cachedDevice.callsign,
+            url: cachedDevice.url ?? '',
+            isOnline: false, // Cached devices are offline
+            latency: null,
+          ),
+          rooms: cachedDevice.rooms,
+          isLoading: false,
         ),
-        rooms: cachedDevice.rooms,
-        isLoading: false,
-      ));
+      );
       addedCallsigns.add(cachedDevice.callsign.toUpperCase());
     }
 
@@ -3539,11 +3964,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final currentProfile = _profileService.getProfile();
 
     // For remote device mode, don't show local channels
-    final localChannels = widget.isRemoteDevice ? <ChatChannel>[] : List<ChatChannel>.from(_channels);
+    final localChannels = widget.isRemoteDevice
+        ? <ChatChannel>[]
+        : List<ChatChannel>.from(_channels);
     _sortChannels(localChannels);
 
     // Station owner is always moderator of their own rooms
-    final isModerator = ProfileService().getProfile().isRelay ||
+    final isModerator =
+        ProfileService().getProfile().isRelay ||
         _stationRooms.any((r) => r.isModerator);
 
     return DeviceChatSidebar(
@@ -3559,7 +3987,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             )
           : null,
       onLocalChannelSelect: _selectChannel,
-      onRemoteRoomSelect: (device, room) => _selectRelayRoomFromDevice(device, room),
+      onRemoteRoomSelect: (device, room) =>
+          _selectRelayRoomFromDevice(device, room),
       onNewLocalChannel: widget.isRemoteDevice ? null : _showNewChannelDialog,
       onRefreshDevice: (device) => _loadRelayRooms(),
       localCallsign: currentProfile.callsign,
@@ -3574,6 +4003,280 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       onCreateRoom: isModerator ? _createStationRoom : null,
       onDeleteRoom: isModerator ? _deleteStationRoom : null,
       onRenameRoom: isModerator ? _renameStationRoom : null,
+    );
+  }
+
+  Future<void> _selectDistributedTopic(String topicId) async {
+    if (_selectedChannel == null || !_isDistributedChannel(_selectedChannel)) {
+      return;
+    }
+    if (topicId == _selectedDistributedTopicId) {
+      return;
+    }
+    _setStateIfMounted(() {
+      _selectedDistributedTopicId = topicId;
+      _isLoading = true;
+    });
+    await _refreshLocalMessages();
+    _setStateIfMounted(() {
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _showCreateDistributedTopicDialog() async {
+    if (_selectedChannel == null || _distributedChatService == null) {
+      return;
+    }
+
+    final titleController = TextEditingController();
+    final descriptionController = TextEditingController();
+    final iconController = TextEditingController();
+
+    try {
+      final created = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('New topic'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Title',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: descriptionController,
+                  decoration: const InputDecoration(
+                    labelText: 'Description',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 2,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: iconController,
+                  decoration: const InputDecoration(
+                    labelText: 'Icon',
+                    hintText: 'Emoji or short symbol',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLength: 8,
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(_i18n.t('cancel')),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (titleController.text.trim().isEmpty) {
+                  return;
+                }
+                Navigator.pop(context, true);
+              },
+              child: const Text('Create'),
+            ),
+          ],
+        ),
+      );
+
+      if (created != true) {
+        return;
+      }
+
+      await _distributedChatService!.createTopic(
+        _selectedChannel!.id,
+        title: titleController.text.trim(),
+        description: descriptionController.text.trim().isEmpty
+            ? null
+            : descriptionController.text.trim(),
+        icon: iconController.text.trim().isEmpty
+            ? null
+            : iconController.text.trim(),
+      );
+
+      final topics = await _distributedChatService!.listTopics(
+        _selectedChannel!.id,
+      );
+      final createdTopic = topics.isNotEmpty ? topics.last : null;
+      _setStateIfMounted(() {
+        _distributedTopics = topics;
+        if (createdTopic != null) {
+          _selectedDistributedTopicId = createdTopic.topicId;
+        }
+      });
+      await _refreshLocalMessages();
+      _showSuccess('Topic created');
+    } catch (e) {
+      _showError('Failed to create topic: $e');
+    } finally {
+      titleController.dispose();
+      descriptionController.dispose();
+      iconController.dispose();
+    }
+  }
+
+  Widget _buildDistributedRoomChat(ThemeData theme) {
+    final channel = _selectedChannel!;
+    final config = channel.config;
+    final currentProfile = _profileService.getProfile();
+    final selectedTopic = _selectedDistributedTopic;
+    final canWrite = config?.canWrite(currentProfile.npub) ?? false;
+    final canCreateTopics = canWrite && _distributedChatService != null;
+    final roomIcon = channel.icon?.trim();
+
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceVariant.withOpacity(0.35),
+            border: Border(
+              bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: roomIcon != null && roomIcon.isNotEmpty
+                        ? Text(roomIcon, style: const TextStyle(fontSize: 22))
+                        : Icon(
+                            Icons.hub,
+                            color: theme.colorScheme.onPrimaryContainer,
+                          ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          channel.name,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        if ((channel.description ?? '').isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              channel.description!,
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (canCreateTopics)
+                    OutlinedButton.icon(
+                      onPressed: _showCreateDistributedTopicDialog,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Topic'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final topic in _distributedTopics)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: ChoiceChip(
+                          selected:
+                              topic.topicId == _selectedDistributedTopicId,
+                          onSelected: (_) =>
+                              _selectDistributedTopic(topic.topicId),
+                          avatar: (topic.icon ?? '').isNotEmpty
+                              ? Text(topic.icon!)
+                              : const Icon(Icons.topic, size: 18),
+                          label: Text(topic.title),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (selectedTopic != null &&
+                  (selectedTopic.description ?? '').isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  selectedTopic.description!,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        Expanded(
+          child: MessageListWidget(
+            messages: _messages,
+            isGroupChat: true,
+            isLoading: _isLoading,
+            onLoadMore: _loadMoreLocalMessages,
+            onMessageDelete: _deleteMessage,
+            canDeleteMessage: _canDeleteMessage,
+            onMessageQuote: _setQuotedMessage,
+            nicknameMap: _nicknameMap,
+          ),
+        ),
+        if (!canWrite)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceVariant.withOpacity(0.5),
+              border: Border(
+                top: BorderSide(color: theme.colorScheme.outlineVariant),
+              ),
+            ),
+            child: Text(
+              config?.roomState == 'paused'
+                  ? 'This room is paused.'
+                  : (config?.roomState == 'closed'
+                        ? 'This room is closed.'
+                        : 'You cannot post in this room right now.'),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          )
+        else
+          MessageInputWidget(
+            onSend: _sendMessage,
+            maxLength: channel.config?.maxSizeText ?? 1000,
+            allowFiles: false,
+            quotedMessage: _quotedMessage,
+            onClearQuote: _clearQuotedMessage,
+          ),
+      ],
     );
   }
 
@@ -3614,9 +4317,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             decoration: BoxDecoration(
               color: theme.colorScheme.surfaceVariant.withOpacity(0.5),
               border: Border(
-                top: BorderSide(
-                  color: theme.colorScheme.outlineVariant,
-                ),
+                top: BorderSide(color: theme.colorScheme.outlineVariant),
               ),
             ),
             child: Row(
@@ -3697,24 +4398,30 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _sortChannels(sortedChannels);
 
     // Check if any external device is reachable
-    final anyDeviceOnline = _stationReachable || _cachedDeviceSources.any((d) => d.isOnline);
+    final anyDeviceOnline =
+        _stationReachable || _cachedDeviceSources.any((d) => d.isOnline);
 
     // Build section widgets
     final stationSection = _buildStationSection(theme);
     final cachedDevicesSection = _buildCachedDevicesSection(theme);
-    final localChannelsSection = _buildLocalChannelsSection(theme, sortedChannels);
+    final localChannelsSection = _buildLocalChannelsSection(
+      theme,
+      sortedChannels,
+    );
 
     return Container(
       color: theme.colorScheme.surface,
       child: ListView(
         children: [
           // If no device is online, show local channels first
-          if (!anyDeviceOnline && sortedChannels.isNotEmpty) ...localChannelsSection,
+          if (!anyDeviceOnline && sortedChannels.isNotEmpty)
+            ...localChannelsSection,
           // Then external devices
           ...stationSection,
           ...cachedDevicesSection,
           // If devices are online, show local channels last
-          if (anyDeviceOnline && sortedChannels.isNotEmpty) ...localChannelsSection,
+          if (anyDeviceOnline && sortedChannels.isNotEmpty)
+            ...localChannelsSection,
         ],
       ),
     );
@@ -3726,7 +4433,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (ProfileService().getProfile().isRelay) return [];
     // Show connecting placeholder when rooms haven't loaded yet but a station is configured
     if (_stationRooms.isEmpty) {
-      if (_connectionStatus == _StationConnectionStatus.connecting && _lastStationUrl != null) {
+      if (_connectionStatus == _StationConnectionStatus.connecting &&
+          _lastStationUrl != null) {
         return [
           Container(
             padding: const EdgeInsets.all(16),
@@ -3776,127 +4484,134 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
 
     return [
+      Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceVariant,
+          border: Border(
+            bottom: BorderSide(
+              color: theme.colorScheme.outlineVariant,
+              width: 1,
+            ),
+          ),
+        ),
+        child: Row(
+          children: [
+            // Status indicator dot
             Container(
-              padding: const EdgeInsets.all(16),
+              width: 10,
+              height: 10,
               decoration: BoxDecoration(
-                color: theme.colorScheme.surfaceVariant,
-                border: Border(
-                  bottom: BorderSide(
-                    color: theme.colorScheme.outlineVariant,
-                    width: 1,
-                  ),
-                ),
+                shape: BoxShape.circle,
+                color: _connectionStatus == _StationConnectionStatus.online
+                    ? Colors.green
+                    : _connectionStatus == _StationConnectionStatus.connecting
+                    ? Colors.grey
+                    : Colors.red.shade400,
               ),
-              child: Row(
+            ),
+            const SizedBox(width: 10),
+            Icon(Icons.cell_tower, color: theme.colorScheme.primary),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Status indicator dot
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: _connectionStatus == _StationConnectionStatus.online
-                          ? Colors.green
-                          : _connectionStatus == _StationConnectionStatus.connecting
-                              ? Colors.grey
-                              : Colors.red.shade400,
+                  Text(
+                    _formatStationDisplayName(
+                      _stationRooms.first.stationName,
+                      _lastStationUrl ?? _stationRooms.first.stationUrl,
+                    ),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Icon(Icons.cell_tower, color: theme.colorScheme.primary),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _formatStationDisplayName(
-                            _stationRooms.first.stationName,
-                            _lastStationUrl ?? _stationRooms.first.stationUrl,
-                          ),
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
+                  Text(
+                    _connectionStatus == _StationConnectionStatus.online
+                        ? _i18n.t('online')
+                        : _connectionStatus ==
+                              _StationConnectionStatus.connecting
+                        ? _i18n.t('connecting')
+                        : _i18n.t('offline_cached'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color:
                           _connectionStatus == _StationConnectionStatus.online
-                              ? _i18n.t('online')
-                              : _connectionStatus == _StationConnectionStatus.connecting
-                                  ? _i18n.t('connecting')
-                                  : _i18n.t('offline_cached'),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: _connectionStatus == _StationConnectionStatus.online
-                                ? Colors.green.shade700
-                                : _connectionStatus == _StationConnectionStatus.connecting
-                                    ? Colors.grey
-                                    : theme.colorScheme.error,
-                          ),
-                        ),
-                      ],
+                          ? Colors.green.shade700
+                          : _connectionStatus ==
+                                _StationConnectionStatus.connecting
+                          ? Colors.grey
+                          : theme.colorScheme.error,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  // + and cog buttons for station owner
-                  if (ProfileService().getProfile().isRelay ||
-                      _stationRooms.any((r) => r.isModerator)) ...[
-                    SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: IconButton(
-                        padding: EdgeInsets.zero,
-                        iconSize: 20,
-                        icon: Icon(Icons.add, color: theme.colorScheme.primary),
-                        tooltip: _i18n.t('create_room'),
-                        onPressed: () => _showCreateRoomMobileDialog(context),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: IconButton(
-                        padding: EdgeInsets.zero,
-                        iconSize: 20,
-                        icon: Icon(Icons.settings, color: theme.colorScheme.primary),
-                        tooltip: _i18n.t('settings'),
-                        onPressed: _openSettings,
-                      ),
-                    ),
-                  ],
                 ],
               ),
             ),
-            ..._stationRooms.map((room) {
-              final unreadCount = _unreadCounts[room.id] ?? 0;
-              final canManage = (ProfileService().getProfile().isRelay ||
-                  _stationRooms.any((r) => r.isModerator)) && room.id != 'general';
-              return ListTile(
-                leading: Badge(
-                  isLabelVisible: unreadCount > 0,
-                  label: Text('$unreadCount'),
-                  child: CircleAvatar(
-                    backgroundColor: theme.colorScheme.tertiaryContainer,
-                    child: Icon(
-                      Icons.forum,
-                      color: theme.colorScheme.onTertiaryContainer,
-                      size: 20,
-                    ),
-                  ),
+            const SizedBox(width: 8),
+            // + and cog buttons for station owner
+            if (ProfileService().getProfile().isRelay ||
+                _stationRooms.any((r) => r.isModerator)) ...[
+              SizedBox(
+                width: 32,
+                height: 32,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  iconSize: 20,
+                  icon: Icon(Icons.add, color: theme.colorScheme.primary),
+                  tooltip: _i18n.t('create_room'),
+                  onPressed: () => _showCreateRoomMobileDialog(context),
                 ),
-                title: Text(room.name),
-                subtitle: room.description.isNotEmpty
-                    ? Text(
-                        room.description,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      )
-                    : Text('${room.messageCount} messages'),
-                onTap: () {
-                  _forcedOfflineMode = false;
-                  _selectRelayRoom(room);
-                },
-                onLongPress: canManage ? () => _showRoomManageDialog(context, room) : null,
-              );
-            }),
+              ),
+              SizedBox(
+                width: 32,
+                height: 32,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  iconSize: 20,
+                  icon: Icon(Icons.settings, color: theme.colorScheme.primary),
+                  tooltip: _i18n.t('settings'),
+                  onPressed: _openSettings,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      ..._stationRooms.map((room) {
+        final unreadCount = _unreadCounts[room.id] ?? 0;
+        final canManage =
+            (ProfileService().getProfile().isRelay ||
+                _stationRooms.any((r) => r.isModerator)) &&
+            room.id != 'general';
+        return ListTile(
+          leading: Badge(
+            isLabelVisible: unreadCount > 0,
+            label: Text('$unreadCount'),
+            child: CircleAvatar(
+              backgroundColor: theme.colorScheme.tertiaryContainer,
+              child: Icon(
+                Icons.forum,
+                color: theme.colorScheme.onTertiaryContainer,
+                size: 20,
+              ),
+            ),
+          ),
+          title: Text(room.name),
+          subtitle: room.description.isNotEmpty
+              ? Text(
+                  room.description,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                )
+              : Text('${room.messageCount} messages'),
+          onTap: () {
+            _forcedOfflineMode = false;
+            _selectRelayRoom(room);
+          },
+          onLongPress: canManage
+              ? () => _showRoomManageDialog(context, room)
+              : null,
+        );
+      }),
     ];
   }
 
@@ -3935,7 +4650,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     final url = device.url;
 
     // Check if name is a proper nickname (not empty, not a URL, not same as callsign)
-    final hasNickname = name != null &&
+    final hasNickname =
+        name != null &&
         name.isNotEmpty &&
         !_isUrlLike(name) &&
         name != callsign;
@@ -3961,7 +4677,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   List<Widget> _buildCachedDevicesSection(ThemeData theme) {
     // Filter out the device already shown in station section (by callsign, not index)
     final devicesToShow = _cachedDeviceSources
-        .where((d) => _lastRelayCacheKey == null || d.callsign != _lastRelayCacheKey)
+        .where(
+          (d) => _lastRelayCacheKey == null || d.callsign != _lastRelayCacheKey,
+        )
         .toList();
     if (devicesToShow.isEmpty) return [];
 
@@ -4008,7 +4726,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                       ),
                     ),
                     Text(
-                      cachedDevice.isOnline ? _i18n.t('online') : _i18n.t('offline_cached'),
+                      cachedDevice.isOnline
+                          ? _i18n.t('online')
+                          : _i18n.t('offline_cached'),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: cachedDevice.isOnline
                             ? Colors.green.shade700
@@ -4050,7 +4770,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             onTap: () {
               _lastRelayCacheKey = cachedDevice.callsign;
               _lastStationUrl = cachedDevice.url;
-              _connectionStatus = cachedDevice.isOnline ? _StationConnectionStatus.online : _StationConnectionStatus.offline;
+              _connectionStatus = cachedDevice.isOnline
+                  ? _StationConnectionStatus.online
+                  : _StationConnectionStatus.offline;
               _forcedOfflineMode = !cachedDevice.isOnline;
               _selectRelayRoom(room);
             },
@@ -4061,21 +4783,70 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     return widgets;
   }
 
+  Widget _buildLocalChannelAvatar(
+    ThemeData theme,
+    ChatChannel channel, {
+    ImageProvider? profilePic,
+  }) {
+    if (channel.isDirect) {
+      return CircleAvatar(
+        backgroundColor: theme.colorScheme.secondaryContainer,
+        backgroundImage: profilePic,
+        child: profilePic == null
+            ? Icon(
+                Icons.person,
+                color: theme.colorScheme.onSecondaryContainer,
+                size: 20,
+              )
+            : null,
+      );
+    }
+
+    final customIcon = channel.icon?.trim();
+    if (customIcon != null && customIcon.isNotEmpty) {
+      return CircleAvatar(
+        backgroundColor: theme.colorScheme.primaryContainer,
+        child: Text(customIcon, style: const TextStyle(fontSize: 18)),
+      );
+    }
+
+    final iconData = channel.config?.isDistributed ?? false
+        ? Icons.hub
+        : Icons.group;
+    final backgroundColor = channel.config?.isDistributed ?? false
+        ? theme.colorScheme.secondaryContainer
+        : theme.colorScheme.primaryContainer;
+    final foregroundColor = channel.config?.isDistributed ?? false
+        ? theme.colorScheme.onSecondaryContainer
+        : theme.colorScheme.onPrimaryContainer;
+
+    return CircleAvatar(
+      backgroundColor: backgroundColor,
+      child: Icon(iconData, color: foregroundColor, size: 20),
+    );
+  }
+
   /// Build local channels section widgets
-  List<Widget> _buildLocalChannelsSection(ThemeData theme, List<ChatChannel> sortedChannels) {
+  List<Widget> _buildLocalChannelsSection(
+    ThemeData theme,
+    List<ChatChannel> sortedChannels,
+  ) {
     if (sortedChannels.isEmpty) return [];
 
     return [
       Container(
         padding: const EdgeInsets.all(16),
-        margin: EdgeInsets.only(top: _stationRooms.isNotEmpty || _cachedDeviceSources.isNotEmpty ? 8 : 0),
+        margin: EdgeInsets.only(
+          top: _stationRooms.isNotEmpty || _cachedDeviceSources.isNotEmpty
+              ? 8
+              : 0,
+        ),
         decoration: BoxDecoration(
           color: theme.colorScheme.surfaceVariant,
           border: Border(
-            top: (_stationRooms.isNotEmpty || _cachedDeviceSources.isNotEmpty) ? BorderSide(
-              color: theme.colorScheme.outlineVariant,
-              width: 1,
-            ) : BorderSide.none,
+            top: (_stationRooms.isNotEmpty || _cachedDeviceSources.isNotEmpty)
+                ? BorderSide(color: theme.colorScheme.outlineVariant, width: 1)
+                : BorderSide.none,
             bottom: BorderSide(
               color: theme.colorScheme.outlineVariant,
               width: 1,
@@ -4138,78 +4909,89 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         ),
       ),
       ...sortedChannels.map((channel) {
-        final profilePic = channel.isDirect ? _profilePicMap[channel.name.toUpperCase()] : null;
+        final profilePic = channel.isDirect
+            ? _profilePicMap[channel.name.toUpperCase()]
+            : null;
         return ListTile(
-        leading: CircleAvatar(
-          backgroundColor: channel.isGroup
-              ? theme.colorScheme.primaryContainer
-              : theme.colorScheme.secondaryContainer,
-          backgroundImage: profilePic,
-          child: profilePic == null ? Icon(
-            channel.isGroup ? Icons.group : Icons.person,
-            color: channel.isGroup
-                ? theme.colorScheme.onPrimaryContainer
-                : theme.colorScheme.onSecondaryContainer,
-            size: 20,
-          ) : null,
-        ),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                channel.isDirect ? _dmDisplayName(channel) : channel.name,
-                style: TextStyle(
-                  fontWeight: channel.isFavorite
-                      ? FontWeight.bold
-                      : FontWeight.normal,
+          leading: _buildLocalChannelAvatar(
+            theme,
+            channel,
+            profilePic: profilePic,
+          ),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  channel.isDirect ? _dmDisplayName(channel) : channel.name,
+                  style: TextStyle(
+                    fontWeight: channel.isFavorite
+                        ? FontWeight.bold
+                        : FontWeight.normal,
+                  ),
                 ),
               ),
-            ),
-            if (channel.isFavorite)
-              Icon(
-                Icons.star,
-                size: 16,
-                color: theme.colorScheme.primary,
-              ),
-          ],
-        ),
-        subtitle: channel.description != null && channel.description!.isNotEmpty
-            ? Text(
-                channel.description!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              )
-            : (channel.isGroup
-                ? Text(_i18n.t('group_chat'))
-                : null),
-        onTap: () => _selectChannelMobile(channel),
-        onLongPress: !channel.isMain && !widget.isRemoteDevice ? () {
-          showDialog(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: Text('${_i18n.t('delete')} "${channel.isDirect ? _dmDisplayName(channel) : channel.name}"?'),
-              content: Text(_i18n.t('delete_channel_confirm')),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx), child: Text(_i18n.t('cancel'))),
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _deleteLocalChannel(channel);
-                  },
-                  child: Text(_i18n.t('delete'), style: TextStyle(color: Colors.red)),
-                ),
-              ],
-            ),
-          );
-        } : null,
-      );
+              if (channel.isFavorite)
+                Icon(Icons.star, size: 16, color: theme.colorScheme.primary),
+            ],
+          ),
+          subtitle:
+              channel.description != null && channel.description!.isNotEmpty
+              ? Text(
+                  channel.description!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                )
+              : (channel.isGroup
+                    ? Text(
+                        channel.config?.isDistributed ?? false
+                            ? 'Decentralized chat'
+                            : _i18n.t('group_chat'),
+                      )
+                    : null),
+          onTap: () => _selectChannelMobile(channel),
+          onLongPress:
+              !channel.isMain &&
+                  !widget.isRemoteDevice &&
+                  !_isDistributedChannel(channel)
+              ? () {
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: Text(
+                        '${_i18n.t('delete')} "${channel.isDirect ? _dmDisplayName(channel) : channel.name}"?',
+                      ),
+                      content: Text(_i18n.t('delete_channel_confirm')),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: Text(_i18n.t('cancel')),
+                        ),
+                        TextButton(
+                          onPressed: () {
+                            Navigator.pop(ctx);
+                            _deleteLocalChannel(channel);
+                          },
+                          child: Text(
+                            _i18n.t('delete'),
+                            style: TextStyle(color: Colors.red),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+              : null,
+        );
       }),
     ];
   }
 
   /// Build room list for remote device mode (only shows station rooms)
   Widget _buildRemoteDeviceRoomList(ThemeData theme) {
-    final deviceName = widget.remoteDeviceName ?? widget.remoteDeviceCallsign ?? 'Remote Device';
+    final deviceName =
+        widget.remoteDeviceName ??
+        widget.remoteDeviceCallsign ??
+        'Remote Device';
 
     return Container(
       color: theme.colorScheme.surface,
@@ -4237,9 +5019,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                     shape: BoxShape.circle,
                     color: _connectionStatus == _StationConnectionStatus.online
                         ? Colors.green
-                        : _connectionStatus == _StationConnectionStatus.connecting
-                            ? Colors.grey
-                            : Colors.red.shade400,
+                        : _connectionStatus ==
+                              _StationConnectionStatus.connecting
+                        ? Colors.grey
+                        : Colors.red.shade400,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -4268,27 +5051,34 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                 ),
                 // Status badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: _connectionStatus == _StationConnectionStatus.online
                         ? Colors.green.withOpacity(0.1)
-                        : _connectionStatus == _StationConnectionStatus.connecting
-                            ? Colors.grey.withOpacity(0.1)
-                            : Colors.red.withOpacity(0.1),
+                        : _connectionStatus ==
+                              _StationConnectionStatus.connecting
+                        ? Colors.grey.withOpacity(0.1)
+                        : Colors.red.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
                     _connectionStatus == _StationConnectionStatus.online
                         ? _i18n.t('online')
-                        : _connectionStatus == _StationConnectionStatus.connecting
-                            ? _i18n.t('connecting')
-                            : _i18n.t('offline_cached'),
+                        : _connectionStatus ==
+                              _StationConnectionStatus.connecting
+                        ? _i18n.t('connecting')
+                        : _i18n.t('offline_cached'),
                     style: theme.textTheme.bodySmall?.copyWith(
-                      color: _connectionStatus == _StationConnectionStatus.online
+                      color:
+                          _connectionStatus == _StationConnectionStatus.online
                           ? Colors.green.shade700
-                          : _connectionStatus == _StationConnectionStatus.connecting
-                              ? Colors.grey.shade700
-                              : Colors.red.shade700,
+                          : _connectionStatus ==
+                                _StationConnectionStatus.connecting
+                          ? Colors.grey.shade700
+                          : Colors.red.shade700,
                     ),
                   ),
                 ),
@@ -4300,14 +5090,17 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           Expanded(
             child: _stationRooms.isEmpty
                 ? Center(
-                    child: _connectionStatus == _StationConnectionStatus.connecting
+                    child:
+                        _connectionStatus == _StationConnectionStatus.connecting
                         ? Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               const SizedBox(
                                 width: 32,
                                 height: 32,
-                                child: CircularProgressIndicator(strokeWidth: 3),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 3,
+                                ),
                               ),
                               const SizedBox(height: 16),
                               Text(
@@ -4324,7 +5117,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                               Icon(
                                 Icons.forum_outlined,
                                 size: 64,
-                                color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
+                                color: theme.colorScheme.onSurfaceVariant
+                                    .withOpacity(0.5),
                               ),
                               const SizedBox(height: 16),
                               Text(
@@ -4361,7 +5155,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               )
-                            : Text('${room.messageCount} ${_i18n.t("messages")}'),
+                            : Text(
+                                '${room.messageCount} ${_i18n.t("messages")}',
+                              ),
                         onTap: () => _selectRelayRoom(room),
                       );
                     },
@@ -4386,10 +5182,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
               color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
             ),
             const SizedBox(height: 24),
-            Text(
-              _i18n.t('no_rooms_found'),
-              style: theme.textTheme.titleLarge,
-            ),
+            Text(_i18n.t('no_rooms_found'), style: theme.textTheme.titleLarge),
             const SizedBox(height: 8),
             Text(
               _stationReachable
@@ -4420,10 +5213,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
             color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
           ),
           const SizedBox(height: 24),
-          Text(
-            _i18n.t('no_channels_found'),
-            style: theme.textTheme.titleLarge,
-          ),
+          Text(_i18n.t('no_channels_found'), style: theme.textTheme.titleLarge),
           const SizedBox(height: 8),
           Text(
             _i18n.t('create_channel_to_start'),
@@ -4481,11 +5271,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
               _buildInfoRow(_i18n.t('type'), _selectedChannel!.type.name),
               _buildInfoRow('ID', _selectedChannel!.id),
               if (_selectedChannel!.description != null)
-                _buildInfoRow(_i18n.t('description'), _selectedChannel!.description!),
-              _buildInfoRow(_i18n.t('participants'),
-                  _selectedChannel!.participants.join(', ')),
-              _buildInfoRow(_i18n.t('created'),
-                  _selectedChannel!.created.toString().substring(0, 16)),
+                _buildInfoRow(
+                  _i18n.t('description'),
+                  _selectedChannel!.description!,
+                ),
+              _buildInfoRow(
+                _i18n.t('participants'),
+                _selectedChannel!.participants.join(', '),
+              ),
+              _buildInfoRow(
+                _i18n.t('created'),
+                _selectedChannel!.created.toString().substring(0, 16),
+              ),
             ],
           ),
         ),
@@ -4508,16 +5305,10 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         children: [
           Text(
             label,
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
-            ),
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
           ),
           const SizedBox(height: 2),
-          SelectableText(
-            value,
-            style: const TextStyle(fontSize: 12),
-          ),
+          SelectableText(value, style: const TextStyle(fontSize: 12)),
           const Divider(),
         ],
       ),
