@@ -39,6 +39,8 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### Cache & File System
 - [CacheServiceBase](#cacheservicebase) - Shared relay cache logic for Desktop and CLI stations
 - [FileIndexService](#fileindexservice) - SQLite file hash cache for fast mirror sync comparison (sha1, tlsh, size, mtime)
+- [ProfileSQLiteDatabase](#profilesqlitedatabase) - Mirror a profile-scoped SQLite file through `ProfileStorage` so it works for both filesystem and encrypted profiles
+- [DChatRoomStore](#dchatroomstore) - Room-local distributed-chat storage with `room.sqlite3`, `device.sqlite3`, and per-room media folders
 - [FileSystemService path utilities](#filesystemservice-path-utilities) - Cross-platform path handling (Windows `\` + Unix `/`)
 - [ZipProfileStorage](#zipprofilestorage) - ProfileStorage backed by an in-memory ZIP archive (NDF files)
 - [NdfService.updateArchiveEntriesInBytes](#ndfserviceupdatearchiveentriesinbytes) - Pure-bytes ZIP entry updater (no filesystem I/O)
@@ -11184,6 +11186,67 @@ SQLite-backed file hash cache that accelerates mirror sync comparison. Instead o
 - Background indexing starts in `main.dart` after profile storage init, restarts on profile switch
 
 **Used in**: `mirror_sync_service.dart`, `device_sync_page.dart`, `log_api_service.dart`, `main.dart`, `profile_service.dart`
+
+---
+
+## ProfileSQLiteDatabase
+
+**File**: `lib/services/profile_sqlite_database.dart`
+
+Reusable bridge for SQLite databases that logically live inside a profile
+folder and must still work when the profile is backed by
+`EncryptedProfileStorage`.
+
+How it works:
+
+- reads `room.sqlite3` or another profile-scoped database file through
+  `ProfileStorage`
+- mirrors the bytes into a temporary native file
+- opens SQLite against that temp file
+- checkpoints and writes the database back through `ProfileStorage`
+
+Key methods:
+
+- `open()` — materialize and open the temp database
+- `read(action)` — run a read closure with the live `Database`
+- `write(action)` — run a transactional write closure and flush it back to
+  `ProfileStorage`
+- `flush()` — checkpoint the WAL and persist the current DB file
+- `close()` — flush and delete the temp mirror
+
+Use this whenever a feature needs SQLite semantics but the source of truth must
+remain under `/{callsign}/...`.
+
+**Used in**: `dchat_room_store.dart`
+
+---
+
+## DChatRoomStore
+
+**File**: `lib/services/dchat_room_store.dart`
+
+Room-local SQLite storage for distributed chat rooms. The store scopes itself to
+`/{callsign}/dchat/{room_id}/` and owns:
+
+- `room.sqlite3` — replicated room state
+- `device.sqlite3` — local-only state
+- `media/images|video|audio|files|thumbs/` — room-local attachment files
+
+Key responsibilities:
+
+- initialize the room and device schemas
+- store room metadata, members, control events, epochs, epoch key envelopes,
+  messages, media references, and sync cursors
+- store room-local device values and local sync diagnostics
+- write attachment files using `{sha1}.{extension}` filenames
+- deduplicate media only inside the same room
+- support whole-room deletion by removing one room folder
+
+This is the storage target for the future `dchat` orchestration migration away
+from text chat logs.
+
+**Used in**: `test/dchat_room_store_test.dart` today; planned backend for
+distributed-room orchestration
 
 ---
 
