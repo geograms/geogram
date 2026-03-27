@@ -28,6 +28,9 @@ class DeviceSyncPage extends StatefulWidget {
 }
 
 class _DeviceSyncPageState extends State<DeviceSyncPage> {
+  static const _excludeSnackBarDuration = Duration(seconds: 4);
+  static const _excludeSnackBarBottomOffset = 96.0;
+
   // Stage tracking
   int _stage = 1; // 1=mirror list, 2=diff view, 3=transfer
 
@@ -40,7 +43,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   final Set<String> _selectedMirrorIds = {};
   List<MirrorDevice> _multiMirrors = []; // resolved mirrors for push
   final Map<String, String> _multiPeerUrls = {}; // deviceId -> url
-  final Map<String, Map<String, String>> _multiTokens = {}; // deviceId -> {folder -> token}
+  final Map<String, Map<String, String>> _multiTokens =
+      {}; // deviceId -> {folder -> token}
   // Which files each device needs: deviceId -> {folder -> set of paths}
   final Map<String, Map<String, Set<String>>> _multiDeviceNeeds = {};
 
@@ -58,9 +62,15 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   // Stage 2: direction filter — null=show all, true=pull only, false=push only
   bool? _directionFilter;
 
+  Timer? _excludeSnackBarTimer;
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>?
+  _excludeSnackBarController;
+
   // Stage 3: transfer state
-  final Map<String, Set<String>> _selectedFiles = {}; // folder -> selected file paths
-  final Map<String, bool> _fileDirections = {}; // "folder:path" -> true=pull, false=push
+  final Map<String, Set<String>> _selectedFiles =
+      {}; // folder -> selected file paths
+  final Map<String, bool> _fileDirections =
+      {}; // "folder:path" -> true=pull, false=push
   StreamSubscription<SyncTransferProgress>? _transferSub;
   SyncTransferProgress? _transferProgress;
 
@@ -92,6 +102,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
   @override
   void dispose() {
+    _excludeSnackBarTimer?.cancel();
     _transferSub?.cancel();
     super.dispose();
   }
@@ -162,7 +173,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         }
         return 'Changes with ${_selectedMirror?.displayName ?? "Mirror"}';
       case 3:
-        return (_transferProgress?.isComplete ?? false) ? 'Sync complete' : 'Syncing...';
+        return (_transferProgress?.isComplete ?? false)
+            ? 'Sync complete'
+            : 'Syncing...';
       default:
         return 'Device Sync';
     }
@@ -235,8 +248,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
               children: [
                 Icon(Icons.devices, size: 64, color: Colors.grey),
                 SizedBox(height: 16),
-                Text('No mirror devices found',
-                    style: TextStyle(fontSize: 18, color: Colors.grey)),
+                Text(
+                  'No mirror devices found',
+                  style: TextStyle(fontSize: 18, color: Colors.grey),
+                ),
                 SizedBox(height: 8),
                 Text(
                   'Connect another device with the same identity\nto the same station to sync.',
@@ -297,13 +312,17 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
                   color: Theme.of(context).colorScheme.surface,
-                  boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black12, blurRadius: 4),
+                  ],
                 ),
                 child: SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
                     icon: const Icon(Icons.send),
-                    label: Text('Push to ${_selectedMirrorIds.length} device(s)'),
+                    label: Text(
+                      'Push to ${_selectedMirrorIds.length} device(s)',
+                    ),
                     onPressed: () => _startMultiPush(mirrors),
                   ),
                 ),
@@ -319,7 +338,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   /// Checks persisted [MirrorPeer.name] when the live [MirrorDevice.displayName]
   /// falls back to the raw platform/installId string.
   String _resolveDisplayName(MirrorDevice mirror) {
-    final hasLiveName = (mirror.nickname != null && mirror.nickname!.isNotEmpty) ||
+    final hasLiveName =
+        (mirror.nickname != null && mirror.nickname!.isNotEmpty) ||
         (mirror.deviceName != null &&
             mirror.deviceName!.isNotEmpty &&
             mirror.deviceName != mirror.callsign);
@@ -357,7 +377,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
               const SizedBox(width: 8),
               const Icon(Icons.verified, size: 14, color: Colors.green),
               const SizedBox(width: 2),
-              const Text('Verified', style: TextStyle(color: Colors.green, fontSize: 12)),
+              const Text(
+                'Verified',
+                style: TextStyle(color: Colors.green, fontSize: 12),
+              ),
             ],
           ],
         ),
@@ -388,7 +411,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
               const SizedBox(width: 8),
               const Icon(Icons.verified, size: 14, color: Colors.green),
               const SizedBox(width: 2),
-              const Text('Verified', style: TextStyle(color: Colors.green, fontSize: 12)),
+              const Text(
+                'Verified',
+                style: TextStyle(color: Colors.green, fontSize: 12),
+              ),
             ],
           ],
         ),
@@ -503,7 +529,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     final url = WebSocketService().connectedUrl;
     if (url == null) return null;
     // Convert ws:// to http://
-    return url.replaceFirst('ws://', 'http://').replaceFirst('wss://', 'https://');
+    return url
+        .replaceFirst('ws://', 'http://')
+        .replaceFirst('wss://', 'https://');
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -538,7 +566,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         // Authenticate for this folder
         final syncResult = await mirror.requestSync(_peerUrl!, folder);
         if (!syncResult.allowed || syncResult.token == null) {
-          LogService().log('DeviceSync: Auth failed for $folder: ${syncResult.error}');
+          LogService().log(
+            'DeviceSync: Auth failed for $folder: ${syncResult.error}',
+          );
           foldersAuthFailed++;
           continue;
         }
@@ -563,7 +593,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           manifest,
           localPath,
           syncStyle: SyncStyle.sendReceive,
-          excludeRules: MirrorConfigService.instance.config?.excludeRules ?? const [],
+          excludeRules:
+              MirrorConfigService.instance.config?.excludeRules ?? const [],
           storage: storage,
           fileIndex: fileIndex,
         );
@@ -595,10 +626,15 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           if (foldersCompared == 0) {
             // No folders were actually compared — report the real problem
             final issues = <String>[];
-            if (foldersAuthFailed > 0) issues.add('$foldersAuthFailed auth failed');
-            if (foldersFetchFailed > 0) issues.add('$foldersFetchFailed manifest fetch failed');
+            if (foldersAuthFailed > 0) {
+              issues.add('$foldersAuthFailed auth failed');
+            }
+            if (foldersFetchFailed > 0) {
+              issues.add('$foldersFetchFailed manifest fetch failed');
+            }
             if (foldersErrored > 0) issues.add('$foldersErrored errored');
-            _diffError = 'Could not compare any folders (${issues.join(', ')}). '
+            _diffError =
+                'Could not compare any folders (${issues.join(', ')}). '
                 'Check that the peer device is online and mirror sync is enabled on both devices.';
           } else {
             _diffError = 'Devices are in sync — no differences found.';
@@ -644,9 +680,14 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           final syncResult = await mirrorService.requestSync(peerUrl, folder);
           if (!syncResult.allowed || syncResult.token == null) continue;
 
-          _multiTokens.putIfAbsent(deviceId, () => {})[folder] = syncResult.token!;
+          _multiTokens.putIfAbsent(deviceId, () => {})[folder] =
+              syncResult.token!;
 
-          final manifest = await mirrorService.fetchManifest(peerUrl, folder, syncResult.token!);
+          final manifest = await mirrorService.fetchManifest(
+            peerUrl,
+            folder,
+            syncResult.token!,
+          );
           if (manifest == null) continue;
 
           foldersCompared++;
@@ -656,7 +697,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             manifest,
             localPath,
             syncStyle: SyncStyle.sendReceive,
-            excludeRules: MirrorConfigService.instance.config?.excludeRules ?? const [],
+            excludeRules:
+                MirrorConfigService.instance.config?.excludeRules ?? const [],
             storage: storage,
             fileIndex: fileIndex,
           );
@@ -666,9 +708,14 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             if (change.type == FileChangeType.upload) {
               pushEntries.putIfAbsent(
                 change.path,
-                () => change.localEntry ?? MirrorFileEntry(
-                  path: change.path, sha1: '', mtime: 0, size: 0,
-                ),
+                () =>
+                    change.localEntry ??
+                    MirrorFileEntry(
+                      path: change.path,
+                      sha1: '',
+                      mtime: 0,
+                      size: 0,
+                    ),
               );
               _multiDeviceNeeds
                   .putIfAbsent(deviceId, () => {})
@@ -677,19 +724,23 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             }
           }
         } catch (e) {
-          LogService().log('DeviceSync: Multi-diff error for $folder on $deviceId: $e');
+          LogService().log(
+            'DeviceSync: Multi-diff error for $folder on $deviceId: $e',
+          );
         }
       }
 
       // Build unified diff for this folder (push-only)
       if (pushEntries.isNotEmpty) {
         _diffs[folder] = pushEntries.entries.map((e) {
-          return FileChange.upload(MirrorFileEntry(
-            path: e.key,
-            sha1: e.value.sha1,
-            mtime: e.value.mtime,
-            size: e.value.size,
-          ));
+          return FileChange.upload(
+            MirrorFileEntry(
+              path: e.key,
+              sha1: e.value.sha1,
+              mtime: e.value.mtime,
+              size: e.value.size,
+            ),
+          );
         }).toList();
 
         _selectedFiles[folder] = pushEntries.keys.toSet();
@@ -740,7 +791,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              _diffs.isEmpty && _diffError!.contains('in sync') || _diffError!.contains('up to date')
+              _diffs.isEmpty && _diffError!.contains('in sync') ||
+                      _diffError!.contains('up to date')
                   ? Icons.check_circle
                   : Icons.info_outline,
               size: 64,
@@ -762,8 +814,16 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             child: SegmentedButton<bool?>(
               segments: const [
                 ButtonSegment(value: null, label: Text('All')),
-                ButtonSegment(value: false, label: Text('Push'), icon: Icon(Icons.arrow_forward, size: 16)),
-                ButtonSegment(value: true, label: Text('Pull'), icon: Icon(Icons.arrow_back, size: 16)),
+                ButtonSegment(
+                  value: false,
+                  label: Text('Push'),
+                  icon: Icon(Icons.arrow_forward, size: 16),
+                ),
+                ButtonSegment(
+                  value: true,
+                  label: Text('Pull'),
+                  icon: Icon(Icons.arrow_back, size: 16),
+                ),
               ],
               selected: {_directionFilter},
               onSelectionChanged: (v) {
@@ -783,7 +843,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                 const SizedBox(width: 8),
                 Text(
                   'Push files to ${_multiMirrors.length} device(s)',
-                  style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.w500),
+                  style: const TextStyle(
+                    color: Colors.blue,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ],
             ),
@@ -800,7 +863,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                   }
                 } else {
                   for (final entry in _diffs.entries) {
-                    _selectedFiles[entry.key] = entry.value.map((c) => c.path).toSet();
+                    _selectedFiles[entry.key] = entry.value
+                        .map((c) => c.path)
+                        .toSet();
                   }
                 }
               });
@@ -812,8 +877,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                     value: _isAllSelected()
                         ? true
                         : _isNoneSelected()
-                            ? false
-                            : null,
+                        ? false
+                        : null,
                     tristate: true,
                     onChanged: (_) {},
                   ),
@@ -897,7 +962,11 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       } else {
         // Pull only — select adds and modifies (remote files)
         _selectedFiles[folder] = changes
-            .where((c) => c.type == FileChangeType.add || c.type == FileChangeType.modify)
+            .where(
+              (c) =>
+                  c.type == FileChangeType.add ||
+                  c.type == FileChangeType.modify,
+            )
             .map((c) => c.path)
             .toSet();
         // Set direction to pull for all
@@ -933,7 +1002,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                       if (selected.length == changes.length) {
                         _selectedFiles[folder] = {};
                       } else {
-                        _selectedFiles[folder] = changes.map((c) => c.path).toSet();
+                        _selectedFiles[folder] = changes
+                            .map((c) => c.path)
+                            .toSet();
                       }
                     });
                   },
@@ -942,8 +1013,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                       value: selected.length == changes.length
                           ? true
                           : selected.isEmpty
-                              ? false
-                              : null,
+                          ? false
+                          : null,
                       tristate: true,
                       onChanged: (_) {},
                     ),
@@ -968,21 +1039,29 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                             children: [
                               Text(
                                 kFolderLabels[folder]?.$1 ?? folder,
-                                style: const TextStyle(fontWeight: FontWeight.bold),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                               const SizedBox(height: 4),
                               Row(
                                 children: [
-                                  if (adds > 0) _changeChip('+$adds', Colors.green),
-                                  if (mods > 0) _changeChip('~$mods', Colors.amber),
-                                  if (dels > 0) _changeChip('-$dels', Colors.red),
-                                  if (ups > 0) _changeChip('^$ups', Colors.blue),
+                                  if (adds > 0)
+                                    _changeChip('+$adds', Colors.green),
+                                  if (mods > 0)
+                                    _changeChip('~$mods', Colors.amber),
+                                  if (dels > 0)
+                                    _changeChip('-$dels', Colors.red),
+                                  if (ups > 0)
+                                    _changeChip('^$ups', Colors.blue),
                                 ],
                               ),
                             ],
                           ),
                         ),
-                        Icon(isExpanded ? Icons.expand_less : Icons.expand_more),
+                        Icon(
+                          isExpanded ? Icons.expand_less : Icons.expand_more,
+                        ),
                       ],
                     ),
                   ),
@@ -1004,15 +1083,14 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                     if (isSelected) {
                       _selectedFiles[folder]?.remove(change.path);
                     } else {
-                      _selectedFiles.putIfAbsent(folder, () => {}).add(change.path);
+                      _selectedFiles
+                          .putIfAbsent(folder, () => {})
+                          .add(change.path);
                     }
                   });
                 },
                 leading: IgnorePointer(
-                  child: Checkbox(
-                    value: isSelected,
-                    onChanged: (_) {},
-                  ),
+                  child: Checkbox(value: isSelected, onChanged: (_) {}),
                 ),
                 title: Text(
                   change.path,
@@ -1022,8 +1100,13 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                   ),
                 ),
                 subtitle: Text(
-                  _isMultiMode ? _multiPushLabel(folder, change.path) : _changeLabel(change.type),
-                  style: TextStyle(fontSize: 11, color: _changeColor(change.type)),
+                  _isMultiMode
+                      ? _multiPushLabel(folder, change.path)
+                      : _changeLabel(change.type),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: _changeColor(change.type),
+                  ),
                 ),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1085,12 +1168,24 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       _selectedFiles[folder]?.remove(change.path);
     });
 
-    ScaffoldMessenger.of(context).showSnackBar(
+    final messenger = ScaffoldMessenger.of(context);
+    _excludeSnackBarTimer?.cancel();
+    messenger.removeCurrentSnackBar();
+    final controller = messenger.showSnackBar(
       SnackBar(
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.fromLTRB(
+          16,
+          8,
+          16,
+          MediaQuery.paddingOf(context).bottom + _excludeSnackBarBottomOffset,
+        ),
+        duration: _excludeSnackBarDuration,
         content: Text('Excluded "$pattern" from sync'),
         action: SnackBarAction(
           label: 'Undo',
           onPressed: () {
+            _excludeSnackBarTimer?.cancel();
             final current = List<SyncExcludeRule>.from(
               configService.config?.excludeRules ?? [],
             )..removeWhere((r) => r.pattern == pattern);
@@ -1106,6 +1201,20 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         ),
       ),
     );
+    _excludeSnackBarController = controller;
+    controller.closed.whenComplete(() {
+      if (identical(_excludeSnackBarController, controller)) {
+        _excludeSnackBarController = null;
+        _excludeSnackBarTimer?.cancel();
+        _excludeSnackBarTimer = null;
+      }
+    });
+    _excludeSnackBarTimer = Timer(_excludeSnackBarDuration, () {
+      if (!mounted || !identical(_excludeSnackBarController, controller)) {
+        return;
+      }
+      controller.close();
+    });
   }
 
   /// Label showing how many devices need this file.
@@ -1157,7 +1266,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   }
 
   Widget _buildApplyBar() {
-    final totalSelected = _selectedFiles.values.fold<int>(0, (sum, s) => sum + s.length);
+    final totalSelected = _selectedFiles.values.fold<int>(
+      0,
+      (sum, s) => sum + s.length,
+    );
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1183,7 +1295,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   // ════════════════════════════════════════════════════════════════
 
   Future<void> _confirmAndApply() async {
-    final totalSelected = _selectedFiles.values.fold<int>(0, (sum, s) => sum + s.length);
+    final totalSelected = _selectedFiles.values.fold<int>(
+      0,
+      (sum, s) => sum + s.length,
+    );
 
     if (_isMultiMode) {
       final confirmed = await showDialog<bool>(
@@ -1195,8 +1310,14 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             'Each device will receive only the files it needs.',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Push')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Push'),
+            ),
           ],
         ),
       );
@@ -1216,7 +1337,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       if (!started) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('A sync transfer is already in progress')),
+            const SnackBar(
+              content: Text('A sync transfer is already in progress'),
+            ),
           );
         }
         return;
@@ -1224,7 +1347,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       setState(() => _stage = 3);
     } else {
       final pullCount = _selectedFiles.entries.expand((e) {
-        return e.value.where((path) => _fileDirections['${e.key}:$path'] == true);
+        return e.value.where(
+          (path) => _fileDirections['${e.key}:$path'] == true,
+        );
       }).length;
       final pushCount = totalSelected - pullCount;
 
@@ -1238,8 +1363,14 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             'Proceed?',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sync')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Sync'),
+            ),
           ],
         ),
       );
@@ -1258,7 +1389,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       if (!started) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('A sync transfer is already in progress')),
+            const SnackBar(
+              content: Text('A sync transfer is already in progress'),
+            ),
           );
         }
         return;
@@ -1293,7 +1426,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                 const SizedBox(height: 8),
                 Text(
                   p.currentDevice!,
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ],
               if (p.currentFile != null) ...[
