@@ -23,6 +23,7 @@ import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/station_service.dart';
 import '../services/station_cache_service.dart';
+import '../services/dchat_room_discovery_service.dart';
 import '../services/direct_message_service.dart';
 import '../services/distributed_chat_service.dart';
 import '../services/chat_notification_service.dart';
@@ -179,9 +180,12 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   // Local collection paths for group synchronization
   String? _localChatCollectionPath;
   String? _groupsAppPath;
+  final DChatRoomDiscoveryService _dchatRoomDiscoveryService =
+      DChatRoomDiscoveryService();
   DistributedChatService? _distributedChatService;
   List<DChatTopicRecord> _distributedTopics = const [];
   String _selectedDistributedTopicId = 'general';
+  int _distributedDiscoveryGeneration = 0;
 
   @override
   void initState() {
@@ -339,31 +343,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     return null;
   }
 
-  Future<List<ChatChannel>> _loadMergedLocalChannels({
-    bool includeDistributed = true,
-  }) async {
+  Future<List<ChatChannel>> _loadMergedLocalChannels() async {
     await _chatService.refreshChannels();
     final channelsById = <String, ChatChannel>{
       for (final channel in _chatService.channels) channel.id: channel,
     };
-
-    if (includeDistributed && _distributedChatService != null) {
-      try {
-        final distributedRooms = await _distributedChatService!
-            .listRooms()
-            .timeout(
-              const Duration(seconds: 3),
-              onTimeout: () => const <ChatChannel>[],
-            );
-        for (final room in distributedRooms) {
-          channelsById[room.id] = room;
-        }
-      } catch (e) {
-        LogService().log(
-          'ChatBrowser: Skipping distributed room merge during load: $e',
-        );
-      }
-    }
 
     try {
       final dmService = DirectMessageService();
@@ -389,12 +373,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     return channelsById.values.toList();
   }
 
-  Future<void> _refreshMergedLocalChannels({
-    bool includeDistributed = true,
-  }) async {
-    final mergedChannels = await _loadMergedLocalChannels(
-      includeDistributed: includeDistributed,
-    );
+  Future<void> _refreshMergedLocalChannels() async {
+    final mergedChannels = await _loadMergedLocalChannels();
     if (!mounted) {
       return;
     }
@@ -407,6 +387,52 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         );
       }
     });
+    _startDistributedRoomDiscovery();
+  }
+
+  void _startDistributedRoomDiscovery() {
+    if (widget.isRemoteDevice || _distributedChatService == null) {
+      return;
+    }
+
+    final appPath = widget.app?.storagePath;
+    final storage = AppService().profileStorage;
+    if (appPath == null || storage == null) {
+      return;
+    }
+
+    final profile = _profileService.getProfile();
+    final generation = ++_distributedDiscoveryGeneration;
+    unawaited(() async {
+      final distributedRooms = await _dchatRoomDiscoveryService.discoverRooms(
+        appPath: appPath,
+        storage: storage,
+        profileCallsign: profile.callsign,
+        profileNpub: profile.npub,
+        profileNsec: profile.nsec.isEmpty ? null : profile.nsec,
+      );
+      if (!mounted || generation != _distributedDiscoveryGeneration) {
+        return;
+      }
+
+      _setStateIfMounted(() {
+        final channelsById = <String, ChatChannel>{
+          for (final channel in _channels)
+            if (!_isDistributedChannel(channel)) channel.id: channel,
+        };
+        for (final room in distributedRooms) {
+          channelsById[room.id] = room;
+        }
+        _channels = channelsById.values.toList();
+        if (_selectedChannel != null &&
+            _isDistributedChannel(_selectedChannel)) {
+          _selectedChannel = _channels.cast<ChatChannel?>().firstWhere(
+            (channel) => channel?.id == _selectedChannel!.id,
+            orElse: () => _selectedChannel,
+          );
+        }
+      });
+    }());
   }
 
   /// Subscribe to file changes for real-time updates from CLI
@@ -847,7 +873,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       _localChatCollectionPath = storagePath;
-      _channels = await _loadMergedLocalChannels(includeDistributed: false);
+      _channels = await _loadMergedLocalChannels();
 
       // Start watching for file changes now that channels are loaded
       _chatService.startWatching();
@@ -855,6 +881,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       _setStateIfMounted(() {
         _isInitialized = true;
       });
+
+      _startDistributedRoomDiscovery();
 
       _groupsAppPath = await GroupSyncService().findCollectionPathByType(
         'groups',
@@ -2546,8 +2574,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _selectedChannel = null;
         });
       }
-      _channels = await _loadMergedLocalChannels();
-      _setStateIfMounted(() {});
+      await _refreshMergedLocalChannels();
     } catch (e) {
       _showError('Failed to delete channel: $e');
     }
@@ -3555,6 +3582,14 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           _channels = [];
         });
         _channels = await _loadMergedLocalChannels();
+        if (_isDistributedChannel(channel)) {
+          final channelsById = <String, ChatChannel>{
+            for (final item in _channels) item.id: item,
+          };
+          channelsById[channel.id] = channel;
+          _channels = channelsById.values.toList();
+          _startDistributedRoomDiscovery();
+        }
         _setStateIfMounted(() {});
 
         // Select the new channel
