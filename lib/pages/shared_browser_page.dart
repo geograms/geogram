@@ -17,9 +17,11 @@ import '../services/i18n_service.dart';
 import '../services/groups_service.dart';
 import '../services/contact_service.dart';
 import '../services/profile_storage.dart';
+import '../services/profile_service.dart';
 import '../services/shared_folder_service.dart';
 import '../services/station_node_service.dart';
 import '../services/station_service.dart';
+import '../util/callsign_url.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_key_generator.dart';
 import 'contact_picker_page.dart';
@@ -647,14 +649,20 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
 
   /// Build the shared folder URL path segment
   String _folderUrlPath(SharedFolder folder) {
-    return '/shared/${folder.sanitizedFilename}/';
+    return 'shared/${folder.sanitizedFilename}/';
   }
 
   Widget _buildUrlRow(SharedFolder folder, ThemeData theme) {
-    final urlPath = _folderUrlPath(folder);
+    final urlPath = '/${callsignForUrl(ProfileService().getProfile().callsign)}/${_folderUrlPath(folder)}';
     final urls = <(String label, String url)>[];
     if (_lanUrl != null) urls.add(('LAN', '$_lanUrl$urlPath'));
-    if (_stationUrl != null) urls.add(('Station', '$_stationUrl$urlPath'));
+    if (_stationUrl != null) {
+      final stationUrl = buildStationAppUrl(
+        StationService().getPreferredStation()?.url ?? '',
+        _folderUrlPath(folder),
+      );
+      if (stationUrl != null) urls.add(('Station', stationUrl));
+    }
     if (urls.isEmpty) return const SizedBox.shrink();
 
     return Padding(

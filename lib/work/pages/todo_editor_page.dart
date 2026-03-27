@@ -16,7 +16,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/i18n_service.dart';
 import '../../services/log_service.dart';
-import '../../services/profile_service.dart';
 import '../../services/station_service.dart';
 import '../../services/websocket_service.dart';
 import '../../util/callsign_url.dart';
@@ -739,14 +738,7 @@ class _TodoEditorPageState extends State<TodoEditorPage> {
     final connected = StationService().getConnectedStation();
     final url = station?.url.isNotEmpty == true ? station!.url : connected?.url;
     if (url == null || url.isEmpty) return null;
-
-    var domain = url.replaceFirst('wss://', '').replaceFirst('ws://', '');
-    if (domain.endsWith('/')) domain = domain.substring(0, domain.length - 1);
-
-    final callsign = ProfileService().getProfile().callsign;
-    if (callsign.isEmpty) return null;
-
-    return 'https://$domain/${callsignForUrl(callsign)}/work/$workspaceId/$filename';
+    return buildStationAppUrl(url, 'work/$workspaceId/$filename');
   }
 
   void _handleMenuAction(String action) {

@@ -11322,7 +11322,20 @@ import 'package:geogram/util/callsign_url.dart';
 final url = 'https://p2p.radio/${callsignForUrl(callsign)}/meet/$code';
 ```
 
-**Used in**: `ConferenceService`, `StationTransport`, `LanTransport`
+### buildStationAppUrl
+
+Builds a full station HTTPS URL for any app path, including the current user's callsign in the path. Takes a station WebSocket URL and an app-relative path.
+
+```dart
+import 'package:geogram/util/callsign_url.dart';
+
+// Returns: https://p2p.radio/brito/shared/box/
+final url = buildStationAppUrl('wss://p2p.radio', 'shared/box/');
+```
+
+**Used in**: `SharedBrowserPage`, `SpreadsheetEditorPage`, `TodoEditorPage`
+
+**Used in (callsignForUrl only)**: `ConferenceService`, `StationTransport`, `LanTransport`
 
 ---
 
