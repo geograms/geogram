@@ -512,6 +512,56 @@ class UpdateService {
 
     if (updateReady) {
       unawaited(_maybeAutoDownload(release));
+
+      // Auto-install for debug builds with auto-install enabled
+      if (_settings?.autoInstallEnabled == true && !kIsWeb && Platform.isAndroid) {
+        unawaited(_autoInstallDebugApk(release));
+      }
+    }
+  }
+
+  /// Auto-install debug APK for unattended station devices.
+  /// Downloads the debug APK and runs `pm install -r` to install silently.
+  Future<void> _autoInstallDebugApk(ReleaseInfo release) async {
+    try {
+      // Get the debug APK URL
+      final debugUrl = release.getAssetUrl(UpdateAssetType.androidDebug);
+      if (debugUrl == null || debugUrl.isEmpty) {
+        LogService().log('Auto-install: no debug APK available for ${release.version}');
+        return;
+      }
+
+      LogService().log('Auto-install: downloading debug APK for ${release.version}...');
+
+      // Download to a temp location
+      final dir = await getApplicationDocumentsDirectory();
+      final apkPath = '${dir.path}/geogram-debug-${release.version}.apk';
+
+      final result = await streamDownloadToFile(
+        Uri.parse(debugUrl),
+        apkPath,
+        headers: {'User-Agent': 'Geogram-Updater'},
+        timeout: const Duration(minutes: 15),
+      );
+
+      if (!result.success) {
+        LogService().log('Auto-install: download failed');
+        return;
+      }
+
+      LogService().log('Auto-install: installing ${release.version} via pm install...');
+      final installResult = await Process.run('pm', ['install', '-r', apkPath]);
+
+      if (installResult.exitCode == 0) {
+        LogService().log('Auto-install: success! App will restart.');
+      } else {
+        LogService().log('Auto-install: pm install failed (exit ${installResult.exitCode}): ${installResult.stderr}');
+      }
+
+      // Clean up APK file
+      try { await File(apkPath).delete(); } catch (_) {}
+    } catch (e) {
+      LogService().log('Auto-install error: $e');
     }
   }
 

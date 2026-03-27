@@ -3,6 +3,7 @@
 /// Asset types available in releases
 enum UpdateAssetType {
   androidApk,
+  androidDebug,
   androidAab,
   linuxDesktop,
   linuxCli,
@@ -17,6 +18,8 @@ enum UpdateAssetType {
     switch (this) {
       case UpdateAssetType.androidApk:
         return 'android-apk';
+      case UpdateAssetType.androidDebug:
+        return 'android-debug';
       case UpdateAssetType.androidAab:
         return 'android-aab';
       case UpdateAssetType.linuxDesktop:
@@ -42,6 +45,8 @@ enum UpdateAssetType {
     switch (this) {
       case UpdateAssetType.androidApk:
         return 'Android APK';
+      case UpdateAssetType.androidDebug:
+        return 'Android Debug APK';
       case UpdateAssetType.androidAab:
         return 'Android App Bundle';
       case UpdateAssetType.linuxDesktop:
@@ -66,6 +71,7 @@ enum UpdateAssetType {
   /// Pattern to match asset filename from GitHub releases or local binaries
   static UpdateAssetType fromFilename(String filename) {
     final lower = filename.toLowerCase();
+    if (lower == 'geogram-debug.apk') return UpdateAssetType.androidDebug;
     if (lower == 'geogram.apk') return UpdateAssetType.androidApk;
     if (lower == 'app-release.aab') return UpdateAssetType.androidAab;
     if (lower.contains('linux') && lower.contains('cli')) return UpdateAssetType.linuxCli;
@@ -177,6 +183,7 @@ class UpdateSettings {
   String? currentVersionPublishedAt; // Release date of currently installed version
   String? dismissedUpdateVersion; // Last update version the user dismissed
   bool betaUpdatesEnabled; // Opt-in to receive pre-release updates
+  bool autoInstallEnabled; // Auto-install debug APK updates (station/unattended mode)
 
   UpdateSettings({
     this.autoCheckUpdates = true,
@@ -196,6 +203,7 @@ class UpdateSettings {
     this.currentVersionPublishedAt,
     this.dismissedUpdateVersion,
     this.betaUpdatesEnabled = false,
+    this.autoInstallEnabled = false,
   });
 
   factory UpdateSettings.fromJson(Map<String, dynamic> json) {
@@ -220,6 +228,7 @@ class UpdateSettings {
       currentVersionPublishedAt: json['currentVersionPublishedAt'] as String?,
       dismissedUpdateVersion: json['dismissedUpdateVersion'] as String?,
       betaUpdatesEnabled: json['betaUpdatesEnabled'] as bool? ?? false,
+      autoInstallEnabled: json['autoInstallEnabled'] as bool? ?? false,
     );
   }
 
@@ -242,6 +251,7 @@ class UpdateSettings {
       'currentVersionPublishedAt': currentVersionPublishedAt,
       'dismissedUpdateVersion': dismissedUpdateVersion,
       'betaUpdatesEnabled': betaUpdatesEnabled,
+      'autoInstallEnabled': autoInstallEnabled,
     };
   }
 
@@ -263,6 +273,7 @@ class UpdateSettings {
     String? currentVersionPublishedAt,
     String? dismissedUpdateVersion,
     bool? betaUpdatesEnabled,
+    bool? autoInstallEnabled,
   }) {
     return UpdateSettings(
       autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
@@ -282,6 +293,7 @@ class UpdateSettings {
       currentVersionPublishedAt: currentVersionPublishedAt ?? this.currentVersionPublishedAt,
       dismissedUpdateVersion: dismissedUpdateVersion ?? this.dismissedUpdateVersion,
       betaUpdatesEnabled: betaUpdatesEnabled ?? this.betaUpdatesEnabled,
+      autoInstallEnabled: autoInstallEnabled ?? this.autoInstallEnabled,
     );
   }
 }

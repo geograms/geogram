@@ -973,6 +973,21 @@ class _UpdatePageState extends State<UpdatePage> {
                         _loadData();
                       },
                     ),
+                    // Auto-install option (debug builds only)
+                    if (kDebugMode) ...[
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        title: Text('Auto-install updates'),
+                        subtitle: Text('Automatically install debug APK updates. For unattended station devices.'),
+                        value: settings.autoInstallEnabled,
+                        onChanged: (value) async {
+                          await _updateService.updateSettings(
+                            settings.copyWith(autoInstallEnabled: value),
+                          );
+                          _setStateIfMounted(() {});
+                        },
+                      ),
+                    ],
                     const Divider(height: 1),
                     ListTile(
                       title: Text(_i18n.t('maximum_backups')),

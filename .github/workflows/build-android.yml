@@ -132,9 +132,14 @@ jobs:
       timeout-minutes: 15
       run: flutter build appbundle --release
 
-    - name: Rename APK
+    - name: Build Debug APK (for station auto-update)
+      timeout-minutes: 30
+      run: flutter build apk --debug
+
+    - name: Rename APKs
       run: |
         cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/geogram.apk
+        cp build/app/outputs/flutter-apk/app-debug.apk build/app/outputs/flutter-apk/geogram-debug.apk
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
@@ -155,6 +160,14 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: build/app/outputs/flutter-apk/geogram.apk
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload Debug APK to Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: build/app/outputs/flutter-apk/geogram-debug.apk
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
