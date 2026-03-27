@@ -339,16 +339,29 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     return null;
   }
 
-  Future<List<ChatChannel>> _loadMergedLocalChannels() async {
+  Future<List<ChatChannel>> _loadMergedLocalChannels({
+    bool includeDistributed = true,
+  }) async {
     await _chatService.refreshChannels();
     final channelsById = <String, ChatChannel>{
       for (final channel in _chatService.channels) channel.id: channel,
     };
 
-    if (_distributedChatService != null) {
-      final distributedRooms = await _distributedChatService!.listRooms();
-      for (final room in distributedRooms) {
-        channelsById[room.id] = room;
+    if (includeDistributed && _distributedChatService != null) {
+      try {
+        final distributedRooms = await _distributedChatService!
+            .listRooms()
+            .timeout(
+              const Duration(seconds: 3),
+              onTimeout: () => const <ChatChannel>[],
+            );
+        for (final room in distributedRooms) {
+          channelsById[room.id] = room;
+        }
+      } catch (e) {
+        LogService().log(
+          'ChatBrowser: Skipping distributed room merge during load: $e',
+        );
       }
     }
 
@@ -374,6 +387,26 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     }
 
     return channelsById.values.toList();
+  }
+
+  Future<void> _refreshMergedLocalChannels({
+    bool includeDistributed = true,
+  }) async {
+    final mergedChannels = await _loadMergedLocalChannels(
+      includeDistributed: includeDistributed,
+    );
+    if (!mounted) {
+      return;
+    }
+    _setStateIfMounted(() {
+      _channels = mergedChannels;
+      if (_selectedChannel != null) {
+        _selectedChannel = mergedChannels.cast<ChatChannel?>().firstWhere(
+          (channel) => channel?.id == _selectedChannel!.id,
+          orElse: () => _selectedChannel,
+        );
+      }
+    });
   }
 
   /// Subscribe to file changes for real-time updates from CLI
@@ -814,6 +847,15 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       _localChatCollectionPath = storagePath;
+      _channels = await _loadMergedLocalChannels(includeDistributed: false);
+
+      // Start watching for file changes now that channels are loaded
+      _chatService.startWatching();
+
+      _setStateIfMounted(() {
+        _isInitialized = true;
+      });
+
       _groupsAppPath = await GroupSyncService().findCollectionPathByType(
         'groups',
       );
@@ -824,14 +866,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         );
       }
 
-      _channels = await _loadMergedLocalChannels();
-
-      // Start watching for file changes now that channels are loaded
-      _chatService.startWatching();
-
-      _setStateIfMounted(() {
-        _isInitialized = true;
-      });
+      await _refreshMergedLocalChannels();
 
       // Load station chat rooms - MUST await to ensure rooms are loaded before UI renders
       await _loadRelayRooms();
@@ -3565,16 +3600,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       ),
     ).then((_) {
       // Reload security settings when returning
-      _loadMergedLocalChannels().then((channels) {
-        _channels = channels;
-        if (_selectedChannel != null) {
-          _selectedChannel = channels.cast<ChatChannel?>().firstWhere(
-            (channel) => channel?.id == _selectedChannel!.id,
-            orElse: () => _selectedChannel,
-          );
-        }
-        _setStateIfMounted(() {});
-      });
+      _refreshMergedLocalChannels();
     });
   }
 
@@ -3597,14 +3623,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       ),
     ).then((_) {
       // Reload channel data when returning
-      _loadMergedLocalChannels().then((channels) {
-        _channels = channels;
-        _selectedChannel = channels.cast<ChatChannel?>().firstWhere(
-          (channel) => channel?.id == _selectedChannel!.id,
-          orElse: () => _selectedChannel,
-        );
-        _setStateIfMounted(() {});
-      });
+      _refreshMergedLocalChannels();
     });
   }
 
