@@ -8,6 +8,7 @@
 /// delegating to [WebSocketService.handleLocalHttpRequest].
 library;
 
+import 'dart:io';
 import 'package:shelf/shelf.dart' as shelf;
 
 import 'dns_responder.dart';
@@ -108,6 +109,26 @@ class HotspotPortalService {
     }
 
     try {
+      // Stream large shared folder files directly instead of loading into RAM
+      if (devicePath.startsWith('/shared/')) {
+        final resolved = await WebSocketService.resolveSharedFilePath(devicePath);
+        if (resolved != null) {
+          final file = File(resolved.filePath);
+          final stat = await file.stat();
+          final filename = resolved.filePath.split('/').last;
+          LogService().log('Portal: Streaming shared file $filename (${stat.size} bytes)');
+          return shelf.Response.ok(
+            file.openRead(),
+            headers: {
+              'Content-Type': resolved.contentType,
+              'Content-Length': stat.size.toString(),
+              'Content-Disposition': 'inline; filename="${Uri.encodeComponent(filename)}"',
+            },
+          );
+        }
+        // Not a file (directory listing, index, etc.) — fall through to handleLocalHttpRequest
+      }
+
       final result = await WebSocketService.handleLocalHttpRequest(
         request.method,
         devicePath,
@@ -176,7 +197,8 @@ class HotspotPortalService {
       return path;
     }
 
-    // Shared folders
+    // Shared folders — directory listings and small files go through handleLocalHttpRequest,
+    // but actual file downloads are streamed directly (see handleShelfRequest).
     if (path.startsWith('/shared/') || path == '/shared') {
       return path;
     }

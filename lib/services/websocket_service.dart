@@ -1148,10 +1148,66 @@ class WebSocketService {
       return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
     }
 
-    final fileBytes = await file.readAsBytes();
     final contentType = _getContentType(remainingPath);
+    final fileBytes = await file.readAsBytes();
     LogService().log('Shared: Served $targetPath (${fileBytes.length} bytes)');
     return (statusCode: 200, contentType: contentType, body: fileBytes);
+  }
+
+  /// Resolve a shared folder file path to its disk location for streaming.
+  /// Returns (filePath, contentType) or null if not a serveable file.
+  /// Used by portal service to stream large files without loading into RAM.
+  static Future<({String filePath, String contentType})?> resolveSharedFilePath(
+    String requestPath,
+  ) async {
+    final appService = AppService();
+    final apps = await appService.loadApps();
+    final app = apps.cast<App?>().firstWhere(
+      (a) => a?.type == 'shared',
+      orElse: () => null,
+    );
+    if (app?.storagePath == null) return null;
+    final storagePath = app!.storagePath!;
+
+    final profileStorage = AppService().profileStorage;
+    if (profileStorage == null) return null;
+
+    final scopedStorage = ScopedProfileStorage.fromAbsolutePath(profileStorage, storagePath);
+    final service = SharedFolderService();
+    service.setStorage(scopedStorage);
+    await service.initializeApp(storagePath);
+    final folders = await service.loadAll();
+
+    // Strip /shared/ prefix
+    final filePath = requestPath.startsWith('/shared')
+        ? requestPath.substring('/shared'.length)
+        : requestPath;
+    if (filePath == '/' || filePath.isEmpty) return null;
+
+    final decodedPath = Uri.decodeFull(filePath);
+    final parts = decodedPath.split('/').where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return null;
+
+    final folderSlug = parts[0];
+    final remainingPath = parts.length > 1 ? parts.sublist(1).join('/') : '';
+    if (remainingPath.isEmpty) return null;
+
+    final entry = folders.cast<SharedFolder?>().firstWhere(
+      (f) => f?.sanitizedFilename == folderSlug,
+      orElse: () => null,
+    );
+    if (entry == null) return null;
+    if (entry.visibility == SharedFolderVisibility.private_) return null;
+
+    final targetPath = '${entry.location}/$remainingPath';
+    final file = File(targetPath);
+    if (!await file.exists()) return null;
+
+    // Only return for actual files, not directories
+    final stat = await file.stat();
+    if (stat.type != FileSystemEntityType.file) return null;
+
+    return (filePath: targetPath, contentType: _getContentType(remainingPath));
   }
 
   /// Generate an index page listing all shared folders (themed)
