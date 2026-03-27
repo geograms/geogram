@@ -1,5 +1,5 @@
 [
-  {"file":"install/install-1.0.0.wapp","id":"tools.geogram.install","version":"1.0.0","size":11094,"description":"Install"},
+  {"file":"install/install-1.0.0.wapp","id":"tools.geogram.install","version":"1.0.0","size":11097,"description":"Install"},
   {"file":"maps/maps-1.0.0.wapp","id":"tools.geogram.maps","version":"1.0.0","size":7767,"description":"Satellite maps with offline tile cache"},
   {"file":"terminal/terminal-1.0.0.wapp","id":"tools.geogram.terminal","version":"1.0.0","size":10766,"description":"Self-contained terminal with built-in commands"}
 ]

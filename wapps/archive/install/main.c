@@ -402,9 +402,6 @@ static void do_install(const char *name) {
     str_cat(msg, "\"}", sizeof(msg));
     hal_msg_send(msg, str_len(msg));
 
-    /* Mark as installed */
-    set_installed_version(e->name, e->version);
-
     char out[128] = "Installing ";
     str_cat(out, e->name, sizeof(out));
     str_cat(out, " v", sizeof(out));
@@ -723,6 +720,30 @@ void module_handle_event(void) {
                 return;
             }
             p++;
+        }
+
+        /* Check for wapp.installed confirmation from renderer */
+        {
+            const char *inst_key = "\"wapp.installed\"";
+            const char *ip = buf;
+            while (*ip) {
+                int im = 1;
+                unsigned ikl = str_len(inst_key);
+                for (unsigned ii = 0; ii < ikl; ii++) {
+                    if (ip[ii] != inst_key[ii]) { im = 0; break; }
+                }
+                if (im) {
+                    /* Extract name and version */
+                    char iname[64] = "", iver[32] = "";
+                    json_find_str(buf, buf + n, "name", iname, sizeof(iname));
+                    json_find_str(buf, buf + n, "version", iver, sizeof(iver));
+                    if (iname[0] && iver[0]) {
+                        set_installed_version(iname, iver);
+                    }
+                    return;
+                }
+                ip++;
+            }
         }
 
         /* Check for wapp.index response from renderer */

@@ -281,6 +281,16 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         return;
       }
 
+      // Confirm installation to the module so it updates its KV
+      final confirmMsg = jsonEncode({
+        'type': 'wapp.installed',
+        'name': name,
+        'version': version,
+      });
+      _engine.sendMessage(confirmMsg);
+      _engine.handleEvent();
+      _drainOutbox();
+
       _outputLines.add(_OutputLine('$name v$version installed', 'info'));
       if (mounted) setState(() {});
     } catch (e) {
@@ -373,7 +383,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     final hasTerminal = screen.children.any((c) =>
         c.keyword == 'group' &&
         c.children.any((gc) => gc.keyword == 'watch'));
-    if (hasTerminal || (_outputLines.isNotEmpty && !hasOutputGroup)) {
+    if (hasTerminal) {
       return _buildTerminalScreen();
     }
 
@@ -433,7 +443,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           version: version,
           size: size,
           description: desc,
-          installed: actuallyInstalled || status.contains('[installed]'),
+          installed: actuallyInstalled,
           updateAvailable: status.contains('[update:'),
         ));
         continue;

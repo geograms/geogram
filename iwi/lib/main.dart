@@ -48,13 +48,13 @@ class WappManifest {
   });
 
   factory WappManifest.fromJson(Map<String, dynamic> json, String dirPath) {
-    // Use description as display name, fall back to id
     final desc = json['description'] as String? ?? '';
     final id = json['id'] as String? ?? '';
+    final folderName = dirPath.split(Platform.pathSeparator).last;
     return WappManifest(
       id: id,
-      name: desc.isNotEmpty ? desc : id.split('.').last,
-      description: json['summary'] as String? ?? desc,
+      name: folderName.isNotEmpty ? folderName : id.split('.').last,
+      description: desc.isNotEmpty ? desc : (json['summary'] as String? ?? ''),
       kind: json['kind'] as String? ?? 'app',
       icon: json['icon'] as String?,
       dirPath: dirPath,
