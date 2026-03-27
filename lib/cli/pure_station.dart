@@ -2660,15 +2660,9 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
     return messages.sublist(messages.length - limit);
   }
 
-  bool deleteMessage(String roomId, String messageId) {
-    final room = _chatRooms[roomId];
-    if (room == null) return false;
-    final idx = room.messages.indexWhere((m) => m.id == messageId);
-    if (idx >= 0) {
-      room.messages.removeAt(idx);
-      return true;
-    }
-    return false;
+  Future<bool> deleteMessage(String roomId, String messageId) async {
+    if (!_chatRooms.containsKey(roomId)) return false;
+    return await _messageStore.deleteMessage(roomId, messageId);
   }
 
   Future<void> _handleRequest(HttpRequest request) async {
