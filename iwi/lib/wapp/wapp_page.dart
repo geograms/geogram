@@ -154,7 +154,6 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       try {
         final data = jsonDecode(raw) as Map<String, dynamic>;
         final type = data['type'] as String? ?? '';
-
         if (type == 'ui.append') {
           final item = data['item'] as Map<String, dynamic>? ?? {};
           _outputLines.add(_OutputLine(
