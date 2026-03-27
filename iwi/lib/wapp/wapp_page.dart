@@ -12,6 +12,16 @@ import '../geoui/geoui_renderer.dart';
 import '../services/preferences_service.dart';
 import 'wapp_engine.dart';
 
+/// Directory where installed wapps are extracted and runnable.
+String installedAppsDir() {
+  final home = Platform.environment['HOME'] ??
+      Platform.environment['USERPROFILE'] ??
+      '/tmp';
+  final dir = '$home/.local/share/iwi/apps';
+  Directory(dir).createSync(recursive: true);
+  return dir;
+}
+
 /// Generic wapp page — loads .ui.json screens from a wapp directory,
 /// instantiates the WASM module, and renders screens as tabs.
 /// Handles terminal output, settings forms, and map viewports.
@@ -241,18 +251,41 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     final srcFile = File(srcPath);
     if (!srcFile.existsSync()) {
       _outputLines.add(_OutputLine('File not found: $srcPath', 'err'));
+      if (mounted) setState(() {});
       return;
     }
 
     try {
-      final baseDir = _defaultDataDir();
-      final installDir = '$baseDir/_installed/$name';
-      Directory(installDir).createSync(recursive: true);
-      final destPath = '$installDir/$name-$version.wapp';
-      srcFile.copySync(destPath);
+      // Extract .wapp (ZIP) to the apps directory so it shows in the launcher
+      final appsDir = installedAppsDir();
+      final appDir = '$appsDir/$name';
+
+      // Clean previous version
+      final dir = Directory(appDir);
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+      dir.createSync(recursive: true);
+
+      // Extract
+      final result = Process.runSync('unzip', ['-o', '-q', srcPath, '-d', appDir]);
+      if (result.exitCode != 0) {
+        _outputLines.add(_OutputLine('Extract failed: ${result.stderr}', 'err'));
+        if (mounted) setState(() {});
+        return;
+      }
+
+      // Verify app.wasm exists
+      if (!File('$appDir/app.wasm').existsSync()) {
+        _outputLines.add(_OutputLine('Invalid wapp: no app.wasm', 'err'));
+        Directory(appDir).deleteSync(recursive: true);
+        if (mounted) setState(() {});
+        return;
+      }
+
       _outputLines.add(_OutputLine('$name v$version installed', 'info'));
+      if (mounted) setState(() {});
     } catch (e) {
       _outputLines.add(_OutputLine('Install failed: $e', 'err'));
+      if (mounted) setState(() {});
     }
   }
 
@@ -378,12 +411,17 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           }
         }
 
+        // Check actual install state from disk, not module KV
+        final appDir = Directory('${installedAppsDir()}/$name');
+        final actuallyInstalled = appDir.existsSync() &&
+            File('${appDir.path}/app.wasm').existsSync();
+
         wapps.add(_CatalogWapp(
           name: name,
           version: version,
           size: size,
           description: desc,
-          installed: status.contains('[installed]'),
+          installed: actuallyInstalled || status.contains('[installed]'),
           updateAvailable: status.contains('[update:'),
         ));
         continue;

@@ -1385,7 +1385,7 @@ void _handleWappInstall(Map<String, dynamic> data) {
     return;
   }
 
-  // Local source — copy the file
+  // Local source — extract .wapp to apps dir
   var basePath = source;
   if (basePath.endsWith('.json')) {
     basePath = basePath.substring(0, basePath.lastIndexOf('/'));
@@ -1399,10 +1399,17 @@ void _handleWappInstall(Map<String, dynamic> data) {
     return;
   }
 
-  final installDir =
-      '${Directory.systemTemp.path}/geogram_cli/wapps/$name';
-  Directory(installDir).createSync(recursive: true);
-  final destPath = '$installDir/$name-$version.wapp';
-  srcFile.copySync(destPath);
-  stdout.writeln('$_green$name v$version installed → $destPath$_reset');
+  final home = Platform.environment['HOME'] ?? '/tmp';
+  final appsDir = '$home/.local/share/iwi/apps';
+  final appDir = '$appsDir/$name';
+  final dir = Directory(appDir);
+  if (dir.existsSync()) dir.deleteSync(recursive: true);
+  dir.createSync(recursive: true);
+
+  final result = Process.runSync('unzip', ['-o', '-q', srcPath, '-d', appDir]);
+  if (result.exitCode != 0) {
+    stderr.writeln('${_red}Extract failed: ${result.stderr}$_reset');
+    return;
+  }
+  stdout.writeln('$_green$name v$version installed → $appDir$_reset');
 }

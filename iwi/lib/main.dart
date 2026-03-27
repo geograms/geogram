@@ -110,16 +110,12 @@ class _LauncherPageState extends State<LauncherPage> {
 
   Future<void> _scanArchive() async {
     final wapps = <WappManifest>[];
+    final seen = <String>{};
 
-    // Find the wapps/archive directory relative to the project root.
-    // The iwi app runs from inside the project, so walk up from the
-    // executable or use the known repo path.
+    // 1. Scan the built-in archive (install wapp lives here)
     final candidates = [
-      // When running via flutter run, cwd is the iwi/ directory
       '${Directory.current.path}/../wapps/archive',
-      // Absolute fallback
       '${Directory.current.path}/../../wapps/archive',
-      // Direct repo path
       _findRepoArchive(),
     ];
 
@@ -134,24 +130,35 @@ class _LauncherPageState extends State<LauncherPage> {
     }
 
     if (archiveDir != null) {
-      for (final entry in archiveDir.listSync()) {
-        if (entry is! Directory) continue;
-        final manifestFile = File('${entry.path}/manifest.json');
-        if (!manifestFile.existsSync()) continue;
-        try {
-          final json = jsonDecode(await manifestFile.readAsString());
-          final manifest = WappManifest.fromJson(
-            json as Map<String, dynamic>,
-            entry.path,
-          );
-          if (manifest.kind == 'app') wapps.add(manifest);
-        } catch (_) {
-          // Skip malformed manifests
-        }
-      }
+      await _scanDir(archiveDir, wapps, seen);
+    }
+
+    // 2. Scan installed apps directory (wapps installed via the shop)
+    final installedDir = Directory(installedAppsDir());
+    if (installedDir.existsSync()) {
+      await _scanDir(installedDir, wapps, seen);
     }
 
     setState(() => _wapps = wapps);
+  }
+
+  Future<void> _scanDir(
+      Directory dir, List<WappManifest> wapps, Set<String> seen) async {
+    for (final entry in dir.listSync()) {
+      if (entry is! Directory) continue;
+      final manifestFile = File('${entry.path}/manifest.json');
+      if (!manifestFile.existsSync()) continue;
+      try {
+        final json = jsonDecode(await manifestFile.readAsString());
+        final manifest = WappManifest.fromJson(
+          json as Map<String, dynamic>,
+          entry.path,
+        );
+        if (manifest.kind == 'app' && seen.add(manifest.id)) {
+          wapps.add(manifest);
+        }
+      } catch (_) {}
+    }
   }
 
   /// Walk up from cwd to find the repo root containing wapps/archive.
@@ -173,7 +180,7 @@ class _LauncherPageState extends State<LauncherPage> {
           title: manifest.name,
         ),
       ),
-    );
+    ).then((_) => _scanArchive()); // Rescan after returning (new installs)
   }
 
   @override
@@ -202,24 +209,14 @@ class _LauncherPageState extends State<LauncherPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    // Show only the installer + Wapp Runner dev tool
     final entries = <_LauncherEntry>[
-      for (final wapp in _wapps!.where((w) => w.id == 'tools.geogram.install'))
+      for (final wapp in _wapps!)
         _LauncherEntry(
           name: wapp.name,
           icon: wapp.iconData,
           color: wapp.color,
           onTap: () => _openWapp(wapp),
         ),
-      // Built-in Wapp Runner (dev tool)
-      _LauncherEntry(
-        name: 'Runner',
-        icon: Icons.memory,
-        color: const Color(0xFF533483),
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const WappRunnerPage()),
-        ),
-      ),
     ];
 
     if (entries.isEmpty) {
