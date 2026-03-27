@@ -407,7 +407,7 @@ class _StationServiceAdapter implements StationCommandInterface {
   }
 
   @override
-  bool deleteMessage(String roomId, String messageId) => false;
+  Future<bool> deleteMessage(String roomId, String messageId) async => false;
 
   @override
   bool verifyMessage(covariant Object message) => false;

@@ -327,7 +327,7 @@ class ChatCommand extends Command {
       return;
     }
 
-    if (station.deleteMessage(roomId, messageId)) {
+    if (await station.deleteMessage(roomId, messageId)) {
       ctx.success('Message deleted');
     } else {
       ctx.error('Message not found');
