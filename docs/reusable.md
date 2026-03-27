@@ -8618,6 +8618,7 @@ final hasQueued = await DMQueueService().hasQueuedMessages(callsign);
 
 **Related:**
 - `DirectMessageService` - Main DM service, calls `onTriggerBackgroundDelivery`
+- `DMConversationDiscoveryService` - Monitored sidebar discovery for DM rooms
 - `DMMessageStatusChangedEvent` - Event bus event for status updates
 - `MessageStatus` enum - pending/delivered/failed states
 
@@ -10438,6 +10439,18 @@ curl -X POST http://localhost:8080/api/debug \
 ### Settings UI
 
 Available at Settings drawer → "Tasks". Shows summary card with colored status chips, grouped task list (by service or priority), expandable tiles with status dot, run stats, error details, and pause/resume switch per task.
+
+### Chat Discovery Tasks
+
+Use monitored one-shot tasks for chat sidebar discovery work that should not
+block page open:
+
+- `DMConversationDiscoveryService` (`lib/services/dm_conversation_discovery_service.dart`)
+  - Task id: `chat.dm_conversation_discovery`
+  - Loads DM conversations in the background and maps them to sidebar channels
+- `DChatRoomDiscoveryService` (`lib/services/dchat_room_discovery_service.dart`)
+  - Task id: `chat.dchat_room_discovery`
+  - Uses `compute()` to scan decentralized rooms off the UI isolate
 
 ## CSV Append-Only Storage Pattern
 

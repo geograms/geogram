@@ -144,8 +144,11 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                     source.rooms,
                     source.isLoading,
                   ),
-                // Local device section (only show if there are local channels)
-                if (widget.localChannels.isNotEmpty)
+                // Local device section stays visible in local mode even when
+                // no rooms are loaded yet, so the user can still orient
+                // themselves and create a room immediately.
+                if (widget.onNewLocalChannel != null ||
+                    widget.localChannels.isNotEmpty)
                   _buildDeviceSection(
                     theme,
                     DeviceSource.local(
@@ -176,6 +179,13 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
               fontWeight: FontWeight.bold,
             ),
           ),
+          const Spacer(),
+          if (widget.onNewLocalChannel != null)
+            IconButton(
+              onPressed: widget.onNewLocalChannel,
+              icon: const Icon(Icons.add),
+              tooltip: _i18n.t('new_channel'),
+            ),
         ],
       ),
     );
@@ -354,7 +364,9 @@ class _DeviceChatSidebarState extends State<DeviceChatSidebar> {
                   ),
                 ),
               // Add room button for station devices when moderator
-              if (widget.isModerator && widget.onCreateRoom != null)
+              if (!device.isLocal &&
+                  widget.isModerator &&
+                  widget.onCreateRoom != null)
                 SizedBox(
                   width: 28,
                   height: 28,

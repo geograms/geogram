@@ -24,7 +24,7 @@ import '../services/profile_storage.dart';
 import '../services/station_service.dart';
 import '../services/station_cache_service.dart';
 import '../services/dchat_room_discovery_service.dart';
-import '../services/direct_message_service.dart';
+import '../services/dm_conversation_discovery_service.dart';
 import '../services/distributed_chat_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/log_service.dart';
@@ -182,10 +182,16 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
   String? _groupsAppPath;
   final DChatRoomDiscoveryService _dchatRoomDiscoveryService =
       DChatRoomDiscoveryService();
+  final DMConversationDiscoveryService _dmConversationDiscoveryService =
+      DMConversationDiscoveryService();
   DistributedChatService? _distributedChatService;
+  List<ChatChannel> _localChannels = const [];
+  List<ChatChannel> _directMessageChannels = const [];
+  List<ChatChannel> _distributedChannels = const [];
   List<DChatTopicRecord> _distributedTopics = const [];
   String _selectedDistributedTopicId = 'general';
   int _distributedDiscoveryGeneration = 0;
+  int _directMessageDiscoveryGeneration = 0;
 
   @override
   void initState() {
@@ -343,41 +349,49 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     return null;
   }
 
-  Future<List<ChatChannel>> _loadMergedLocalChannels() async {
+  Future<List<ChatChannel>> _loadLocalChannels() async {
     await _chatService.refreshChannels();
-    final channelsById = <String, ChatChannel>{
-      for (final channel in _chatService.channels) channel.id: channel,
-    };
-
-    try {
-      final dmService = DirectMessageService();
-      final conversations = await dmService.listConversations();
-      for (final conv in conversations) {
-        if (channelsById.containsKey(conv.otherCallsign)) {
-          continue;
-        }
-        channelsById[conv.otherCallsign] = ChatChannel(
-          id: conv.otherCallsign,
-          type: ChatChannelType.direct,
-          name: conv.otherCallsign,
-          folder: conv.path,
-          participants: [conv.otherCallsign],
-          created: conv.lastMessageTime ?? DateTime.now(),
-          lastMessageTime: conv.lastMessageTime,
-        );
-      }
-    } catch (_) {
-      // DM loading is optional.
-    }
-
-    return channelsById.values.toList();
+    return List<ChatChannel>.from(_chatService.channels);
   }
 
   Future<void> _refreshMergedLocalChannels() async {
-    final mergedChannels = await _loadMergedLocalChannels();
+    final localChannels = await _loadLocalChannels();
     if (!mounted) {
       return;
     }
+    _applyChannelSources(localChannels: localChannels);
+    _scheduleBackgroundLocalDiscovery();
+  }
+
+  List<ChatChannel> _mergeChannelSources() {
+    final channelsById = <String, ChatChannel>{
+      for (final channel in _localChannels) channel.id: channel,
+    };
+    for (final channel in _directMessageChannels) {
+      channelsById.putIfAbsent(channel.id, () => channel);
+    }
+    for (final channel in _distributedChannels) {
+      channelsById[channel.id] = channel;
+    }
+    return channelsById.values.toList();
+  }
+
+  void _applyChannelSources({
+    List<ChatChannel>? localChannels,
+    List<ChatChannel>? directMessageChannels,
+    List<ChatChannel>? distributedChannels,
+  }) {
+    if (localChannels != null) {
+      _localChannels = localChannels;
+    }
+    if (directMessageChannels != null) {
+      _directMessageChannels = directMessageChannels;
+    }
+    if (distributedChannels != null) {
+      _distributedChannels = distributedChannels;
+    }
+
+    final mergedChannels = _mergeChannelSources();
     _setStateIfMounted(() {
       _channels = mergedChannels;
       if (_selectedChannel != null) {
@@ -387,7 +401,35 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         );
       }
     });
-    _startDistributedRoomDiscovery();
+  }
+
+  void _scheduleBackgroundLocalDiscovery() {
+    if (widget.isRemoteDevice) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _startDirectMessageDiscovery();
+      _startDistributedRoomDiscovery();
+    });
+  }
+
+  void _startDirectMessageDiscovery() {
+    if (widget.isRemoteDevice) {
+      return;
+    }
+
+    final generation = ++_directMessageDiscoveryGeneration;
+    unawaited(() async {
+      final directMessageChannels = await _dmConversationDiscoveryService
+          .discoverConversations();
+      if (!mounted || generation != _directMessageDiscoveryGeneration) {
+        return;
+      }
+      _applyChannelSources(directMessageChannels: directMessageChannels);
+    }());
   }
 
   void _startDistributedRoomDiscovery() {
@@ -414,24 +456,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (!mounted || generation != _distributedDiscoveryGeneration) {
         return;
       }
-
-      _setStateIfMounted(() {
-        final channelsById = <String, ChatChannel>{
-          for (final channel in _channels)
-            if (!_isDistributedChannel(channel)) channel.id: channel,
-        };
-        for (final room in distributedRooms) {
-          channelsById[room.id] = room;
-        }
-        _channels = channelsById.values.toList();
-        if (_selectedChannel != null &&
-            _isDistributedChannel(_selectedChannel)) {
-          _selectedChannel = _channels.cast<ChatChannel?>().firstWhere(
-            (channel) => channel?.id == _selectedChannel!.id,
-            orElse: () => _selectedChannel,
-          );
-        }
-      });
+      _applyChannelSources(distributedChannels: distributedRooms);
     }());
   }
 
@@ -873,7 +898,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       _localChatCollectionPath = storagePath;
-      _channels = await _loadMergedLocalChannels();
+      final localChannels = await _loadLocalChannels();
+      _localChannels = localChannels;
+      _channels = _mergeChannelSources();
 
       // Start watching for file changes now that channels are loaded
       _chatService.startWatching();
@@ -882,7 +909,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         _isInitialized = true;
       });
 
-      _startDistributedRoomDiscovery();
+      _scheduleBackgroundLocalDiscovery();
+      unawaited(_loadRelayRooms());
 
       _groupsAppPath = await GroupSyncService().findCollectionPathByType(
         'groups',
@@ -895,9 +923,6 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       }
 
       await _refreshMergedLocalChannels();
-
-      // Load station chat rooms - MUST await to ensure rooms are loaded before UI renders
-      await _loadRelayRooms();
 
       // Initialize ContactService for nickname resolution
       final contactsAppPath = await GroupSyncService().findCollectionPathByType(
@@ -979,8 +1004,9 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (cachedRooms.isNotEmpty) {
         _setStateIfMounted(() {
           _stationRooms = cachedRooms;
-          // We have cached rooms — mark online immediately so user can interact
-          _connectionStatus = _StationConnectionStatus.online;
+          // Cached rooms are immediately usable, but remain offline/read-only
+          // until we fetch fresh data from the device.
+          _connectionStatus = _StationConnectionStatus.offline;
           _loadingRelayRooms = false;
         });
       }
@@ -1027,8 +1053,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       if (cachedRooms.isNotEmpty) {
         _setStateIfMounted(() {
           _stationRooms = cachedRooms;
-          // We have cached rooms — mark online immediately so user can interact
-          _connectionStatus = _StationConnectionStatus.online;
+          // Cached rooms remain offline until a fresh fetch succeeds.
+          _connectionStatus = _StationConnectionStatus.offline;
           _loadingRelayRooms = false;
         });
       }
@@ -3578,19 +3604,17 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
           }
         }
 
-        _setStateIfMounted(() {
-          _channels = [];
-        });
-        _channels = await _loadMergedLocalChannels();
+        await _refreshMergedLocalChannels();
         if (_isDistributedChannel(channel)) {
           final channelsById = <String, ChatChannel>{
-            for (final item in _channels) item.id: item,
+            for (final item in _distributedChannels) item.id: item,
           };
           channelsById[channel.id] = channel;
-          _channels = channelsById.values.toList();
-          _startDistributedRoomDiscovery();
+          _applyChannelSources(
+            distributedChannels: channelsById.values.toList(),
+          );
+          _scheduleBackgroundLocalDiscovery();
         }
-        _setStateIfMounted(() {});
 
         // Select the new channel
         final updatedChannel =
@@ -3803,9 +3827,11 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     if (_channels.isEmpty &&
         _stationRooms.isEmpty &&
         _cachedDeviceSources.isEmpty) {
-      // Show connecting indicator while initial station fetch is in progress
-      if (_connectionStatus == _StationConnectionStatus.connecting ||
-          _loadingRelayRooms) {
+      // Remote-device browsing still needs a blocking connection state.
+      // Local chat should stay interactive and let background discovery fill in.
+      if (widget.isRemoteDevice &&
+          (_connectionStatus == _StationConnectionStatus.connecting ||
+              _loadingRelayRooms)) {
         return Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
