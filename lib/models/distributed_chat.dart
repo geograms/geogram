@@ -9,6 +9,7 @@ enum DistributedChatControlType {
   joinApproved,
   joinRejected,
   roomKeyShared,
+  epochRotated,
   memberRemoved,
   memberBanned,
   memberUnbanned,
@@ -35,6 +36,8 @@ extension DistributedChatControlTypeX on DistributedChatControlType {
         return 'join_rejected';
       case DistributedChatControlType.roomKeyShared:
         return 'room_key_shared';
+      case DistributedChatControlType.epochRotated:
+        return 'epoch_rotated';
       case DistributedChatControlType.memberRemoved:
         return 'member_removed';
       case DistributedChatControlType.memberBanned:
@@ -292,6 +295,45 @@ class DistributedChatControlEvent {
 
   String? get encryptedRoomSecretBase64 =>
       payload['encrypted_room_nsec'] as String?;
+
+  int? get epoch {
+    final raw = payload['epoch'];
+    if (raw is int) {
+      return raw;
+    }
+    if (raw is num) {
+      return raw.toInt();
+    }
+    if (raw is String) {
+      return int.tryParse(raw);
+    }
+    return null;
+  }
+
+  String? get epochSummary => payload['summary'] as String?;
+
+  List<Map<String, String>> get epochKeyBoxes {
+    final rawBoxes = payload['boxes'];
+    if (rawBoxes is! List) {
+      return const [];
+    }
+    final boxes = <Map<String, String>>[];
+    for (final rawBox in rawBoxes) {
+      if (rawBox is! Map) {
+        continue;
+      }
+      final recipient = rawBox['recipient_npub']?.toString();
+      final envelope = rawBox['envelope']?.toString();
+      if (recipient == null || recipient.isEmpty) {
+        continue;
+      }
+      if (envelope == null || envelope.isEmpty) {
+        continue;
+      }
+      boxes.add({'recipient_npub': recipient, 'envelope': envelope});
+    }
+    return boxes;
+  }
 
   bool verify() => event.verify();
 

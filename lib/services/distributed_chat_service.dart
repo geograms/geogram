@@ -22,6 +22,8 @@ typedef SaveDistributedChatRoomSecret =
     Future<void> Function(String roomId, String roomNsec);
 typedef DeleteDistributedChatRoomSecret = Future<void> Function(String roomId);
 
+const _epochEncryptionScheme = 'epoch-chacha20poly1305-v1';
+
 /// Orchestrates distributed restricted chat rooms on top of the dchat SQLite
 /// room store.
 ///
@@ -128,7 +130,7 @@ class DistributedChatService {
       limit: limit,
       includeDeleted: false,
     );
-    return records.map(_chatMessageFromRecord).toList();
+    return _decodeReadableMessages(roomId, records);
   }
 
   Future<List<DistributedChatControlEvent>> loadControlEvents(
@@ -182,6 +184,11 @@ class DistributedChatService {
       },
     );
     await _importControlEvent(created);
+    await _rotateEpoch(
+      roomId,
+      summary: 'room_created',
+      rotatedAt: created.createdAt.toUtc(),
+    );
 
     return _requireRoom(roomId);
   }
@@ -261,6 +268,11 @@ class DistributedChatService {
       payload: {'admission': admission.toJson()},
     );
     await _importControlEvent(event);
+    await _rotateEpoch(
+      roomId,
+      summary: 'join_approved:$applicantNpub',
+      rotatedAt: event.createdAt.toUtc(),
+    );
     return event;
   }
 
@@ -381,22 +393,34 @@ class DistributedChatService {
     String roomId,
     String targetNpub,
   ) async {
-    return _emitMembershipChange(
+    final event = await _emitMembershipChange(
       roomId: roomId,
       targetNpub: targetNpub,
       type: DistributedChatControlType.memberRemoved,
     );
+    await _rotateEpoch(
+      roomId,
+      summary: 'member_removed:$targetNpub',
+      rotatedAt: event.createdAt.toUtc(),
+    );
+    return event;
   }
 
   Future<DistributedChatControlEvent> banMember(
     String roomId,
     String targetNpub,
   ) async {
-    return _emitMembershipChange(
+    final event = await _emitMembershipChange(
       roomId: roomId,
       targetNpub: targetNpub,
       type: DistributedChatControlType.memberBanned,
     );
+    await _rotateEpoch(
+      roomId,
+      summary: 'member_banned:$targetNpub',
+      rotatedAt: event.createdAt.toUtc(),
+    );
+    return event;
   }
 
   Future<DistributedChatControlEvent> unbanMember(
@@ -466,20 +490,48 @@ class DistributedChatService {
     Map<String, String>? metadata,
   }) async {
     _requireSigner();
-    final config = await _requireDistributedConfig(roomId);
+    final snapshot = await _requireSnapshot(roomId);
+    final config = _snapshotToConfig(snapshot);
     if (!config.canWrite(profileNpub)) {
       throw PermissionDeniedException('You cannot send messages to this room');
     }
+    final epoch = snapshot.metadata.currentEpoch;
+    if (epoch < 1) {
+      throw Exception('Room has no active epoch: $roomId');
+    }
+    final epochKey = await _loadLocalEpochKey(roomId, epoch);
+    if (epochKey == null) {
+      throw PermissionDeniedException(
+        'Missing local epoch key for room $roomId epoch $epoch',
+      );
+    }
+
+    final plaintext = Uint8List.fromList(utf8.encode(content));
+    final encrypted = BackupEncryption.encryptBytesWithSharedKey(
+      plaintext,
+      epochKey,
+      info: _epochMessageInfo(roomId, epoch),
+    );
+    final ciphertextSha1 = sha1.convert(encrypted.ciphertext).toString();
+    final envelope = <String, dynamic>{
+      'epoch': epoch,
+      'enc': _epochEncryptionScheme,
+      'ciphertext_sha1': ciphertextSha1,
+      'nonce': base64Encode(encrypted.nonce),
+    };
 
     final privateKeyHex = NostrCrypto.decodeNsec(profileNsec!);
     final pubkeyHex = NostrCrypto.derivePublicKey(privateKeyHex);
     final messageEvent = NostrEvent.textNote(
       pubkeyHex: pubkeyHex,
-      content: content,
+      content: jsonEncode(envelope),
       tags: [
         ['t', 'chat'],
         ['room', roomId],
         ['callsign', profileCallsign],
+        ['epoch', epoch.toString()],
+        ['enc', _epochEncryptionScheme],
+        ['ciphertext_sha1', ciphertextSha1],
       ],
     );
     messageEvent.signWithNsec(profileNsec!);
@@ -491,16 +543,17 @@ class DistributedChatService {
       }
       final record = DChatMessageRecord(
         messageId: messageEvent.id ?? messageEvent.calculateId(),
-        epoch: metadataRecord.currentEpoch,
+        epoch: epoch,
         lamport: await store.nextMessageLamport(),
         authorNpub: profileNpub,
         authoredAt: DateTime.fromMillisecondsSinceEpoch(
           messageEvent.createdAt * 1000,
           isUtc: true,
         ),
-        ciphertext: Uint8List.fromList(utf8.encode(content)),
-        encryptionScheme: 'plain',
-        ciphertextSha1: sha1.convert(utf8.encode(content)).toString(),
+        ciphertext: encrypted.ciphertext,
+        nonce: encrypted.nonce,
+        encryptionScheme: _epochEncryptionScheme,
+        ciphertextSha1: ciphertextSha1,
         rawEventJson: jsonEncode(messageEvent.toJson()),
       );
       await store.appendMessage(record);
@@ -520,7 +573,8 @@ class DistributedChatService {
         'created_at': messageEvent.createdAt.toString(),
         if (messageEvent.sig != null) 'signature': messageEvent.sig!,
         if (messageEvent.id != null) 'event_id': messageEvent.id!,
-        'enc': 'plain',
+        'enc': _epochEncryptionScheme,
+        'epoch': epoch.toString(),
       },
     );
   }
@@ -709,6 +763,50 @@ class DistributedChatService {
     return event;
   }
 
+  Future<void> _rotateEpoch(
+    String roomId, {
+    required String summary,
+    DateTime? rotatedAt,
+  }) async {
+    _requireSigner();
+    final snapshot = await _requireSnapshot(roomId);
+    final config = _snapshotToConfig(snapshot);
+    if (!config.isModerator(profileNpub)) {
+      throw PermissionDeniedException(
+        'Only moderators and above can rotate room epochs',
+      );
+    }
+
+    final recipients = _activeEpochRecipients(config);
+    if (recipients.isEmpty) {
+      throw Exception('Cannot rotate epoch without active recipients');
+    }
+
+    final epoch = snapshot.metadata.currentEpoch + 1;
+    final epochKey = BackupEncryption.randomBytes(32);
+    final boxes = [
+      for (final recipientNpub in recipients)
+        {
+          'recipient_npub': recipientNpub,
+          'envelope': base64Encode(
+            BackupEncryption.encryptFile(epochKey, recipientNpub),
+          ),
+        },
+    ];
+
+    final event = DistributedChatControlEvent.create(
+      type: DistributedChatControlType.epochRotated,
+      roomId: roomId,
+      actorNsec: profileNsec!,
+      actorCallsign: profileCallsign,
+      createdAt: rotatedAt == null
+          ? null
+          : rotatedAt.millisecondsSinceEpoch ~/ 1000,
+      payload: {'epoch': epoch, 'summary': summary, 'boxes': boxes},
+    );
+    await _importControlEvent(event);
+  }
+
   Future<void> _importControlEvent(DistributedChatControlEvent event) async {
     if (!event.verify()) {
       throw Exception('Invalid distributed control event signature');
@@ -747,6 +845,9 @@ class DistributedChatService {
         break;
       case DistributedChatControlType.roomKeyShared:
         await _applyRoomKeyShared(event);
+        break;
+      case DistributedChatControlType.epochRotated:
+        await _applyEpochRotated(event);
         break;
       case DistributedChatControlType.memberRemoved:
         await _applyMemberRemoved(event);
@@ -971,6 +1072,76 @@ class DistributedChatService {
       throw Exception('Room secret does not match room public key');
     }
     await _saveRoomSecret(event.roomId, roomNsec);
+  }
+
+  Future<void> _applyEpochRotated(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final epoch = event.epoch;
+    if (config == null || epoch == null) {
+      return;
+    }
+    if (!config.isModerator(event.actorNpub)) {
+      throw PermissionDeniedException(
+        'Only moderators and above can rotate room epochs',
+      );
+    }
+
+    final boxes = event.epochKeyBoxes;
+    if (boxes.isEmpty) {
+      throw Exception('Epoch rotation is missing key envelopes');
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final metadata = await store.loadMetadata();
+      if (metadata == null) {
+        return;
+      }
+      final controlEventId = event.event.id ?? event.event.calculateId();
+      await store.recordEpoch(
+        DChatEpochRecord(
+          epoch: epoch,
+          rotatedByNpub: event.actorNpub,
+          createdAt: event.createdAt.toUtc(),
+          controlEventId: controlEventId,
+          summary: event.epochSummary,
+        ),
+      );
+      for (final box in boxes) {
+        await store.putEpochKeyBox(
+          DChatEpochKeyBox(
+            epoch: epoch,
+            recipientNpub: box['recipient_npub']!,
+            envelope: box['envelope']!,
+            createdAt: event.createdAt.toUtc(),
+          ),
+        );
+      }
+      await store.initializeRoom(
+        metadata.copyWith(
+          currentEpoch: epoch > metadata.currentEpoch
+              ? epoch
+              : metadata.currentEpoch,
+          snapshotStart: event.createdAt.toUtc().millisecondsSinceEpoch,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+      if (profileNsec == null || profileNsec!.isEmpty) {
+        return;
+      }
+      final myBox = boxes.where((box) => box['recipient_npub'] == profileNpub);
+      if (myBox.isEmpty) {
+        return;
+      }
+      final decrypted = BackupEncryption.decryptFile(
+        Uint8List.fromList(base64Decode(myBox.first['envelope']!)),
+        profileNsec!,
+      );
+      if (decrypted.isEmpty) {
+        throw Exception('Received empty epoch key for room ${event.roomId}');
+      }
+      await store.storeLocalEpochKey(epoch, decrypted);
+    });
   }
 
   Future<void> _applyMemberRemoved(DistributedChatControlEvent event) async {
@@ -1260,20 +1431,34 @@ class DistributedChatService {
       limit: 100000,
       includeDeleted: true,
     );
-    for (final record in records) {
-      final message = _chatMessageFromRecord(record);
-      if (message.timestamp == timestamp && message.author == authorCallsign) {
-        matches.add(record);
+    await _withStore(event.roomId, (store) async {
+      final keyCache = <int, Uint8List?>{};
+      for (final record in records) {
+        final message = await _chatMessageFromRecord(
+          event.roomId,
+          store,
+          record,
+          keyCache: keyCache,
+        );
+        if (message == null) {
+          continue;
+        }
+        if (message.timestamp == timestamp &&
+            message.author == authorCallsign) {
+          matches.add(record);
+        }
       }
-    }
+    });
     if (matches.isEmpty) {
       return;
     }
 
     final canModerate = config.isModerator(event.actorNpub);
     for (final record in matches) {
-      final message = _chatMessageFromRecord(record);
-      final isAuthor = message.npub == event.actorNpub;
+      final rawEvent = jsonDecode(record.rawEventJson) as Map<String, dynamic>;
+      final messageEvent = NostrEvent.fromJson(rawEvent);
+      final messageNpub = NostrCrypto.encodeNpub(messageEvent.pubkey);
+      final isAuthor = messageNpub == event.actorNpub;
       if (!isAuthor && !canModerate) {
         throw PermissionDeniedException(
           'Not authorized to delete this message',
@@ -1469,6 +1654,28 @@ class DistributedChatService {
     });
   }
 
+  Future<List<ChatMessage>> _decodeReadableMessages(
+    String roomId,
+    List<DChatMessageRecord> records,
+  ) async {
+    return _withStore(roomId, (store) async {
+      final keyCache = <int, Uint8List?>{};
+      final messages = <ChatMessage>[];
+      for (final record in records) {
+        final message = await _chatMessageFromRecord(
+          roomId,
+          store,
+          record,
+          keyCache: keyCache,
+        );
+        if (message != null) {
+          messages.add(message);
+        }
+      }
+      return messages;
+    });
+  }
+
   Future<void> _importMessageRecord(
     String roomId,
     DChatMessageRecord record,
@@ -1485,6 +1692,54 @@ class DistributedChatService {
     final eventId = event.id ?? event.calculateId();
     if (eventId != record.messageId) {
       throw Exception('Message id mismatch for ${record.messageId}');
+    }
+    final eventAuthorNpub = NostrCrypto.encodeNpub(event.pubkey);
+    if (eventAuthorNpub != record.authorNpub) {
+      throw Exception('Message author mismatch for ${record.messageId}');
+    }
+
+    final envelope = _decodeMessageEnvelope(event);
+    final eventEpoch =
+        int.tryParse(_eventTagValue(event.tags, 'epoch') ?? '') ??
+        _intValue(envelope?['epoch']);
+    if (eventEpoch != null && eventEpoch != record.epoch) {
+      throw Exception('Message epoch mismatch for ${record.messageId}');
+    }
+
+    final eventScheme =
+        _eventTagValue(event.tags, 'enc') ?? envelope?['enc']?.toString();
+    if (record.encryptionScheme != null &&
+        eventScheme != null &&
+        record.encryptionScheme != eventScheme) {
+      throw Exception(
+        'Message encryption scheme mismatch for ${record.messageId}',
+      );
+    }
+
+    final eventCiphertextSha1 =
+        _eventTagValue(event.tags, 'ciphertext_sha1') ??
+        envelope?['ciphertext_sha1']?.toString();
+    final actualCiphertextSha1 = sha1.convert(record.ciphertext).toString();
+    if (actualCiphertextSha1 != record.ciphertextSha1) {
+      throw Exception(
+        'Message ciphertext digest mismatch for ${record.messageId}',
+      );
+    }
+    if (eventCiphertextSha1 != null &&
+        eventCiphertextSha1 != record.ciphertextSha1) {
+      throw Exception(
+        'Signed ciphertext digest mismatch for ${record.messageId}',
+      );
+    }
+    if (record.encryptionScheme == _epochEncryptionScheme) {
+      final nonceBase64 = envelope?['nonce']?.toString();
+      final recordNonce = record.nonce;
+      if (recordNonce == null || nonceBase64 == null || nonceBase64.isEmpty) {
+        throw Exception('Encrypted message is missing nonce metadata');
+      }
+      if (base64Encode(recordNonce) != nonceBase64) {
+        throw Exception('Message nonce mismatch for ${record.messageId}');
+      }
     }
 
     await _withStore(roomId, (store) async {
@@ -1512,31 +1767,132 @@ class DistributedChatService {
     });
   }
 
-  ChatMessage _chatMessageFromRecord(DChatMessageRecord record) {
+  Future<ChatMessage?> _chatMessageFromRecord(
+    String roomId,
+    DChatRoomStore store,
+    DChatMessageRecord record, {
+    required Map<int, Uint8List?> keyCache,
+  }) async {
     final rawEvent = jsonDecode(record.rawEventJson) as Map<String, dynamic>;
     final event = NostrEvent.fromJson(rawEvent);
+    final content = await _decodeMessageContent(
+      roomId,
+      store,
+      record,
+      keyCache: keyCache,
+    );
+    if (content == null) {
+      return null;
+    }
     return ChatMessage(
       author:
           _eventTagValue(event.tags, 'callsign') ??
           NostrCrypto.encodeNpub(event.pubkey),
       timestamp: ChatFormat.epochToTimestamp(event.createdAt),
-      content: _decodeMessageContent(record),
+      content: content,
       metadata: {
         'npub': NostrCrypto.encodeNpub(event.pubkey),
         'created_at': event.createdAt.toString(),
         if (event.sig != null) 'signature': event.sig!,
         if (event.id != null) 'event_id': event.id!,
         if (record.encryptionScheme != null) 'enc': record.encryptionScheme!,
+        'epoch': record.epoch.toString(),
       },
     );
   }
 
-  String _decodeMessageContent(DChatMessageRecord record) {
-    try {
-      return utf8.decode(record.ciphertext, allowMalformed: true);
-    } catch (_) {
-      return base64Encode(record.ciphertext);
+  Future<String?> _decodeMessageContent(
+    String roomId,
+    DChatRoomStore store,
+    DChatMessageRecord record, {
+    required Map<int, Uint8List?> keyCache,
+  }) async {
+    if (record.encryptionScheme == null || record.encryptionScheme == 'plain') {
+      return _decodeUtf8(record.ciphertext);
     }
+
+    if (record.encryptionScheme != _epochEncryptionScheme) {
+      return null;
+    }
+
+    final nonce = record.nonce;
+    if (nonce == null) {
+      return null;
+    }
+    if (!keyCache.containsKey(record.epoch)) {
+      keyCache[record.epoch] = await store.loadLocalEpochKey(record.epoch);
+    }
+    final epochKey = keyCache[record.epoch];
+    if (epochKey == null) {
+      return null;
+    }
+    try {
+      final plaintext = BackupEncryption.decryptBytesWithSharedKey(
+        ciphertext: record.ciphertext,
+        nonce: nonce,
+        sharedSecret: epochKey,
+        info: _epochMessageInfo(roomId, record.epoch),
+      );
+      return _decodeUtf8(plaintext);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _decodeUtf8(Uint8List bytes) {
+    try {
+      return utf8.decode(bytes, allowMalformed: true);
+    } catch (_) {
+      return base64Encode(bytes);
+    }
+  }
+
+  Map<String, dynamic>? _decodeMessageEnvelope(NostrEvent event) {
+    if (event.content.trim().isEmpty) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(event.content);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+    } catch (_) {
+      // Legacy/plain fallback.
+    }
+    return null;
+  }
+
+  int? _intValue(Object? raw) {
+    if (raw is int) {
+      return raw;
+    }
+    if (raw is num) {
+      return raw.toInt();
+    }
+    if (raw is String) {
+      return int.tryParse(raw);
+    }
+    return null;
+  }
+
+  List<String> _activeEpochRecipients(ChatChannelConfig config) {
+    final recipients = <String>{
+      if (config.owner != null && config.owner!.isNotEmpty) config.owner!,
+      ...config.admins,
+      ...config.moderatorNpubs,
+      ...config.members,
+    }.where(config.canAccess).toList();
+    recipients.sort();
+    return recipients;
+  }
+
+  Future<Uint8List?> _loadLocalEpochKey(String roomId, int epoch) async {
+    return _withStore(roomId, (store) async {
+      if (!await store.exists()) {
+        return null;
+      }
+      return store.loadLocalEpochKey(epoch);
+    });
   }
 
   Future<DChatMemberRecord?> _findMemberRecord(
@@ -1584,4 +1940,8 @@ String? _eventTagValue(List<List<String>> tags, String key) {
     }
   }
   return null;
+}
+
+String _epochMessageInfo(String roomId, int epoch) {
+  return 'geogram-dchat-message:$roomId:$epoch';
 }

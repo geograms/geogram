@@ -672,6 +672,22 @@ class DChatRoomStore {
     });
   }
 
+  Future<void> storeLocalEpochKey(int epoch, Uint8List keyBytes) async {
+    await setDeviceValue(_epochKeyName(epoch), base64Encode(keyBytes));
+  }
+
+  Future<Uint8List?> loadLocalEpochKey(int epoch) async {
+    final encoded = await getDeviceValue(_epochKeyName(epoch));
+    if (encoded == null || encoded.isEmpty) {
+      return null;
+    }
+    try {
+      return Uint8List.fromList(base64Decode(encoded));
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<String?> getDeviceValue(String key) async {
     await open();
     return _deviceDatabase.read((db) {
@@ -1180,4 +1196,6 @@ class DChatRoomStore {
     }
     return const [];
   }
+
+  String _epochKeyName(int epoch) => 'epoch_key.$epoch';
 }

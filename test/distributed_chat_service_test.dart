@@ -6,6 +6,7 @@ import 'package:geogram/models/distributed_chat.dart';
 import 'package:geogram/platform/file_system_service.dart';
 import 'package:geogram/services/chat_service.dart'
     show PermissionDeniedException;
+import 'package:geogram/services/dchat_room_store.dart';
 import 'package:geogram/services/distributed_chat_service.dart';
 import 'package:geogram/services/profile_storage.dart';
 import 'package:geogram/util/nostr_key_generator.dart';
@@ -38,7 +39,7 @@ void main() {
     });
 
     test(
-      'supports approval, moderator room-key sharing, and kick boundaries',
+      'rotates epochs for joins and kicks while keeping old readable history',
       () async {
         const roomId = 'mesh-camp';
 
@@ -59,6 +60,14 @@ void main() {
           await admin.storage.exists('dchat/$roomId/device.sqlite3'),
           isTrue,
         );
+        final adminStore = DChatRoomStore(
+          profileStorage: admin.storage,
+          roomId: roomId,
+        );
+        final initialEpochs = await adminStore.listEpochs();
+        expect(initialEpochs.map((epoch) => epoch.epoch).toList(), [1]);
+        expect(await adminStore.loadLocalEpochKey(1), isNotNull);
+        await adminStore.close();
 
         final invite = await admin.service.createInvite(roomId);
         final preApprovalMessage = await admin.service.sendMessage(
@@ -110,10 +119,7 @@ void main() {
           roomId,
           limit: 100,
         );
-        expect(
-          moderatorBootstrapMessages.map((message) => message.content),
-          contains('Before approval'),
-        );
+        expect(moderatorBootstrapMessages, isEmpty);
 
         await admin.service.promoteToModerator(roomId, moderator.keys.npub);
         await moderator.service.syncRoomFromPeer(admin.service, roomId);
@@ -124,6 +130,9 @@ void main() {
           isTrue,
         );
         expect(await moderator.service.hasRoomSecret(roomId), isTrue);
+
+        await moderator.service.sendMessage(roomId, 'Moderator online');
+        await admin.service.syncRoomFromPeer(moderator.service, roomId);
 
         await member.service.acceptInviteAndRequestJoin(
           invite,
@@ -140,12 +149,9 @@ void main() {
           roomId,
           limit: 100,
         );
-        expect(
-          memberBootstrapMessages.map((message) => message.content),
-          contains('Before approval'),
-        );
+        expect(memberBootstrapMessages, isEmpty);
 
-        await moderator.service.sendMessage(roomId, 'Moderator online');
+        await moderator.service.sendMessage(roomId, 'Welcome member');
         await admin.service.syncRoomFromPeer(moderator.service, roomId);
         await member.service.syncRoomFromPeer(admin.service, roomId);
 
@@ -153,9 +159,17 @@ void main() {
           roomId,
           limit: 100,
         );
+        final memberMessagesBeforeKickContents = memberMessagesBeforeKick
+            .map((message) => message.content)
+            .toList();
+        expect(memberMessagesBeforeKickContents, contains('Welcome member'));
         expect(
-          memberMessagesBeforeKick.map((message) => message.content),
-          contains('Moderator online'),
+          memberMessagesBeforeKickContents,
+          isNot(contains('Before approval')),
+        );
+        expect(
+          memberMessagesBeforeKickContents,
+          isNot(contains('Moderator online')),
         );
 
         await moderator.service.removeMember(roomId, member.keys.npub);
@@ -177,12 +191,14 @@ void main() {
         final memberContents = memberMessagesAfterKick
             .map((message) => message.content)
             .toList();
-        expect(memberContents, contains('Before approval'));
-        expect(memberContents, contains('Moderator online'));
+        expect(memberContents, contains('Welcome member'));
+        expect(memberContents, isNot(contains('Before approval')));
+        expect(memberContents, isNot(contains('Moderator online')));
         expect(memberContents, isNot(contains('After kick')));
 
         final controlEvents = await admin.service.loadControlEvents(roomId);
         final controlTypes = controlEvents.map((event) => event.type).toList();
+        expect(controlTypes, contains(DistributedChatControlType.epochRotated));
         expect(
           controlTypes,
           contains(DistributedChatControlType.roomKeyShared),
@@ -200,7 +216,25 @@ void main() {
           await member.storage.exists('dchat/$roomId/room.sqlite3'),
           isTrue,
         );
+
+        final finalAdminStore = DChatRoomStore(
+          profileStorage: admin.storage,
+          roomId: roomId,
+        );
+        final finalMemberStore = DChatRoomStore(
+          profileStorage: member.storage,
+          roomId: roomId,
+        );
+        expect(
+          (await finalAdminStore.listEpochs()).map((epoch) => epoch.epoch),
+          [1, 2, 3, 4],
+        );
+        expect(await finalMemberStore.loadLocalEpochKey(3), isNotNull);
+        expect(await finalMemberStore.loadLocalEpochKey(4), isNull);
+        await finalAdminStore.close();
+        await finalMemberStore.close();
       },
+      timeout: const Timeout(Duration(seconds: 60)),
     );
   });
 }

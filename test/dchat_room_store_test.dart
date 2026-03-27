@@ -214,6 +214,7 @@ void main() {
             createdAt: createdAt,
           ),
         );
+        await store.storeLocalEpochKey(3, Uint8List.fromList([7, 8, 9, 10]));
 
         final mediaBytes = Uint8List.fromList(utf8.encode('hello image'));
         final media = await store.storeMediaBytes(
@@ -316,6 +317,10 @@ void main() {
 
         final keyBoxes = await reopened.listEpochKeyBoxes(3);
         expect(keyBoxes.single.recipientNpub, peer.npub);
+        expect(
+          await reopened.loadLocalEpochKey(3),
+          Uint8List.fromList([7, 8, 9, 10]),
+        );
 
         final messages = await reopened.listMessages();
         expect(messages.single.messageId, 'msg-1');

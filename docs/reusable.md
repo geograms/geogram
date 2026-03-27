@@ -4226,19 +4226,21 @@ bool isIgnored(String relativePath, List<String> patterns);
 **Spec:** `docs/docs/dchat.md`
 
 Reusable orchestration layer for distributed restricted chat rooms. It keeps the
-existing chat storage model intact and adds:
+legacy chat model intact while using room-local SQLite storage for `dchat`:
 
 - `DistributedChatInvite` deep links (`geogram://dchat?payload=...`)
-- append-only control log at `roomId/extra/dchat/control.jsonl`
+- per-room storage under `/{callsign}/dchat/{room_id}/`
 - admission capabilities signed with a room signer key
 - ECIES-encrypted room-key sharing for admins/moderators
+- epoch rotation on room creation, join approval, kicks, and bans
+- per-epoch message encryption with local epoch keys in `device.sqlite3`
 - peer-to-peer room repair/bootstrap via `syncRoomFromPeer()`
 
 **Reuses existing pieces instead of duplicating them:**
-- `ChatService` for room configs, membership rules, moderation, and message I/O
-- `ChatChannelConfig.dailyFiles` for per-day room files
-- chat-format/NOSTR signatures for message persistence
-- `BackupEncryption` for encrypted room-secret handoff
+- `ChatChannelConfig` for room config projection and permission checks
+- `DChatRoomStore` for SQLite-backed room/device state
+- NOSTR signatures for control/message authorship
+- `BackupEncryption` for room-secret handoff and epoch-message encryption
 
 **Core methods:**
 ```dart
@@ -7652,7 +7654,7 @@ final encrypted = BackupEncryption.encryptFile(plaintextBytes, recipientNpub);
 final decrypted = BackupEncryption.decryptFile(encryptedBytes, myNsec);
 ```
 
-**Reused by:** Backup service, Email cache (offline delivery)
+**Reused by:** Backup service, Email cache (offline delivery), dchat room-key envelopes, dchat epoch-message encryption
 
 ---
 
@@ -11242,11 +11244,10 @@ Key responsibilities:
 - deduplicate media only inside the same room
 - support whole-room deletion by removing one room folder
 
-This is the storage target for the future `dchat` orchestration migration away
-from text chat logs.
+This is the storage backend used by `DistributedChatService` for the current
+`dchat` implementation.
 
-**Used in**: `test/dchat_room_store_test.dart` today; planned backend for
-distributed-room orchestration
+**Used in**: `test/dchat_room_store_test.dart`, `DistributedChatService`
 
 ---
 

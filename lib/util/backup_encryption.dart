@@ -19,9 +19,13 @@ import 'nostr_crypto.dart';
 /// and ChaCha20-Poly1305 for authenticated encryption
 class BackupEncryption {
   static final _secureRandom = SecureRandom('Fortuna')
-    ..seed(KeyParameter(
-      Uint8List.fromList(List.generate(32, (_) => Random.secure().nextInt(256))),
-    ));
+    ..seed(
+      KeyParameter(
+        Uint8List.fromList(
+          List.generate(32, (_) => Random.secure().nextInt(256)),
+        ),
+      ),
+    );
 
   /// Encrypt file bytes for a recipient NPUB
   /// Returns: [ephemeral_pubkey (33)] + [nonce (12)] + [ciphertext] + [tag (16)]
@@ -35,7 +39,10 @@ class BackupEncryption {
     final ephemeralPubKey = ephemeralKeyPair.publicKey;
 
     // Derive shared secret via ECDH
-    final sharedSecret = _deriveSharedSecret(ephemeralPrivKey, recipientPubKeyHex);
+    final sharedSecret = _deriveSharedSecret(
+      ephemeralPrivKey,
+      recipientPubKeyHex,
+    );
 
     // Derive encryption key using HKDF
     final encryptionKey = _hkdfExpand(sharedSecret, 'geogram-backup-file', 32);
@@ -44,7 +51,11 @@ class BackupEncryption {
     final nonce = _generateNonce();
 
     // Encrypt using ChaCha20-Poly1305
-    final ciphertext = _chacha20Poly1305Encrypt(encryptionKey, nonce, plaintext);
+    final ciphertext = _chacha20Poly1305Encrypt(
+      encryptionKey,
+      nonce,
+      plaintext,
+    );
 
     // Output: ephemeral_pubkey (33 compressed) || nonce (12) || ciphertext+tag
     final result = Uint8List(33 + 12 + ciphertext.length);
@@ -71,7 +82,10 @@ class BackupEncryption {
     final encryptedData = ciphertext.sublist(45);
 
     // Derive shared secret via ECDH
-    final sharedSecret = _deriveSharedSecretFromCompressed(myPrivKeyHex, ephemeralPubKey);
+    final sharedSecret = _deriveSharedSecretFromCompressed(
+      myPrivKeyHex,
+      ephemeralPubKey,
+    );
 
     // Derive encryption key using HKDF
     final encryptionKey = _hkdfExpand(sharedSecret, 'geogram-backup-file', 32);
@@ -95,7 +109,11 @@ class BackupEncryption {
 
     // Encrypt
     final plaintext = utf8.encode(manifestJson);
-    final ciphertext = _chacha20Poly1305Encrypt(manifestKey, nonce, Uint8List.fromList(plaintext));
+    final ciphertext = _chacha20Poly1305Encrypt(
+      manifestKey,
+      nonce,
+      Uint8List.fromList(plaintext),
+    );
 
     // Output: nonce (12) || ciphertext+tag
     final result = Uint8List(12 + ciphertext.length);
@@ -128,6 +146,42 @@ class BackupEncryption {
     return utf8.decode(plaintext);
   }
 
+  /// Generate cryptographically secure random bytes.
+  static Uint8List randomBytes(int length) {
+    final bytes = Uint8List(length);
+    for (var i = 0; i < length; i++) {
+      bytes[i] = Random.secure().nextInt(256);
+    }
+    return bytes;
+  }
+
+  /// Encrypt bytes with a shared symmetric secret and detached nonce.
+  static ({Uint8List nonce, Uint8List ciphertext}) encryptBytesWithSharedKey(
+    Uint8List plaintext,
+    Uint8List sharedSecret, {
+    String info = 'geogram-dchat-epoch-message',
+  }) {
+    final nonce = _generateNonce();
+    final encryptionKey = _hkdfExpand(sharedSecret, info, 32);
+    final ciphertext = _chacha20Poly1305Encrypt(
+      encryptionKey,
+      nonce,
+      plaintext,
+    );
+    return (nonce: nonce, ciphertext: ciphertext);
+  }
+
+  /// Decrypt bytes encrypted with [encryptBytesWithSharedKey].
+  static Uint8List decryptBytesWithSharedKey({
+    required Uint8List ciphertext,
+    required Uint8List nonce,
+    required Uint8List sharedSecret,
+    String info = 'geogram-dchat-epoch-message',
+  }) {
+    final encryptionKey = _hkdfExpand(sharedSecret, info, 32);
+    return _chacha20Poly1305Decrypt(encryptionKey, nonce, ciphertext);
+  }
+
   // === ECDH Key Agreement ===
 
   /// Generate ephemeral keypair for ECIES
@@ -151,7 +205,10 @@ class BackupEncryption {
   }
 
   /// Derive shared secret using ECDH: shared = myPrivKey * theirPubKey
-  static Uint8List _deriveSharedSecret(Uint8List myPrivateKey, String theirPublicKeyHex) {
+  static Uint8List _deriveSharedSecret(
+    Uint8List myPrivateKey,
+    String theirPublicKeyHex,
+  ) {
     final curve = ECCurve_secp256k1();
     final myD = _bytesToBigInt(myPrivateKey);
 
@@ -174,7 +231,10 @@ class BackupEncryption {
   }
 
   /// Derive shared secret from compressed public key
-  static Uint8List _deriveSharedSecretFromCompressed(String myPrivKeyHex, Uint8List theirCompressedPubKey) {
+  static Uint8List _deriveSharedSecretFromCompressed(
+    String myPrivKeyHex,
+    Uint8List theirCompressedPubKey,
+  ) {
     final curve = ECCurve_secp256k1();
     final myD = _bytesToBigInt(_hexDecode(myPrivKeyHex));
 
@@ -224,7 +284,11 @@ class BackupEncryption {
   // === ChaCha20-Poly1305 ===
 
   /// Encrypt using ChaCha20-Poly1305 AEAD
-  static Uint8List _chacha20Poly1305Encrypt(Uint8List key, Uint8List nonce, Uint8List plaintext) {
+  static Uint8List _chacha20Poly1305Encrypt(
+    Uint8List key,
+    Uint8List nonce,
+    Uint8List plaintext,
+  ) {
     // Use pointycastle's ChaCha20-Poly1305
     final cipher = ChaCha20Poly1305(ChaCha7539Engine(), Poly1305());
     final params = AEADParameters(
@@ -245,7 +309,11 @@ class BackupEncryption {
   }
 
   /// Decrypt using ChaCha20-Poly1305 AEAD
-  static Uint8List _chacha20Poly1305Decrypt(Uint8List key, Uint8List nonce, Uint8List ciphertext) {
+  static Uint8List _chacha20Poly1305Decrypt(
+    Uint8List key,
+    Uint8List nonce,
+    Uint8List ciphertext,
+  ) {
     if (ciphertext.length < 16) {
       throw ArgumentError('Ciphertext too short (missing auth tag)');
     }
@@ -277,11 +345,7 @@ class BackupEncryption {
 
   /// Generate random 12-byte nonce
   static Uint8List _generateNonce() {
-    final nonce = Uint8List(12);
-    for (var i = 0; i < 12; i++) {
-      nonce[i] = Random.secure().nextInt(256);
-    }
-    return nonce;
+    return randomBytes(12);
   }
 
   /// Compress EC public key to 33 bytes (02/03 prefix + x-coordinate)
@@ -297,7 +361,10 @@ class BackupEncryption {
   }
 
   /// Decompress EC public key from 33 bytes
-  static ECPoint? _decompressPublicKey(Uint8List compressed, ECDomainParameters curve) {
+  static ECPoint? _decompressPublicKey(
+    Uint8List compressed,
+    ECDomainParameters curve,
+  ) {
     if (compressed.length != 33) {
       return null;
     }
@@ -308,7 +375,10 @@ class BackupEncryption {
     }
 
     final x = _bytesToBigInt(compressed.sublist(1));
-    final p = BigInt.parse('FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F', radix: 16);
+    final p = BigInt.parse(
+      'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F',
+      radix: 16,
+    );
 
     // y² = x³ + 7 (mod p) for secp256k1
     final ySq = (x.modPow(BigInt.from(3), p) + BigInt.from(7)) % p;
@@ -331,7 +401,10 @@ class BackupEncryption {
 
   /// Lift x-coordinate to curve point (BIP-340 style)
   static ECPoint? _liftX(BigInt x, ECDomainParameters curve) {
-    final p = BigInt.parse('FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F', radix: 16);
+    final p = BigInt.parse(
+      'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F',
+      radix: 16,
+    );
     if (x >= p) return null;
 
     // y² = x³ + 7 (mod p) for secp256k1
@@ -373,11 +446,6 @@ class BackupEncryption {
       result[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
     }
     return result;
-  }
-
-  /// Hex encode helper
-  static String _hexEncode(Uint8List bytes) {
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 }
 

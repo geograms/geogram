@@ -1,6 +1,6 @@
 # Distributed Chat Rooms (`dchat`)
 
-**Status:** storage foundation implemented in `lib/services/profile_sqlite_database.dart` and `lib/services/dchat_room_store.dart`  
+**Status:** SQLite-backed service and epoch rotation implemented in `lib/services/distributed_chat_service.dart`, `lib/services/profile_sqlite_database.dart`, and `lib/services/dchat_room_store.dart`  
 **Last updated:** 2026-03-27
 
 ## Overview
@@ -26,16 +26,16 @@ so the data stays compatible with both filesystem profiles and
 - Avoid mixing media between rooms so deleting a room is deleting one folder.
 - Deduplicate attachments only inside the same room.
 - Keep NOSTR identities and signatures as the authorship layer.
-- Support future epoch-key rotation and partial offline sync without relying on
-  text file ordering.
+- Rotate epoch keys on membership changes so new members do not inherit old
+  history and removed members lose future decryptability.
+- Support partial offline sync without relying on text file ordering.
 
 ## Non-Goals
 
 - No changes to existing DM or legacy room storage.
 - No shared cross-room media pool.
 - No original filenames in stored media paths.
-- No full `DistributedChatService` migration in this document; this document
-  describes the new storage target and the implemented storage library.
+- No changes to existing DM or legacy room storage.
 
 ## Implemented Reusable Pieces
 
@@ -46,6 +46,10 @@ so the data stays compatible with both filesystem profiles and
   Owns one room folder, initializes the schema, stores room/control/message
   rows, stores room-local device state, and writes media files into room-local
   folders.
+- `DistributedChatService`
+  Uses `DChatRoomStore` as the room backend, issues NOSTR-signed control
+  events, rotates epochs on room creation and membership changes, encrypts
+  message bodies per epoch, and syncs room state peer-to-peer.
 - `DChatStorage` models
   Typed records for room metadata, members, epochs, encrypted epoch envelopes,
   messages, media references, and sync cursors.
@@ -144,27 +148,48 @@ The original filename, MIME type, size, and room-local logical path live in
 `dchat` still uses NOSTR for identity and signatures.
 
 - Control rows store signed `DistributedChatControlEvent` JSON.
-- Message rows store the raw signed NOSTR event JSON plus ciphertext and
-  ordering fields.
+- Epoch rotations are signed control events and carry per-recipient encrypted
+  epoch-key envelopes.
+- Message rows store the raw signed NOSTR event JSON plus ciphertext, nonce,
+  epoch, and ordering fields.
 - This keeps the transport/authentication layer reusable while removing the
   need to append and merge human-readable text files.
+
+## Epoch Enforcement
+
+Each room starts at epoch `1` when created.
+
+- every membership-changing event rotates the room to a new epoch
+- `join_approved` rotates so new members do not receive old decrypt keys
+- `member_removed` and `member_banned` rotate so removed users lose future
+  decrypt keys
+- message payloads are encrypted with the current epoch key and stored as
+  ciphertext in `room.sqlite3`
+- only per-recipient ECIES-wrapped epoch-key envelopes are replicated
+- decrypted epoch keys are stored only in `device.sqlite3`
+
+This gives forward-only revocation:
+
+- current members keep their previously readable history
+- removed members cannot decrypt new epochs
+- newly approved members do not inherit old epochs
 
 ## Next Integration Steps
 
 The implemented storage library is the target backend for the higher-level
 distributed-room orchestration:
 
-1. migrate `DistributedChatService` from text files to `DChatRoomStore`
-2. add epoch-rotation writes on membership changes
-3. sync `room.sqlite3` and room-local media trees between peers
-4. exclude `device.sqlite3` from peer-replicated room sync
-5. wire the chat UI to the new room store
+1. sync room-local media trees between peers
+2. exclude `device.sqlite3` from peer-replicated room sync
+3. wire the chat UI to the new room store
+4. add attachment encryption and retention rules on top of epoch metadata
 
 ## Verification
 
 Implemented verification currently lives in:
 
 - `test/dchat_room_store_test.dart`
+- `test/distributed_chat_service_test.dart`
 
 The test covers:
 
@@ -177,11 +202,16 @@ The test covers:
 - persistence of room metadata, control events, epochs, epoch envelopes,
   messages, media links, sync cursors, and local-only device values
 - whole-room deletion by removing one room folder
+- room creation initializes epoch `1`
+- join approval rotates to a new epoch and hides pre-join history
+- member removal rotates to a new epoch and blocks future readable messages
 
 ## Related Files
 
 - `lib/services/profile_sqlite_database.dart`
 - `lib/services/dchat_room_store.dart`
 - `lib/models/dchat_storage.dart`
+- `lib/services/distributed_chat_service.dart`
 - `test/dchat_room_store_test.dart`
+- `test/distributed_chat_service_test.dart`
 - `docs/reusable.md`
