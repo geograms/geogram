@@ -6,10 +6,13 @@
 #   ./build-archive.sh maps         # build and package one
 #   ./build-archive.sh clean        # remove binaries/
 #
-# Output: binaries/<name>-<version>.wapp for each module.
-# Also generates binaries/index.json listing all packages with
-# their id, version, and size — consumers compare versions to
-# detect updates.
+# Output layout:
+#   binaries/
+#     maps/
+#       maps-1.0.0.wapp
+#     terminal/
+#       terminal-1.0.0.wapp
+#     index.json              ← version index for update detection
 #
 # Environment:
 #   WASI_SDK_PATH  — path to wasi-sdk (default: ~/wasi-sdk)
@@ -65,7 +68,8 @@ build_wapp() {
 
     [ -f "$dir/app.wasm" ] || { echo "[$name] no app.wasm after build"; return 1; }
 
-    wapp_file="$OUTPUT_DIR/$name-$version.wapp"
+    mkdir -p "$OUTPUT_DIR/$name"
+    wapp_file="$OUTPUT_DIR/$name/$name-$version.wapp"
     echo "[$name] packaging $name-$version.wapp..."
     rm -f "$wapp_file"
 
@@ -85,7 +89,7 @@ build_wapp() {
     else
         human="$(echo "$size" | awk '{printf "%.1fKB", $1/1024}')"
     fi
-    echo "[$name] → $name-$version.wapp ($human)"
+    echo "[$name] → $name/$name-$version.wapp ($human)"
     return 0
 }
 
@@ -94,10 +98,10 @@ generate_index() {
     index="$OUTPUT_DIR/index.json"
     printf '[\n' > "$index"
     first=1
-    for wapp in "$OUTPUT_DIR"/*.wapp; do
+    for wapp in "$OUTPUT_DIR"/*/*.wapp; do
         [ -f "$wapp" ] || continue
-        # Extract manifest.json from the zip
         manifest=$(unzip -p "$wapp" manifest.json 2>/dev/null) || continue
+        wapp_dir=$(basename "$(dirname "$wapp")")
         fname=$(basename "$wapp")
         size=$(wc -c < "$wapp" | tr -d ' ')
         wapp_id=$(echo "$manifest" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
@@ -108,8 +112,8 @@ generate_index() {
             | head -1 | sed 's/.*"description"[[:space:]]*:[[:space:]]*"//;s/"//')
 
         [ "$first" = 1 ] && first=0 || printf ',\n' >> "$index"
-        printf '  {"file":"%s","id":"%s","version":"%s","size":%s,"description":"%s"}' \
-            "$fname" "$wapp_id" "$version" "$size" "$description" >> "$index"
+        printf '  {"file":"%s/%s","id":"%s","version":"%s","size":%s,"description":"%s"}' \
+            "$wapp_dir" "$fname" "$wapp_id" "$version" "$size" "$description" >> "$index"
     done
     printf '\n]\n' >> "$index"
 }
@@ -151,10 +155,11 @@ generate_index
 # Summary
 echo ""
 echo "Packages:"
-printf "  %-25s %s\n" "FILE" "SIZE"
-printf "  %-25s %s\n" "-------------------------" "--------"
-for wapp in "$OUTPUT_DIR"/*.wapp; do
+printf "  %-30s %s\n" "FILE" "SIZE"
+printf "  %-30s %s\n" "------------------------------" "--------"
+for wapp in "$OUTPUT_DIR"/*/*.wapp; do
     [ -f "$wapp" ] || continue
+    wapp_dir=$(basename "$(dirname "$wapp")")
     fname=$(basename "$wapp")
     size=$(wc -c < "$wapp" | tr -d ' ')
     if [ "$size" -lt 1024 ]; then
@@ -162,5 +167,5 @@ for wapp in "$OUTPUT_DIR"/*.wapp; do
     else
         human="$(echo "$size" | awk '{printf "%.1fKB", $1/1024}')"
     fi
-    printf "  %-25s %s\n" "$fname" "$human"
+    printf "  %-30s %s\n" "$wapp_dir/$fname" "$human"
 done
