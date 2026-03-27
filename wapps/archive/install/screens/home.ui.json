@@ -1,7 +1,7 @@
 [
   {
     "$": "screen",
-    "name": "Shop",
+    "name": "Archive",
     "tip": "Browse and install wapps from a repository.",
     "children": [
       {

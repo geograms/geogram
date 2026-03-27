@@ -112,64 +112,45 @@ class _LauncherPageState extends State<LauncherPage> {
     final wapps = <WappManifest>[];
     final seen = <String>{};
 
-    // 1. Scan the built-in archive (install wapp lives here)
+    // 1. The install wapp is built-in (from the archive source dir)
     final candidates = [
-      '${Directory.current.path}/../wapps/archive',
-      '${Directory.current.path}/../../wapps/archive',
-      _findRepoArchive(),
+      '${Directory.current.path}/../wapps/archive/install',
+      '${Directory.current.path}/../../wapps/archive/install',
     ];
-
-    Directory? archiveDir;
     for (final path in candidates) {
-      if (path == null) continue;
       final dir = Directory(path);
       if (dir.existsSync()) {
-        archiveDir = dir;
+        await _scanManifest(dir, wapps, seen);
         break;
       }
     }
 
-    if (archiveDir != null) {
-      await _scanDir(archiveDir, wapps, seen);
-    }
-
-    // 2. Scan installed apps directory (wapps installed via the shop)
+    // 2. User-installed wapps (extracted by the installer)
     final installedDir = Directory(installedAppsDir());
     if (installedDir.existsSync()) {
-      await _scanDir(installedDir, wapps, seen);
+      for (final entry in installedDir.listSync()) {
+        if (entry is! Directory) continue;
+        await _scanManifest(entry as Directory, wapps, seen);
+      }
     }
 
     setState(() => _wapps = wapps);
   }
 
-  Future<void> _scanDir(
+  Future<void> _scanManifest(
       Directory dir, List<WappManifest> wapps, Set<String> seen) async {
-    for (final entry in dir.listSync()) {
-      if (entry is! Directory) continue;
-      final manifestFile = File('${entry.path}/manifest.json');
-      if (!manifestFile.existsSync()) continue;
-      try {
-        final json = jsonDecode(await manifestFile.readAsString());
-        final manifest = WappManifest.fromJson(
-          json as Map<String, dynamic>,
-          entry.path,
-        );
-        if (manifest.kind == 'app' && seen.add(manifest.id)) {
-          wapps.add(manifest);
-        }
-      } catch (_) {}
-    }
-  }
-
-  /// Walk up from cwd to find the repo root containing wapps/archive.
-  String? _findRepoArchive() {
-    var dir = Directory.current;
-    for (var i = 0; i < 5; i++) {
-      final candidate = Directory('${dir.path}/wapps/archive');
-      if (candidate.existsSync()) return candidate.path;
-      dir = dir.parent;
-    }
-    return null;
+    final manifestFile = File('${dir.path}/manifest.json');
+    if (!manifestFile.existsSync()) return;
+    try {
+      final json = jsonDecode(await manifestFile.readAsString());
+      final manifest = WappManifest.fromJson(
+        json as Map<String, dynamic>,
+        dir.path,
+      );
+      if (manifest.kind == 'app' && seen.add(manifest.id)) {
+        wapps.add(manifest);
+      }
+    } catch (_) {}
   }
 
   void _openWapp(WappManifest manifest) {

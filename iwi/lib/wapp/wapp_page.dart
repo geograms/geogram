@@ -289,6 +289,18 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     }
   }
 
+  void _uninstallWapp(String name) {
+    final appDir = Directory('${installedAppsDir()}/$name');
+    if (appDir.existsSync()) {
+      appDir.deleteSync(recursive: true);
+    }
+    // Also tell the module so it updates its KV
+    _sendCommand('remove $name');
+    _engine.handleEvent();
+    _drainOutbox();
+    if (mounted) setState(() {});
+  }
+
   static String _defaultDataDir() {
     final home = Platform.environment['HOME'] ??
         Platform.environment['USERPROFILE'] ??
@@ -519,16 +531,21 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
               )
             : null,
         trailing: wapp.installed
-            ? Chip(
-                label: const Text('Installed', style: TextStyle(fontSize: 11)),
-                backgroundColor: cs.primaryContainer,
-                side: BorderSide.none,
-                padding: EdgeInsets.zero,
-                visualDensity: VisualDensity.compact,
+            ? TextButton(
+                onPressed: () => _uninstallWapp(wapp.name),
+                style: TextButton.styleFrom(
+                  foregroundColor: cs.error,
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: const Text('Uninstall', style: TextStyle(fontSize: 12)),
               )
             : wapp.updateAvailable
                 ? FilledButton.tonal(
-                    onPressed: () => _sendCommand('install ${wapp.name}'),
+                    onPressed: () {
+                      _sendCommand('install ${wapp.name}');
+                      _engine.handleEvent();
+                      _drainOutbox();
+                    },
                     style: FilledButton.styleFrom(
                         visualDensity: VisualDensity.compact),
                     child: const Text('Update', style: TextStyle(fontSize: 12)),
@@ -536,7 +553,11 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
                 : isInstall
                     ? null
                     : FilledButton(
-                        onPressed: () => _sendCommand('install ${wapp.name}'),
+                        onPressed: () {
+                          _sendCommand('install ${wapp.name}');
+                          _engine.handleEvent();
+                          _drainOutbox();
+                        },
                         style: FilledButton.styleFrom(
                             visualDensity: VisualDensity.compact),
                         child: const Text('Install',
