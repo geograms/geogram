@@ -139,7 +139,7 @@ abstract class StationCommandInterface {
   bool deleteChatRoom(String id);
   bool renameChatRoom(String oldId, String newName);
   Future<void> postMessage(String roomId, String content);
-  bool deleteMessage(String roomId, String messageId);
+  Future<bool> deleteMessage(String roomId, String messageId);
   bool verifyMessage(covariant Object message);
 
   // --- Moderation ---

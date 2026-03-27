@@ -66,7 +66,7 @@ class ServerChatRoom implements ChatRoomReadable {
         'creator': creatorCallsign,
         'created_at': createdAt.toIso8601String(),
         'last_activity': lastActivity.toIso8601String(),
-        'message_count': messages.length,
+        'message_count': 0, // Messages are on disk, use ChatMessageStore.getMessageCount()
         'is_public': isPublic,
       };
 

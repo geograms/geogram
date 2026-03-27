@@ -65,6 +65,7 @@ import 'server/mixins/mirror_notify_mixin.dart';
 import 'server/mixins/heartbeat_mixin.dart';
 import 'server/mixins/karma_mixin.dart';
 import 'cli/themes_embedded.dart';
+import 'server/chat_message_store.dart';
 import 'server/station_client.dart';
 import 'server/update_mirror_utils.dart';
 
@@ -647,6 +648,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
   final PureTileCache _tileCache = PureTileCache();
   final Map<String, ChatRoom> _chatRooms = {};
+  late final ChatMessageStore _messageStore;
   ChatSecurity _chatSecurityData = ChatSecurity();
   final List<LogEntry> _logs = [];
   final ServerStats _stats = ServerStats();
@@ -966,8 +968,31 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     // Only initialize chat data if settings already existed (not fresh install).
     // For fresh installs, chat will be initialized after identity is established
     // via reinitializeChatForCurrentIdentity().
+    // Initialize disk-based message store
+    _messageStore = ChatMessageStore(
+      getChatPath: _getChatDataPath,
+      log: _log,
+    );
+    _messageStore.reconstructNostrEvent = ({
+      required String npub,
+      required String content,
+      String? signature,
+      required String roomId,
+      required String callsign,
+      required DateTime timestamp,
+      int? createdAtUnix,
+    }) => _reconstructNostrEvent(
+      npub: npub,
+      content: content,
+      signature: signature,
+      roomId: roomId,
+      callsign: callsign,
+      timestamp: timestamp,
+      createdAtUnix: createdAtUnix,
+    );
+
     if (settingsExisted) {
-      // Load persisted chat data
+      // Load persisted chat data (room metadata only, messages stay on disk)
       await _loadChatData();
 
       // Create default chat room if it doesn't exist
@@ -1102,9 +1127,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
               creatorCallsign: _settings.callsign,
             );
             _chatRooms[room.id] = room;
-            await _loadRoomMessages(room);
           }
-          _log('INFO', 'Loaded ${_chatRooms.length} chat rooms from channels.json');
+          _log('INFO', 'Loaded ${_chatRooms.length} chat rooms from channels.json (messages on disk)');
         } catch (e) {
           _log('ERROR', 'Failed to parse channels.json: $e');
         }
@@ -1128,7 +1152,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
               creatorCallsign: _settings.callsign,
             );
             _chatRooms[room.id] = room;
-            await _loadRoomMessages(room);
           } catch (_) {}
         }
         // Write channels.json so ChatService can see them
@@ -1251,32 +1274,18 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
           reactions: p.reactions,
           metadata: p.metadata,
         );
-        _addChatMessage(room, msg);
+        await _addChatMessage(room, msg);
       }
     } catch (e) {
       _log('ERROR', 'Failed to parse chat file ${chatFile.path}: $e');
     }
   }
 
-  /// Add a chat message to a room with deduplication.
+  /// Add a chat message to a room with deduplication and disk persistence.
   /// Returns true if the message was added, false if it was a duplicate.
-  /// Primary key: event ID (NOSTR event ID). Fallback: sender + timestamp within 2s window.
-  bool _addChatMessage(ServerChatRoom room, ChatMessage msg) {
-    // Check by event ID first (most reliable for signed messages)
-    final msgId = msg.id;
-    for (final existing in room.messages) {
-      // Primary: exact event ID match (skip auto-generated millisecond IDs)
-      if (msgId.length > 13 && existing.id == msgId) {
-        return false;
-      }
-      // Fallback: same sender + timestamp within 2-second window
-      if (existing.senderCallsign.toUpperCase() == msg.senderCallsign.toUpperCase() &&
-          existing.content == msg.content &&
-          (existing.timestamp.difference(msg.timestamp).abs().inSeconds <= 2)) {
-        return false;
-      }
-    }
-    room.messages.add(msg);
+  Future<bool> _addChatMessage(ServerChatRoom room, ChatMessage msg) async {
+    if (await _messageStore.isDuplicate(room.id, msg)) return false;
+    await _messageStore.appendMessage(room.id, msg);
     return true;
   }
 
@@ -2388,16 +2397,13 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       verified: verified,  // Set verification status
       hasSignature: signature != null,
     );
-    if (!_addChatMessage(room, message)) return; // Duplicate, skip
+    if (!await _addChatMessage(room, message)) return; // Duplicate, skip
     room.lastActivity = now;
     _stats.totalMessages++;
     _stats.lastMessage = now;
 
     // Fire event for subscribers
     _fireChatMessageEvent(message);
-
-    // Persist to disk
-    await _saveRoomMessages(roomId);
 
     // Broadcast to connected clients
     final payload = jsonEncode({
@@ -2451,31 +2457,14 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     );
   }
 
-  List<ChatMessage> getChatHistory(String roomId, {int limit = 20, String? before}) {
-    final room = _chatRooms[roomId];
-    if (room == null) return [];
-    var messages = room.messages;
-    if (before != null) {
-      final beforeDt = DateTime.tryParse(before);
-      if (beforeDt != null) {
-        final idx = messages.lastIndexWhere((m) => m.timestamp.isBefore(beforeDt));
-        if (idx < 0) return [];
-        messages = messages.sublist(0, idx + 1);
-      }
-    }
-    if (messages.length <= limit) return messages.toList();
-    return messages.sublist(messages.length - limit);
+  Future<List<ChatMessage>> getChatHistory(String roomId, {int limit = 20, String? before}) async {
+    if (!_chatRooms.containsKey(roomId)) return [];
+    return await _messageStore.getMessages(roomId, limit: limit, before: before);
   }
 
-  bool deleteMessage(String roomId, String messageId) {
-    final room = _chatRooms[roomId];
-    if (room == null) return false;
-    final idx = room.messages.indexWhere((m) => m.id == messageId);
-    if (idx >= 0) {
-      room.messages.removeAt(idx);
-      return true;
-    }
-    return false;
+  Future<bool> deleteMessage(String roomId, String messageId) async {
+    if (!_chatRooms.containsKey(roomId)) return false;
+    return await _messageStore.deleteMessage(roomId, messageId);
   }
 
   Future<void> _handleRequest(HttpRequest request) async {
@@ -2598,7 +2587,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
           roomDetails.add({
             'id': room.id,
             'name': room.name,
-            'message_count': room.messages.length,
+            'message_count': await _messageStore.getMessageCount(room.id),
             'has_config': configContent != null,
             'config_has_daily_files': configContent?.contains('daily_files') ?? false,
             'year_dirs': yearDirs,
@@ -2823,7 +2812,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     }
   }
 
-  void _handleWebSocketMessage(StationClient client, dynamic data) {
+  Future<void> _handleWebSocketMessage(StationClient client, dynamic data) async {
     try {
       client.lastActivity = DateTime.now();
 
@@ -3274,7 +3263,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
                   verified: isVerified,
                   hasSignature: hasSig,
                 );
-                if (!_addChatMessage(room, msg)) {
+                if (!await _addChatMessage(room, msg)) {
                   _log('DEBUG', 'Duplicate chat_message skipped from ${client.callsign}');
                   break;
                 }
@@ -3284,9 +3273,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
                 // Fire event for subscribers
                 _fireChatMessageEvent(msg);
-
-                // Persist to disk
-                _saveRoomMessages(roomId);
 
                 // Broadcast to other clients
                 final payload = jsonEncode({
@@ -3782,7 +3768,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         hasSignature: true,
       );
 
-      if (!_addChatMessage(room, msg)) {
+      if (!await _addChatMessage(room, msg)) {
         _log('DEBUG', 'Duplicate NOSTR relay message skipped for room $roomId');
         return;
       }
@@ -3792,9 +3778,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
       // Fire event for subscribers
       _fireChatMessageEvent(msg);
-
-      // Persist to disk
-      _saveRoomMessages(roomId);
 
       // Broadcast to other clients
       final payload = jsonEncode({
@@ -6647,12 +6630,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         content: content,
         timestamp: now,
       );
-      chatRoom.messages.add(msg);
+      await _messageStore.appendMessage(room, msg);
       chatRoom.lastActivity = now;
       _stats.totalMessages++;
-
-      // Persist to disk
-      await _saveRoomMessages(room);
 
       // Broadcast to connected clients
       final payload = jsonEncode({
@@ -7084,7 +7064,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     // Build messages HTML for default room
     final messagesHtml = StringBuffer();
     if (rooms.isNotEmpty) {
-      final messages = getChatHistory(defaultRoom, limit: 20);
+      final messages = await getChatHistory(defaultRoom, limit: 20);
       if (messages.isEmpty) {
         messagesHtml.writeln('<div class="empty-state">No messages yet</div>');
       } else {
@@ -7412,7 +7392,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     if (request.method == 'GET') {
       final limit = int.tryParse(request.uri.queryParameters['limit'] ?? '50') ?? 50;
       final before = request.uri.queryParameters['before'];
-      final messages = getChatHistory(roomId, limit: limit, before: before).map((m) => m.toJson()).toList();
+      final messages = (await getChatHistory(roomId, limit: limit, before: before)).map((m) => m.toJson()).toList();
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode({
         'room_id': roomId,
@@ -7532,7 +7512,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
           metadata: metadata,
         );
 
-        if (!_addChatMessage(room, msg)) {
+        if (!await _addChatMessage(room, msg)) {
           _log('DEBUG', 'Duplicate HTTP POST message skipped for room $roomId');
           request.response
             ..statusCode = HttpStatus.conflict
@@ -7550,9 +7530,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
         // Fire event for subscribers
         _fireChatMessageEvent(msg);
-
-        // Persist to disk under the target callsign's folder
-        await _saveRoomMessages(roomId, targetCallsign);
 
         // Broadcast to connected WebSocket clients
         final payload = jsonEncode({
@@ -7662,8 +7639,10 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       return;
     }
 
+    // Find message on disk
+    final allMessages = await _messageStore.getMessages(roomId, limit: 10000, callsign: targetCallsign);
     final targetTime = _parseApiTimestamp(timestampRaw);
-    final index = room.messages.indexWhere((msg) =>
+    final index = allMessages.indexWhere((msg) =>
         _messageTimestampMatches(msg, timestampRaw, targetTime));
     if (index == -1) {
       request.response.statusCode = 404;
@@ -7673,10 +7652,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     }
 
     final actorCallsign = callsignTag.trim().toUpperCase();
-    final updated = _toggleMessageReaction(room.messages[index], reactionKey, actorCallsign);
-    room.messages[index] = updated;
-
-    await _saveRoomMessages(roomId, targetCallsign);
+    final updated = _toggleMessageReaction(allMessages[index], reactionKey, actorCallsign);
+    await _messageStore.updateMessage(roomId, updated.id, updated, targetCallsign);
 
     // Record chat reaction karma
     karmaRecord(

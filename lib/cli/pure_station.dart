@@ -66,6 +66,7 @@ import '../server/mixins/mirror_notify_mixin.dart';
 import '../server/mixins/heartbeat_mixin.dart';
 import '../server/mixins/karma_mixin.dart';
 import 'themes_embedded.dart';
+import '../server/chat_message_store.dart';
 import '../server/station_client.dart';
 import '../server/update_mirror_utils.dart';
 
@@ -766,6 +767,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
   final PureTileCache _tileCache = PureTileCache();
   final Map<String, ChatRoom> _chatRooms = {};
+  late final ChatMessageStore _messageStore;
   ChatSecurity _chatSecurityData = ChatSecurity();
   final List<LogEntry> _logs = [];
   final ServerStats _stats = ServerStats();
@@ -1108,8 +1110,31 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
     // Only initialize chat data if settings already existed (not fresh install).
     // For fresh installs, chat will be initialized after identity is established
     // via reinitializeChatForCurrentIdentity().
+    // Initialize disk-based message store
+    _messageStore = ChatMessageStore(
+      getChatPath: _getChatDataPath,
+      log: _log,
+    );
+    _messageStore.reconstructNostrEvent = ({
+      required String npub,
+      required String content,
+      String? signature,
+      required String roomId,
+      required String callsign,
+      required DateTime timestamp,
+      int? createdAtUnix,
+    }) => _reconstructNostrEvent(
+      npub: npub,
+      content: content,
+      signature: signature,
+      roomId: roomId,
+      callsign: callsign,
+      timestamp: timestamp,
+      createdAtUnix: createdAtUnix,
+    );
+
     if (settingsExisted) {
-      // Load persisted chat data
+      // Load persisted chat data (room metadata only, messages stay on disk)
       await _loadChatData();
 
       // Create default chat room if it doesn't exist
@@ -1243,7 +1268,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
               creatorCallsign: _settings.callsign,
             );
             _chatRooms[room.id] = room;
-            await _loadRoomMessages(room);
+            // Messages stay on disk, loaded on-demand via _messageStore
           }
           _log('INFO', 'Loaded ${_chatRooms.length} chat rooms from channels.json');
         } catch (e) {
@@ -1269,7 +1294,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
               creatorCallsign: _settings.callsign,
             );
             _chatRooms[room.id] = room;
-            await _loadRoomMessages(room);
+            // Messages stay on disk, loaded on-demand via _messageStore
           } catch (_) {}
         }
         if (_chatRooms.isNotEmpty) {
