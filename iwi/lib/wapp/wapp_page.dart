@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../geoui/geoui_ast.dart';
 import '../geoui/geoui_parser.dart';
 import '../geoui/geoui_renderer.dart';
+import '../services/preferences_service.dart';
 import 'wapp_engine.dart';
 
 /// Generic wapp page — loads .ui.json screens from a wapp directory,
@@ -100,6 +101,15 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     // Build tab controller
     _tabController = TabController(length: _screenNames.length, vsync: this);
 
+    // Set up persistent KV storage
+    try {
+      final prefs = await PreferencesService.instance();
+      final baseDir = prefs.wappDataDir ?? _defaultDataDir();
+      // Use wapp folder name as the storage subdirectory
+      final wappName = widget.wappDir.split(Platform.pathSeparator).last;
+      _engine.setStorageDir('$baseDir/$wappName');
+    } catch (_) {}
+
     // Load WASM
     final wasmFile = File('${widget.wappDir}/app.wasm');
     if (!wasmFile.existsSync()) {
@@ -158,6 +168,10 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
               SnackBar(content: Text(data['message'] as String? ?? '')),
             );
           }
+        } else if (type == 'wapp.fetch_index') {
+          _handleFetchIndex(data);
+        } else if (type == 'wapp.install') {
+          _handleWappInstall(data);
         }
       } catch (_) {}
     }
@@ -169,6 +183,74 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         }
       });
     }
+  }
+
+  void _handleFetchIndex(Map<String, dynamic> data) {
+    final source = data['source'] as String? ?? '';
+    if (source.isEmpty) return;
+
+    var path = source;
+    if (!path.endsWith('.json')) {
+      if (!path.endsWith('/')) path += '/';
+      path += 'index.json';
+    }
+
+    final file = File(path);
+    if (!file.existsSync()) {
+      _outputLines.add(_OutputLine('Index not found: $path', 'err'));
+      return;
+    }
+
+    try {
+      final contents = jsonDecode(file.readAsStringSync());
+      _engine.sendMessage(jsonEncode({
+        'type': 'wapp.index',
+        'data': contents,
+      }));
+      _engine.handleEvent();
+      _drainOutbox();
+    } catch (e) {
+      _outputLines.add(_OutputLine('Failed to read index: $e', 'err'));
+    }
+  }
+
+  void _handleWappInstall(Map<String, dynamic> data) {
+    final source = data['source'] as String? ?? '';
+    final filePath = data['file'] as String? ?? '';
+    final name = data['name'] as String? ?? '';
+    final version = data['version'] as String? ?? '';
+    if (source.isEmpty || filePath.isEmpty) return;
+
+    var basePath = source;
+    if (basePath.endsWith('.json')) {
+      basePath = basePath.substring(0, basePath.lastIndexOf('/'));
+    }
+    if (!basePath.endsWith('/')) basePath += '/';
+    final srcPath = '$basePath$filePath';
+
+    final srcFile = File(srcPath);
+    if (!srcFile.existsSync()) {
+      _outputLines.add(_OutputLine('File not found: $srcPath', 'err'));
+      return;
+    }
+
+    try {
+      final baseDir = _defaultDataDir();
+      final installDir = '$baseDir/_installed/$name';
+      Directory(installDir).createSync(recursive: true);
+      final destPath = '$installDir/$name-$version.wapp';
+      srcFile.copySync(destPath);
+      _outputLines.add(_OutputLine('$name v$version installed', 'info'));
+    } catch (e) {
+      _outputLines.add(_OutputLine('Install failed: $e', 'err'));
+    }
+  }
+
+  static String _defaultDataDir() {
+    final home = Platform.environment['HOME'] ??
+        Platform.environment['USERPROFILE'] ??
+        '/tmp';
+    return '$home/.local/share/iwi/wapps';
   }
 
   void _sendCommand(String cmd) {

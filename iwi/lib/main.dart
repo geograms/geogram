@@ -61,27 +61,16 @@ class WappManifest {
     );
   }
 
-  /// Map common wapp IDs/tags to Material icons.
+  /// Map wapp IDs to Material icons.
   IconData get iconData {
     final lower = id.toLowerCase();
-    if (lower.contains('terminal') || lower.contains('shell')) {
-      return Icons.terminal;
-    }
-    if (lower.contains('chat') || lower.contains('messenger')) {
-      return Icons.chat;
-    }
-    if (lower.contains('radio') || lower.contains('aprs')) {
-      return Icons.radio;
-    }
-    if (lower.contains('settings') || lower.contains('config')) {
-      return Icons.settings;
-    }
-    if (lower.contains('map') || lower.contains('gps')) {
-      return Icons.map;
-    }
-    if (lower.contains('file') || lower.contains('storage')) {
-      return Icons.folder;
-    }
+    if (lower.contains('install')) return Icons.download;
+    if (lower.contains('terminal')) return Icons.terminal;
+    if (lower.contains('chat')) return Icons.chat;
+    if (lower.contains('radio')) return Icons.radio;
+    if (lower.contains('map')) return Icons.map;
+    if (lower.contains('file')) return Icons.folder;
+    if (lower.contains('settings')) return Icons.settings;
     return Icons.extension;
   }
 
@@ -213,10 +202,9 @@ class _LauncherPageState extends State<LauncherPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    // Combine discovered wapps + the built-in Wapp Runner tool
+    // Show only the installer + Wapp Runner dev tool
     final entries = <_LauncherEntry>[
-      // Discovered wapps from archive
-      for (final wapp in _wapps!)
+      for (final wapp in _wapps!.where((w) => w.id == 'tools.geogram.install'))
         _LauncherEntry(
           name: wapp.name,
           icon: wapp.iconData,
@@ -225,7 +213,7 @@ class _LauncherPageState extends State<LauncherPage> {
         ),
       // Built-in Wapp Runner (dev tool)
       _LauncherEntry(
-        name: 'Wapp Runner',
+        name: 'Runner',
         icon: Icons.memory,
         color: const Color(0xFF533483),
         onTap: () => Navigator.of(context).push(

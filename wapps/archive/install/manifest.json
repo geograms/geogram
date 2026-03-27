@@ -2,7 +2,7 @@
   "id":              "tools.geogram.install",
   "version":         "1.0.0",
   "kind":            "app",
-  "description":     "Wapp installer and updater",
+  "description":     "Install",
   "summary":         "Browse, install, and update wapps from a local or remote repository.\nReads index.json to detect available versions.",
   "icon":            "media/icons/install.svg",
   "tags":            ["tools", "installer", "shop", "system"],

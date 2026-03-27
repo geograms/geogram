@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -24,10 +26,39 @@ class WappEngine {
   final _stopwatch = Stopwatch();
   final _random = Random.secure();
   final Map<String, Uint8List> _kv = {};
+  String? _kvDir;
   bool _loaded = false;
 
   bool get isLoaded => _loaded;
   List<String> get outbox => List.unmodifiable(_outbox);
+
+  /// Set a storage directory for persistent KV. Call before load().
+  void setStorageDir(String dir) {
+    _kvDir = dir;
+    Directory(dir).createSync(recursive: true);
+    _loadKv();
+  }
+
+  void _loadKv() {
+    if (_kvDir == null) return;
+    final file = File('$_kvDir/kv.json');
+    if (!file.existsSync()) return;
+    try {
+      final data = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+      for (final e in data.entries) {
+        _kv[e.key] = Uint8List.fromList((e.value as String).codeUnits);
+      }
+    } catch (_) {}
+  }
+
+  void _saveKv() {
+    if (_kvDir == null) return;
+    final data = <String, String>{};
+    for (final e in _kv.entries) {
+      data[e.key] = String.fromCharCodes(e.value);
+    }
+    File('$_kvDir/kv.json').writeAsStringSync(jsonEncode(data));
+  }
 
   void sendMessage(String msg) => _inbox.add(msg);
 
@@ -105,13 +136,18 @@ class WappEngine {
         final key = _readStr(kPtr, kLen);
         final mem = _memory!.view;
         _kv[key] = Uint8List.fromList(mem.buffer.asUint8List(vPtr, vLen));
+        _saveKv();
         return 0;
       },
       params: [ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32],
       results: [ValueTy.i32],
     );
     final halKvDelete = WasmFunction(
-      (int kPtr, int kLen) => _kv.remove(_readStr(kPtr, kLen)) != null ? 0 : -1,
+      (int kPtr, int kLen) {
+        final removed = _kv.remove(_readStr(kPtr, kLen)) != null;
+        if (removed) _saveKv();
+        return removed ? 0 : -1;
+      },
       params: [ValueTy.i32, ValueTy.i32], results: [ValueTy.i32],
     );
     final halKvList = WasmFunction(

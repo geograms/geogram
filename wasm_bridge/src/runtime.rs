@@ -5,7 +5,7 @@
 //! Supports two module kinds: App (tick loop) and Library (callable functions).
 
 use crate::hal_impl;
-use crate::kv::{InMemoryKvBackend, KvBackend};
+use crate::kv::{FileKvBackend, KvBackend};
 
 use libc::c_char;
 use std::cell::UnsafeCell;
@@ -200,7 +200,9 @@ impl WasmBridge {
         WasmBridge {
             modules: Arc::new(Mutex::new(HashMap::new())),
             event_router: Arc::new(Mutex::new(EventRouter::new())),
-            kv_backend: Arc::new(InMemoryKvBackend::new()),
+            kv_backend: Arc::new(FileKvBackend::new(
+                format!("{}/geogram_cli", std::env::temp_dir().display()),
+            )),
             in_tx,
             in_rx: Mutex::new(in_rx),
             out_rx: Mutex::new(out_rx),
