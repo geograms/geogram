@@ -6,8 +6,10 @@
 #   ./build-archive.sh maps         # build and package one
 #   ./build-archive.sh clean        # remove binaries/
 #
-# Output: binaries/<id>.wapp for each module (ZIP with app.wasm,
-#         manifest.json, screens/, media/ at the root).
+# Output: binaries/<name>-<version>.wapp for each module.
+# Also generates binaries/index.json listing all packages with
+# their id, version, and size — consumers compare versions to
+# detect updates.
 #
 # Environment:
 #   WASI_SDK_PATH  — path to wasi-sdk (default: ~/wasi-sdk)
@@ -38,6 +40,12 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 
+# Read a JSON string field from a file: json_field <file> <key>
+json_field() {
+    grep -o "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$1" \
+        | head -1 | sed "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"//;s/\"//"
+}
+
 # Build and package a single wapp directory.
 build_wapp() {
     dir="$1"
@@ -46,10 +54,8 @@ build_wapp() {
     [ -f "$dir/Makefile" ] || return 1
     [ -f "$dir/manifest.json" ] || return 1
 
-    # Read id from manifest for the output filename
-    wapp_id=$(grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' "$dir/manifest.json" \
-        | head -1 | sed 's/.*"id"[[:space:]]*:[[:space:]]*"//;s/"//')
-    [ -z "$wapp_id" ] && wapp_id="$name"
+    version=$(json_field "$dir/manifest.json" version)
+    [ -z "$version" ] && version="0.0.0"
 
     echo "[$name] compiling..."
     if ! make -C "$dir" --no-print-directory 2>&1; then
@@ -59,8 +65,8 @@ build_wapp() {
 
     [ -f "$dir/app.wasm" ] || { echo "[$name] no app.wasm after build"; return 1; }
 
-    echo "[$name] packaging $wapp_id.wapp..."
-    wapp_file="$OUTPUT_DIR/$wapp_id.wapp"
+    wapp_file="$OUTPUT_DIR/$name-$version.wapp"
+    echo "[$name] packaging $name-$version.wapp..."
     rm -f "$wapp_file"
 
     # ZIP from inside the wapp dir so paths are at the root
@@ -79,13 +85,39 @@ build_wapp() {
     else
         human="$(echo "$size" | awk '{printf "%.1fKB", $1/1024}')"
     fi
-    echo "[$name] → $wapp_id.wapp ($human)"
+    echo "[$name] → $name-$version.wapp ($human)"
     return 0
+}
+
+# Generate binaries/index.json from all .wapp files present.
+generate_index() {
+    index="$OUTPUT_DIR/index.json"
+    printf '[\n' > "$index"
+    first=1
+    for wapp in "$OUTPUT_DIR"/*.wapp; do
+        [ -f "$wapp" ] || continue
+        # Extract manifest.json from the zip
+        manifest=$(unzip -p "$wapp" manifest.json 2>/dev/null) || continue
+        fname=$(basename "$wapp")
+        size=$(wc -c < "$wapp" | tr -d ' ')
+        wapp_id=$(echo "$manifest" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
+            | head -1 | sed 's/.*"id"[[:space:]]*:[[:space:]]*"//;s/"//')
+        version=$(echo "$manifest" | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' \
+            | head -1 | sed 's/.*"version"[[:space:]]*:[[:space:]]*"//;s/"//')
+        description=$(echo "$manifest" | grep -o '"description"[[:space:]]*:[[:space:]]*"[^"]*"' \
+            | head -1 | sed 's/.*"description"[[:space:]]*:[[:space:]]*"//;s/"//')
+
+        [ "$first" = 1 ] && first=0 || printf ',\n' >> "$index"
+        printf '  {"file":"%s","id":"%s","version":"%s","size":%s,"description":"%s"}' \
+            "$fname" "$wapp_id" "$version" "$size" "$description" >> "$index"
+    done
+    printf '\n]\n' >> "$index"
 }
 
 # Single module mode
 if [ -n "${1:-}" ] && [ -d "$ARCHIVE_DIR/$1" ]; then
     build_wapp "$ARCHIVE_DIR/$1"
+    generate_index
     exit $?
 fi
 
@@ -114,11 +146,13 @@ done
 echo "Results: $BUILT/$TOTAL built"
 [ "$FAILED" -gt 0 ] && echo "  $FAILED failed" && exit 1
 
+generate_index
+
 # Summary
 echo ""
 echo "Packages:"
-printf "  %-35s %s\n" "FILE" "SIZE"
-printf "  %-35s %s\n" "-----------------------------------" "--------"
+printf "  %-25s %s\n" "FILE" "SIZE"
+printf "  %-25s %s\n" "-------------------------" "--------"
 for wapp in "$OUTPUT_DIR"/*.wapp; do
     [ -f "$wapp" ] || continue
     fname=$(basename "$wapp")
@@ -128,5 +162,5 @@ for wapp in "$OUTPUT_DIR"/*.wapp; do
     else
         human="$(echo "$size" | awk '{printf "%.1fKB", $1/1024}')"
     fi
-    printf "  %-35s %s\n" "$fname" "$human"
+    printf "  %-25s %s\n" "$fname" "$human"
 done
