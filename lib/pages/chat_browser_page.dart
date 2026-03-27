@@ -161,6 +161,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   // Download progress event subscription
   EventSubscription<ChatDownloadProgressEvent>? _downloadSubscription;
+  // Live message updates from station server (for local station device)
+  EventSubscription<ChatMessageEvent>? _chatMessageSubscription;
 
   // Contact nickname map for display in chat bubbles
   Map<String, String> _nicknameMap = {};
@@ -181,6 +183,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _subscribeToFileChanges();
     _subscribeToDebugActions();
     _subscribeToDownloadEvents();
+    _subscribeToStationChatEvents();
     _startRelayStatusChecker();
     _startMessagePolling();
     _nicknameRefreshTimer = Timer.periodic(
@@ -223,6 +226,18 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
       // ContactService storage may not be initialized (remote device mode)
       LogService().log('DEBUG _loadNicknameMap: $e');
     }
+  }
+
+  void _subscribeToStationChatEvents() {
+    // When this device IS the station, listen for new messages from the
+    // station server's EventBus so the chat updates live without WebSocket.
+    if (!ProfileService().getProfile().isRelay) return;
+    _chatMessageSubscription = EventBus().on<ChatMessageEvent>((event) {
+      // Refresh if we're viewing the room that got a new message
+      if (_selectedChannel?.id == event.roomId) {
+        _refreshLocalMessages();
+      }
+    });
   }
 
   void _subscribeToDownloadEvents() {
@@ -341,6 +356,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
     _fileChangeSubscription?.cancel();
     _debugActionSubscription?.cancel();
     _downloadSubscription?.cancel();
+    _chatMessageSubscription?.cancel();
     _nicknameRefreshTimer?.cancel();
     _chatService.stopWatching();
     _stationStatusTimer?.cancel();
