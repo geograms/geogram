@@ -1079,14 +1079,15 @@ class WebSocketService {
       return (statusCode: 200, contentType: 'text/html', body: utf8.encode(html));
     }
 
-    // Parse: /{folderSlug}/{rest}
-    final parts = filePath.split('/').where((p) => p.isNotEmpty).toList();
+    // Parse: /{folderSlug}/{rest} — decode full path first to handle encoded characters
+    final decodedPath = Uri.decodeFull(filePath);
+    final parts = decodedPath.split('/').where((p) => p.isNotEmpty).toList();
     if (parts.isEmpty) {
       return (statusCode: 404, contentType: 'text/plain', body: utf8.encode('Not Found'));
     }
 
-    final folderSlug = Uri.decodeComponent(parts[0]);
-    final remainingPath = parts.length > 1 ? parts.sublist(1).map(Uri.decodeComponent).join('/') : '';
+    final folderSlug = parts[0];
+    final remainingPath = parts.length > 1 ? parts.sublist(1).join('/') : '';
 
     final entry = folders.cast<SharedFolder?>().firstWhere(
       (f) => f?.sanitizedFilename == folderSlug,
@@ -1131,6 +1132,7 @@ class WebSocketService {
 
     // Serve actual file or subdirectory from disk
     final targetPath = '$diskPath/$remainingPath';
+    LogService().log('Shared: Resolving "$remainingPath" in "$diskPath" -> "$targetPath"');
 
     // Check if it's a subdirectory → generate listing
     final targetDir = Directory(targetPath);
