@@ -307,13 +307,17 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         .firstOrNull;
     if (mapGroup != null) return _buildMapScreen(screen, mapGroup);
 
-    // Check if it's a terminal-like screen (has watch/output)
+    // Check if it's a terminal-like screen:
+    // - has output group ($type: "output"), or
+    // - has output lines + a string field
+    final hasOutputGroup = screen.children.any((c) =>
+        c.keyword == 'group' && c.type == 'output');
     final hasOutput = _outputLines.isNotEmpty ||
+        hasOutputGroup ||
         screen.children.any((c) =>
             c.keyword == 'group' &&
             c.children.any((gc) => gc.keyword == 'watch'));
-    if (hasOutput && screen.childrenOf('group').any((g) =>
-        g.children.any((c) => c.keyword == 'field' && c.type == 'string'))) {
+    if (hasOutput) {
       return _buildTerminalScreen(screen);
     }
 
@@ -401,6 +405,10 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           }));
           _engine.handleEvent();
           _drainOutbox();
+          // Switch to first tab (Shop) to show results
+          if (_tabController != null && _tabController!.index != 0) {
+            _tabController!.animateTo(0);
+          }
         }
       },
     );

@@ -608,13 +608,15 @@ void module_init(void) {
 
     send_output("Wapp Installer v1.0", "info");
     if (source[0]) {
-        char msg[256] = "Source: ";
-        str_cat(msg, source, sizeof(msg));
-        send_output(msg, "out");
-        send_output("Type 'list' to browse available wapps.", "info");
+        /* Auto-fetch catalog on startup */
+        if (source_is_url()) {
+            fetch_index_url();
+        } else {
+            fetch_index_file();
+        }
     } else {
         send_output("No source configured.", "info");
-        send_output("Use: source <url-or-path-to-index.json-dir>", "info");
+        send_output("Set a repository path in Settings.", "info");
     }
 }
 
@@ -704,9 +706,14 @@ void module_handle_event(void) {
                             if (new_source[0]) {
                                 str_copy(source, new_source, sizeof(source));
                                 save_source();
-                                char msg[256] = "Source set to: ";
-                                str_cat(msg, source, sizeof(msg));
-                                send_output(msg, "info");
+                                /* Toast confirmation */
+                                hal_msg_send("{\"type\":\"ui.toast\",\"message\":\"Settings saved\"}", 46);
+                                /* Auto-fetch catalog */
+                                if (source_is_url()) {
+                                    fetch_index_url();
+                                } else {
+                                    fetch_index_file();
+                                }
                             }
                             return;
                         }
