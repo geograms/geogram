@@ -150,6 +150,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       try {
         final data = jsonDecode(raw) as Map<String, dynamic>;
         final type = data['type'] as String? ?? '';
+
         if (type == 'ui.append') {
           final item = data['item'] as Map<String, dynamic>? ?? {};
           _outputLines.add(_OutputLine(
@@ -173,7 +174,9 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         } else if (type == 'wapp.install') {
           _handleWappInstall(data);
         }
-      } catch (_) {}
+      } catch (e, st) {
+        debugPrint('WappPage outbox error: $e\n$st');
+      }
     }
     if (changed && mounted) {
       setState(() {});
@@ -195,22 +198,28 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       path += 'index.json';
     }
 
+
     final file = File(path);
     if (!file.existsSync()) {
+
       _outputLines.add(_OutputLine('Index not found: $path', 'err'));
+      if (mounted) setState(() {});
       return;
     }
 
     try {
       final contents = jsonDecode(file.readAsStringSync());
-      _engine.sendMessage(jsonEncode({
-        'type': 'wapp.index',
-        'data': contents,
-      }));
+      final msg = jsonEncode({'type': 'wapp.index', 'data': contents});
+
+      _engine.sendMessage(msg);
       _engine.handleEvent();
       _drainOutbox();
+
+      if (mounted) setState(() {});
     } catch (e) {
+
       _outputLines.add(_OutputLine('Failed to read index: $e', 'err'));
+      if (mounted) setState(() {});
     }
   }
 
@@ -307,27 +316,59 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         .firstOrNull;
     if (mapGroup != null) return _buildMapScreen(screen, mapGroup);
 
-    // Check if it's a terminal-like screen:
-    // - has output group ($type: "output"), or
-    // - has output lines + a string field
+    // Output-only screen (e.g. Shop catalog) — no command input
     final hasOutputGroup = screen.children.any((c) =>
         c.keyword == 'group' && c.type == 'output');
-    final hasOutput = _outputLines.isNotEmpty ||
-        hasOutputGroup ||
-        screen.children.any((c) =>
-            c.keyword == 'group' &&
-            c.children.any((gc) => gc.keyword == 'watch'));
-    if (hasOutput) {
-      return _buildTerminalScreen(screen);
+    if (hasOutputGroup) {
+      return _buildOutputScreen();
+    }
+
+    // Terminal screen — has output + command input
+    final hasTerminal = screen.children.any((c) =>
+        c.keyword == 'group' &&
+        c.children.any((gc) => gc.keyword == 'watch'));
+    if (hasTerminal || (_outputLines.isNotEmpty && !hasOutputGroup)) {
+      return _buildTerminalScreen();
     }
 
     // Settings-like screen — use GeoUI renderer
     return _buildSettingsScreen(screen);
   }
 
+  // ── Output-only screen (no command input) ─────────────────────────
+
+  Widget _buildOutputScreen() {
+    if (_outputLines.isEmpty) {
+      return const Center(
+        child: Text('No wapps loaded yet.\nSet a repository path in Settings.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey)),
+      );
+    }
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.all(12),
+      itemCount: _outputLines.length,
+      itemBuilder: (context, i) {
+        final line = _outputLines[i];
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 1),
+          child: Text(
+            line.text,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              color: _outputColor(line.level),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   // ── Terminal screen ────────────────────────────────────────────────
 
-  Widget _buildTerminalScreen(GeoUiBlock screen) {
+  Widget _buildTerminalScreen() {
     return Column(
       children: [
         Expanded(
@@ -342,13 +383,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
                 style: TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 13,
-                  color: switch (line.level) {
-                    'cmd' => const Color(0xFF7EE787),
-                    'err' || 'error' => const Color(0xFFF85149),
-                    'info' => const Color(0xFF58A6FF),
-                    'warn' || 'warning' => const Color(0xFFE3B341),
-                    _ => const Color(0xFFE6EDF3),
-                  },
+                  color: _outputColor(line.level),
                 ),
               );
             },
@@ -390,6 +425,14 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     );
   }
 
+  Color _outputColor(String level) => switch (level) {
+        'cmd' => const Color(0xFF7EE787),
+        'err' || 'error' => const Color(0xFFF85149),
+        'info' => const Color(0xFF58A6FF),
+        'warn' || 'warning' => const Color(0xFFE3B341),
+        _ => const Color(0xFFE6EDF3),
+      };
+
   // ── Settings screen ────────────────────────────────────────────────
 
   Widget _buildSettingsScreen(GeoUiBlock screen) {
@@ -398,6 +441,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       bindings: _WappFieldBindings(_fieldValues, () => setState(() {})),
       onAction: (action) {
         if (action == 'save') {
+
           _engine.sendMessage(jsonEncode({
             'type': 'action',
             'action': 'save',
@@ -405,6 +449,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           }));
           _engine.handleEvent();
           _drainOutbox();
+
           // Switch to first tab (Shop) to show results
           if (_tabController != null && _tabController!.index != 0) {
             _tabController!.animateTo(0);
