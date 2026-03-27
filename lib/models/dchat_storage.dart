@@ -25,6 +25,7 @@ class DChatRoomMetadata {
   final String? description;
   final String ownerNpub;
   final String? roomNpub;
+  final List<String> seedPeerHints;
   final int currentEpoch;
   final int? snapshotStart;
   final String state;
@@ -38,6 +39,7 @@ class DChatRoomMetadata {
     this.description,
     required this.ownerNpub,
     this.roomNpub,
+    this.seedPeerHints = const [],
     this.currentEpoch = 0,
     this.snapshotStart,
     this.state = 'active',
@@ -54,6 +56,7 @@ class DChatRoomMetadata {
     String? ownerNpub,
     String? roomNpub,
     bool clearRoomNpub = false,
+    List<String>? seedPeerHints,
     int? currentEpoch,
     int? snapshotStart,
     bool clearSnapshotStart = false,
@@ -68,6 +71,7 @@ class DChatRoomMetadata {
       description: clearDescription ? null : (description ?? this.description),
       ownerNpub: ownerNpub ?? this.ownerNpub,
       roomNpub: clearRoomNpub ? null : (roomNpub ?? this.roomNpub),
+      seedPeerHints: seedPeerHints ?? List<String>.from(this.seedPeerHints),
       currentEpoch: currentEpoch ?? this.currentEpoch,
       snapshotStart: clearSnapshotStart
           ? null

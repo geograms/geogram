@@ -1,15 +1,20 @@
+import 'dart:ffi';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:geogram/models/distributed_chat.dart';
 import 'package:geogram/platform/file_system_service.dart';
-import 'package:geogram/services/chat_service.dart';
+import 'package:geogram/services/chat_service.dart'
+    show PermissionDeniedException;
 import 'package:geogram/services/distributed_chat_service.dart';
 import 'package:geogram/services/profile_storage.dart';
 import 'package:geogram/util/nostr_key_generator.dart';
 import 'package:path/path.dart' as p;
+import 'package:sqlite3/open.dart' as sqlite_open;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  _configureSqliteForTests();
 
   setUpAll(() async {
     await FileSystemService.instance.init();
@@ -21,14 +26,12 @@ void main() {
     late _TestInstance member;
 
     setUp(() async {
-      ChatService().reset();
       admin = await _TestInstance.create('admin');
       moderator = await _TestInstance.create('moderator');
       member = await _TestInstance.create('member');
     });
 
     tearDown(() async {
-      ChatService().reset();
       await admin.dispose();
       await moderator.dispose();
       await member.dispose();
@@ -48,16 +51,30 @@ void main() {
         expect(created.config?.isDistributed, isTrue);
         expect(created.config?.dailyFiles, isTrue);
         expect(await admin.service.hasRoomSecret(roomId), isTrue);
+        expect(
+          await admin.storage.exists('dchat/$roomId/room.sqlite3'),
+          isTrue,
+        );
+        expect(
+          await admin.storage.exists('dchat/$roomId/device.sqlite3'),
+          isTrue,
+        );
 
         final invite = await admin.service.createInvite(roomId);
         final preApprovalMessage = await admin.service.sendMessage(
           roomId,
           'Before approval',
         );
-        final dailyPath =
-            '$roomId/${preApprovalMessage.dateTime.year}/${preApprovalMessage.datePortion}_chat.txt';
-        expect(await admin.storage.exists(dailyPath), isTrue);
+        expect(preApprovalMessage.content, 'Before approval');
+        expect(
+          await admin.storage.exists('dchat/$roomId/room.sqlite3'),
+          isTrue,
+        );
         expect(await admin.storage.exists('$roomId/messages.txt'), isFalse);
+        expect(
+          await admin.storage.exists('$roomId/extra/dchat/control.jsonl'),
+          isFalse,
+        );
 
         await moderator.service.acceptInviteAndRequestJoin(
           invite,
@@ -164,12 +181,25 @@ void main() {
         expect(memberContents, contains('Moderator online'));
         expect(memberContents, isNot(contains('After kick')));
 
-        final controlLog = await admin.storage.readString(
-          '$roomId/extra/dchat/control.jsonl',
+        final controlEvents = await admin.service.loadControlEvents(roomId);
+        final controlTypes = controlEvents.map((event) => event.type).toList();
+        expect(
+          controlTypes,
+          contains(DistributedChatControlType.roomKeyShared),
         );
-        expect(controlLog, isNotNull);
-        expect(controlLog, contains('room_key_shared'));
-        expect(controlLog, contains('member_removed'));
+        expect(
+          controlTypes,
+          contains(DistributedChatControlType.memberRemoved),
+        );
+
+        expect(
+          await admin.storage.exists('dchat/$roomId/room.sqlite3'),
+          isTrue,
+        );
+        expect(
+          await member.storage.exists('dchat/$roomId/room.sqlite3'),
+          isTrue,
+        );
       },
     );
   });
@@ -208,13 +238,16 @@ class _TestInstance {
 
   static Future<_TestInstance> create(String label) async {
     final rootDir = await Directory.systemTemp.createTemp('dchat-$label-');
-    final appPath = p.join(rootDir.path, 'chat');
+    final keys = NostrKeyGenerator.generateKeyPair();
+    final profilePath = p.join(rootDir.path, keys.callsign);
+    await Directory(profilePath).create(recursive: true);
+    final appPath = p.join(profilePath, 'chat');
     await Directory(appPath).create(recursive: true);
     return _TestInstance._(
       rootDir: rootDir,
       appPath: appPath,
-      storage: FilesystemProfileStorage(appPath),
-      keys: NostrKeyGenerator.generateKeyPair(),
+      storage: FilesystemProfileStorage(profilePath),
+      keys: keys,
       roomSecrets: <String, String>{},
     );
   }
@@ -222,6 +255,42 @@ class _TestInstance {
   Future<void> dispose() async {
     if (await rootDir.exists()) {
       await rootDir.delete(recursive: true);
+    }
+  }
+}
+
+void _configureSqliteForTests() {
+  final cwd = Directory.current.path;
+
+  if (Platform.isLinux) {
+    final libPath = '$cwd/third_party/sqlite/linux-x64/libsqlite3.so.0';
+    if (File(libPath).existsSync()) {
+      sqlite_open.open.overrideFor(
+        sqlite_open.OperatingSystem.linux,
+        () => DynamicLibrary.open(libPath),
+      );
+    }
+    return;
+  }
+
+  if (Platform.isMacOS) {
+    final libPath = '$cwd/third_party/sqlite/macos-x64/libsqlite3.dylib';
+    if (File(libPath).existsSync()) {
+      sqlite_open.open.overrideFor(
+        sqlite_open.OperatingSystem.macOS,
+        () => DynamicLibrary.open(libPath),
+      );
+    }
+    return;
+  }
+
+  if (Platform.isWindows) {
+    final libPath = '$cwd/third_party/sqlite/windows-x64/sqlite3.dll';
+    if (File(libPath).existsSync()) {
+      sqlite_open.open.overrideFor(
+        sqlite_open.OperatingSystem.windows,
+        () => DynamicLibrary.open(libPath),
+      );
     }
   }
 }

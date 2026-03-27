@@ -38,6 +38,10 @@ class DChatRoomStore {
 
   String get absoluteRoomPath => _roomStorage.basePath;
 
+  Future<bool> exists() async {
+    return _roomStorage.exists('room.sqlite3');
+  }
+
   Future<void> open() async {
     if (_opened) {
       return;
@@ -61,18 +65,20 @@ class DChatRoomStore {
           description,
           owner_npub,
           room_npub,
+          seed_peer_hints_json,
           current_epoch,
           snapshot_start,
           state,
           join_policy,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(room_id) DO UPDATE SET
           title = excluded.title,
           description = excluded.description,
           owner_npub = excluded.owner_npub,
           room_npub = excluded.room_npub,
+          seed_peer_hints_json = excluded.seed_peer_hints_json,
           current_epoch = excluded.current_epoch,
           snapshot_start = excluded.snapshot_start,
           state = excluded.state,
@@ -85,6 +91,7 @@ class DChatRoomStore {
           metadata.description,
           metadata.ownerNpub,
           metadata.roomNpub,
+          jsonEncode(metadata.seedPeerHints),
           metadata.currentEpoch,
           metadata.snapshotStart,
           metadata.state,
@@ -97,6 +104,9 @@ class DChatRoomStore {
   }
 
   Future<DChatRoomMetadata?> loadMetadata() async {
+    if (!await exists()) {
+      return null;
+    }
     await open();
     return _roomDatabase.read((db) {
       final rows = db.select('''
@@ -106,6 +116,7 @@ class DChatRoomStore {
           description,
           owner_npub,
           room_npub,
+          seed_peer_hints_json,
           current_epoch,
           snapshot_start,
           state,
@@ -158,6 +169,9 @@ class DChatRoomStore {
   }
 
   Future<List<DChatMemberRecord>> listMembers() async {
+    if (!await exists()) {
+      return const [];
+    }
     await open();
     return _roomDatabase.read((db) {
       final rows = db.select('''
@@ -208,9 +222,40 @@ class DChatRoomStore {
     });
   }
 
+  Future<bool> hasControlEvent(String eventId) async {
+    if (!await exists()) {
+      return false;
+    }
+    await open();
+    return _roomDatabase.read((db) {
+      final rows = db.select(
+        'SELECT 1 FROM control_events WHERE event_id = ? LIMIT 1;',
+        [eventId],
+      );
+      return rows.isNotEmpty;
+    });
+  }
+
+  Future<int> nextControlLamport() async {
+    if (!await exists()) {
+      return 1;
+    }
+    await open();
+    return _roomDatabase.read((db) {
+      final rows = db.select(
+        'SELECT COALESCE(MAX(lamport), 0) AS max_lamport FROM control_events;',
+      );
+      final current = rows.first['max_lamport'] as int? ?? 0;
+      return current + 1;
+    });
+  }
+
   Future<List<DistributedChatControlEvent>> listControlEvents({
     int limit = 500,
   }) async {
+    if (!await exists()) {
+      return const [];
+    }
     await open();
     return _roomDatabase.read((db) {
       final rows = db.select(
@@ -257,6 +302,9 @@ class DChatRoomStore {
   }
 
   Future<List<DChatEpochRecord>> listEpochs() async {
+    if (!await exists()) {
+      return const [];
+    }
     await open();
     return _roomDatabase.read((db) {
       final rows = db.select('''
@@ -286,6 +334,9 @@ class DChatRoomStore {
   }
 
   Future<List<DChatEpochKeyBox>> listEpochKeyBoxes(int epoch) async {
+    if (!await exists()) {
+      return const [];
+    }
     await open();
     return _roomDatabase.read((db) {
       final rows = db.select(
@@ -337,9 +388,44 @@ class DChatRoomStore {
     });
   }
 
-  Future<List<DChatMessageRecord>> listMessages({int limit = 200}) async {
+  Future<bool> hasMessage(String messageId) async {
+    if (!await exists()) {
+      return false;
+    }
     await open();
     return _roomDatabase.read((db) {
+      final rows = db.select(
+        'SELECT 1 FROM messages WHERE message_id = ? LIMIT 1;',
+        [messageId],
+      );
+      return rows.isNotEmpty;
+    });
+  }
+
+  Future<int> nextMessageLamport() async {
+    if (!await exists()) {
+      return 1;
+    }
+    await open();
+    return _roomDatabase.read((db) {
+      final rows = db.select(
+        'SELECT COALESCE(MAX(lamport), 0) AS max_lamport FROM messages;',
+      );
+      final current = rows.first['max_lamport'] as int? ?? 0;
+      return current + 1;
+    });
+  }
+
+  Future<List<DChatMessageRecord>> listMessageRecords({
+    int limit = 200,
+    bool includeDeleted = false,
+  }) async {
+    if (!await exists()) {
+      return const [];
+    }
+    await open();
+    return _roomDatabase.read((db) {
+      final whereClause = includeDeleted ? '' : 'WHERE deleted_at IS NULL';
       final rows = db.select(
         '''
         SELECT
@@ -355,12 +441,34 @@ class DChatRoomStore {
           raw_event_json,
           deleted_at
         FROM messages
+        $whereClause
         ORDER BY epoch DESC, lamport DESC, authored_at DESC, message_id DESC
         LIMIT ?;
         ''',
         [limit.clamp(1, 5000)],
       );
       return rows.reversed.map(_messageFromRow).toList();
+    });
+  }
+
+  Future<List<DChatMessageRecord>> listMessages({int limit = 200}) {
+    return listMessageRecords(limit: limit, includeDeleted: false);
+  }
+
+  Future<void> markMessageDeleted(
+    String messageId, {
+    required DateTime deletedAt,
+  }) async {
+    await open();
+    await _roomDatabase.write((db) {
+      db.execute(
+        '''
+        UPDATE messages
+        SET deleted_at = ?
+        WHERE message_id = ?;
+        ''',
+        [_millis(deletedAt), messageId],
+      );
     });
   }
 
@@ -418,6 +526,9 @@ class DChatRoomStore {
   }
 
   Future<DChatMediaRecord?> getMediaBySha1(String sha1Digest) async {
+    if (!await exists()) {
+      return null;
+    }
     await open();
     return _roomDatabase.read((db) {
       final rows = db.select(
@@ -465,6 +576,9 @@ class DChatRoomStore {
   }
 
   Future<List<DChatMediaRecord>> listMediaForMessage(String messageId) async {
+    if (!await exists()) {
+      return const [];
+    }
     await open();
     return _roomDatabase.read((db) {
       final rows = db.select(
@@ -517,6 +631,9 @@ class DChatRoomStore {
   }
 
   Future<DChatSyncCursor?> loadSyncCursor(String peerNpub) async {
+    if (!await exists()) {
+      return null;
+    }
     await open();
     return _roomDatabase.read((db) {
       final rows = db.select(
@@ -664,6 +781,7 @@ class DChatRoomStore {
         description TEXT,
         owner_npub TEXT NOT NULL,
         room_npub TEXT,
+        seed_peer_hints_json TEXT NOT NULL DEFAULT '[]',
         current_epoch INTEGER NOT NULL DEFAULT 0,
         snapshot_start INTEGER,
         state TEXT NOT NULL DEFAULT 'active',
@@ -835,6 +953,9 @@ class DChatRoomStore {
       description: row['description'] as String?,
       ownerNpub: row['owner_npub'] as String,
       roomNpub: row['room_npub'] as String?,
+      seedPeerHints: _decodeStringList(
+        row['seed_peer_hints_json'] as String? ?? '[]',
+      ),
       currentEpoch: row['current_epoch'] as int? ?? 0,
       snapshotStart: row['snapshot_start'] as int?,
       state: row['state'] as String? ?? 'active',
@@ -1046,5 +1167,17 @@ class DChatRoomStore {
       return null;
     }
     return _fromMillis(value);
+  }
+
+  List<String> _decodeStringList(String rawJson) {
+    try {
+      final decoded = jsonDecode(rawJson);
+      if (decoded is List) {
+        return decoded.map((value) => value.toString()).toList();
+      }
+    } catch (_) {
+      // Best-effort fallback.
+    }
+    return const [];
   }
 }

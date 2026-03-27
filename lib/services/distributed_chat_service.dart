@@ -5,14 +5,16 @@ import 'package:crypto/crypto.dart';
 
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
+import '../models/dchat_storage.dart';
 import '../models/distributed_chat.dart';
 import '../util/backup_encryption.dart';
 import '../util/chat_format.dart';
 import '../util/nostr_crypto.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_key_generator.dart';
-import 'chat_service.dart';
+import 'chat_service.dart' show PermissionDeniedException;
 import 'config_service.dart';
+import 'dchat_room_store.dart';
 import 'profile_storage.dart';
 
 typedef LoadDistributedChatRoomSecret = Future<String?> Function(String roomId);
@@ -20,16 +22,12 @@ typedef SaveDistributedChatRoomSecret =
     Future<void> Function(String roomId, String roomNsec);
 typedef DeleteDistributedChatRoomSecret = Future<void> Function(String roomId);
 
-/// Orchestrates distributed restricted chat rooms on top of [ChatService].
+/// Orchestrates distributed restricted chat rooms on top of the dchat SQLite
+/// room store.
 ///
-/// The room folder remains the durable source of truth. This service adds:
-/// - room invite/admission capability handling
-/// - signed control-log entries
-/// - room-key distribution for moderators/admins
-/// - peer-to-peer room synchronization for bootstrap and repair flows
-///
-/// It intentionally reuses [ChatService] for room configs, membership rules,
-/// moderation, and per-day message storage instead of duplicating chat logic.
+/// The public API stays aligned with the previous prototype, but room state,
+/// control events, and messages are now persisted under `/{callsign}/dchat/`
+/// via [DChatRoomStore] instead of legacy chat text files.
 class DistributedChatService {
   final String appPath;
   final ProfileStorage storage;
@@ -96,16 +94,6 @@ class DistributedChatService {
     return sha256.convert(utf8.encode(appPath)).toString().substring(0, 16);
   }
 
-  String _controlLogPath(String roomId) => '$roomId/extra/dchat/control.jsonl';
-
-  Future<T> _withChat<T>(Future<T> Function(ChatService chat) action) async {
-    final chat = ChatService();
-    chat.reset();
-    chat.setStorage(storage);
-    await chat.initializeApp(appPath, creatorNpub: profileNpub);
-    return action(chat);
-  }
-
   Future<ChatChannel> _requireRoom(String roomId) async {
     final room = await getRoom(roomId);
     if (room == null) {
@@ -124,38 +112,34 @@ class DistributedChatService {
   }
 
   Future<ChatChannel?> getRoom(String roomId) async {
-    return _withChat((chat) async => chat.getChannel(roomId));
+    final snapshot = await _loadSnapshot(roomId);
+    if (snapshot == null) {
+      return null;
+    }
+    return _snapshotToChannel(snapshot);
   }
 
   Future<List<ChatMessage>> loadMessages(
     String roomId, {
     int limit = 1000,
   }) async {
-    return _withChat((chat) async => chat.loadMessages(roomId, limit: limit));
+    final records = await _loadMessageRecords(
+      roomId,
+      limit: limit,
+      includeDeleted: false,
+    );
+    return records.map(_chatMessageFromRecord).toList();
   }
 
   Future<List<DistributedChatControlEvent>> loadControlEvents(
     String roomId,
   ) async {
-    final content = await storage.readString(_controlLogPath(roomId));
-    if (content == null || content.trim().isEmpty) {
-      return const [];
-    }
-
-    final events = <DistributedChatControlEvent>[];
-    for (final line in content.split('\n')) {
-      final trimmed = line.trim();
-      if (trimmed.isEmpty) {
-        continue;
+    return _withStore(roomId, (store) async {
+      if (!await store.exists()) {
+        return const <DistributedChatControlEvent>[];
       }
-      try {
-        final json = jsonDecode(trimmed) as Map<String, dynamic>;
-        events.add(DistributedChatControlEvent.fromJson(json));
-      } catch (_) {
-        // Skip malformed lines in a best-effort way.
-      }
-    }
-    return events;
+      return store.listControlEvents(limit: 100000);
+    });
   }
 
   Future<bool> hasRoomSecret(String roomId) async {
@@ -182,33 +166,6 @@ class DistributedChatService {
     final roomKeys = NostrKeyGenerator.generateKeyPair();
     await _saveRoomSecret(roomId, roomKeys.nsec);
 
-    final config = ChatChannelConfig(
-      id: roomId,
-      name: name,
-      description: description,
-      visibility: 'RESTRICTED',
-      owner: profileNpub,
-      admins: const [],
-      moderatorNpubs: const [],
-      members: [profileNpub],
-      banned: const [],
-      pendingApplicants: const [],
-      dailyFiles: true,
-      distributionMode: 'distributed',
-      roomNpub: roomKeys.npub,
-      roomState: 'active',
-      joinPolicy: 'approval_required',
-      seedPeerHints: seedPeerHints,
-    );
-    final channel = ChatChannel.group(
-      id: roomId,
-      name: name,
-      participants: const [],
-      description: description,
-      config: config,
-    );
-    await _withChat((chat) async => chat.createChannel(channel));
-
     final created = DistributedChatControlEvent.create(
       type: DistributedChatControlType.roomCreated,
       roomId: roomId,
@@ -220,7 +177,6 @@ class DistributedChatService {
         'owner_npub': profileNpub,
         'room_npub': roomKeys.npub,
         'distribution_mode': 'distributed',
-        'daily_files': true,
         'join_policy': 'approval_required',
         if (seedPeerHints.isNotEmpty) 'seed_peer_hints': seedPeerHints,
       },
@@ -528,11 +484,33 @@ class DistributedChatService {
     );
     messageEvent.signWithNsec(profileNsec!);
 
+    await _withStore(roomId, (store) async {
+      final metadataRecord = await store.loadMetadata();
+      if (metadataRecord == null) {
+        throw Exception('Room not found: $roomId');
+      }
+      final record = DChatMessageRecord(
+        messageId: messageEvent.id ?? messageEvent.calculateId(),
+        epoch: metadataRecord.currentEpoch,
+        lamport: await store.nextMessageLamport(),
+        authorNpub: profileNpub,
+        authoredAt: DateTime.fromMillisecondsSinceEpoch(
+          messageEvent.createdAt * 1000,
+          isUtc: true,
+        ),
+        ciphertext: Uint8List.fromList(utf8.encode(content)),
+        encryptionScheme: 'plain',
+        ciphertextSha1: sha1.convert(utf8.encode(content)).toString(),
+        rawEventJson: jsonEncode(messageEvent.toJson()),
+      );
+      await store.appendMessage(record);
+    });
+
     final eventDateTime = DateTime.fromMillisecondsSinceEpoch(
       messageEvent.createdAt * 1000,
       isUtc: true,
     ).toLocal();
-    final message = ChatMessage(
+    return ChatMessage(
       author: profileCallsign,
       timestamp: ChatFormat.formatTimestamp(eventDateTime),
       content: content,
@@ -542,10 +520,9 @@ class DistributedChatService {
         'created_at': messageEvent.createdAt.toString(),
         if (messageEvent.sig != null) 'signature': messageEvent.sig!,
         if (messageEvent.id != null) 'event_id': messageEvent.id!,
+        'enc': 'plain',
       },
     );
-    await _withChat((chat) async => chat.saveMessage(roomId, message));
-    return message;
   }
 
   Future<void> syncRoomFromPeer(
@@ -569,21 +546,40 @@ class DistributedChatService {
       return;
     }
 
-    final remoteMessages = await peer.loadMessages(roomId, limit: 100000);
-    final localMessages = await loadMessages(roomId, limit: 100000);
-    final existingIds = localMessages.map(_messageIdentity).toSet();
+    final remoteMessages = await peer._loadMessageRecords(
+      roomId,
+      limit: 100000,
+      includeDeleted: true,
+    );
+    final localMessages = await _loadMessageRecords(
+      roomId,
+      limit: 100000,
+      includeDeleted: true,
+    );
+    final localById = {
+      for (final message in localMessages) message.messageId: message,
+    };
 
     for (final message in remoteMessages) {
       if (!hasCurrentAccess &&
           accessEnd != null &&
-          !message.dateTime.isBefore(accessEnd)) {
+          !message.authoredAt.toLocal().isBefore(accessEnd)) {
         continue;
       }
-      final id = _messageIdentity(message);
-      if (!existingIds.add(id)) {
+      final local = localById[message.messageId];
+      if (local == null) {
+        await _importMessageRecord(roomId, message);
+        localById[message.messageId] = message;
         continue;
       }
-      await _withChat((chat) async => chat.saveMessage(roomId, message));
+      if (local.deletedAt == null && message.deletedAt != null) {
+        await _withStore(roomId, (store) async {
+          await store.markMessageDeleted(
+            message.messageId,
+            deletedAt: message.deletedAt!,
+          );
+        });
+      }
     }
   }
 
@@ -603,36 +599,57 @@ class DistributedChatService {
 
   Future<void> _ensureStubRoomFromInvite(DistributedChatInvite invite) async {
     final existing = await getRoom(invite.roomId);
+    final now = DateTime.now().toUtc();
     if (existing != null) {
+      await _withStore(invite.roomId, (store) async {
+        final metadata = await store.loadMetadata();
+        if (metadata == null) {
+          return;
+        }
+        final mergedHints = {
+          ...metadata.seedPeerHints,
+          ...invite.seedPeerHints,
+        }.toList();
+        await store.initializeRoom(
+          metadata.copyWith(
+            title: invite.roomName,
+            description: invite.roomDescription,
+            ownerNpub: invite.ownerNpub,
+            roomNpub: invite.roomNpub,
+            seedPeerHints: mergedHints,
+            joinPolicy: invite.joinPolicy,
+            updatedAt: now,
+          ),
+        );
+      });
       return;
     }
 
-    final config = ChatChannelConfig(
-      id: invite.roomId,
-      name: invite.roomName,
-      description: invite.roomDescription,
-      visibility: 'RESTRICTED',
-      owner: invite.ownerNpub,
-      admins: const [],
-      moderatorNpubs: const [],
-      members: [invite.ownerNpub],
-      banned: const [],
-      pendingApplicants: const [],
-      dailyFiles: true,
-      distributionMode: invite.distributionMode,
-      roomNpub: invite.roomNpub,
-      roomState: 'active',
-      joinPolicy: invite.joinPolicy,
-      seedPeerHints: invite.seedPeerHints,
-    );
-    final room = ChatChannel.group(
-      id: invite.roomId,
-      name: invite.roomName,
-      participants: const [],
-      description: invite.roomDescription,
-      config: config,
-    );
-    await _withChat((chat) async => chat.createChannel(room));
+    await _withStore(invite.roomId, (store) async {
+      await store.initializeRoom(
+        DChatRoomMetadata(
+          roomId: invite.roomId,
+          title: invite.roomName,
+          description: invite.roomDescription,
+          ownerNpub: invite.ownerNpub,
+          roomNpub: invite.roomNpub,
+          seedPeerHints: invite.seedPeerHints,
+          joinPolicy: invite.joinPolicy,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: invite.ownerNpub,
+          role: 'owner',
+          status: 'active',
+          joinedAt: now,
+          addedBy: invite.ownerNpub,
+          updatedAt: now,
+        ),
+      );
+    });
   }
 
   Future<DistributedChatControlEvent> _emitRoleChange({
@@ -697,35 +714,21 @@ class DistributedChatService {
       throw Exception('Invalid distributed control event signature');
     }
 
-    final eventId = event.event.id;
-    final existingIds = await _loadControlEventIds(event.roomId);
-    if (eventId != null && existingIds.contains(eventId)) {
+    final eventId = event.event.id ?? event.event.calculateId();
+    final alreadyExists = await _withStore(event.roomId, (store) async {
+      return store.hasControlEvent(eventId);
+    });
+    if (alreadyExists) {
       return;
     }
 
     await _applyControlEvent(event);
-    await _appendControlEvent(event.roomId, event);
-  }
-
-  Future<void> _appendControlEvent(
-    String roomId,
-    DistributedChatControlEvent event,
-  ) async {
-    final path = _controlLogPath(roomId);
-    final existing = await storage.readString(path);
-    final line = jsonEncode(event.toJson());
-    final newContent = existing == null || existing.trim().isEmpty
-        ? line
-        : '$existing\n$line';
-    await storage.writeString(path, newContent);
-  }
-
-  Future<Set<String>> _loadControlEventIds(String roomId) async {
-    final events = await loadControlEvents(roomId);
-    return {
-      for (final event in events)
-        if (event.event.id != null) event.event.id!,
-    };
+    await _withStore(event.roomId, (store) async {
+      await store.appendControlEvent(
+        event,
+        lamport: await store.nextControlLamport(),
+      );
+    });
   }
 
   Future<void> _applyControlEvent(DistributedChatControlEvent event) async {
@@ -734,272 +737,140 @@ class DistributedChatService {
         await _applyRoomCreated(event);
         break;
       case DistributedChatControlType.joinRequested:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          if (room == null) {
-            return;
-          }
-          final config = room.config;
-          final applicantNpub = event.targetNpub ?? event.actorNpub;
-          if (config == null ||
-              config.hasApplied(applicantNpub) ||
-              config.isMember(applicantNpub) ||
-              config.isBanned(applicantNpub)) {
-            return;
-          }
-          await chat.applyForMembership(
-            event.roomId,
-            applicantNpub,
-            (event.payload['callsign'] as String?) ?? event.actorCallsign,
-            event.payload['message'] as String?,
-          );
-        });
+        await _applyJoinRequested(event);
         break;
       case DistributedChatControlType.joinApproved:
         await _applyJoinApproved(event);
         break;
       case DistributedChatControlType.joinRejected:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          final config = room?.config;
-          final applicantNpub = event.targetNpub;
-          if (room == null || config == null || applicantNpub == null) {
-            return;
-          }
-          if (!config.hasApplied(applicantNpub)) {
-            return;
-          }
-          await chat.rejectApplication(
-            event.roomId,
-            event.actorNpub,
-            applicantNpub,
-          );
-        });
+        await _applyJoinRejected(event);
         break;
       case DistributedChatControlType.roomKeyShared:
         await _applyRoomKeyShared(event);
         break;
       case DistributedChatControlType.memberRemoved:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          final config = room?.config;
-          final targetNpub = event.targetNpub;
-          if (room == null || config == null || targetNpub == null) {
-            return;
-          }
-          if (!config.isMember(targetNpub)) {
-            return;
-          }
-          await chat.removeMember(event.roomId, event.actorNpub, targetNpub);
-        });
+        await _applyMemberRemoved(event);
         break;
       case DistributedChatControlType.memberBanned:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          final config = room?.config;
-          final targetNpub = event.targetNpub;
-          if (room == null || config == null || targetNpub == null) {
-            return;
-          }
-          if (config.isBanned(targetNpub)) {
-            return;
-          }
-          await chat.banMember(event.roomId, event.actorNpub, targetNpub);
-        });
+        await _applyMemberBanned(event);
         break;
       case DistributedChatControlType.memberUnbanned:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          final config = room?.config;
-          final targetNpub = event.targetNpub;
-          if (room == null || config == null || targetNpub == null) {
-            return;
-          }
-          if (!config.isBanned(targetNpub)) {
-            return;
-          }
-          await chat.unbanMember(event.roomId, event.actorNpub, targetNpub);
-        });
+        await _applyMemberUnbanned(event);
         break;
       case DistributedChatControlType.moderatorGranted:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          final config = room?.config;
-          final targetNpub = event.targetNpub;
-          if (room == null || config == null || targetNpub == null) {
-            return;
-          }
-          if (config.isModerator(targetNpub)) {
-            return;
-          }
-          await chat.promoteToModerator(
-            event.roomId,
-            event.actorNpub,
-            targetNpub,
-          );
-        });
+        await _applyModeratorGranted(event);
         break;
       case DistributedChatControlType.moderatorRevoked:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          final config = room?.config;
-          final targetNpub = event.targetNpub;
-          if (room == null || config == null || targetNpub == null) {
-            return;
-          }
-          if (!config.moderatorNpubs.contains(targetNpub)) {
-            return;
-          }
-          await chat.demote(event.roomId, event.actorNpub, targetNpub);
-        });
+        await _applyModeratorRevoked(event);
         break;
       case DistributedChatControlType.adminGranted:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          final config = room?.config;
-          final targetNpub = event.targetNpub;
-          if (room == null || config == null || targetNpub == null) {
-            return;
-          }
-          if (config.isAdmin(targetNpub)) {
-            return;
-          }
-          await chat.promoteToAdmin(event.roomId, event.actorNpub, targetNpub);
-        });
+        await _applyAdminGranted(event);
         break;
       case DistributedChatControlType.adminRevoked:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          final config = room?.config;
-          final targetNpub = event.targetNpub;
-          if (room == null || config == null || targetNpub == null) {
-            return;
-          }
-          if (!config.admins.contains(targetNpub)) {
-            return;
-          }
-          await chat.demote(event.roomId, event.actorNpub, targetNpub);
-        });
+        await _applyAdminRevoked(event);
         break;
       case DistributedChatControlType.roomPaused:
       case DistributedChatControlType.roomResumed:
       case DistributedChatControlType.roomClosed:
-        await _withChat((chat) async {
-          final room = chat.getChannel(event.roomId);
-          final config = room?.config;
-          if (room == null || config == null) {
-            return;
-          }
-          if (!config.isAdmin(event.actorNpub)) {
-            throw PermissionDeniedException(
-              'Only admins and above can change room state',
-            );
-          }
-          final updatedConfig = config.copyWith(
-            roomState: event.state ?? config.roomState,
-          );
-          await chat.updateChannel(room.copyWith(config: updatedConfig));
-        });
+        await _applyRoomStateChange(event);
         break;
       case DistributedChatControlType.messageDeleted:
-        await _withChat((chat) async {
-          final timestamp = event.messageTimestamp;
-          final authorCallsign = event.messageAuthor;
-          if (timestamp == null || authorCallsign == null) {
-            return;
-          }
-          try {
-            await chat.deleteMessageByTimestamp(
-              channelId: event.roomId,
-              timestamp: timestamp,
-              authorCallsign: authorCallsign,
-              actorNpub: event.actorNpub,
-            );
-          } catch (_) {
-            // Deletion is best-effort during replay.
-          }
-        });
+        await _applyMessageDeleted(event);
         break;
     }
   }
 
   Future<void> _applyRoomCreated(DistributedChatControlEvent event) async {
-    final existing = await getRoom(event.roomId);
     final ownerNpub = event.payload['owner_npub'] as String? ?? event.actorNpub;
-    final config = ChatChannelConfig(
-      id: event.roomId,
-      name: event.payload['name'] as String? ?? event.roomId,
-      description: event.payload['description'] as String?,
-      visibility: 'RESTRICTED',
-      owner: ownerNpub,
-      admins: const [],
-      moderatorNpubs: const [],
-      members: [ownerNpub],
-      banned: const [],
-      pendingApplicants: const [],
-      dailyFiles: (event.payload['daily_files'] as bool?) ?? true,
-      distributionMode:
-          event.payload['distribution_mode'] as String? ?? 'distributed',
-      roomNpub: event.payload['room_npub'] as String?,
-      roomState: 'active',
-      joinPolicy:
-          event.payload['join_policy'] as String? ?? 'approval_required',
-      seedPeerHints: List<String>.from(
-        event.payload['seed_peer_hints'] as List? ?? const [],
-      ),
-    );
+    final createdAt = event.createdAt.toUtc();
 
-    if (existing == null) {
-      final room = ChatChannel.group(
-        id: event.roomId,
-        name: config.name,
-        participants: const [],
-        description: config.description,
-        config: config,
+    await _withStore(event.roomId, (store) async {
+      final existing = await store.loadMetadata();
+      final mergedHints = {
+        ...?existing?.seedPeerHints,
+        ...List<String>.from(
+          event.payload['seed_peer_hints'] as List? ?? const [],
+        ),
+      }.toList();
+
+      await store.initializeRoom(
+        DChatRoomMetadata(
+          roomId: event.roomId,
+          title:
+              event.payload['name'] as String? ??
+              existing?.title ??
+              event.roomId,
+          description:
+              event.payload['description'] as String? ?? existing?.description,
+          ownerNpub: ownerNpub,
+          roomNpub: event.payload['room_npub'] as String? ?? existing?.roomNpub,
+          seedPeerHints: mergedHints,
+          currentEpoch: existing?.currentEpoch ?? 0,
+          snapshotStart: existing?.snapshotStart,
+          state: existing?.state ?? 'active',
+          joinPolicy:
+              event.payload['join_policy'] as String? ??
+              existing?.joinPolicy ??
+              'approval_required',
+          createdAt: existing?.createdAt ?? createdAt,
+          updatedAt: createdAt,
+        ),
       );
-      await _withChat((chat) async => chat.createChannel(room));
+
+      final ownerRecord = await _findMemberRecord(store, ownerNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: ownerNpub,
+          role: 'owner',
+          status: 'active',
+          joinedAt: ownerRecord?.joinedAt ?? createdAt,
+          removedAt: null,
+          addedBy: ownerNpub,
+          updatedAt: createdAt,
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyJoinRequested(DistributedChatControlEvent event) async {
+    final room = await getRoom(event.roomId);
+    if (room == null) {
+      return;
+    }
+    final config = room.config;
+    final applicantNpub = event.targetNpub ?? event.actorNpub;
+    if (config == null ||
+        config.hasApplied(applicantNpub) ||
+        config.isMember(applicantNpub) ||
+        config.isBanned(applicantNpub)) {
       return;
     }
 
-    final existingConfig = existing.config;
-    final mergedConfig =
-        existingConfig?.copyWith(
-          name: config.name,
-          description: config.description,
-          visibility: 'RESTRICTED',
-          owner: config.owner,
-          members: existingConfig.members.contains(ownerNpub)
-              ? existingConfig.members
-              : [...existingConfig.members, ownerNpub],
-          dailyFiles: config.dailyFiles,
-          distributionMode: config.distributionMode,
-          roomNpub: config.roomNpub,
-          roomState: config.roomState,
-          joinPolicy: config.joinPolicy,
-          seedPeerHints: {
-            ...existingConfig.seedPeerHints,
-            ...config.seedPeerHints,
-          }.toList(),
-        ) ??
-        config;
-
-    await _withChat((chat) async {
-      await chat.updateChannel(
-        existing.copyWith(
-          name: config.name,
-          description: config.description,
-          config: mergedConfig,
+    await _withStore(event.roomId, (store) async {
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: applicantNpub,
+          role: 'member',
+          status: 'pending',
+          addedBy: event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
         ),
       );
     });
   }
 
   Future<void> _applyJoinApproved(DistributedChatControlEvent event) async {
-    final room = await _requireRoom(event.roomId);
+    final snapshot = await _requireSnapshot(event.roomId);
+    final room = _snapshotToChannel(snapshot);
     final config = room.config;
     final targetNpub = event.targetNpub;
     if (config == null || targetNpub == null) {
       return;
+    }
+    if (!config.canManageApplications(event.actorNpub)) {
+      throw PermissionDeniedException(
+        'Only moderators and above can approve applicants',
+      );
     }
 
     final admission = event.admission;
@@ -1013,24 +884,59 @@ class DistributedChatService {
     )) {
       throw Exception('Invalid admission capability for $targetNpub');
     }
+    if (config.isBanned(targetNpub)) {
+      throw PermissionDeniedException('User is banned from this room');
+    }
+    if (config.isMember(targetNpub)) {
+      return;
+    }
 
-    await _withChat((chat) async {
-      final current = chat.getChannel(event.roomId);
-      final currentConfig = current?.config;
-      if (current == null || currentConfig == null) {
-        return;
-      }
+    await _withStore(event.roomId, (store) async {
+      final existing = await _findMemberRecord(store, targetNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: targetNpub,
+          role: existing?.role == 'admin' || existing?.role == 'moderator'
+              ? existing!.role
+              : 'member',
+          status: 'active',
+          joinedAt: existing?.joinedAt ?? event.createdAt.toUtc(),
+          addedBy: existing?.addedBy ?? event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+    });
+  }
 
-      if (currentConfig.hasApplied(targetNpub)) {
-        await chat.approveApplication(
-          event.roomId,
-          event.actorNpub,
-          targetNpub,
-        );
-      } else if (!currentConfig.isMember(targetNpub) &&
-          !currentConfig.isBanned(targetNpub)) {
-        await chat.addMember(event.roomId, event.actorNpub, targetNpub);
-      }
+  Future<void> _applyJoinRejected(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final applicantNpub = event.targetNpub;
+    if (config == null || applicantNpub == null) {
+      return;
+    }
+    if (!config.canManageApplications(event.actorNpub)) {
+      throw PermissionDeniedException(
+        'Only moderators and above can reject applicants',
+      );
+    }
+    if (!config.hasApplied(applicantNpub)) {
+      return;
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final existing = await _findMemberRecord(store, applicantNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: applicantNpub,
+          role: existing?.role ?? 'member',
+          status: 'rejected',
+          joinedAt: existing?.joinedAt,
+          removedAt: event.createdAt.toUtc(),
+          addedBy: existing?.addedBy ?? event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
     });
   }
 
@@ -1067,6 +973,321 @@ class DistributedChatService {
     await _saveRoomSecret(event.roomId, roomNsec);
   }
 
+  Future<void> _applyMemberRemoved(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final targetNpub = event.targetNpub;
+    if (config == null || targetNpub == null) {
+      return;
+    }
+    if (config.isOwner(targetNpub)) {
+      throw PermissionDeniedException('Cannot remove the room owner');
+    }
+    if (config.isAdmin(targetNpub)) {
+      if (!config.isOwner(event.actorNpub)) {
+        throw PermissionDeniedException('Only the owner can remove admins');
+      }
+    } else if (config.isModerator(targetNpub)) {
+      if (!config.isAdmin(event.actorNpub)) {
+        throw PermissionDeniedException('Only admins can remove moderators');
+      }
+    } else if (!config.canManageMembers(event.actorNpub)) {
+      throw PermissionDeniedException(
+        'Only moderators and above can remove members',
+      );
+    }
+    if (!config.isMember(targetNpub)) {
+      return;
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final existing = await _findMemberRecord(store, targetNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: targetNpub,
+          role: 'member',
+          status: 'removed',
+          joinedAt: existing?.joinedAt,
+          removedAt: event.createdAt.toUtc(),
+          addedBy: existing?.addedBy ?? event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyMemberBanned(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final targetNpub = event.targetNpub;
+    if (config == null || targetNpub == null) {
+      return;
+    }
+    if (config.isOwner(targetNpub)) {
+      throw PermissionDeniedException('Cannot ban the room owner');
+    }
+    if (!config.canBan(event.actorNpub)) {
+      throw PermissionDeniedException(
+        'Only moderators and above can ban users',
+      );
+    }
+    if (config.isAdmin(targetNpub) && !config.isOwner(event.actorNpub)) {
+      throw PermissionDeniedException('Only the owner can ban admins');
+    }
+    if (config.isModerator(targetNpub) && !config.isAdmin(event.actorNpub)) {
+      throw PermissionDeniedException('Only admins can ban moderators');
+    }
+    if (config.isBanned(targetNpub)) {
+      return;
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final existing = await _findMemberRecord(store, targetNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: targetNpub,
+          role: 'member',
+          status: 'banned',
+          joinedAt: existing?.joinedAt,
+          removedAt: event.createdAt.toUtc(),
+          addedBy: existing?.addedBy ?? event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyMemberUnbanned(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final targetNpub = event.targetNpub;
+    if (config == null || targetNpub == null) {
+      return;
+    }
+    if (!config.canBan(event.actorNpub)) {
+      throw PermissionDeniedException(
+        'Only moderators and above can unban users',
+      );
+    }
+    if (!config.isBanned(targetNpub)) {
+      return;
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final existing = await _findMemberRecord(store, targetNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: targetNpub,
+          role: 'member',
+          status: 'removed',
+          joinedAt: existing?.joinedAt,
+          removedAt: event.createdAt.toUtc(),
+          addedBy: existing?.addedBy ?? event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyModeratorGranted(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final targetNpub = event.targetNpub;
+    if (config == null || targetNpub == null) {
+      return;
+    }
+    if (!config.canManageRoles(event.actorNpub)) {
+      throw PermissionDeniedException(
+        'Only admins and above can promote to moderator',
+      );
+    }
+    if (!config.isMember(targetNpub)) {
+      throw PermissionDeniedException('User must be a member before promotion');
+    }
+    if (config.isModerator(targetNpub)) {
+      return;
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final existing = await _findMemberRecord(store, targetNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: targetNpub,
+          role: 'moderator',
+          status: 'active',
+          joinedAt: existing?.joinedAt ?? event.createdAt.toUtc(),
+          addedBy: existing?.addedBy ?? event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyModeratorRevoked(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final targetNpub = event.targetNpub;
+    if (config == null || targetNpub == null) {
+      return;
+    }
+    if (config.isOwner(targetNpub)) {
+      throw PermissionDeniedException('Cannot demote the room owner');
+    }
+    if (!config.moderatorNpubs.contains(targetNpub)) {
+      return;
+    }
+    if (!config.isAdmin(event.actorNpub)) {
+      throw PermissionDeniedException('Only admins can demote moderators');
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final existing = await _findMemberRecord(store, targetNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: targetNpub,
+          role: 'member',
+          status: 'active',
+          joinedAt: existing?.joinedAt ?? event.createdAt.toUtc(),
+          addedBy: existing?.addedBy ?? event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyAdminGranted(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final targetNpub = event.targetNpub;
+    if (config == null || targetNpub == null) {
+      return;
+    }
+    if (!config.canManageAdmins(event.actorNpub)) {
+      throw PermissionDeniedException('Only the owner can promote to admin');
+    }
+    if (!config.isMember(targetNpub)) {
+      throw PermissionDeniedException('User must be a member before promotion');
+    }
+    if (config.isAdmin(targetNpub)) {
+      return;
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final existing = await _findMemberRecord(store, targetNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: targetNpub,
+          role: 'admin',
+          status: 'active',
+          joinedAt: existing?.joinedAt ?? event.createdAt.toUtc(),
+          addedBy: existing?.addedBy ?? event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyAdminRevoked(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final targetNpub = event.targetNpub;
+    if (config == null || targetNpub == null) {
+      return;
+    }
+    if (config.isOwner(targetNpub)) {
+      throw PermissionDeniedException('Cannot demote the room owner');
+    }
+    if (!config.admins.contains(targetNpub)) {
+      return;
+    }
+    if (!config.isOwner(event.actorNpub)) {
+      throw PermissionDeniedException('Only the owner can demote admins');
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final existing = await _findMemberRecord(store, targetNpub);
+      await store.upsertMember(
+        DChatMemberRecord(
+          memberNpub: targetNpub,
+          role: 'member',
+          status: 'active',
+          joinedAt: existing?.joinedAt ?? event.createdAt.toUtc(),
+          addedBy: existing?.addedBy ?? event.actorNpub,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyRoomStateChange(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    if (config == null) {
+      return;
+    }
+    if (!config.isAdmin(event.actorNpub)) {
+      throw PermissionDeniedException(
+        'Only admins and above can change room state',
+      );
+    }
+
+    await _withStore(event.roomId, (store) async {
+      final metadata = await store.loadMetadata();
+      if (metadata == null) {
+        return;
+      }
+      await store.initializeRoom(
+        metadata.copyWith(
+          state: event.state ?? metadata.state,
+          updatedAt: event.createdAt.toUtc(),
+        ),
+      );
+    });
+  }
+
+  Future<void> _applyMessageDeleted(DistributedChatControlEvent event) async {
+    final room = await _requireRoom(event.roomId);
+    final config = room.config;
+    final timestamp = event.messageTimestamp;
+    final authorCallsign = event.messageAuthor;
+    if (config == null || timestamp == null || authorCallsign == null) {
+      return;
+    }
+
+    final matches = <DChatMessageRecord>[];
+    final records = await _loadMessageRecords(
+      event.roomId,
+      limit: 100000,
+      includeDeleted: true,
+    );
+    for (final record in records) {
+      final message = _chatMessageFromRecord(record);
+      if (message.timestamp == timestamp && message.author == authorCallsign) {
+        matches.add(record);
+      }
+    }
+    if (matches.isEmpty) {
+      return;
+    }
+
+    final canModerate = config.isModerator(event.actorNpub);
+    for (final record in matches) {
+      final message = _chatMessageFromRecord(record);
+      final isAuthor = message.npub == event.actorNpub;
+      if (!isAuthor && !canModerate) {
+        throw PermissionDeniedException(
+          'Not authorized to delete this message',
+        );
+      }
+      await _withStore(event.roomId, (store) async {
+        await store.markMessageDeleted(
+          record.messageId,
+          deletedAt: event.createdAt.toUtc(),
+        );
+      });
+    }
+  }
+
   Future<DateTime?> _accessEnd(String roomId, String npub) async {
     final events = await loadControlEvents(roomId);
     DateTime? end;
@@ -1090,15 +1311,277 @@ class DistributedChatService {
     return end;
   }
 
-  String _messageIdentity(ChatMessage message) {
-    final eventId = message.getMeta('event_id');
-    if (eventId != null && eventId.isNotEmpty) {
-      return 'event:$eventId';
-    }
-    final signature = message.signature;
-    if (signature != null && signature.isNotEmpty) {
-      return 'sig:$signature';
-    }
-    return '${message.timestamp}|${message.author}|${message.content}';
+  Future<_DChatRoomSnapshot?> _loadSnapshot(String roomId) async {
+    return _withStore(roomId, (store) async {
+      if (!await store.exists()) {
+        return null;
+      }
+      final metadata = await store.loadMetadata();
+      if (metadata == null) {
+        return null;
+      }
+      return _DChatRoomSnapshot(
+        metadata: metadata,
+        members: await store.listMembers(),
+        controlEvents: await store.listControlEvents(limit: 100000),
+      );
+    });
   }
+
+  Future<_DChatRoomSnapshot> _requireSnapshot(String roomId) async {
+    final snapshot = await _loadSnapshot(roomId);
+    if (snapshot == null) {
+      throw Exception('Room not found: $roomId');
+    }
+    return snapshot;
+  }
+
+  ChatChannel _snapshotToChannel(_DChatRoomSnapshot snapshot) {
+    final config = _snapshotToConfig(snapshot);
+    final participants = <String>{
+      if (snapshot.metadata.ownerNpub.isNotEmpty) snapshot.metadata.ownerNpub,
+      ...config.admins,
+      ...config.moderatorNpubs,
+      ...config.members,
+    }.toList();
+
+    return ChatChannel(
+      id: snapshot.metadata.roomId,
+      type: ChatChannelType.group,
+      name: snapshot.metadata.title,
+      folder: 'dchat/${snapshot.metadata.roomId}',
+      participants: participants,
+      description: snapshot.metadata.description,
+      created: snapshot.metadata.createdAt,
+      config: config,
+    );
+  }
+
+  ChatChannelConfig _snapshotToConfig(_DChatRoomSnapshot snapshot) {
+    final admins = <String>[];
+    final moderators = <String>[];
+    final members = <String>[];
+    final banned = <String>[];
+
+    for (final member in snapshot.members) {
+      switch (member.status) {
+        case 'active':
+          switch (member.role) {
+            case 'admin':
+              admins.add(member.memberNpub);
+              break;
+            case 'moderator':
+              moderators.add(member.memberNpub);
+              break;
+            case 'member':
+              members.add(member.memberNpub);
+              break;
+            case 'owner':
+              break;
+            default:
+              members.add(member.memberNpub);
+              break;
+          }
+          break;
+        case 'banned':
+          banned.add(member.memberNpub);
+          break;
+      }
+    }
+
+    final pendingByNpub = _pendingApplicationsFromEvents(
+      snapshot.controlEvents,
+    );
+    final pendingApplicants = snapshot.members
+        .where((member) => member.status == 'pending')
+        .map(
+          (member) =>
+              pendingByNpub[member.memberNpub] ??
+              MembershipApplication(
+                npub: member.memberNpub,
+                appliedAt: member.updatedAt,
+              ),
+        )
+        .toList();
+
+    return ChatChannelConfig(
+      id: snapshot.metadata.roomId,
+      name: snapshot.metadata.title,
+      description: snapshot.metadata.description,
+      visibility: 'RESTRICTED',
+      owner: snapshot.metadata.ownerNpub,
+      admins: admins,
+      moderatorNpubs: moderators,
+      members: members,
+      banned: banned,
+      pendingApplicants: pendingApplicants,
+      dailyFiles: true,
+      distributionMode: 'distributed',
+      roomNpub: snapshot.metadata.roomNpub,
+      roomState: snapshot.metadata.state,
+      joinPolicy: snapshot.metadata.joinPolicy,
+      seedPeerHints: snapshot.metadata.seedPeerHints,
+    );
+  }
+
+  Map<String, MembershipApplication> _pendingApplicationsFromEvents(
+    List<DistributedChatControlEvent> events,
+  ) {
+    final pending = <String, MembershipApplication>{};
+    for (final event in events) {
+      final targetNpub = event.targetNpub ?? event.actorNpub;
+      switch (event.type) {
+        case DistributedChatControlType.joinRequested:
+          pending[targetNpub] = MembershipApplication(
+            npub: targetNpub,
+            callsign:
+                (event.payload['callsign'] as String?) ?? event.actorCallsign,
+            appliedAt: event.createdAt,
+            message: event.payload['message'] as String?,
+          );
+          break;
+        case DistributedChatControlType.joinApproved:
+        case DistributedChatControlType.joinRejected:
+        case DistributedChatControlType.memberRemoved:
+        case DistributedChatControlType.memberBanned:
+          pending.remove(targetNpub);
+          break;
+        default:
+          break;
+      }
+    }
+    return pending;
+  }
+
+  Future<List<DChatMessageRecord>> _loadMessageRecords(
+    String roomId, {
+    int limit = 1000,
+    bool includeDeleted = false,
+  }) async {
+    return _withStore(roomId, (store) async {
+      if (!await store.exists()) {
+        return const <DChatMessageRecord>[];
+      }
+      return store.listMessageRecords(
+        limit: limit,
+        includeDeleted: includeDeleted,
+      );
+    });
+  }
+
+  Future<void> _importMessageRecord(
+    String roomId,
+    DChatMessageRecord record,
+  ) async {
+    final rawEvent = jsonDecode(record.rawEventJson) as Map<String, dynamic>;
+    final event = NostrEvent.fromJson(rawEvent);
+    if (!event.verify()) {
+      throw Exception('Invalid distributed message signature');
+    }
+    final eventRoomId = _eventTagValue(event.tags, 'room');
+    if (eventRoomId != roomId) {
+      throw Exception('Message room mismatch for ${record.messageId}');
+    }
+    final eventId = event.id ?? event.calculateId();
+    if (eventId != record.messageId) {
+      throw Exception('Message id mismatch for ${record.messageId}');
+    }
+
+    await _withStore(roomId, (store) async {
+      if (await store.hasMessage(record.messageId)) {
+        return;
+      }
+      final metadata = await store.loadMetadata();
+      if (metadata == null) {
+        throw Exception('Room not found: $roomId');
+      }
+      final normalized = DChatMessageRecord(
+        messageId: record.messageId,
+        epoch: record.epoch,
+        lamport: await store.nextMessageLamport(),
+        authorNpub: record.authorNpub,
+        authoredAt: record.authoredAt,
+        ciphertext: record.ciphertext,
+        nonce: record.nonce,
+        encryptionScheme: record.encryptionScheme,
+        ciphertextSha1: record.ciphertextSha1,
+        rawEventJson: record.rawEventJson,
+        deletedAt: record.deletedAt,
+      );
+      await store.appendMessage(normalized);
+    });
+  }
+
+  ChatMessage _chatMessageFromRecord(DChatMessageRecord record) {
+    final rawEvent = jsonDecode(record.rawEventJson) as Map<String, dynamic>;
+    final event = NostrEvent.fromJson(rawEvent);
+    return ChatMessage(
+      author:
+          _eventTagValue(event.tags, 'callsign') ??
+          NostrCrypto.encodeNpub(event.pubkey),
+      timestamp: ChatFormat.epochToTimestamp(event.createdAt),
+      content: _decodeMessageContent(record),
+      metadata: {
+        'npub': NostrCrypto.encodeNpub(event.pubkey),
+        'created_at': event.createdAt.toString(),
+        if (event.sig != null) 'signature': event.sig!,
+        if (event.id != null) 'event_id': event.id!,
+        if (record.encryptionScheme != null) 'enc': record.encryptionScheme!,
+      },
+    );
+  }
+
+  String _decodeMessageContent(DChatMessageRecord record) {
+    try {
+      return utf8.decode(record.ciphertext, allowMalformed: true);
+    } catch (_) {
+      return base64Encode(record.ciphertext);
+    }
+  }
+
+  Future<DChatMemberRecord?> _findMemberRecord(
+    DChatRoomStore store,
+    String npub,
+  ) async {
+    final members = await store.listMembers();
+    for (final member in members) {
+      if (member.memberNpub == npub) {
+        return member;
+      }
+    }
+    return null;
+  }
+
+  Future<T> _withStore<T>(
+    String roomId,
+    Future<T> Function(DChatRoomStore store) action,
+  ) async {
+    final store = DChatRoomStore(profileStorage: storage, roomId: roomId);
+    try {
+      return await action(store);
+    } finally {
+      await store.close();
+    }
+  }
+}
+
+class _DChatRoomSnapshot {
+  final DChatRoomMetadata metadata;
+  final List<DChatMemberRecord> members;
+  final List<DistributedChatControlEvent> controlEvents;
+
+  const _DChatRoomSnapshot({
+    required this.metadata,
+    required this.members,
+    required this.controlEvents,
+  });
+}
+
+String? _eventTagValue(List<List<String>> tags, String key) {
+  for (final tag in tags) {
+    if (tag.isNotEmpty && tag.first == key && tag.length > 1) {
+      return tag[1];
+    }
+  }
+  return null;
 }
