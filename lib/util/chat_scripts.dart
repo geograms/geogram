@@ -247,6 +247,8 @@ String getChatPageScripts() {
         const div = document.createElement('div');
         div.className = 'message';
         div.dataset.timestamp = msg.timestamp;
+        div.dataset.author = (msg.callsign || msg.author || msg.senderCallsign || '').toUpperCase();
+        div.dataset.content = msg.content || '';
 
         const time = parseMsgTime(msg.timestamp);
         const callsign = msg.callsign || msg.author || msg.senderCallsign;
@@ -373,9 +375,21 @@ String getChatPageScripts() {
 
           if (parsed.messages.length > 0) {
             const shouldScroll = isNearBottom();
+            const container = document.getElementById('messages');
             parsed.messages.forEach(msg => {
               if (msg.timestamp > lastTimestamp) {
-                appendMessage(msg);
+                // Dedup: skip if same author+content exists in last few DOM messages
+                const author = (msg.callsign || msg.author || '').toUpperCase();
+                const content = msg.content || '';
+                const recent = container.querySelectorAll('.message');
+                let isDup = false;
+                for (let i = recent.length - 1; i >= Math.max(0, recent.length - 5); i--) {
+                  if (recent[i].dataset.author === author && recent[i].dataset.content === content) {
+                    isDup = true;
+                    break;
+                  }
+                }
+                if (!isDup) appendMessage(msg);
                 lastTimestamp = msg.timestamp;
               }
             });
