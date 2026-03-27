@@ -178,9 +178,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         } else if (type == 'wapp.install') {
           _handleWappInstall(data);
         }
-      } catch (e, st) {
-        debugPrint('WappPage outbox error: $e\n$st');
-      }
+      } catch (_) {}
     }
     if (changed && mounted) {
       setState(() {});
@@ -445,7 +443,6 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       bindings: _WappFieldBindings(_fieldValues, () => setState(() {})),
       onAction: (action) {
         if (action == 'save') {
-
           _engine.sendMessage(jsonEncode({
             'type': 'action',
             'action': 'save',

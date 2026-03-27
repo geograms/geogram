@@ -63,6 +63,9 @@ class WappEngine {
   /// Check if a KV key exists (before module is loaded).
   bool hasKvKey(String key) => _kv.containsKey(key);
 
+  /// List all KV keys (for debugging).
+  List<String> get kvKeys => _kv.keys.toList();
+
   /// Set a KV key directly (before module is loaded).
   void kvSet(String key, String value) {
     _kv[key] = Uint8List.fromList(value.codeUnits);
@@ -225,7 +228,7 @@ class WappEngine {
       params: [ValueTy.i32, ValueTy.i32], results: [ValueTy.i32],
     );
 
-    builder.addImports([
+    final allImports = [
       // System
       WasmImport('hal', 'platform', halPlatform),
       WasmImport('hal', 'heap_free', halHeapFree),
@@ -305,7 +308,17 @@ class WappEngine {
       WasmImport('wasi_snapshot_preview1', 'fd_read', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32], 0)),
       WasmImport('wasi_snapshot_preview1', 'fd_seek', stubI32([ValueTy.i32, ValueTy.i64, ValueTy.i32], 0)),
       WasmImport('wasi_snapshot_preview1', 'fd_fdstat_get', stubI32([ValueTy.i32, ValueTy.i32], 0)),
-    ]);
+    ];
+
+    // Add imports one by one, skipping any the module doesn't declare.
+    // wasm_run throws if we provide an import the module doesn't need.
+    for (final imp in allImports) {
+      try {
+        builder.addImports([imp]);
+      } catch (_) {
+        // Module doesn't use this import — skip it
+      }
+    }
 
     _instance = await builder.build();
     _memory = _instance!.exports['memory'] as WasmMemory?;
