@@ -904,6 +904,52 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
   }
 
   /// Toggle auto-follow GPS mode (mobile only)
+  /// Cycle GPS mode: off → locate once → auto-follow → off
+  Future<void> _cycleLocationMode() async {
+    if (_autoFollow) {
+      // Follow → off
+      await _toggleAutoFollow();
+      setState(() => _userLocation = null);
+      _showLocationModeSnackBar(_i18n.t('gps_off_description'));
+    } else if (_userLocation != null) {
+      // Located → follow (mobile only) or snap back (desktop)
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+        await _toggleAutoFollow();
+        _showLocationModeSnackBar(_i18n.t('gps_following_description'));
+      } else {
+        // Desktop: snap back to location then turn off
+        if (_centerPosition != null && _mapReady) {
+          _mapController.move(_userLocation!, _currentZoom);
+          setState(() => _centerPosition = _userLocation);
+          _saveMapState();
+        }
+        setState(() => _userLocation = null);
+        _showLocationModeSnackBar(_i18n.t('gps_off_description'));
+      }
+    } else {
+      // Off → locate
+      await _autoDetectLocation();
+      if (_userLocation != null) {
+        final canFollow = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+        _showLocationModeSnackBar(canFollow
+            ? _i18n.t('gps_located_description')
+            : _i18n.t('auto_detect_location'));
+      }
+    }
+  }
+
+  void _showLocationModeSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   Future<void> _toggleAutoFollow() async {
     if (_autoFollow) {
       // Turn off
@@ -1776,26 +1822,20 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                 ),
               ),
               const SizedBox(height: 8),
-              // Find my location button
+              // GPS location button — cycles: off → locate → follow → off
               FloatingActionButton.small(
-                heroTag: 'find_location',
-                onPressed: _isDetectingLocation ? null : () {
-                  // If pinned location exists and viewport is far away, snap back first
-                  if (_userLocation != null && _centerPosition != null) {
-                    final dist = _distanceBetween(
-                      _centerPosition!.latitude, _centerPosition!.longitude,
-                      _userLocation!.latitude, _userLocation!.longitude,
-                    );
-                    if (dist > 500 && _mapReady) {
-                      _mapController.move(_userLocation!, _currentZoom);
-                      setState(() => _centerPosition = _userLocation);
-                      _saveMapState();
-                      return;
-                    }
-                  }
-                  _autoDetectLocation();
-                },
-                tooltip: _i18n.t('auto_detect_location'),
+                heroTag: 'gps_location',
+                onPressed: _isDetectingLocation ? null : _cycleLocationMode,
+                tooltip: _autoFollow
+                    ? _i18n.t('gps_following')
+                    : _userLocation != null
+                        ? _i18n.t('gps_located')
+                        : _i18n.t('gps_off'),
+                backgroundColor: _autoFollow
+                    ? Theme.of(context).colorScheme.primaryContainer
+                    : _userLocation != null
+                        ? Theme.of(context).colorScheme.secondaryContainer
+                        : null,
                 child: _isDetectingLocation
                     ? SizedBox(
                         width: 20,
@@ -1805,24 +1845,14 @@ class _MapsBrowserPageState extends State<MapsBrowserPage> with SingleTickerProv
                           color: Theme.of(context).colorScheme.onPrimaryContainer,
                         ),
                       )
-                    : const Icon(Icons.my_location),
+                    : Icon(
+                        _autoFollow
+                            ? Icons.gps_fixed
+                            : _userLocation != null
+                                ? Icons.my_location
+                                : Icons.gps_not_fixed,
+                      ),
               ),
-              // Auto-follow GPS toggle (mobile only)
-              if (!kIsWeb && (Platform.isAndroid || Platform.isIOS))
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: FloatingActionButton.small(
-                    heroTag: 'auto_follow',
-                    onPressed: _toggleAutoFollow,
-                    tooltip: _i18n.t('auto_follow'),
-                    backgroundColor: _autoFollow
-                        ? Theme.of(context).colorScheme.primaryContainer
-                        : null,
-                    child: Icon(
-                      _autoFollow ? Icons.gps_fixed : Icons.gps_not_fixed,
-                    ),
-                  ),
-                ),
             ],
           ),
         ),
