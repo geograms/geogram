@@ -336,7 +336,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     return _buildSettingsScreen(screen);
   }
 
-  // ── Output-only screen (no command input) ─────────────────────────
+  // ── Output-only screen (Shop catalog) ──────────────────────────────
 
   Widget _buildOutputScreen() {
     if (_outputLines.isEmpty) {
@@ -346,24 +346,165 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
             style: TextStyle(color: Colors.grey)),
       );
     }
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.all(12),
-      itemCount: _outputLines.length,
-      itemBuilder: (context, i) {
-        final line = _outputLines[i];
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 1),
-          child: Text(
-            line.text,
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 13,
-              color: _outputColor(line.level),
-            ),
+
+    // Parse output lines into wapp entries for card display.
+    // Format from module:
+    //   [info] N wapp(s) available:
+    //   [out]   name            vX.Y.Z  (NKB)  [installed] or [update: ...]
+    //   [out]     Description text
+    final wapps = <_CatalogWapp>[];
+    final errors = <String>[];
+
+    for (var i = 0; i < _outputLines.length; i++) {
+      final line = _outputLines[i];
+      final text = line.text;
+
+      // Wapp entry line: starts with "  " + name, has version
+      final match = RegExp(r'^\s{2}(\S+)\s+v(\S+)(?:\s+\(([^)]+)\))?(.*)$')
+          .firstMatch(text);
+      if (match != null && line.level == 'out') {
+        final name = match.group(1)!;
+        final version = match.group(2)!;
+        final size = match.group(3) ?? '';
+        final status = match.group(4)?.trim() ?? '';
+
+        // Next line might be the description (indented with 4 spaces)
+        String desc = '';
+        if (i + 1 < _outputLines.length) {
+          final next = _outputLines[i + 1].text;
+          if (next.startsWith('    ') && _outputLines[i + 1].level == 'out') {
+            desc = next.trim();
+            i++; // skip description line
+          }
+        }
+
+        wapps.add(_CatalogWapp(
+          name: name,
+          version: version,
+          size: size,
+          description: desc,
+          installed: status.contains('[installed]'),
+          updateAvailable: status.contains('[update:'),
+        ));
+        continue;
+      }
+
+      // Error lines
+      if (line.level == 'err') {
+        errors.add(text);
+      }
+    }
+
+    if (wapps.isEmpty && errors.isEmpty) {
+      // Fallback to raw output if we can't parse
+      return ListView.builder(
+        controller: _scrollController,
+        padding: const EdgeInsets.all(12),
+        itemCount: _outputLines.length,
+        itemBuilder: (context, i) => Text(
+          _outputLines[i].text,
+          style: TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 13,
+            color: _outputColor(_outputLines[i].level),
           ),
-        );
-      },
+        ),
+      );
+    }
+
+    final cs = Theme.of(context).colorScheme;
+
+    return ListView(
+      controller: _scrollController,
+      padding: const EdgeInsets.all(16),
+      children: [
+        if (errors.isNotEmpty)
+          for (final err in errors)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(err, style: TextStyle(color: cs.error, fontSize: 13)),
+            ),
+        Text('${wapps.length} wapp${wapps.length == 1 ? '' : 's'} available',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                )),
+        const SizedBox(height: 12),
+        for (final wapp in wapps) _buildWappCard(wapp, cs),
+      ],
+    );
+  }
+
+  Widget _buildWappCard(_CatalogWapp wapp, ColorScheme cs) {
+    final isInstall = wapp.name == 'install';
+
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+      ),
+      color: cs.surfaceContainerLow,
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        leading: Icon(
+          isInstall
+              ? Icons.download
+              : wapp.name == 'maps'
+                  ? Icons.map
+                  : wapp.name == 'terminal'
+                      ? Icons.terminal
+                      : Icons.extension,
+          color: cs.primary,
+          size: 28,
+        ),
+        title: Row(
+          children: [
+            Text(wapp.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(width: 8),
+            Text('v${wapp.version}',
+                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
+            if (wapp.size.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Text(wapp.size,
+                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
+            ],
+          ],
+        ),
+        subtitle: wapp.description.isNotEmpty
+            ? Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(wapp.description,
+                    style: TextStyle(
+                        fontSize: 12, color: cs.onSurfaceVariant)),
+              )
+            : null,
+        trailing: wapp.installed
+            ? Chip(
+                label: const Text('Installed', style: TextStyle(fontSize: 11)),
+                backgroundColor: cs.primaryContainer,
+                side: BorderSide.none,
+                padding: EdgeInsets.zero,
+                visualDensity: VisualDensity.compact,
+              )
+            : wapp.updateAvailable
+                ? FilledButton.tonal(
+                    onPressed: () => _sendCommand('install ${wapp.name}'),
+                    style: FilledButton.styleFrom(
+                        visualDensity: VisualDensity.compact),
+                    child: const Text('Update', style: TextStyle(fontSize: 12)),
+                  )
+                : isInstall
+                    ? null
+                    : FilledButton(
+                        onPressed: () => _sendCommand('install ${wapp.name}'),
+                        style: FilledButton.styleFrom(
+                            visualDensity: VisualDensity.compact),
+                        child: const Text('Install',
+                            style: TextStyle(fontSize: 12)),
+                      ),
+      ),
     );
   }
 
@@ -490,6 +631,24 @@ class _OutputLine {
   final String text;
   final String level;
   _OutputLine(this.text, this.level);
+}
+
+class _CatalogWapp {
+  final String name;
+  final String version;
+  final String size;
+  final String description;
+  final bool installed;
+  final bool updateAvailable;
+
+  _CatalogWapp({
+    required this.name,
+    required this.version,
+    this.size = '',
+    this.description = '',
+    this.installed = false,
+    this.updateAvailable = false,
+  });
 }
 
 class _WappFieldBindings implements GeoUiBindings {
