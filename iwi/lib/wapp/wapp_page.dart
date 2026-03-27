@@ -102,13 +102,17 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     _tabController = TabController(length: _screenNames.length, vsync: this);
 
     // Set up persistent KV storage
-    try {
-      final prefs = await PreferencesService.instance();
-      final baseDir = prefs.wappDataDir ?? _defaultDataDir();
-      // Use wapp folder name as the storage subdirectory
-      final wappName = widget.wappDir.split(Platform.pathSeparator).last;
-      _engine.setStorageDir('$baseDir/$wappName');
-    } catch (_) {}
+    final wappName = widget.wappDir.split(Platform.pathSeparator).last;
+    final kvDir = '${_defaultDataDir()}/$wappName';
+    _engine.setStorageDir(kvDir);
+
+    // Auto-set default source for install wapp if not yet configured
+    if (wappName == 'install') {
+      final binDir = Directory('${widget.wappDir}/../../binaries');
+      if (binDir.existsSync() && !_engine.hasKvKey('source')) {
+        _engine.kvSet('source', binDir.absolute.path);
+      }
+    }
 
     // Load WASM
     final wasmFile = File('${widget.wappDir}/app.wasm');

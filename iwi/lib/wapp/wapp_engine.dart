@@ -60,6 +60,15 @@ class WappEngine {
     File('$_kvDir/kv.json').writeAsStringSync(jsonEncode(data));
   }
 
+  /// Check if a KV key exists (before module is loaded).
+  bool hasKvKey(String key) => _kv.containsKey(key);
+
+  /// Set a KV key directly (before module is loaded).
+  void kvSet(String key, String value) {
+    _kv[key] = Uint8List.fromList(value.codeUnits);
+    _saveKv();
+  }
+
   void sendMessage(String msg) => _inbox.add(msg);
 
   List<String> drainOutbox() {
