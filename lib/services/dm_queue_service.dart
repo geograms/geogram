@@ -32,8 +32,11 @@ class DMQueueService {
   MonitoredAsyncPeriodicTimer? _processingTimer;
   bool _isProcessing = false;
   bool _initialized = false;
+  final Set<String> _queuedCallsigns = <String>{};
+  DateTime? _lastIdleDiskScanAt;
 
   static const _processInterval = Duration(seconds: 10);
+  static const _idleDiskScanInterval = Duration(minutes: 3);
   static const _maxRetries = 10;
   static const _webrtcTimeout = Duration(seconds: 30);
 
@@ -63,7 +66,9 @@ class DMQueueService {
     _storage = FilesystemProfileStorage(storageConfig.chatDir);
 
     // Register callback with DirectMessageService to enable optimistic UI
-    DirectMessageService().onTriggerBackgroundDelivery = processQueue;
+    DirectMessageService().onTriggerBackgroundDelivery = () {
+      return processQueue(forceDiskScan: true);
+    };
 
     // Start periodic queue processing
     _processingTimer = MonitoredAsyncPeriodicTimer(
@@ -77,7 +82,9 @@ class DMQueueService {
     );
 
     _initialized = true;
-    LogService().log('DMQueueService: Initialized with ${_processInterval.inSeconds}s interval');
+    LogService().log(
+      'DMQueueService: Initialized with ${_processInterval.inSeconds}s interval',
+    );
   }
 
   /// Dispose resources
@@ -89,30 +96,22 @@ class DMQueueService {
   }
 
   /// Trigger immediate queue processing (called after queueing new message)
-  Future<void> processQueue() async {
+  Future<void> processQueue({bool forceDiskScan = false}) async {
     if (_isProcessing) {
-      LogService().log('DMQueueService: Already processing, skipping');
       return;
     }
     if (_storage == null) {
-      LogService().log('DMQueueService: Not initialized, skipping');
       return;
     }
 
     _isProcessing = true;
 
     try {
-      LogService().log('DMQueueService: Processing queue...');
-
-      // Get list of all callsigns with potential queued messages
-      final callsigns = await _getCallsignsWithQueuedMessages();
+      final callsigns = await _getQueuedCallsigns(forceDiskScan: forceDiskScan);
 
       if (callsigns.isEmpty) {
-        LogService().log('DMQueueService: No queued messages found');
         return;
       }
-
-      LogService().log('DMQueueService: Found ${callsigns.length} conversations with queued messages');
 
       for (final callsign in callsigns) {
         await _processCallsignQueue(callsign);
@@ -122,6 +121,26 @@ class DMQueueService {
     } finally {
       _isProcessing = false;
     }
+  }
+
+  Future<List<String>> _getQueuedCallsigns({bool forceDiskScan = false}) async {
+    if (_queuedCallsigns.isNotEmpty) {
+      return _queuedCallsigns.toList(growable: false);
+    }
+
+    final now = DateTime.now();
+    if (!forceDiskScan &&
+        _lastIdleDiskScanAt != null &&
+        now.difference(_lastIdleDiskScanAt!) < _idleDiskScanInterval) {
+      return const <String>[];
+    }
+
+    final callsigns = await _getCallsignsWithQueuedMessages();
+    _queuedCallsigns
+      ..clear()
+      ..addAll(callsigns);
+    _lastIdleDiskScanAt = now;
+    return callsigns;
   }
 
   /// Get list of callsigns that have queued messages
@@ -156,9 +175,10 @@ class DMQueueService {
     final dmService = DirectMessageService();
     final queuedMessages = await dmService.loadQueuedMessages(callsign);
 
-    if (queuedMessages.isEmpty) return;
-
-    LogService().log('DMQueueService: Processing ${queuedMessages.length} messages for $callsign');
+    if (queuedMessages.isEmpty) {
+      _queuedCallsigns.remove(callsign);
+      return;
+    }
 
     for (final message in queuedMessages) {
       final messageId = '${message.timestamp}|${message.author}';
@@ -166,15 +186,21 @@ class DMQueueService {
       // Check if we should retry yet (exponential backoff)
       final nextRetry = _nextRetryTime[messageId];
       if (nextRetry != null && DateTime.now().isBefore(nextRetry)) {
-        LogService().log('DMQueueService: Skipping $messageId - waiting for backoff');
         continue;
       }
 
       // Check retry limit
       final retries = _retryCount[messageId] ?? 0;
       if (retries >= _maxRetries) {
-        LogService().log('DMQueueService: Message $messageId exceeded max retries, marking as failed');
-        await _updateMessageStatus(callsign, message, MessageStatus.failed, error: 'Max retries exceeded');
+        LogService().log(
+          'DMQueueService: Message $messageId exceeded max retries, marking as failed',
+        );
+        await _updateMessageStatus(
+          callsign,
+          message,
+          MessageStatus.failed,
+          error: 'Max retries exceeded',
+        );
         continue;
       }
 
@@ -188,11 +214,16 @@ class DMQueueService {
       } else {
         // Increment retry counter and set next retry time with exponential backoff
         _retryCount[messageId] = retries + 1;
-        final backoffSeconds = _backoffBaseSeconds * (1 << retries); // 2^retries
-        _nextRetryTime[messageId] = DateTime.now().add(Duration(seconds: backoffSeconds));
+        final backoffSeconds =
+            _backoffBaseSeconds * (1 << retries); // 2^retries
+        _nextRetryTime[messageId] = DateTime.now().add(
+          Duration(seconds: backoffSeconds),
+        );
 
-        LogService().log('DMQueueService: Delivery failed for $messageId, '
-            'retry ${retries + 1}/$_maxRetries, next attempt in ${backoffSeconds}s');
+        LogService().log(
+          'DMQueueService: Delivery failed for $messageId, '
+          'retry ${retries + 1}/$_maxRetries, next attempt in ${backoffSeconds}s',
+        );
       }
     }
   }
@@ -203,19 +234,33 @@ class DMQueueService {
     final connectionManager = ConnectionManager();
 
     // Fire status update: delivering
-    _fireStatusEvent(callsign, message, MessageStatus.pending, info: 'Delivering...');
+    _fireStatusEvent(
+      callsign,
+      message,
+      MessageStatus.pending,
+      info: 'Delivering...',
+    );
 
     try {
       // Rebuild signed event from message metadata
       final signedEvent = _rebuildSignedEventFromMessage(message, callsign);
 
       if (signedEvent == null) {
-        LogService().log('DMQueueService: Cannot rebuild signed event for ${message.timestamp}');
-        await _updateMessageStatus(callsign, message, MessageStatus.failed, error: 'Missing signature data');
+        LogService().log(
+          'DMQueueService: Cannot rebuild signed event for ${message.timestamp}',
+        );
+        await _updateMessageStatus(
+          callsign,
+          message,
+          MessageStatus.failed,
+          error: 'Missing signature data',
+        );
         return false;
       }
 
-      LogService().log('DMQueueService: Delivering to $callsign via ConnectionManager');
+      LogService().log(
+        'DMQueueService: Delivering to $callsign via ConnectionManager',
+      );
 
       // Try delivery via ConnectionManager (handles transport selection)
       // ConnectionManager will try WebRTC first (if available), then Station
@@ -226,9 +271,15 @@ class DMQueueService {
       );
 
       if (result.success) {
-        LogService().log('DMQueueService: Message delivered via ${result.transportUsed}');
-        await _updateMessageStatus(callsign, message, MessageStatus.delivered,
-            transportUsed: result.transportUsed);
+        LogService().log(
+          'DMQueueService: Message delivered via ${result.transportUsed}',
+        );
+        await _updateMessageStatus(
+          callsign,
+          message,
+          MessageStatus.delivered,
+          transportUsed: result.transportUsed,
+        );
         return true;
       } else {
         LogService().log('DMQueueService: Delivery failed: ${result.error}');
@@ -242,15 +293,23 @@ class DMQueueService {
   }
 
   /// Rebuild a NostrEvent from stored message metadata
-  NostrEvent? _rebuildSignedEventFromMessage(ChatMessage message, String roomId) {
+  NostrEvent? _rebuildSignedEventFromMessage(
+    ChatMessage message,
+    String roomId,
+  ) {
     final npub = message.npub;
     final signature = message.signature;
     final eventId = message.getMeta('eventId');
     final createdAtStr = message.getMeta('created_at');
 
-    if (npub == null || signature == null || eventId == null || createdAtStr == null) {
-      LogService().log('DMQueueService: Cannot rebuild event - missing metadata '
-          '(npub=${npub != null}, sig=${signature != null}, id=${eventId != null}, created_at=${createdAtStr != null})');
+    if (npub == null ||
+        signature == null ||
+        eventId == null ||
+        createdAtStr == null) {
+      LogService().log(
+        'DMQueueService: Cannot rebuild event - missing metadata '
+        '(npub=${npub != null}, sig=${signature != null}, id=${eventId != null}, created_at=${createdAtStr != null})',
+      );
       return null;
     }
 
@@ -330,18 +389,25 @@ class DMQueueService {
       dmService.invalidateMessageCache(callsign);
 
       // Fire delivered event for backward compatibility
-      EventBus().fire(DMMessageDeliveredEvent(
-        callsign: callsign,
-        messageTimestamp: message.timestamp,
-      ));
+      EventBus().fire(
+        DMMessageDeliveredEvent(
+          callsign: callsign,
+          messageTimestamp: message.timestamp,
+        ),
+      );
     } else if (status == MessageStatus.failed) {
       // Update the status in the queue file
       await _updateQueueMessageStatus(callsign, message.timestamp, status);
     }
 
     // Fire status changed event
-    _fireStatusEvent(callsign, message, status,
-        transportUsed: transportUsed, error: error);
+    _fireStatusEvent(
+      callsign,
+      message,
+      status,
+      transportUsed: transportUsed,
+      error: error,
+    );
   }
 
   /// Fire DMMessageStatusChangedEvent
@@ -355,20 +421,24 @@ class DMQueueService {
   }) {
     final messageId = '${message.timestamp}|${message.author}';
 
-    EventBus().fire(DMMessageStatusChangedEvent(
-      callsign: callsign,
-      messageId: messageId,
-      newStatus: status,
-      transportUsed: transportUsed,
-      error: error,
-    ));
+    EventBus().fire(
+      DMMessageStatusChangedEvent(
+        callsign: callsign,
+        messageId: messageId,
+        newStatus: status,
+        transportUsed: transportUsed,
+        error: error,
+      ),
+    );
   }
 
   /// Remove a message from queue after successful delivery
   Future<void> _removeFromQueue(String callsign, String timestamp) async {
     final dmService = DirectMessageService();
     final queuedMessages = await dmService.loadQueuedMessages(callsign);
-    final remaining = queuedMessages.where((m) => m.timestamp != timestamp).toList();
+    final remaining = queuedMessages
+        .where((m) => m.timestamp != timestamp)
+        .toList();
 
     if (remaining.isEmpty) {
       // Delete queue file if empty
@@ -383,7 +453,11 @@ class DMQueueService {
   }
 
   /// Update status of a specific message in queue file
-  Future<void> _updateQueueMessageStatus(String callsign, String timestamp, MessageStatus status) async {
+  Future<void> _updateQueueMessageStatus(
+    String callsign,
+    String timestamp,
+    MessageStatus status,
+  ) async {
     final dmService = DirectMessageService();
     final queuedMessages = await dmService.loadQueuedMessages(callsign);
 
@@ -398,7 +472,10 @@ class DMQueueService {
   }
 
   /// Rewrite queue file with messages
-  Future<void> _rewriteQueue(String callsign, List<ChatMessage> messages) async {
+  Future<void> _rewriteQueue(
+    String callsign,
+    List<ChatMessage> messages,
+  ) async {
     final queuePath = '${callsign.toUpperCase()}/queue.txt';
 
     final buffer = StringBuffer();

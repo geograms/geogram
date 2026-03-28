@@ -48,13 +48,18 @@ class QueuedStationChatMessage {
       roomId: json['roomId'] as String? ?? '',
       callsign: json['callsign'] as String? ?? '',
       content: json['content'] as String? ?? '',
-      metadata: (json['metadata'] as Map?)?.map(
+      metadata:
+          (json['metadata'] as Map?)?.map(
             (k, v) => MapEntry(k.toString(), v.toString()),
           ) ??
           <String, String>{},
-      eventJson: (json['eventJson'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{},
+      eventJson:
+          (json['eventJson'] as Map?)?.cast<String, dynamic>() ??
+          <String, dynamic>{},
       retryCount: json['retryCount'] as int? ?? 0,
-      queuedAt: DateTime.tryParse(json['queuedAt'] as String? ?? '') ?? DateTime.now().toUtc(),
+      queuedAt:
+          DateTime.tryParse(json['queuedAt'] as String? ?? '') ??
+          DateTime.now().toUtc(),
       nextAttemptAt: json['nextAttemptAt'] != null
           ? DateTime.tryParse(json['nextAttemptAt'] as String)
           : null,
@@ -62,21 +67,23 @@ class QueuedStationChatMessage {
   }
 
   Map<String, dynamic> toJson() => {
-        'stationUrl': stationUrl,
-        'stationCallsign': stationCallsign,
-        'roomId': roomId,
-        'callsign': callsign,
-        'content': content,
-        'metadata': metadata,
-        'eventJson': eventJson,
-        'retryCount': retryCount,
-        'queuedAt': queuedAt.toUtc().toIso8601String(),
-        if (nextAttemptAt != null) 'nextAttemptAt': nextAttemptAt!.toUtc().toIso8601String(),
-      };
+    'stationUrl': stationUrl,
+    'stationCallsign': stationCallsign,
+    'roomId': roomId,
+    'callsign': callsign,
+    'content': content,
+    'metadata': metadata,
+    'eventJson': eventJson,
+    'retryCount': retryCount,
+    'queuedAt': queuedAt.toUtc().toIso8601String(),
+    if (nextAttemptAt != null)
+      'nextAttemptAt': nextAttemptAt!.toUtc().toIso8601String(),
+  };
 }
 
 class StationChatQueueService {
-  static final StationChatQueueService _instance = StationChatQueueService._internal();
+  static final StationChatQueueService _instance =
+      StationChatQueueService._internal();
   factory StationChatQueueService() => _instance;
   StationChatQueueService._internal();
 
@@ -86,8 +93,11 @@ class StationChatQueueService {
   MonitoredAsyncPeriodicTimer? _processingTimer;
   bool _initialized = false;
   bool _isProcessing = false;
+  final Set<String> _queuedCallsigns = <String>{};
+  DateTime? _lastIdleDiskScanAt;
 
   static const _processInterval = Duration(seconds: 5);
+  static const _idleDiskScanInterval = Duration(minutes: 3);
   static const _maxRetries = 10;
   static const _baseBackoffSeconds = 3;
   static const _maxBackoffSeconds = 30;
@@ -124,11 +134,17 @@ class StationChatQueueService {
     final list = await _loadQueue(msg.stationCallsign);
     list.add(msg);
     await _saveQueue(msg.stationCallsign, list);
+    _queuedCallsigns.add(msg.stationCallsign);
     // Try immediately instead of waiting for the next timer tick.
-    unawaited(processQueue(stationCallsign: msg.stationCallsign));
+    unawaited(
+      processQueue(stationCallsign: msg.stationCallsign, forceDiskScan: true),
+    );
   }
 
-  Future<void> processQueue({String? stationCallsign}) async {
+  Future<void> processQueue({
+    String? stationCallsign,
+    bool forceDiskScan = false,
+  }) async {
     if (kIsWeb) return;
     if (_isProcessing) return;
     _isProcessing = true;
@@ -136,11 +152,14 @@ class StationChatQueueService {
     try {
       final callsigns = stationCallsign != null && stationCallsign.isNotEmpty
           ? <String>[stationCallsign]
-          : await _getQueuedCallsigns();
+          : await _getQueuedCallsigns(forceDiskScan: forceDiskScan);
 
       for (final callsign in callsigns) {
         final list = await _loadQueue(callsign);
-        if (list.isEmpty) continue;
+        if (list.isEmpty) {
+          _queuedCallsigns.remove(callsign);
+          continue;
+        }
 
         final now = DateTime.now().toUtc();
         final updated = <QueuedStationChatMessage>[];
@@ -155,19 +174,24 @@ class StationChatQueueService {
             final retries = msg.retryCount + 1;
             if (retries <= _maxRetries) {
               final backoffSeconds =
-                  (_baseBackoffSeconds * (1 << (retries - 1))).clamp(1, _maxBackoffSeconds);
-              updated.add(QueuedStationChatMessage(
-                stationUrl: msg.stationUrl,
-                stationCallsign: msg.stationCallsign,
-                roomId: msg.roomId,
-                callsign: msg.callsign,
-                content: msg.content,
-                metadata: msg.metadata,
-                eventJson: msg.eventJson,
-                retryCount: retries,
-                queuedAt: msg.queuedAt,
-                nextAttemptAt: now.add(Duration(seconds: backoffSeconds)),
-              ));
+                  (_baseBackoffSeconds * (1 << (retries - 1))).clamp(
+                    1,
+                    _maxBackoffSeconds,
+                  );
+              updated.add(
+                QueuedStationChatMessage(
+                  stationUrl: msg.stationUrl,
+                  stationCallsign: msg.stationCallsign,
+                  roomId: msg.roomId,
+                  callsign: msg.callsign,
+                  content: msg.content,
+                  metadata: msg.metadata,
+                  eventJson: msg.eventJson,
+                  retryCount: retries,
+                  queuedAt: msg.queuedAt,
+                  nextAttemptAt: now.add(Duration(seconds: backoffSeconds)),
+                ),
+              );
             } else {
               await _markQueuedMessageFailed(msg);
             }
@@ -175,6 +199,11 @@ class StationChatQueueService {
         }
 
         await _saveQueue(callsign, updated);
+        if (updated.isEmpty) {
+          _queuedCallsigns.remove(callsign);
+        } else {
+          _queuedCallsigns.add(callsign);
+        }
       }
     } finally {
       _isProcessing = false;
@@ -184,8 +213,12 @@ class StationChatQueueService {
   Future<bool> _trySendQueuedMessage(QueuedStationChatMessage msg) async {
     try {
       final event = NostrEvent.fromJson(msg.eventJson);
-      final metadata = _stationService.stripUnsignedStatusMetadata(msg.metadata);
-      final sendMetadata = _stationService.sanitizeChatMetadataForSend(msg.metadata);
+      final metadata = _stationService.stripUnsignedStatusMetadata(
+        msg.metadata,
+      );
+      final sendMetadata = _stationService.sanitizeChatMetadataForSend(
+        msg.metadata,
+      );
       final sent = await _stationService.sendSignedChatEvent(
         msg.stationUrl,
         msg.roomId,
@@ -200,7 +233,8 @@ class StationChatQueueService {
         final updatedMetadata = Map<String, String>.from(metadata);
         updatedMetadata['created_at'] = event.createdAt.toString();
         updatedMetadata['npub'] = NostrCrypto.encodeNpub(event.pubkey);
-        updatedMetadata['signature'] = event.sig ?? updatedMetadata['signature'] ?? '';
+        updatedMetadata['signature'] =
+            event.sig ?? updatedMetadata['signature'] ?? '';
         if (event.id != null) {
           updatedMetadata['event_id'] = event.id!;
         }
@@ -225,12 +259,16 @@ class StationChatQueueService {
           ),
         );
 
-        await _cacheService.mergeMessages(msg.stationCallsign, msg.roomId, [updated]);
+        await _cacheService.mergeMessages(msg.stationCallsign, msg.roomId, [
+          updated,
+        ]);
       }
 
       return sent;
     } catch (e) {
-      LogService().log('StationChatQueueService: Failed to send queued message: $e');
+      LogService().log(
+        'StationChatQueueService: Failed to send queued message: $e',
+      );
       return false;
     }
   }
@@ -271,27 +309,62 @@ class StationChatQueueService {
           metadata: metadata,
         ),
       );
-      await _cacheService.mergeMessages(msg.stationCallsign, msg.roomId, [failed]);
+      await _cacheService.mergeMessages(msg.stationCallsign, msg.roomId, [
+        failed,
+      ]);
     } catch (e) {
-      LogService().log('StationChatQueueService: Failed to mark message failed: $e');
+      LogService().log(
+        'StationChatQueueService: Failed to mark message failed: $e',
+      );
     }
   }
 
-  Future<List<String>> _getQueuedCallsigns() async {
+  Future<List<String>> _getQueuedCallsigns({bool forceDiskScan = false}) async {
+    if (_queuedCallsigns.isNotEmpty) {
+      return _queuedCallsigns.toList(growable: false);
+    }
+
+    final now = DateTime.now();
+    if (!forceDiskScan &&
+        _lastIdleDiskScanAt != null &&
+        now.difference(_lastIdleDiskScanAt!) < _idleDiskScanInterval) {
+      return const <String>[];
+    }
+
     final storageConfig = StorageConfig();
     if (!storageConfig.isInitialized) return [];
     final base = storageConfig.devicesDir;
     final dir = Directory(base);
     if (!await dir.exists()) return [];
 
-    final entities = await dir.list().toList();
+    final entities = await dir.list(followLinks: false).toList();
     final callsigns = <String>[];
     for (final entity in entities) {
       if (entity is Directory) {
         final name = entity.path.split('/').last;
+        final queueFile = File('${entity.path}/chat/_pending.json');
+        if (!await queueFile.exists()) {
+          continue;
+        }
+        try {
+          if (await queueFile.length() == 0) {
+            continue;
+          }
+          final raw = await queueFile.readAsString();
+          final trimmed = raw.trim();
+          if (trimmed.isEmpty || trimmed == '[]') {
+            continue;
+          }
+        } catch (_) {
+          continue;
+        }
         callsigns.add(name);
       }
     }
+    _queuedCallsigns
+      ..clear()
+      ..addAll(callsigns);
+    _lastIdleDiskScanAt = now;
     return callsigns;
   }
 
@@ -315,19 +388,32 @@ class StationChatQueueService {
       final content = await file.readAsString();
       if (content.trim().isEmpty) return [];
       final data = jsonDecode(content) as List<dynamic>;
-      return data.map((e) => QueuedStationChatMessage.fromJson(e as Map<String, dynamic>)).toList();
+      return data
+          .map(
+            (e) => QueuedStationChatMessage.fromJson(e as Map<String, dynamic>),
+          )
+          .toList();
     } catch (e) {
       LogService().log('StationChatQueueService: Failed to load queue: $e');
       return [];
     }
   }
 
-  Future<void> _saveQueue(String callsign, List<QueuedStationChatMessage> list) async {
+  Future<void> _saveQueue(
+    String callsign,
+    List<QueuedStationChatMessage> list,
+  ) async {
     try {
       final file = await _queueFile(callsign);
-      final content = const JsonEncoder.withIndent('  ').convert(
-        list.map((e) => e.toJson()).toList(),
-      );
+      if (list.isEmpty) {
+        if (await file.exists()) {
+          await file.delete();
+        }
+        return;
+      }
+      final content = const JsonEncoder.withIndent(
+        '  ',
+      ).convert(list.map((e) => e.toJson()).toList());
       await file.writeAsString(content);
     } catch (e) {
       LogService().log('StationChatQueueService: Failed to save queue: $e');

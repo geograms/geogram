@@ -32,6 +32,13 @@ const String _kNodeIdPath = 'p2p/node_id.bin';
 const String _kPeerCachePath = 'p2p/peer_cache.json';
 const String _kTaskId = 'p2p_discovery.dht';
 const Duration _kKnownPeerProbeInterval = Duration(seconds: 30);
+const Duration _kDesktopKnownPeerProbeInterval = Duration(minutes: 3);
+const Duration _kDiscoveryRefreshInterval = Duration(minutes: 5);
+const Duration _kDesktopDiscoveryRefreshInterval = Duration(minutes: 10);
+const Duration _kInitialDiscoverySweepDelay = Duration(seconds: 5);
+const Duration _kDesktopInitialDiscoverySweepDelay = Duration(seconds: 20);
+const Duration _kKnownPeerPostStartupDelay = Duration(seconds: 30);
+const Duration _kDesktopKnownPeerPostStartupDelay = Duration(minutes: 2);
 const int _kKnownPeerProbeBatchSize = 3;
 const Duration _kFailedDhtCandidateTtl = Duration(seconds: 20);
 const Duration _kKnownPeerCandidateCacheTtl = Duration(minutes: 5);
@@ -46,6 +53,9 @@ const List<Duration> _kKnownPeerWarmupProbeDelays = <Duration>[
   Duration.zero,
   Duration(seconds: 10),
   Duration(seconds: 20),
+];
+const List<Duration> _kDesktopKnownPeerWarmupProbeDelays = <Duration>[
+  Duration(seconds: 45),
 ];
 const String _kPairRendezvousTopicPrefix = 'geogram:rendezvous:v1:';
 
@@ -277,15 +287,6 @@ class P2PService {
       try {
         await _capability!.detectFromDht(_dht!);
         await _refreshPublicHttpAnnounce();
-        await _probeExistingDiscoveredPeers();
-
-        final peers = await _lookupDiscoveryPeers(
-          sha1Hash('geogram'),
-          includeCached: false,
-        );
-        for (final p in peers) {
-          _addDiscoveredPeer(p);
-        }
 
         _taskHandle?.markIdle();
         LogService().log(
@@ -294,33 +295,27 @@ class P2PService {
         );
         _startKnownPeerProbeLoop();
         _scheduleKnownPeerWarmupProbes();
+        Timer(_initialDiscoverySweepDelay, () {
+          if (_dht == null || !_dht!.isRunning) return;
+          unawaited(_runDiscoveryPeerSweep());
+        });
 
         // After 30s: fresh peer scan + probe known devices
         // (gives the other device time to announce)
-        Timer(const Duration(seconds: 30), () async {
+        Timer(_postStartupKnownPeerRefreshDelay, () async {
           if (_dht == null || !_dht!.isRunning) return;
-          final p = await _lookupDiscoveryPeers(
-            sha1Hash('geogram'),
-            includeCached: false,
-          );
-          for (final peer in p) {
-            _addDiscoveredPeer(peer);
-          }
-          await _runKnownPeerProbe();
+          await _runDiscoveryPeerSweep(includeKnownPeerProbe: true);
         });
 
         // Periodic refresh — fresh getPeers to discover new peers
-        _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
+        _refreshTimer = Timer.periodic(_backgroundDiscoveryRefreshInterval, (
+          _,
+        ) async {
           if (_dht == null || !_dht!.isRunning) return;
-          await _capability!.detectFromDht(_dht!);
-          final p = await _lookupDiscoveryPeers(
-            sha1Hash('geogram'),
-            includeCached: false,
+          await _runDiscoveryPeerSweep(
+            refreshCapability: true,
+            includeKnownPeerProbe: true,
           );
-          for (final peer in p) {
-            _addDiscoveredPeer(peer);
-          }
-          await _runKnownPeerProbe();
         });
       } catch (e) {
         _taskHandle?.markError(e);
@@ -1096,7 +1091,7 @@ class P2PService {
     _knownPeerProbeTimer?.cancel();
     void scheduleNext() {
       final now = DateTime.now();
-      final intervalMs = _kKnownPeerProbeInterval.inMilliseconds;
+      final intervalMs = _knownPeerProbeInterval.inMilliseconds;
       final nextMs =
           ((now.millisecondsSinceEpoch ~/ intervalMs) + 1) * intervalMs;
       final delay = Duration(milliseconds: nextMs - now.millisecondsSinceEpoch);
@@ -1110,7 +1105,7 @@ class P2PService {
   }
 
   void _scheduleKnownPeerWarmupProbes() {
-    for (final delay in _kKnownPeerWarmupProbeDelays) {
+    for (final delay in _knownPeerWarmupProbeDelays) {
       Timer(delay, () {
         if (!_running || _dht == null || !_dht!.isRunning) return;
         unawaited(_runKnownPeerProbe());
@@ -1118,7 +1113,30 @@ class P2PService {
     }
   }
 
-  bool get _useLightDhtLookups => Platform.isAndroid;
+  bool get _isDesktopPlatform =>
+      Platform.isLinux || Platform.isMacOS || Platform.isWindows;
+
+  Duration get _knownPeerProbeInterval => _isDesktopPlatform
+      ? _kDesktopKnownPeerProbeInterval
+      : _kKnownPeerProbeInterval;
+
+  Duration get _backgroundDiscoveryRefreshInterval => _isDesktopPlatform
+      ? _kDesktopDiscoveryRefreshInterval
+      : _kDiscoveryRefreshInterval;
+
+  Duration get _initialDiscoverySweepDelay => _isDesktopPlatform
+      ? _kDesktopInitialDiscoverySweepDelay
+      : _kInitialDiscoverySweepDelay;
+
+  Duration get _postStartupKnownPeerRefreshDelay => _isDesktopPlatform
+      ? _kDesktopKnownPeerPostStartupDelay
+      : _kKnownPeerPostStartupDelay;
+
+  List<Duration> get _knownPeerWarmupProbeDelays => _isDesktopPlatform
+      ? _kDesktopKnownPeerWarmupProbeDelays
+      : _kKnownPeerWarmupProbeDelays;
+
+  bool get _useLightDhtLookups => Platform.isAndroid || _isDesktopPlatform;
 
   Future<List<PeerInfo>> _lookupDiscoveryPeers(
     Uint8List infoHash, {
@@ -1129,6 +1147,34 @@ class P2PService {
       return _dht!.getPeersLight(infoHash, includeCached: includeCached);
     }
     return _dht!.getPeers(infoHash, includeCached: includeCached);
+  }
+
+  Future<void> _runDiscoveryPeerSweep({
+    bool refreshCapability = false,
+    bool includeKnownPeerProbe = false,
+  }) async {
+    if (_dht == null || !_dht!.isRunning) {
+      return;
+    }
+
+    try {
+      if (refreshCapability && _capability != null) {
+        await _capability!.detectFromDht(_dht!);
+      }
+      await _probeExistingDiscoveredPeers();
+      final peers = await _lookupDiscoveryPeers(
+        sha1Hash('geogram'),
+        includeCached: false,
+      );
+      for (final peer in peers) {
+        _addDiscoveredPeer(peer);
+      }
+      if (includeKnownPeerProbe) {
+        await _runKnownPeerProbe();
+      }
+    } catch (e) {
+      LogService().log('P2P: discovery sweep failed: $e');
+    }
   }
 
   Future<void> _runKnownPeerProbe() async {

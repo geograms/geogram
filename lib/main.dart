@@ -172,7 +172,11 @@ import 'transfer/services/p2p_transfer_service.dart';
 import 'cli/console.dart';
 
 /// Wrap a service init with CPU + memory profiling via TaskMonitor.
-Future<void> _initService(String id, String name, Future<void> Function() init) async {
+Future<void> _initService(
+  String id,
+  String name,
+  Future<void> Function() init,
+) async {
   final monitor = TaskMonitorService();
   final task = MonitoredTask(
     id: 'startup.$id',
@@ -200,10 +204,11 @@ Future<void> _initService(String id, String name, Future<void> Function() init) 
 
 /// Log startup profiling summary sorted by CPU time.
 void _logStartupProfile() {
-  final tasks = TaskMonitorService().tasks
-      .where((t) => t.id.startsWith('startup.'))
-      .toList()
-    ..sort((a, b) => b.initCpuMs.compareTo(a.initCpuMs));
+  final tasks =
+      TaskMonitorService().tasks
+          .where((t) => t.id.startsWith('startup.'))
+          .toList()
+        ..sort((a, b) => b.initCpuMs.compareTo(a.initCpuMs));
   if (tasks.isEmpty) return;
 
   final totalCpu = tasks.fold<int>(0, (s, t) => s + t.initCpuMs);
@@ -215,11 +220,15 @@ void _logStartupProfile() {
   for (final t in tasks) {
     final rssMB = t.rssDeltaBytes / 1024 / 1024;
     final rssStr = '${rssMB >= 0 ? "+" : ""}${rssMB.toStringAsFixed(1)}MB';
-    LogService().log('  ${t.initCpuMs.toString().padLeft(5)}ms cpu  '
-        '${t.initWallMs.toString().padLeft(5)}ms wall  '
-        '${rssStr.padLeft(8)}  ${t.name}');
+    LogService().log(
+      '  ${t.initCpuMs.toString().padLeft(5)}ms cpu  '
+      '${t.initWallMs.toString().padLeft(5)}ms wall  '
+      '${rssStr.padLeft(8)}  ${t.name}',
+    );
   }
-  LogService().log('  TOTAL: ${totalCpu}ms cpu, ${totalWall}ms wall, RSS: ${rss}MB');
+  LogService().log(
+    '  TOTAL: ${totalCpu}ms cpu, ${totalWall}ms wall, RSS: ${rss}MB',
+  );
   LogService().log('=========================');
   LogService().log('');
 }
@@ -312,10 +321,9 @@ void main() async {
   if (!kIsWeb && Platform.isAndroid) {
     if (await FileViewerService.checkLaunchIntent()) {
       final info = FileViewerService.launchFile!;
-      runApp(FileViewerApp(
-        filePath: info['path']!,
-        mimeType: info['mimeType']!,
-      ));
+      runApp(
+        FileViewerApp(filePath: info['path']!, mimeType: info['mimeType']!),
+      );
       return;
     }
   }
@@ -449,10 +457,22 @@ void main() async {
       }
     }
 
-    await _initService('web_theme', 'WebThemeService', () => WebThemeService().init());
-    await _initService('app_theme', 'AppThemeService', () => AppThemeService().initialize());
+    await _initService(
+      'web_theme',
+      'WebThemeService',
+      () => WebThemeService().init(),
+    );
+    await _initService(
+      'app_theme',
+      'AppThemeService',
+      () => AppThemeService().initialize(),
+    );
     await _initService('app_service', 'AppService', () => AppService().init());
-    await _initService('profile', 'ProfileService', () => ProfileService().initialize());
+    await _initService(
+      'profile',
+      'ProfileService',
+      () => ProfileService().initialize(),
+    );
 
     // Set active callsign for app storage path
     final profile = ProfileService().getProfile();
@@ -497,25 +517,56 @@ void main() async {
     // Only create default apps if first launch is complete.
     // On first launch, WelcomePage.finalizeProfileIdentity() will create them
     // after the user confirms their callsign (avoids orphaned random-callsign folder).
-    final isFirstLaunch = !(ConfigService().getNestedValue('firstLaunchComplete', false) as bool);
+    final isFirstLaunch =
+        !(ConfigService().getNestedValue('firstLaunchComplete', false) as bool);
     if (!isFirstLaunch) {
       AppService().ensureDefaultApps();
     }
-    LogService().log('Default apps creation ${isFirstLaunch ? "deferred (first launch)" : "started"}');
+    LogService().log(
+      'Default apps creation ${isFirstLaunch ? "deferred (first launch)" : "started"}',
+    );
 
-    await _initService('notification', 'NotificationService', () => NotificationService().initialize());
-    await _initService('chat_notification', 'ChatNotificationService', () async => ChatNotificationService().initialize());
-    await _initService('station_content', 'StationContentNotification', () async => StationContentNotificationService().initialize());
-    await _initService('chat_queue', 'StationChatQueueService', () async => StationChatQueueService().initialize());
-    await _initService('activity_publisher', 'StationActivityPublisher', () async => StationActivityPublisherService().initialize());
+    await _initService(
+      'notification',
+      'NotificationService',
+      () => NotificationService().initialize(),
+    );
+    await _initService(
+      'chat_notification',
+      'ChatNotificationService',
+      () async => ChatNotificationService().initialize(),
+    );
+    await _initService(
+      'station_content',
+      'StationContentNotification',
+      () async => StationContentNotificationService().initialize(),
+    );
+    await _initService(
+      'chat_queue',
+      'StationChatQueueService',
+      () async => StationChatQueueService().initialize(),
+    );
+    await _initService(
+      'activity_publisher',
+      'StationActivityPublisher',
+      () async => StationActivityPublisherService().initialize(),
+    );
 
     // Wire event-creation activity publishing (decoupled for CLI compatibility)
     EventService.onEventCreated = (event) =>
         StationActivityPublisherService().publishEventRecord(event);
 
     if (!kIsWeb && Platform.isAndroid) {
-      await _initService('usb_attach', 'UsbAttachmentService', () async => UsbAttachmentService().initialize());
-      await _initService('file_viewer', 'FileViewerService', () async => FileViewerService().initialize());
+      await _initService(
+        'usb_attach',
+        'UsbAttachmentService',
+        () async => UsbAttachmentService().initialize(),
+      );
+      await _initService(
+        'file_viewer',
+        'FileViewerService',
+        () async => FileViewerService().initialize(),
+      );
     }
 
     // Initialize DM notification service (for push notifications on mobile)
@@ -528,12 +579,25 @@ void main() async {
       );
       firstLaunch = firstLaunchComplete != true;
     }
-    await _initService('dm_notification', 'DMNotificationService', () =>
-        DMNotificationService().initialize(skipPermissionRequest: firstLaunch));
-    await _initService('backup_notification', 'BackupNotificationService', () =>
-        BackupNotificationService().initialize(skipPermissionRequest: firstLaunch));
-    await _initService('message_attention', 'MessageAttentionService', () =>
-        MessageAttentionService().initialize());
+    await _initService(
+      'dm_notification',
+      'DMNotificationService',
+      () => DMNotificationService().initialize(
+        skipPermissionRequest: firstLaunch,
+      ),
+    );
+    await _initService(
+      'backup_notification',
+      'BackupNotificationService',
+      () => BackupNotificationService().initialize(
+        skipPermissionRequest: firstLaunch,
+      ),
+    );
+    await _initService(
+      'message_attention',
+      'MessageAttentionService',
+      () => MessageAttentionService().initialize(),
+    );
 
     // Auto-transcription disabled at startup — runs on demand from meeting UI
     // MeetingTranscriptionService().startBackgroundAutoTranscription();
@@ -615,12 +679,31 @@ void main() async {
       StationDiscoveryService().start();
       LogService().log('StationDiscoveryService started (deferred)');
 
-      // Start P2P DHT discovery (background task)
-      P2PService().start().then((_) {
-        LogService().log('P2PService started (deferred)');
-      }).catchError((e) {
-        LogService().log('P2PService failed to start: $e');
-      });
+      // Start P2P DHT discovery after the desktop UI settles so the initial
+      // app interaction path is not competing with the DHT bootstrap work.
+      final p2pStartupDelay =
+          !kIsWeb &&
+              (Platform.isLinux || Platform.isMacOS || Platform.isWindows)
+          ? const Duration(seconds: 20)
+          : Duration.zero;
+
+      Future<void> startP2PDeferred() async {
+        try {
+          await P2PService().start();
+          LogService().log('P2PService started (deferred)');
+        } catch (e) {
+          LogService().log('P2PService failed to start: $e');
+        }
+      }
+
+      if (p2pStartupDelay > Duration.zero) {
+        LogService().log(
+          'P2PService scheduled to start in ${p2pStartupDelay.inSeconds}s',
+        );
+        unawaited(Future<void>.delayed(p2pStartupDelay, startP2PDeferred));
+      } else {
+        unawaited(startP2PDeferred());
+      }
 
       // Start peer discovery API service (port 3456 for local device discovery)
       // Enable via CLI flags if specified (--http-api, --debug-api)
@@ -645,7 +728,9 @@ void main() async {
 
       // Auto-start station server if profile is station type
       if (ProfileService().getProfile().isRelay) {
-        LogService().log('Station profile detected — initializing StationNodeService...');
+        LogService().log(
+          'Station profile detected — initializing StationNodeService...',
+        );
         await StationNodeService().initialize();
       }
 
@@ -815,8 +900,8 @@ void main() async {
           AprsService()
               .autoStart(aprsStorage, callsign: profile.fullCallsign)
               .catchError((e) {
-            LogService().log('APRS auto-start failed: $e');
-          });
+                LogService().log('APRS auto-start failed: $e');
+              });
         }
 
         // Auto-start IRC background service
@@ -1041,7 +1126,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     });
 
     // Subscribe to generic Now notification taps (irc, telegram, aprs, alert, blog, events, places)
-    _nowNotificationSubscription = EventBus().on<NowNotificationTappedEvent>((event) {
+    _nowNotificationSubscription = EventBus().on<NowNotificationTappedEvent>((
+      event,
+    ) {
       LogService().log(
         'GeogramApp: Now notification tapped for ${event.appType}:${event.sourceId}',
       );
@@ -1151,7 +1238,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
         if (parts.length >= 2) {
           final appType = parts[0];
           final sourceId = parts[1];
-          final sourceName = parts.length >= 3 ? parts.sublist(2).join(':') : '';
+          final sourceName = parts.length >= 3
+              ? parts.sublist(2).join(':')
+              : '';
           _navigateToNowSource(appType, sourceId, sourceName);
         }
         break;
@@ -1235,7 +1324,9 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
     }
 
     // Navigator not ready yet (cold start) - wait for next frame and retry
-    LogService().log('GeogramApp: Navigator not ready for chat, waiting for next frame');
+    LogService().log(
+      'GeogramApp: Navigator not ready for chat, waiting for next frame',
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _navigateToChatRoom(roomId);
     });
@@ -1282,7 +1373,11 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   }
 
   /// Navigate to a Now source by appType (mirrors NowPage._navigateToSource)
-  void _navigateToNowSource(String appType, String sourceId, String sourceName) {
+  void _navigateToNowSource(
+    String appType,
+    String sourceId,
+    String sourceName,
+  ) {
     if (_navigatorKey.currentState == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _navigateToNowSource(appType, sourceId, sourceName);
@@ -1294,40 +1389,54 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
       case 'irc':
         final parts = sourceId.split(':');
         if (parts.length >= 2) {
-          _navigatorKey.currentState!.push(MaterialPageRoute(
-            builder: (_) => IrcChatPage(serverId: parts[0], channel: parts.sublist(1).join(':')),
-          ));
+          _navigatorKey.currentState!.push(
+            MaterialPageRoute(
+              builder: (_) => IrcChatPage(
+                serverId: parts[0],
+                channel: parts.sublist(1).join(':'),
+              ),
+            ),
+          );
         }
         break;
       case 'telegram':
         final chatId = int.tryParse(sourceId);
         if (chatId != null) {
-          _navigatorKey.currentState!.push(MaterialPageRoute(
-            builder: (_) => TelegramChatPage(chatId: chatId, chatTitle: sourceName),
-          ));
+          _navigatorKey.currentState!.push(
+            MaterialPageRoute(
+              builder: (_) =>
+                  TelegramChatPage(chatId: chatId, chatTitle: sourceName),
+            ),
+          );
         }
         break;
       case 'aprs':
         if (sourceId == 'geochat') {
           final teleportApp = AppService().getAppByType('teleport');
           if (teleportApp != null) {
-            _navigatorKey.currentState!.push(MaterialPageRoute(
-              builder: (_) => AprsMainPage(
-                appPath: teleportApp.storagePath ?? '',
-                initialTab: 0,
-                showGeoChat: true,
+            _navigatorKey.currentState!.push(
+              MaterialPageRoute(
+                builder: (_) => AprsMainPage(
+                  appPath: teleportApp.storagePath ?? '',
+                  initialTab: 0,
+                  showGeoChat: true,
+                ),
               ),
-            ));
+            );
           }
         } else {
           final isTag = sourceId.startsWith('#');
-          _navigatorKey.currentState!.push(MaterialPageRoute(
-            builder: (_) => AprsConversationPage(
-              conversationId: sourceId,
-              conversationType: isTag ? AprsConversationType.tag : AprsConversationType.direct,
-              partnerPosition: AprsService().lastKnownPositions[sourceId],
+          _navigatorKey.currentState!.push(
+            MaterialPageRoute(
+              builder: (_) => AprsConversationPage(
+                conversationId: sourceId,
+                conversationType: isTag
+                    ? AprsConversationType.tag
+                    : AprsConversationType.direct,
+                partnerPosition: AprsService().lastKnownPositions[sourceId],
+              ),
             ),
-          ));
+          );
         }
         break;
       case 'alert':
@@ -1339,16 +1448,25 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
           final device = RemoteDevice(
             callsign: station.callsign ?? 'STATION',
             name: station.name,
-            url: station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
+            url: station.url
+                .replaceFirst('wss://', 'https://')
+                .replaceFirst('ws://', 'http://'),
             apps: [],
             source: DeviceSourceType.station,
           );
-          _navigatorKey.currentState!.push(MaterialPageRoute(
-            builder: (_) => RemoteChatRoomPage(
-              device: device,
-              room: ChatRoom(id: sourceId, name: sourceName, memberCount: 0, visibility: 'public'),
+          _navigatorKey.currentState!.push(
+            MaterialPageRoute(
+              builder: (_) => RemoteChatRoomPage(
+                device: device,
+                room: ChatRoom(
+                  id: sourceId,
+                  name: sourceName,
+                  memberCount: 0,
+                  visibility: 'public',
+                ),
+              ),
             ),
-          ));
+          );
         }
         break;
       case 'blog':
@@ -1357,38 +1475,50 @@ class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
           final device = RemoteDevice(
             callsign: station.callsign ?? 'STATION',
             name: station.name,
-            url: station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
+            url: station.url
+                .replaceFirst('wss://', 'https://')
+                .replaceFirst('ws://', 'http://'),
             apps: [],
             source: DeviceSourceType.station,
           );
-          _navigatorKey.currentState!.push(MaterialPageRoute(
-            builder: (_) => RemoteBlogBrowserPage(device: device),
-          ));
+          _navigatorKey.currentState!.push(
+            MaterialPageRoute(
+              builder: (_) => RemoteBlogBrowserPage(device: device),
+            ),
+          );
         }
         break;
       case 'events':
         final station = StationService().getPreferredStation();
         if (station != null && station.url.isNotEmpty) {
-          _navigatorKey.currentState!.push(MaterialPageRoute(
-            builder: (_) => EventsBrowserPage(
-              remoteDeviceUrl: station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://'),
-              remoteDeviceCallsign: station.callsign,
-              remoteDeviceName: station.name,
+          _navigatorKey.currentState!.push(
+            MaterialPageRoute(
+              builder: (_) => EventsBrowserPage(
+                remoteDeviceUrl: station.url
+                    .replaceFirst('wss://', 'https://')
+                    .replaceFirst('ws://', 'http://'),
+                remoteDeviceCallsign: station.callsign,
+                remoteDeviceName: station.name,
+              ),
             ),
-          ));
+          );
         }
         break;
       case 'places':
         final station = StationService().getPreferredStation();
         if (station != null && station.url.isNotEmpty) {
-          final url = station.url.replaceFirst('wss://', 'https://').replaceFirst('ws://', 'http://');
-          _navigatorKey.currentState!.push(MaterialPageRoute(
-            builder: (_) => ReportBrowserPage(
-              remoteDeviceUrl: url,
-              remoteDeviceCallsign: station.callsign,
-              remoteDeviceName: station.name,
+          final url = station.url
+              .replaceFirst('wss://', 'https://')
+              .replaceFirst('ws://', 'http://');
+          _navigatorKey.currentState!.push(
+            MaterialPageRoute(
+              builder: (_) => ReportBrowserPage(
+                remoteDeviceUrl: url,
+                remoteDeviceCallsign: station.callsign,
+                remoteDeviceName: station.name,
+              ),
             ),
-          ));
+          );
         }
         break;
     }
@@ -1618,9 +1748,8 @@ class _HomePageState extends State<HomePage> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => WelcomePage(
-            onComplete: () => Navigator.of(context).pop(),
-          ),
+          builder: (context) =>
+              WelcomePage(onComplete: () => Navigator.of(context).pop()),
         ),
       );
     } else if (event.action == DebugAction.openDM) {
@@ -2754,11 +2883,15 @@ class _AppsPageState extends State<AppsPage> {
     try {
       final callsign = _profileService.getProfile().callsign.toUpperCase();
       final store = StationServerService().karmaStore;
-      final counts = await KarmaEngine.getTodayActionCountsWithFallback(store, callsign);
+      final counts = await KarmaEngine.getTodayActionCountsWithFallback(
+        store,
+        callsign,
+      );
       final left = KarmaEngine.countUnstartedMissions(counts);
       if (mounted) setState(() => _karmaMissionsLeft = left);
     } catch (e) {
-      if (mounted) setState(() => _karmaMissionsLeft = KarmaEngine.missions.length);
+      if (mounted)
+        setState(() => _karmaMissionsLeft = KarmaEngine.missions.length);
     }
   }
 
@@ -3268,7 +3401,6 @@ class _AppsPageState extends State<AppsPage> {
                             }, childCount: filteredApps.length),
                           ),
                         ),
-
                     ],
                   );
                 },
@@ -4681,10 +4813,7 @@ class FileViewerApp extends StatelessWidget {
 
   Widget _buildViewer() {
     if (mimeType == 'application/pdf') {
-      return DocumentViewerEditorPage(
-        filePath: filePath,
-        readOnly: true,
-      );
+      return DocumentViewerEditorPage(filePath: filePath, readOnly: true);
     }
     // Images and videos
     return PhotoViewerPage(imagePaths: [filePath]);
