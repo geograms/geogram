@@ -4928,3 +4928,53 @@ curl -X POST http://localhost:8080/api/debug \
   -H 'Content-Type: application/json' \
   -d '{"action": "local_backup_status"}'
 ```
+
+---
+
+## Task Monitor
+
+Debug API actions for inspecting and temporarily pausing monitored background
+tasks from automation or local troubleshooting.
+
+### Get Task Status
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "task_status"}'
+```
+
+### Pause One Task
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "task_pause", "id": "dm_queue.process"}'
+```
+
+### Resume One Task
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "task_resume", "id": "dm_queue.process"}'
+```
+
+### Pause Performance-Tab Periodic Tasks
+
+Pauses the non-critical periodic runtime tasks shown in the Task Monitor
+Performance tab. Startup tasks and isolate-only entries are left untouched.
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "task_pause_performance"}'
+```
+
+### Resume Performance-Tab Periodic Tasks
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "task_resume_performance"}'
+```

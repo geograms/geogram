@@ -789,6 +789,33 @@ class DebugController {
         },
       },
       {
+        'action': 'task_status',
+        'description': 'Get background task monitor status',
+        'params': {},
+      },
+      {
+        'action': 'task_pause',
+        'description': 'Pause a monitored background task by id',
+        'params': {'id': 'Task id (for example dm_queue.process)'},
+      },
+      {
+        'action': 'task_resume',
+        'description': 'Resume a paused background task by id',
+        'params': {'id': 'Task id (for example dm_queue.process)'},
+      },
+      {
+        'action': 'task_pause_performance',
+        'description':
+            'Pause the non-critical periodic runtime tasks shown in the Performance tab',
+        'params': {},
+      },
+      {
+        'action': 'task_resume_performance',
+        'description':
+            'Resume the periodic runtime tasks paused from the Performance tab',
+        'params': {},
+      },
+      {
         'action': 'ble_scan',
         'description': 'Start BLE device discovery scan',
         'params': {},
@@ -1167,7 +1194,8 @@ class DebugController {
       },
       {
         'action': 'dht_status',
-        'description': 'Get DHT/P2P discovery status (node type, peers, connections)',
+        'description':
+            'Get DHT/P2P discovery status (node type, peers, connections)',
         'params': {},
       },
       {
@@ -1242,8 +1270,7 @@ class DebugController {
         'params': {
           'room_name': '(optional) Meeting name (default: meeting code)',
           'max_speakers': '(optional) Max speakers including host (default: 6)',
-          'scheduled_at':
-              '(optional) ISO-8601 timestamp for automatic start',
+          'scheduled_at': '(optional) ISO-8601 timestamp for automatic start',
         },
       },
       {
@@ -2317,10 +2344,7 @@ class DebugController {
         scheduledAt: scheduledAt,
         visibility: visibility,
       );
-      return {
-        'success': true,
-        'schedule': entry.toJson(),
-      };
+      return {'success': true, 'schedule': entry.toJson()};
     } catch (e) {
       return {'success': false, 'error': e.toString()};
     }
@@ -2377,10 +2401,8 @@ class DebugController {
       'archive_path': cs.archiveEntry?.relativePath,
       'pending_speaker_requests': cs.pendingSpeakerRequests,
       'pending_screen_share_requests': cs.pendingScreenShareRequests,
-      'pending_join_requests':
-          cs.room?.pendingJoinRequests.keys.toList() ?? [],
-      'banned_callsigns':
-          cs.room?.bannedCallsigns.toList() ?? [],
+      'pending_join_requests': cs.room?.pendingJoinRequests.keys.toList() ?? [],
+      'banned_callsigns': cs.room?.bannedCallsigns.toList() ?? [],
       'has_password': cs.room?.password != null,
       'approval_required': cs.room?.approvalRequired ?? false,
       'chat_messages': cs.chatMessages
@@ -2955,18 +2977,23 @@ class DebugController {
     return {
       'success': true,
       'count': archives.length,
-      'archives': archives.map((a) => {
-        'name': a.relativePath.split('/').last,
-        'room_name': a.roomName,
-        'recordings': a.recordings.length,
-        'voice_transcripts': a.voiceTranscripts.length,
-        'started_at': a.startedAt.toIso8601String(),
-      }).toList(),
+      'archives': archives
+          .map(
+            (a) => {
+              'name': a.relativePath.split('/').last,
+              'room_name': a.roomName,
+              'recordings': a.recordings.length,
+              'voice_transcripts': a.voiceTranscripts.length,
+              'started_at': a.startedAt.toIso8601String(),
+            },
+          )
+          .toList(),
     };
   }
 
   Future<Map<String, dynamic>> _meetingTranscribe(
-      Map<String, dynamic> params) async {
+    Map<String, dynamic> params,
+  ) async {
     final archiveName = params['archive_name'] as String?;
     if (archiveName == null || archiveName.isEmpty) {
       return {'success': false, 'error': 'archive_name is required'};
@@ -2974,15 +3001,17 @@ class DebugController {
 
     final archiveService = ConferenceArchiveService();
     final archives = await archiveService.listArchives();
-    final entry = archives.where(
-      (a) => a.relativePath.endsWith(archiveName),
-    ).firstOrNull;
+    final entry = archives
+        .where((a) => a.relativePath.endsWith(archiveName))
+        .firstOrNull;
 
     if (entry == null) {
       return {
         'success': false,
         'error': 'Archive not found: $archiveName',
-        'available': archives.map((a) => a.relativePath.split('/').last).toList(),
+        'available': archives
+            .map((a) => a.relativePath.split('/').last)
+            .toList(),
       };
     }
 
@@ -2991,11 +3020,11 @@ class DebugController {
     }
 
     // Pick recording
-    final recordingName = params['recording_name'] as String? ??
-        entry.recordings.first.name;
-    final recording = entry.recordings.where(
-      (r) => r.name == recordingName,
-    ).firstOrNull;
+    final recordingName =
+        params['recording_name'] as String? ?? entry.recordings.first.name;
+    final recording = entry.recordings
+        .where((r) => r.name == recordingName)
+        .firstOrNull;
     if (recording == null) {
       return {
         'success': false,
@@ -3006,7 +3035,8 @@ class DebugController {
 
     // Export MP4 to temp path
     final tempPath = await archiveService.exportArchiveFileToTemporaryPath(
-      entry, recording.relativePath,
+      entry,
+      recording.relativePath,
     );
     if (tempPath == null) {
       return {'success': false, 'error': 'Failed to export recording to temp'};
@@ -3020,7 +3050,9 @@ class DebugController {
     );
 
     // Clean up temp
-    try { await File(tempPath).delete(); } catch (_) {}
+    try {
+      await File(tempPath).delete();
+    } catch (_) {}
 
     if (result.cancelled) {
       return {'success': false, 'error': 'Transcription was cancelled'};
@@ -3036,7 +3068,9 @@ class DebugController {
 
     // Save transcript to archive
     await archiveService.writeTranscriptForRecording(
-      entry, recordingName, result.text!,
+      entry,
+      recordingName,
+      result.text!,
     );
 
     return {

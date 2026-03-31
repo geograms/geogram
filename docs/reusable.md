@@ -10415,6 +10415,9 @@ _handle.dispose();
 - `tasksByPriority` → `Map<TaskPriority, List<MonitoredTask>>`
 - `pause(id)` → `bool` (refuses critical), `resume(id)` → `bool`
 - `pauseAllNonCritical()` → `int`, `resumeAll()` → `int`
+- `performanceRuntimeTasks` → `List<MonitoredTask>` — runtime tasks shown in the Performance tab
+- `canTogglePerformanceTask(task)` → `bool` — true for non-critical periodic runtime tasks
+- `pausePerformanceTasks()` → `int`, `resumePerformanceTasks()` → `int`
 - `stateChanges` → `Stream<TaskStateChangedEvent>` (for UI)
 - `toJson()` → summary map with task list
 
@@ -10434,11 +10437,19 @@ curl -X POST http://localhost:8080/api/debug \
 # Resume a paused task
 curl -X POST http://localhost:8080/api/debug \
   -d '{"action":"task_resume","id":"dm_queue.process"}'
+
+# Pause the periodic tasks shown in the Performance tab
+curl -X POST http://localhost:8080/api/debug \
+  -d '{"action":"task_pause_performance"}'
+
+# Resume the periodic tasks shown in the Performance tab
+curl -X POST http://localhost:8080/api/debug \
+  -d '{"action":"task_resume_performance"}'
 ```
 
 ### Settings UI
 
-Available at Settings drawer → "Tasks". Shows summary card with colored status chips, grouped task list (by service or priority), expandable tiles with status dot, run stats, error details, and pause/resume switch per task.
+Available at Settings drawer → "Tasks". Shows summary card with colored status chips, grouped task list (by service or priority), expandable tiles with status dot, run stats, error details, and pause/resume switch per task. The Performance tab also exposes per-task pause controls plus pause/resume-all controls for non-critical periodic runtime tasks.
 
 ### Chat Discovery Tasks
 

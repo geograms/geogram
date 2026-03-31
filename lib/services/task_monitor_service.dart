@@ -104,6 +104,30 @@ class TaskMonitorService {
     return map;
   }
 
+  bool isPerformanceRuntimeTask(MonitoredTask task) {
+    if (task.id.startsWith('startup.')) return false;
+    final hasRuntimeActivity =
+        task.totalCpuMs > 0 ||
+        task.runCount > 0 ||
+        task.status == TaskStatus.running ||
+        task.status == TaskStatus.paused;
+    if (task.type == TaskType.periodic || task.type == TaskType.isolate) {
+      return hasRuntimeActivity;
+    }
+    return task.totalCpuMs > 0 ||
+        task.status == TaskStatus.running ||
+        task.status == TaskStatus.paused;
+  }
+
+  bool canTogglePerformanceTask(MonitoredTask task) {
+    if (!isPerformanceRuntimeTask(task)) return false;
+    if (task.priority == TaskPriority.critical) return false;
+    return task.type == TaskType.periodic;
+  }
+
+  List<MonitoredTask> get performanceRuntimeTasks =>
+      List.unmodifiable(_tasks.values.where(isPerformanceRuntimeTask));
+
   // ------------------------------------------------------------------
   // Pause / resume
   // ------------------------------------------------------------------
@@ -144,7 +168,9 @@ class TaskMonitorService {
         count++;
       }
     }
-    if (count > 0) LogService().log('TaskMonitor: paused $count non-critical tasks');
+    if (count > 0) {
+      LogService().log('TaskMonitor: paused $count non-critical tasks');
+    }
     return count;
   }
 
@@ -163,6 +189,38 @@ class TaskMonitorService {
     return count;
   }
 
+  int pauseWhere(bool Function(MonitoredTask task) predicate) {
+    int count = 0;
+    for (final task in _tasks.values) {
+      if (!predicate(task)) continue;
+      if (pause(task.id)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  int resumeWhere(bool Function(MonitoredTask task) predicate) {
+    int count = 0;
+    for (final task in _tasks.values) {
+      if (!predicate(task)) continue;
+      if (resume(task.id)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  int pausePerformanceTasks() => pauseWhere(
+    (task) =>
+        canTogglePerformanceTask(task) && task.status != TaskStatus.paused,
+  );
+
+  int resumePerformanceTasks() => resumeWhere(
+    (task) =>
+        canTogglePerformanceTask(task) && task.status == TaskStatus.paused,
+  );
+
   // ------------------------------------------------------------------
   // Summary (used by debug API)
   // ------------------------------------------------------------------
@@ -172,9 +230,13 @@ class TaskMonitorService {
     return {
       'success': true,
       'total': list.length,
-      'running': _tasks.values.where((t) => t.status == TaskStatus.running).length,
+      'running': _tasks.values
+          .where((t) => t.status == TaskStatus.running)
+          .length,
       'idle': _tasks.values.where((t) => t.status == TaskStatus.idle).length,
-      'paused': _tasks.values.where((t) => t.status == TaskStatus.paused).length,
+      'paused': _tasks.values
+          .where((t) => t.status == TaskStatus.paused)
+          .length,
       'error': _tasks.values.where((t) => t.status == TaskStatus.error).length,
       'tasks': list,
     };
@@ -186,10 +248,8 @@ class TaskMonitorService {
 
   void _emit(String id, TaskStatus old, TaskStatus next) {
     if (old == next) return;
-    _stateChanges.add(TaskStateChangedEvent(
-      taskId: id,
-      oldStatus: old,
-      newStatus: next,
-    ));
+    _stateChanges.add(
+      TaskStateChangedEvent(taskId: id, oldStatus: old, newStatus: next),
+    );
   }
 }

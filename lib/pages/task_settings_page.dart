@@ -71,8 +71,7 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   // ------------------------------------------------------------------
 
   Widget _buildSummaryCard(ThemeData theme, List<MonitoredTask> tasks) {
-    final running =
-        tasks.where((t) => t.status == TaskStatus.running).length;
+    final running = tasks.where((t) => t.status == TaskStatus.running).length;
     final idle = tasks.where((t) => t.status == TaskStatus.idle).length;
     final paused = tasks.where((t) => t.status == TaskStatus.paused).length;
     final error = tasks.where((t) => t.status == TaskStatus.error).length;
@@ -104,7 +103,11 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
               width: double.infinity,
               child: OutlinedButton.icon(
                 icon: Icon(hasPaused ? Icons.play_arrow : Icons.pause),
-                label: Text(hasPaused ? _i18n.t('task_resume_all') : _i18n.t('task_pause_all')),
+                label: Text(
+                  hasPaused
+                      ? _i18n.t('task_resume_all')
+                      : _i18n.t('task_pause_all'),
+                ),
                 onPressed: () {
                   setState(() {
                     if (hasPaused) {
@@ -124,11 +127,7 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
 
   Widget _chip(String label, int count, Color color) {
     return Chip(
-      avatar: CircleAvatar(
-        backgroundColor: color,
-        radius: 6,
-        child: null,
-      ),
+      avatar: CircleAvatar(backgroundColor: color, radius: 6, child: null),
       label: Text('$label: $count'),
       visualDensity: VisualDensity.compact,
     );
@@ -141,9 +140,18 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   Widget _buildViewToggle(ThemeData theme) {
     return SegmentedButton<_ViewMode>(
       segments: [
-        const ButtonSegment(value: _ViewMode.performance, label: Text('Performance')),
-        ButtonSegment(value: _ViewMode.service, label: Text(_i18n.t('task_group_by_service'))),
-        ButtonSegment(value: _ViewMode.priority, label: Text(_i18n.t('task_group_by_priority'))),
+        const ButtonSegment(
+          value: _ViewMode.performance,
+          label: Text('Performance'),
+        ),
+        ButtonSegment(
+          value: _ViewMode.service,
+          label: Text(_i18n.t('task_group_by_service')),
+        ),
+        ButtonSegment(
+          value: _ViewMode.priority,
+          label: Text(_i18n.t('task_group_by_priority')),
+        ),
       ],
       selected: {_viewMode},
       onSelectionChanged: (v) => setState(() => _viewMode = v.first),
@@ -154,19 +162,30 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   // Performance view
   // ------------------------------------------------------------------
 
-  List<Widget> _buildPerformanceView(ThemeData theme, List<MonitoredTask> tasks) {
+  List<Widget> _buildPerformanceView(
+    ThemeData theme,
+    List<MonitoredTask> tasks,
+  ) {
     final rssMB = (ProcessInfo.currentRss / 1024 / 1024).toStringAsFixed(1);
     final maxRssMB = (ProcessInfo.maxRss / 1024 / 1024).toStringAsFixed(1);
 
-    final startupTasks = tasks
-        .where((t) => t.id.startsWith('startup.'))
-        .toList()
-      ..sort((a, b) => b.initCpuMs.compareTo(a.initCpuMs));
+    final startupTasks =
+        tasks.where((t) => t.id.startsWith('startup.')).toList()
+          ..sort((a, b) => b.initCpuMs.compareTo(a.initCpuMs));
 
-    final runtimeTasks = tasks
-        .where((t) => !t.id.startsWith('startup.') && t.totalCpuMs > 0)
-        .toList()
+    final runtimeTasks = _monitor.performanceRuntimeTasks.toList()
       ..sort((a, b) => b.totalCpuMs.compareTo(a.totalCpuMs));
+
+    final pausableRuntimeTasks = runtimeTasks
+        .where(_monitor.canTogglePerformanceTask)
+        .toList();
+    final pausedRuntimeTaskCount = pausableRuntimeTasks
+        .where((t) => t.status == TaskStatus.paused)
+        .length;
+    final hasPausedRuntimeTasks = pausedRuntimeTaskCount > 0;
+    final hasRunningRuntimeTasks = pausableRuntimeTasks.any(
+      (t) => t.status != TaskStatus.paused,
+    );
 
     return [
       // Memory summary
@@ -192,16 +211,27 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
 
       // Continuous section — ongoing periodic tasks (shown first)
       if (runtimeTasks.isNotEmpty) ...[
-        _sectionHeader(theme, 'CONTINUOUS (periodic tasks)'),
+        _sectionHeader(theme, 'CONTINUOUS (runtime tasks)'),
         Padding(
           padding: const EdgeInsets.only(left: 4, bottom: 8),
           child: Text(
-            'Cumulative CPU from tasks that run repeatedly while the app is open.',
+            'Cumulative CPU from background tasks while the app is open. '
+            'Periodic tasks can be paused here without affecting startup stats.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.outline,
             ),
           ),
         ),
+        if (pausableRuntimeTasks.isNotEmpty) ...[
+          _buildRuntimeControlsCard(
+            theme,
+            runtimeTaskCount: pausableRuntimeTasks.length,
+            pausedTaskCount: pausedRuntimeTaskCount,
+            canPause: hasRunningRuntimeTasks,
+            canResume: hasPausedRuntimeTasks,
+          ),
+          const SizedBox(height: 8),
+        ],
         ..._buildRuntimeRows(theme, runtimeTasks),
         const SizedBox(height: 16),
       ],
@@ -321,6 +351,10 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
   List<Widget> _buildRuntimeRows(ThemeData theme, List<MonitoredTask> tasks) {
     return tasks.map((t) {
       final avgMs = t.runCount > 0 ? t.totalCpuMs ~/ t.runCount : 0;
+      final canToggle = _monitor.canTogglePerformanceTask(t);
+      final intervalLabel = t.interval != null
+          ? ' · every ${_formatDuration(t.interval!)}'
+          : '';
 
       return ListTile(
         dense: true,
@@ -335,21 +369,83 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
             ),
           ),
         ),
-        title: Text(t.name, style: theme.textTheme.bodySmall),
+        title: Row(
+          children: [
+            Expanded(child: Text(t.name, style: theme.textTheme.bodySmall)),
+            const SizedBox(width: 8),
+            _statusDot(t.status),
+          ],
+        ),
         subtitle: Text(
-          '${t.runCount} runs, avg ${avgMs}ms',
+          '${t.runCount} runs, avg ${avgMs}ms$intervalLabel',
           style: theme.textTheme.bodySmall?.copyWith(
             color: theme.colorScheme.outline,
           ),
         ),
-        trailing: t.interval != null
-            ? Text(
-                _formatDuration(t.interval!),
-                style: theme.textTheme.bodySmall,
+        trailing: canToggle
+            ? IconButton(
+                tooltip: t.status == TaskStatus.paused
+                    ? 'Resume periodic task'
+                    : 'Pause periodic task',
+                icon: Icon(
+                  t.status == TaskStatus.paused
+                      ? Icons.play_arrow
+                      : Icons.pause,
+                ),
+                onPressed: () => _toggleRuntimeTask(t),
               )
             : null,
       );
     }).toList();
+  }
+
+  Widget _buildRuntimeControlsCard(
+    ThemeData theme, {
+    required int runtimeTaskCount,
+    required int pausedTaskCount,
+    required bool canPause,
+    required bool canResume,
+  }) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$runtimeTaskCount periodic tasks can be paused from this view.',
+              style: theme.textTheme.titleSmall,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              pausedTaskCount == 0
+                  ? 'Startup and isolate tasks stay read-only so the controls reflect real CPU relief.'
+                  : '$pausedTaskCount periodic tasks are currently paused.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: canPause ? _pauseShownRuntimeTasks : null,
+                  icon: const Icon(Icons.pause_circle_outline),
+                  label: const Text('Pause shown periodic tasks'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: canResume ? _resumeShownRuntimeTasks : null,
+                  icon: const Icon(Icons.play_circle_outline),
+                  label: const Text('Resume shown periodic tasks'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ------------------------------------------------------------------
@@ -362,7 +458,11 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
       child: Center(
         child: Column(
           children: [
-            Icon(Icons.task_alt, size: 64, color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4)),
+            Icon(
+              Icons.task_alt,
+              size: 64,
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+            ),
             const SizedBox(height: 12),
             Text(
               _i18n.t('task_no_tasks'),
@@ -374,7 +474,9 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
             Text(
               _i18n.t('task_no_tasks_hint'),
               style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
+                color: theme.colorScheme.onSurfaceVariant.withValues(
+                  alpha: 0.7,
+                ),
               ),
             ),
           ],
@@ -399,7 +501,11 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
       ];
     } else {
       final groups = _monitor.tasksByPriority;
-      final order = [TaskPriority.critical, TaskPriority.normal, TaskPriority.low];
+      final order = [
+        TaskPriority.critical,
+        TaskPriority.normal,
+        TaskPriority.low,
+      ];
       return [
         for (final p in order)
           if (groups.containsKey(p)) ...[
@@ -433,7 +539,10 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
     final dur = task.lastDuration != null
         ? _formatDuration(task.lastDuration!)
         : '-';
-    final subtitle = _i18n.t('task_last_run', params: [ago, dur, '${task.runCount}']);
+    final subtitle = _i18n.t(
+      'task_last_run',
+      params: [ago, dur, '${task.runCount}'],
+    );
 
     return ExpansionTile(
       leading: _statusDot(task.status),
@@ -461,7 +570,10 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
               Text(task.description, style: theme.textTheme.bodySmall),
               const SizedBox(height: 8),
               Text(
-                _i18n.t('task_success_fail', params: ['${task.successCount}', '${task.failCount}']),
+                _i18n.t(
+                  'task_success_fail',
+                  params: ['${task.successCount}', '${task.failCount}'],
+                ),
                 style: theme.textTheme.bodySmall,
               ),
               if (task.lastError != null) ...[
@@ -519,6 +631,44 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
     );
   }
 
+  void _toggleRuntimeTask(MonitoredTask task) {
+    final paused = task.status == TaskStatus.paused;
+    final ok = paused ? _monitor.resume(task.id) : _monitor.pause(task.id);
+    if (!ok) return;
+    setState(() {});
+    _showRuntimeTaskSnackBar(
+      paused ? 'Resumed ${task.name}' : 'Paused ${task.name}',
+    );
+  }
+
+  void _pauseShownRuntimeTasks() {
+    final pausedCount = _monitor.pausePerformanceTasks();
+    setState(() {});
+    _showRuntimeTaskSnackBar(
+      pausedCount == 0
+          ? 'No periodic runtime tasks could be paused.'
+          : 'Paused $pausedCount periodic runtime tasks.',
+    );
+  }
+
+  void _resumeShownRuntimeTasks() {
+    final resumedCount = _monitor.resumePerformanceTasks();
+    setState(() {});
+    _showRuntimeTaskSnackBar(
+      resumedCount == 0
+          ? 'No periodic runtime tasks were paused.'
+          : 'Resumed $resumedCount periodic runtime tasks.',
+    );
+  }
+
+  void _showRuntimeTaskSnackBar(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+      );
+  }
+
   Widget _priorityBadge(ThemeData theme, TaskPriority priority) {
     final (label, color) = switch (priority) {
       TaskPriority.critical => (_i18n.t('task_priority_critical'), Colors.red),
@@ -540,14 +690,20 @@ class _TaskSettingsPageState extends State<TaskSettingsPage> {
 
   String _formatAgo(Duration d) {
     if (d.inDays > 0) return _i18n.t('task_ago_days', params: ['${d.inDays}']);
-    if (d.inHours > 0) return _i18n.t('task_ago_hours', params: ['${d.inHours}']);
-    if (d.inMinutes > 0) return _i18n.t('task_ago_minutes', params: ['${d.inMinutes}']);
+    if (d.inHours > 0) {
+      return _i18n.t('task_ago_hours', params: ['${d.inHours}']);
+    }
+    if (d.inMinutes > 0) {
+      return _i18n.t('task_ago_minutes', params: ['${d.inMinutes}']);
+    }
     return _i18n.t('task_ago_seconds', params: ['${d.inSeconds}']);
   }
 
   String _formatDuration(Duration d) {
     if (d.inMilliseconds < 1000) return '${d.inMilliseconds}ms';
-    if (d.inSeconds < 60) return '${d.inSeconds}.${(d.inMilliseconds % 1000) ~/ 100}s';
+    if (d.inSeconds < 60) {
+      return '${d.inSeconds}.${(d.inMilliseconds % 1000) ~/ 100}s';
+    }
     return '${d.inMinutes}m ${d.inSeconds % 60}s';
   }
 

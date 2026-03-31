@@ -22571,6 +22571,32 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           headers: headers,
         );
 
+      case 'task_pause_performance':
+        final count = monitor.pausePerformanceTasks();
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'count': count,
+            'message': count == 0
+                ? 'no periodic runtime tasks were paused'
+                : 'paused $count periodic runtime tasks',
+          }),
+          headers: headers,
+        );
+
+      case 'task_resume_performance':
+        final count = monitor.resumePerformanceTasks();
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'count': count,
+            'message': count == 0
+                ? 'no periodic runtime tasks were resumed'
+                : 'resumed $count periodic runtime tasks',
+          }),
+          headers: headers,
+        );
+
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown task action: $action'}),
