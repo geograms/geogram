@@ -668,22 +668,32 @@ class UpdateService {
   /// Compare versions (returns true if newVersion > currentVersion)
   bool isNewerVersion(String currentVersion, String newVersion) {
     try {
-      final current = currentVersion.replaceFirst(RegExp(r'^v'), '').split('.');
-      final newVer = newVersion.replaceFirst(RegExp(r'^v'), '').split('.');
+      // Strip leading 'v' and split off pre-release suffix (e.g. "1.37.0-beta.3" -> "1.37.0" + "beta.3")
+      final currentClean = currentVersion.replaceFirst(RegExp(r'^v'), '');
+      final newClean = newVersion.replaceFirst(RegExp(r'^v'), '');
+
+      final currentBase = currentClean.split('-')[0];
+      final newBase = newClean.split('-')[0];
+
+      final currentHasPreRelease = currentClean.contains('-');
+      final newHasPreRelease = newClean.contains('-');
+
+      final current = currentBase.split('.');
+      final newVer = newBase.split('.');
 
       final maxLen = current.length > newVer.length ? current.length : newVer.length;
 
       for (var i = 0; i < maxLen; i++) {
-        final c = i < current.length
-            ? int.tryParse(current[i].replaceAll(RegExp(r'[^0-9]'), '')) ?? 0
-            : 0;
-        final n = i < newVer.length
-            ? int.tryParse(newVer[i].replaceAll(RegExp(r'[^0-9]'), '')) ?? 0
-            : 0;
+        final c = i < current.length ? int.tryParse(current[i]) ?? 0 : 0;
+        final n = i < newVer.length ? int.tryParse(newVer[i]) ?? 0 : 0;
 
         if (n > c) return true;
         if (n < c) return false;
       }
+
+      // Same base version: stable (no pre-release) is newer than pre-release
+      // e.g. 1.37.0 is newer than 1.37.0-beta.3
+      if (currentHasPreRelease && !newHasPreRelease) return true;
     } catch (e) {
       LogService().log('Version comparison failed: $currentVersion vs $newVersion');
     }
