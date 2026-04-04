@@ -20,6 +20,7 @@ import '../models/todo_content.dart';
 import '../models/voicememo_content.dart';
 import '../models/meeting_content.dart';
 import '../models/websnapshot_content.dart';
+import '../models/accounting_content.dart';
 
 /// Service for reading and writing NDF (Nostr Data Format) documents
 class NdfService {
@@ -506,6 +507,26 @@ class NdfService {
 
       case NdfDocumentType.meeting:
         return MeetingContent.create(title: title).toJson();
+
+      case NdfDocumentType.accounting:
+        final now = DateTime.now();
+        return {
+          'type': 'accounting',
+          'id': 'acct-${now.millisecondsSinceEpoch.toRadixString(36)}',
+          'schema': 'ndf-accounting-1.0',
+          'title': title,
+          'version': 1,
+          'created': now.toIso8601String(),
+          'modified': now.toIso8601String(),
+          'currency': 'EUR',
+          'settings': {
+            'sort_order': 'dateDesc',
+            'view_period': 'monthly',
+            'show_chart': true,
+          },
+          'entries': [],
+          'custom_categories': [],
+        };
     }
   }
 
@@ -847,6 +868,77 @@ class NdfService {
     String itemId,
   ) async {
     await deleteArchiveFiles(filePath, ['content/items/$itemId.json']);
+  }
+
+  // ============================================================
+  // ACCOUNTING CONTENT METHODS
+  // ============================================================
+
+  /// Read accounting content from main.json
+  Future<AccountingContent?> readAccountingContent(String filePath) async {
+    final json = await readArchiveJson(filePath, 'content/main.json');
+    if (json == null) return null;
+    try {
+      return AccountingContent.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing accounting content: $e');
+      return null;
+    }
+  }
+
+  /// Read a single accounting entry
+  Future<AccountingEntry?> readAccountingEntry(String filePath, String entryId) async {
+    final json = await readArchiveJson(filePath, 'content/entries/$entryId.json');
+    if (json == null) return null;
+    try {
+      return AccountingEntry.fromJson(json);
+    } catch (e) {
+      LogService().log('NdfService: Error parsing accounting entry $entryId: $e');
+      return null;
+    }
+  }
+
+  /// Read all accounting entries
+  Future<List<AccountingEntry>> readAccountingEntries(String filePath, List<String> entryIds) async {
+    final entries = <AccountingEntry>[];
+    for (final entryId in entryIds) {
+      final entry = await readAccountingEntry(filePath, entryId);
+      if (entry != null) {
+        entries.add(entry);
+      }
+    }
+    return entries;
+  }
+
+  /// Save accounting content and entries
+  Future<void> saveAccounting(
+    String filePath,
+    AccountingContent content,
+    List<AccountingEntry> entries,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/main.json': content.toJsonString(),
+      for (final entry in entries)
+        'content/entries/${entry.id}.json': entry.toJsonString(),
+    });
+  }
+
+  /// Save a single accounting entry
+  Future<void> saveAccountingEntry(
+    String filePath,
+    AccountingEntry entry,
+  ) async {
+    await _updateArchiveFiles(filePath, {
+      'content/entries/${entry.id}.json': entry.toJsonString(),
+    });
+  }
+
+  /// Delete an accounting entry
+  Future<void> deleteAccountingEntry(
+    String filePath,
+    String entryId,
+  ) async {
+    await deleteArchiveFiles(filePath, ['content/entries/$entryId.json']);
   }
 
   // ============================================================

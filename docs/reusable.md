@@ -291,6 +291,9 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [TodoContent](#todocontent-model) - TODO content models (items, links, updates, settings)
 - [TodoItemCardWidget](#todoitemcardwidget) - Expandable TODO item card with pictures/links/updates
 - [NDF Logo and Thumbnail Embedding](#ndf-logo-and-thumbnail-embedding) - Embed and read logos/thumbnails from NDF documents
+- [AccountingContent](#accountingcontent-model) - Accounting content models (entries, categories, settings)
+- [AccountingChartWidget](#accountingchartwidget) - CustomPaint bar chart for income vs expenses by week/month
+- [AccountingEntryCardWidget](#accountingentrycardwidget) - Entry card with swipe-to-delete and currency formatting
 
 ### API Common Utilities
 - [GeometryUtils](#geometryutils) - Haversine distance calculation between coordinates
@@ -11734,3 +11737,65 @@ STUN-based NAT type detection. Classifies nodes as Type A (public), Type B (pred
 ### ICE Hole Punching (`lib/p2p/ice_punch.dart`)
 
 Simplified ICE — raw UDP simultaneous open. No WebRTC overhead. Manages direct connections with keepalive and identity handshake.
+
+---
+
+### AccountingContent Model
+
+Content model for the Accounting NDF document type. Tracks income and expenses with categories and currency.
+
+**Files:**
+- `lib/work/models/accounting_content.dart`
+
+**Usage:**
+```dart
+// Create accounting content
+final content = AccountingContent.create(title: 'My Budget', currency: 'EUR');
+
+// Add an entry
+final entry = AccountingEntry.create(
+  description: 'Groceries',
+  date: DateTime.now(),
+  amount: 42.50,
+  type: AccountingEntryType.expense,
+  category: 'Food',
+);
+content.addEntry(entry.id);
+
+// Service methods
+final ndfService = NdfService();
+await ndfService.saveAccounting(filePath, content, [entry]);
+final loaded = await ndfService.readAccountingContent(filePath);
+final entries = await ndfService.readAccountingEntries(filePath, loaded!.entries);
+```
+
+### AccountingChartWidget
+
+CustomPaint-based bar chart showing income (green) vs expenses (red) grouped by week or month. No external chart library needed.
+
+**File:** `lib/work/widgets/accounting/accounting_chart_widget.dart`
+
+**Usage:**
+```dart
+AccountingChartWidget(
+  entries: entries,
+  viewPeriod: AccountingViewPeriod.monthly,
+  currencyCode: 'EUR',
+)
+```
+
+### AccountingEntryCardWidget
+
+ListTile-based card for displaying an accounting entry with swipe-to-delete, currency formatting via CurrencyFormat, and color-coded income/expense indicators.
+
+**File:** `lib/work/widgets/accounting/accounting_entry_card_widget.dart`
+
+**Usage:**
+```dart
+AccountingEntryCardWidget(
+  entry: entry,
+  currencyCode: 'EUR',
+  onEdit: () => editEntry(entry),
+  onDelete: () => deleteEntry(entry),
+)
+```

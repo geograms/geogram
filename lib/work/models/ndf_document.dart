@@ -15,6 +15,7 @@ enum NdfDocumentType {
   voicememo,
   websnapshot,
   meeting,
+  accounting,
 }
 
 /// Metadata for an NDF document (from ndf.json inside the archive)
@@ -154,6 +155,8 @@ class NdfDocument {
         return 'language';
       case NdfDocumentType.meeting:
         return 'groups';
+      case NdfDocumentType.accounting:
+        return 'account_balance_wallet';
     }
   }
 }

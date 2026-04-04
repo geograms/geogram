@@ -27,6 +27,7 @@ import 'presentation_editor_page.dart';
 import 'todo_editor_page.dart';
 import 'voicememo_editor_page.dart';
 import 'websnapshot_editor_page.dart';
+import 'accounting_editor_page.dart';
 
 /// Workspace detail page showing documents and folders
 class WorkspaceDetailPage extends StatefulWidget {
@@ -657,6 +658,15 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
                   _createDocument(NdfDocumentType.websnapshot);
                 },
               ),
+              ListTile(
+                leading: const Icon(Icons.account_balance_wallet),
+                title: Text(_i18n.t('work_accounting')),
+                subtitle: Text(_i18n.t('work_accounting_desc')),
+                onTap: () {
+                  Navigator.pop(context);
+                  _createDocument(NdfDocumentType.accounting);
+                },
+              ),
               const SizedBox(height: 16),
             ],
           ),
@@ -1124,6 +1134,21 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
           const SnackBar(content: Text('Meeting documents are opened from the Meetings archive')),
         );
         break;
+
+      case NdfDocumentType.accounting:
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => AccountingEditorPage(
+              filePath: filePath,
+              title: doc.title,
+              workspaceId: widget.workspaceId,
+              documentFilename: doc.filename,
+              workStorage: _storage,
+            ),
+          ),
+        ).then((_) => onEditorClosed());
+        break;
     }
   }
 
@@ -1145,6 +1170,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return _i18n.t('work_websnapshot');
       case NdfDocumentType.meeting:
         return 'Meeting';
+      case NdfDocumentType.accounting:
+        return _i18n.t('work_accounting');
     }
   }
 
@@ -1166,6 +1193,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Icons.language;
       case NdfDocumentType.meeting:
         return Icons.groups;
+      case NdfDocumentType.accounting:
+        return Icons.account_balance_wallet;
     }
   }
 
@@ -1187,6 +1216,8 @@ class _WorkspaceDetailPageState extends State<WorkspaceDetailPage> {
         return Colors.indigo;
       case NdfDocumentType.meeting:
         return Colors.blueGrey;
+      case NdfDocumentType.accounting:
+        return Colors.amber;
     }
   }
 

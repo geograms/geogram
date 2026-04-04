@@ -84,6 +84,10 @@ class CurrencyFormat {
     CurrencyFormat(code: 'SATS', symbol: 'sats', name: 'Satoshis', decimals: 0, symbolBefore: false, isCrypto: true),
     CurrencyFormat(code: 'LTC', symbol: 'Ł', name: 'Litecoin', decimals: 8, isCrypto: true),
     CurrencyFormat(code: 'ETH', symbol: 'Ξ', name: 'Ethereum', decimals: 6, isCrypto: true),
+    CurrencyFormat(code: 'SOL', symbol: 'SOL', name: 'Solana', decimals: 9, symbolBefore: false, isCrypto: true),
+    CurrencyFormat(code: 'ADA', symbol: 'ADA', name: 'Cardano', decimals: 6, symbolBefore: false, isCrypto: true),
+    CurrencyFormat(code: 'DOGE', symbol: 'D', name: 'Dogecoin', decimals: 8, isCrypto: true),
+    CurrencyFormat(code: 'XRP', symbol: 'XRP', name: 'XRP', decimals: 6, symbolBefore: false, isCrypto: true),
   ];
 
   /// All currencies
