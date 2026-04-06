@@ -54,6 +54,8 @@ const _categoryI18nKeys = {
   'Education': 'work_accounting_cat_education',
   'Entertainment': 'work_accounting_cat_entertainment',
   'Shopping': 'work_accounting_cat_shopping',
+  'Material': 'work_accounting_cat_material',
+  'People': 'work_accounting_cat_people',
   'Other': 'work_accounting_cat_other',
   'Salary': 'work_accounting_cat_salary',
   'Freelance': 'work_accounting_cat_freelance',
@@ -161,6 +163,7 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
         builder: (context) => _AccountingEntryFormPage(
           i18n: _i18n,
           title: _i18n.t('work_accounting_add_entry'),
+          defaultCurrency: _content!.currency,
           customCategories: _content!.customCategories,
           getCategoryLabel: _getCategoryLabel,
         ),
@@ -190,6 +193,8 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
           initialDate: entry.date,
           initialType: entry.type,
           initialCategory: entry.category,
+          initialCurrency: entry.currency,
+          defaultCurrency: _content!.currency,
           customCategories: _content!.customCategories,
           getCategoryLabel: _getCategoryLabel,
         ),
@@ -203,6 +208,7 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
         entry.amount = result.amount;
         entry.type = result.type;
         entry.category = result.category;
+        entry.currency = result.currency;
         _hasChanges = true;
       });
     }
@@ -873,6 +879,8 @@ class _AccountingEntryFormPage extends StatefulWidget {
   final DateTime? initialDate;
   final AccountingEntryType? initialType;
   final String? initialCategory;
+  final String? initialCurrency;
+  final String defaultCurrency;
   final List<String> customCategories;
   final String Function(String) getCategoryLabel;
 
@@ -884,6 +892,8 @@ class _AccountingEntryFormPage extends StatefulWidget {
     this.initialDate,
     this.initialType,
     this.initialCategory,
+    this.initialCurrency,
+    required this.defaultCurrency,
     required this.customCategories,
     required this.getCategoryLabel,
   });
@@ -898,6 +908,7 @@ class _AccountingEntryFormPageState extends State<_AccountingEntryFormPage> {
   late DateTime _date;
   late AccountingEntryType _type;
   late String _category;
+  late String _currency;
 
   @override
   void initState() {
@@ -909,6 +920,7 @@ class _AccountingEntryFormPageState extends State<_AccountingEntryFormPage> {
     _date = widget.initialDate ?? DateTime.now();
     _type = widget.initialType ?? AccountingEntryType.expense;
     _category = widget.initialCategory ?? defaultExpenseCategories.first;
+    _currency = widget.initialCurrency ?? widget.defaultCurrency;
   }
 
   @override
@@ -939,9 +951,29 @@ class _AccountingEntryFormPageState extends State<_AccountingEntryFormPage> {
       amount: amount,
       type: _type,
       category: _category,
+      currency: _currency != widget.defaultCurrency ? _currency : null,
     );
 
     Navigator.pop(context, entry);
+  }
+
+  List<DropdownMenuItem<String>> _buildCurrencyItems() {
+    // EUR first, then remaining fiat, then crypto
+    final currencies = <CurrencyFormat>[];
+    final eur = CurrencyFormat.byCode('EUR');
+    if (eur != null) currencies.add(eur);
+    for (final c in CurrencyFormat.fiatCurrencies) {
+      if (c.code != 'EUR') currencies.add(c);
+    }
+    for (final c in CurrencyFormat.cryptoCurrencies) {
+      currencies.add(c);
+    }
+    return currencies.map((c) {
+      return DropdownMenuItem(
+        value: c.code,
+        child: Text('${c.symbol} ${c.code}', overflow: TextOverflow.ellipsis),
+      );
+    }).toList();
   }
 
   void _addCustomCategory() async {
@@ -1052,17 +1084,40 @@ class _AccountingEntryFormPageState extends State<_AccountingEntryFormPage> {
             ),
             const SizedBox(height: 16),
 
-            // Amount
-            TextField(
-              controller: _amountController,
-              decoration: InputDecoration(
-                labelText: i18n.t('work_accounting_amount'),
-                border: const OutlineInputBorder(),
-                prefixIcon: const Icon(Icons.attach_money),
-              ),
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
+            // Amount + Currency row
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: TextField(
+                    controller: _amountController,
+                    decoration: InputDecoration(
+                      labelText: i18n.t('work_accounting_amount'),
+                      border: const OutlineInputBorder(),
+                      prefixIcon: const Icon(Icons.attach_money),
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[\d.]')),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 2,
+                  child: DropdownButtonFormField<String>(
+                    value: _currency,
+                    decoration: InputDecoration(
+                      labelText: i18n.t('work_accounting_currency'),
+                      border: const OutlineInputBorder(),
+                    ),
+                    items: _buildCurrencyItems(),
+                    onChanged: (val) {
+                      if (val != null) setState(() => _currency = val);
+                    },
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 16),

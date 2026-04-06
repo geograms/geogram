@@ -29,7 +29,8 @@ class AccountingEntryCardWidget extends StatelessWidget {
     final theme = Theme.of(context);
     final isIncome = entry.type == AccountingEntryType.income;
     final color = isIncome ? Colors.green : Colors.red;
-    final currency = CurrencyFormat.byCode(currencyCode);
+    final effectiveCurrency = entry.currency ?? currencyCode;
+    final currency = CurrencyFormat.byCode(effectiveCurrency);
     final sign = isIncome ? '+' : '-';
 
     String formattedAmount;
@@ -43,7 +44,7 @@ class AccountingEntryCardWidget extends StatelessWidget {
         formattedAmount = '$sign$formatted ${currency.symbol}';
       }
     } else {
-      formattedAmount = '$sign${entry.amount.toStringAsFixed(2)} $currencyCode';
+      formattedAmount = '$sign${entry.amount.toStringAsFixed(2)} $effectiveCurrency';
     }
 
     final dateStr = DateFormat.yMMMd().format(entry.date);

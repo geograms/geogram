@@ -16,6 +16,8 @@ const defaultExpenseCategories = [
   'Education',
   'Entertainment',
   'Shopping',
+  'Material',
+  'People',
   'Other',
 ];
 
@@ -56,6 +58,7 @@ class AccountingEntry {
   double amount;
   AccountingEntryType type;
   String category;
+  String? currency; // per-entry currency override; null = use document default
   final DateTime createdAt;
 
   AccountingEntry({
@@ -65,6 +68,7 @@ class AccountingEntry {
     required this.amount,
     required this.type,
     required this.category,
+    this.currency,
     required this.createdAt,
   });
 
@@ -74,6 +78,7 @@ class AccountingEntry {
     required double amount,
     required AccountingEntryType type,
     required String category,
+    String? currency,
   }) {
     final now = DateTime.now();
     final rnd = Random().nextInt(0xFFFF).toRadixString(36);
@@ -85,6 +90,7 @@ class AccountingEntry {
       amount: amount,
       type: type,
       category: category,
+      currency: currency,
       createdAt: now,
     );
   }
@@ -100,6 +106,7 @@ class AccountingEntry {
         orElse: () => AccountingEntryType.expense,
       ),
       category: json['category'] as String? ?? 'Other',
+      currency: json['currency'] as String?,
       createdAt: DateTime.parse(json['created_at'] as String),
     );
   }
@@ -111,6 +118,7 @@ class AccountingEntry {
     'amount': amount,
     'type': type.name,
     'category': category,
+    if (currency != null) 'currency': currency,
     'created_at': createdAt.toIso8601String(),
   };
 
@@ -122,6 +130,7 @@ class AccountingEntry {
     double? amount,
     AccountingEntryType? type,
     String? category,
+    String? currency,
   }) {
     return AccountingEntry(
       id: id,
@@ -130,6 +139,7 @@ class AccountingEntry {
       amount: amount ?? this.amount,
       type: type ?? this.type,
       category: category ?? this.category,
+      currency: currency ?? this.currency,
       createdAt: createdAt,
     );
   }
