@@ -4,6 +4,7 @@
  */
 
 import 'dart:convert';
+import 'dart:math';
 
 /// Default expense categories
 const defaultExpenseCategories = [
@@ -75,7 +76,8 @@ class AccountingEntry {
     required String category,
   }) {
     final now = DateTime.now();
-    final id = 'entry-${now.millisecondsSinceEpoch.toRadixString(36)}';
+    final rnd = Random().nextInt(0xFFFF).toRadixString(36);
+    final id = 'entry-${now.millisecondsSinceEpoch.toRadixString(36)}-$rnd';
     return AccountingEntry(
       id: id,
       description: description,
