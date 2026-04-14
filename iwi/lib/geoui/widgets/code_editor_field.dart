@@ -34,6 +34,13 @@ class CodeEditorField extends StatefulWidget {
   /// Fired on every keystroke with the full current text.
   final ValueChanged<String> onChanged;
 
+  /// When true, the underlying [TextField] is read-only (text still
+  /// selectable for copy, but no edits) and the text dims. Used by
+  /// App Creator to lock the Code tab when a loaded wapp doesn't
+  /// ship `main.c` so the user can't accidentally type into a
+  /// nothing-burger.
+  final bool readOnly;
+
   const CodeEditorField({
     super.key,
     required this.fieldName,
@@ -42,6 +49,7 @@ class CodeEditorField extends StatefulWidget {
     required this.initialValue,
     required this.onChanged,
     this.tip,
+    this.readOnly = false,
   });
 
   @override
@@ -156,14 +164,21 @@ class _CodeEditorFieldState extends State<CodeEditorField> {
                             controller: _controller,
                             maxLines: null,
                             minLines: 10,
+                            readOnly: widget.readOnly,
+                            enableInteractiveSelection: true,
                             keyboardType: TextInputType.multiline,
                             textAlignVertical: TextAlignVertical.top,
                             cursorColor: Colors.white,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontFamily: _fontFamily,
                               fontSize: _fontSize,
                               height: _lineHeight,
-                              color: Colors.white,
+                              // Dim the text when read-only so the
+                              // state is visually obvious — matches
+                              // the muted look of a disabled input.
+                              color: widget.readOnly
+                                  ? Colors.white54
+                                  : Colors.white,
                             ),
                             decoration: const InputDecoration(
                               border: InputBorder.none,

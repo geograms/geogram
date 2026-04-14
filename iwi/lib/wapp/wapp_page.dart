@@ -66,6 +66,21 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   final _screenNames = <String>[];
   TabController? _tabController;
 
+  /// True when this wapp is the App Creator. Drives a navigation split
+  /// where the initial view is just the Projects panel (no tabs) and
+  /// the Code / UI / Settings tabs are only revealed after the user
+  /// picks or creates a project.
+  bool get _isAppCreator => _wappName == 'app-creator';
+
+  /// Editor-mode flag for App Creator. False = show Projects panel
+  /// only; true = show Code/UI/Settings tabs with a back arrow.
+  bool _editorMode = false;
+
+  /// TabController for the App Creator editor (Code/UI/Settings).
+  /// Created lazily the first time the user enters editor mode so we
+  /// don't allocate a controller for the Projects-only view.
+  TabController? _editorTabController;
+
   // Terminal output
   final _outputLines = <_OutputLine>[];
   final _cmdController = TextEditingController();
@@ -228,6 +243,12 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     }
     _logLine('── install started: $id ($mode) ──');
 
+    // Preserve the C source alongside the binary so a subsequent
+    // Edit → load can populate the Code tab with the original text.
+    // For edit-in-place installs that never touched the source, the
+    // installer carries the existing main.c forward automatically.
+    final sourceC = (_fieldValues['source'] as String?) ?? '';
+
     final result = await WappInstallerService.instance.installFromCompiled(
       id: id,
       title: title,
@@ -235,6 +256,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       description: description,
       wasmBytes: freshBytes,
       homeScreenJson: sourceUi.isEmpty ? null : sourceUi,
+      sourceC: sourceC.isEmpty ? null : sourceC,
       overwrite: true,
     );
     if (!result.ok) {
@@ -276,15 +298,19 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   /// the dir path to read from (works for both user installs under
   /// `installedAppsStorage()` and built-ins under `wapps/archive/`).
   ///
-  /// Reads manifest + home.ui.json + app.wasm from the entry's
-  /// dirPath. The wasm bytes land in [_loadedWasmBytes] so the
-  /// subsequent install — even without a fresh compile — has bytes
-  /// to write. For built-ins this effectively forks the source-tree
-  /// wapp into `installedAppsStorage()` on the next install.
+  /// Reads manifest + home.ui.json + app.wasm + main.c from the
+  /// entry's dirPath. The wasm bytes land in [_loadedWasmBytes] so
+  /// the subsequent install — even without a fresh compile — has
+  /// bytes to write. For built-ins this effectively forks the
+  /// source-tree wapp into `installedAppsStorage()` on the next
+  /// install.
   ///
-  /// Source C code is NOT loaded — we only keep compiled wasm on
-  /// disk, not the original C. The user edits title / id /
-  /// description / UI JSON against the existing compiled binary.
+  /// Original C source is loaded when the wapp ships it. Built-in
+  /// wapps always have `main.c` next to `app.wasm` in
+  /// `wapps/archive/<name>/`. User installs only have it when they
+  /// were created by App Creator after the source-preservation
+  /// change landed — older installs have no `main.c` and the Code
+  /// tab stays empty with a log-line hint.
   Future<void> _loadProject(_ProjectEntry entry) async {
     final pkg = wappPackageStorage(entry.dirPath);
     final manifest = await pkg.readJson('manifest.json');
@@ -304,6 +330,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     final uiJson =
         await pkg.readString('screens/home.ui.json') ?? '';
     final wasm = await pkg.readBytes('app.wasm');
+    final sourceC = await pkg.readString('main.c') ?? '';
 
     // Mutate the bindings map in place. A subsequent setState lets
     // CodeEditorField / TextField widgets pick up the new values
@@ -313,12 +340,22 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     _fieldValues['wapp_description'] = description;
     _fieldValues['wapp_name'] = entry.folder;
     _fieldValues['source_ui'] = uiJson;
+    _fieldValues['source'] = sourceC;
+    // Lock the Code tab when the loaded wapp didn't ship main.c.
+    // User can still start fresh via the "Create new wapp" button.
+    _fieldValues['source__readonly'] = sourceC.isEmpty;
     _loadedWasmBytes = wasm;
 
     _logLine('loaded ${entry.folder}: id=$id, '
         'title=${title.isEmpty ? '(empty)' : title}, '
-        'ui=${uiJson.length} chars, wasm=${wasm?.length ?? 0} bytes'
+        'ui=${uiJson.length} chars, '
+        'source=${sourceC.isEmpty ? '(missing)' : '${sourceC.length} chars'}, '
+        'wasm=${wasm?.length ?? 0} bytes'
         '${entry.isBuiltIn ? ' (built-in)' : ''}');
+    if (sourceC.isEmpty) {
+      _logLine('(no main.c shipped with this wapp — Code tab will be '
+          'empty; Compile will rebuild from whatever you type in)');
+    }
     NotificationService.instance.show(GeogramNotification(
       level: NotificationLevel.success,
       title: 'Loaded ${entry.folder}',
@@ -343,6 +380,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       'wapp_description',
       'source',
       'source_ui',
+      'source__readonly',
     };
     for (final key in keysToReset) {
       _fieldValues.remove(key);
@@ -350,6 +388,9 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     for (final screen in _screens) {
       _seedFieldDefaults(screen);
     }
+    // Any `*__readonly` flag the previously-loaded project might
+    // have set is gone; the Code tab is editable again.
+    _fieldValues['source__readonly'] = false;
     _logLine('── new project — fields reset to defaults ──');
     NotificationService.instance.show(GeogramNotification(
       level: NotificationLevel.info,
@@ -508,18 +549,44 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     await _refreshProjects();
   }
 
-  /// Switch the tab bar to the screen with [screenName] (case-
-  /// insensitive). Used after Edit / Create new so the user lands
-  /// on the Code tab without a second click.
-  void _switchToScreen(String screenName) {
-    if (_tabController == null) return;
-    for (var i = 0; i < _screenNames.length; i++) {
-      if (_screenNames[i].toLowerCase() == screenName.toLowerCase()) {
-        _tabController!.animateTo(i);
-        return;
-      }
-    }
+  /// Enter App Creator editor mode — reveals the Code/UI/Settings
+  /// tabs. Called after the user picks a project or hits "Create new
+  /// wapp" on the Projects panel. Lazily builds the editor tab
+  /// controller so repeat entries keep the same instance (and its
+  /// animation state) across a single wapp session.
+  void _enterEditorMode() {
+    _editorTabController ??= TabController(
+      length: _editorTabCount,
+      vsync: this,
+      initialIndex: 0,
+    );
+    // Always land on the Code tab on (re-)entry.
+    _editorTabController!.index = 0;
+    if (mounted) setState(() => _editorMode = true);
   }
+
+  /// Exit App Creator editor mode — returns to the Projects panel.
+  /// The back arrow on the editor scaffold calls this.
+  void _exitEditorMode() {
+    if (mounted) setState(() => _editorMode = false);
+  }
+
+  /// The subset of [_screens] shown inside the App Creator editor
+  /// view (i.e. everything except Projects). Order is preserved from
+  /// home.ui.json so the author controls the tab layout — which must
+  /// be Code, UI, Settings.
+  List<GeoUiBlock> get _editorScreens => _screens
+      .where((s) => (s.name ?? '').toLowerCase() != 'projects')
+      .toList();
+
+  /// The tab labels shown for the editor, matched 1:1 to
+  /// [_editorScreens]. Used only for the App Creator scaffold.
+  List<String> get _editorScreenNames =>
+      _editorScreens.map((s) => s.name ?? '').toList();
+
+  /// Number of editor tabs surfaced for App Creator. Matches the
+  /// length of [_editorScreens].
+  int get _editorTabCount => _editorScreens.length;
 
   /// Build the App Creator Projects tab. First call kicks off the
   /// async scan; subsequent calls render the cached list.
@@ -548,7 +615,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
               FilledButton.icon(
                 onPressed: () {
                   _resetToNewProject();
-                  _switchToScreen('Code');
+                  _enterEditorMode();
                 },
                 icon: const Icon(Icons.add, size: 18),
                 label: const Text('Create new wapp'),
@@ -611,7 +678,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         borderRadius: BorderRadius.circular(14),
         onTap: () async {
           await _loadProject(entry);
-          _switchToScreen('Code');
+          _enterEditorMode();
         },
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
@@ -696,7 +763,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
                   TextButton.icon(
                     onPressed: () async {
                       await _loadProject(entry);
-                      _switchToScreen('Code');
+                      _enterEditorMode();
                     },
                     icon: const Icon(Icons.edit, size: 16),
                     label: const Text('Edit'),
@@ -1157,6 +1224,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     _cmdController.dispose();
     _scrollController.dispose();
     _tabController?.dispose();
+    _editorTabController?.dispose();
     super.dispose();
   }
 
@@ -1167,6 +1235,12 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         appBar: AppBar(title: Text(widget.title)),
         body: Center(child: Text(_status)),
       );
+    }
+
+    if (_isAppCreator) {
+      return _editorMode
+          ? _buildAppCreatorEditor()
+          : _buildAppCreatorProjects();
     }
 
     return Scaffold(
@@ -1186,6 +1260,61 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         children: [
           for (var i = 0; i < _screens.length; i++)
             _buildScreen(_screens[i]),
+        ],
+      ),
+    );
+  }
+
+  /// Initial App Creator view — just the Projects panel. No tab
+  /// bar, no "Projects" label; the AppBar title is the wapp title
+  /// so the user knows they're in App Creator, and the body is the
+  /// projects list directly.
+  Widget _buildAppCreatorProjects() {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: _buildProjectsScreen(),
+    );
+  }
+
+  /// App Creator editor view — shown after the user picks a project
+  /// or clicks "Create new wapp". Back arrow returns to the Projects
+  /// panel; tabs are Code / UI / Settings, matching the order in
+  /// home.ui.json (with Projects filtered out).
+  Widget _buildAppCreatorEditor() {
+    final editorScreens = _editorScreens;
+    final editorNames = _editorScreenNames;
+    // Guard: if home.ui.json has fewer editor screens than the
+    // previously-built controller expects, rebuild it. Keeps the
+    // navigation coherent even while developing.
+    if (_editorTabController == null ||
+        _editorTabController!.length != editorScreens.length) {
+      _editorTabController?.dispose();
+      _editorTabController = TabController(
+        length: editorScreens.length,
+        vsync: this,
+      );
+    }
+    final currentName = _fieldValues['wapp_title'] as String? ?? '';
+    final titleSuffix = currentName.isEmpty ? '' : ' — $currentName';
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          tooltip: 'Back to projects',
+          onPressed: _exitEditorMode,
+        ),
+        title: Text('${widget.title}$titleSuffix'),
+        bottom: TabBar(
+          controller: _editorTabController,
+          tabs: editorNames.map((n) => Tab(text: n)).toList(),
+          isScrollable: true,
+        ),
+      ),
+      body: TabBarView(
+        controller: _editorTabController,
+        physics: const NeverScrollableScrollPhysics(),
+        children: [
+          for (final screen in editorScreens) _buildScreen(screen),
         ],
       ),
     );

@@ -220,12 +220,21 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
     // the default text into bindings before the first build. Calling
     // setValue here would trigger setState() inside a build method.
     final current = widget.bindings.getValue(name)?.toString() ?? '';
+    // Companion flag in the bindings map that the host can flip at
+    // runtime (e.g. App Creator's _loadProject sets
+    // `source__readonly = true` when the loaded wapp doesn't ship a
+    // main.c). Absent / non-true means the editor stays editable.
+    final readOnly = widget.bindings.getValue('${name}__readonly') == true;
     return CodeEditorField(
       fieldName: name,
       label: label,
-      tip: tip,
+      tip: readOnly
+          ? '${tip ?? ''}\n(read-only — no source shipped with this wapp; '
+              'click "Create new wapp" to start fresh)'
+          : tip,
       languageId: languageId,
       initialValue: current,
+      readOnly: readOnly,
       onChanged: (v) => widget.bindings.setValue(name, v),
     );
   }

@@ -59,6 +59,10 @@ class WappInstallerService {
   ///   without recompiling.
   /// - [homeScreenJson] — raw `home.ui.json` to write. Null/empty
   ///   triggers a default label screen.
+  /// - [sourceC] — original C source to preserve as `main.c` next to
+  ///   `app.wasm`. Null or empty skips the write (edit-in-place
+  ///   installs that don't touch the source keep whatever `main.c`
+  ///   was already on disk, so we don't clobber it with nothing).
   /// - [overwrite] — collisions fail unless explicitly allowed.
   Future<InstallResult> installFromCompiled({
     required String id,
@@ -68,6 +72,7 @@ class WappInstallerService {
     Uint8List? wasmBytes,
     String version = '1.0.0',
     String? homeScreenJson,
+    String? sourceC,
     bool overwrite = false,
   }) async {
     if (id.isEmpty) {
@@ -105,6 +110,15 @@ class WappInstallerService {
             'to replace (App Creator passes overwrite implicitly)',
       );
     }
+
+    // When editing in place without a fresh sourceC, carry the
+    // previous main.c forward so a pure metadata/UI edit doesn't
+    // strip source preservation. Read it BEFORE the delete.
+    String? effectiveSource = sourceC;
+    if (exists && (effectiveSource == null || effectiveSource.isEmpty)) {
+      effectiveSource = await installed.readString('$folder/main.c');
+    }
+
     if (exists && overwrite) {
       await installed.deleteDirectory(folder, recursive: true);
     }
@@ -147,6 +161,12 @@ class WappInstallerService {
         '$folder/screens/home.ui.json',
         homeJson,
       );
+      // Preserve the C source alongside the binary so the user can
+      // reload and keep editing later. Match the built-in archive
+      // convention: main.c sits next to app.wasm.
+      if (effectiveSource != null && effectiveSource.isNotEmpty) {
+        await installed.writeString('$folder/main.c', effectiveSource);
+      }
     } catch (e) {
       return InstallResult.failure(id, 'failed to write wapp files: $e');
     }

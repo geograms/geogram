@@ -51,6 +51,22 @@
   },
   {
     "$": "screen",
+    "name": "UI",
+    "tip": "Raw home.ui.json for the wapp. Selecting a project on the Projects tab populates this; Install writes it back. A visual drag-and-drop editor will layer on top of this later.",
+    "children": [
+      {
+        "$": "field",
+        "name": "source_ui",
+        "$type": "code",
+        "label": "home.ui.json",
+        "language": "json",
+        "tip": "GeoUI screen definition. Leave empty for a default label screen. See wapps/wapps.md for the full schema.",
+        "default": ""
+      }
+    ]
+  },
+  {
+    "$": "screen",
     "name": "Settings",
     "tip": "Metadata for the wapp you're editing. Title is what shows on the launcher grid; Name is the folder slug used on disk.",
     "children": [
@@ -92,22 +108,6 @@
             "tip": "Longer description. Goes into manifest.summary."
           }
         ]
-      }
-    ]
-  },
-  {
-    "$": "screen",
-    "name": "UI",
-    "tip": "Raw home.ui.json for the wapp. Selecting a project on the Projects tab populates this; Install writes it back. A visual drag-and-drop editor will layer on top of this later.",
-    "children": [
-      {
-        "$": "field",
-        "name": "source_ui",
-        "$type": "code",
-        "label": "home.ui.json",
-        "language": "json",
-        "tip": "GeoUI screen definition. Leave empty for a default label screen. See wapps/wapps.md for the full schema.",
-        "default": ""
       }
     ]
   }
