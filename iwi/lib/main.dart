@@ -1,14 +1,17 @@
 import 'dart:async';
-import 'dart:io' show Directory, Platform, Process;
+import 'dart:io' show Directory, File, Platform, Process;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'models/monitored_task.dart';
+import 'pages/welcome_page.dart';
 import 'services/event_bus.dart';
 import 'services/host_event_bridge.dart';
 import 'services/notification_service.dart';
 import 'services/preferences_service.dart';
+import 'services/profile_service.dart';
 import 'services/profile_storage.dart';
 import 'services/storage_paths.dart';
 import 'services/task_monitor_service.dart';
@@ -53,6 +56,18 @@ Future<void> main() async {
       HostEventBridge.instance.install();
     },
   );
+  BootOrchestrator.instance.register(
+    id: 'profile-service',
+    name: 'Profile service',
+    description:
+        'Loads profiles.json and the active profile id. Must run '
+        'before the launcher scan because storage_paths.dart '
+        'resolves apps/ and wapps/ under the active profile folder.',
+    mode: BootStart.sequential,
+    init: () async {
+      await ProfileService.instance.load();
+    },
+  );
 
   // Run every registered boot task. Sequential boot tasks run first,
   // alone, in registration order; then all parallels run concurrently.
@@ -61,18 +76,47 @@ Future<void> main() async {
   runApp(IwiApp(messengerKey: rootMessengerKey));
 }
 
-class IwiApp extends StatelessWidget {
+class IwiApp extends StatefulWidget {
   final GlobalKey<ScaffoldMessengerState> messengerKey;
   const IwiApp({super.key, required this.messengerKey});
 
   @override
+  State<IwiApp> createState() => _IwiAppState();
+}
+
+class _IwiAppState extends State<IwiApp> {
+  @override
+  void initState() {
+    super.initState();
+    // Rebuild the root whenever the active profile changes so that
+    // (a) the welcome-page → launcher handoff flips cleanly on first
+    //     profile creation, and
+    // (b) profile switches re-route storage paths and trigger a
+    //     launcher rescan on the fresh apps/ folder.
+    ProfileService.instance.activeProfileNotifier.addListener(_onProfileChanged);
+  }
+
+  @override
+  void dispose() {
+    ProfileService.instance.activeProfileNotifier
+        .removeListener(_onProfileChanged);
+    super.dispose();
+  }
+
+  void _onProfileChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final hasProfile = ProfileService.instance.hasProfiles &&
+        ProfileService.instance.activeProfile != null;
     return MaterialApp(
       title: 'geogram',
       // Kept for ad-hoc Flutter snackbars (e.g. settings delete errors).
       // The unified NotificationService does NOT use this — it pipes
       // everything through the NotificationLayer overlay below.
-      scaffoldMessengerKey: messengerKey,
+      scaffoldMessengerKey: widget.messengerKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark(useMaterial3: true),
       // The NotificationLayer is installed via `builder`, not `home:`,
@@ -84,7 +128,16 @@ class IwiApp extends StatelessWidget {
       builder: (context, child) {
         return NotificationLayer(child: child ?? const SizedBox.shrink());
       },
-      home: const LauncherPage(),
+      home: hasProfile
+          ? const LauncherPage()
+          : WelcomePage(
+              // saveAndActivate already flips activeProfileNotifier,
+              // so the _onProfileChanged setState above will rebuild
+              // this widget with hasProfile==true and swap to the
+              // launcher. onComplete is a no-op hook for any future
+              // analytics / telemetry.
+              onComplete: () {},
+            ),
     );
   }
 }
@@ -172,6 +225,31 @@ class WappManifest {
     return Icons.extension;
   }
 
+  /// Extract a short text label from `manifest.icon` if one is set.
+  /// Path-shaped values (`media/icons/foo.svg`) return null so the
+  /// caller falls through to [svgIconPath] instead. Returns up to
+  /// the first two grapheme-ish chars so an emoji ZWJ sequence
+  /// doesn't get truncated mid-sequence.
+  String? get textIcon {
+    final raw = icon;
+    if (raw == null || raw.isEmpty) return null;
+    if (raw.contains('/') || raw.contains('\\')) return null;
+    return raw.characters.take(2).toString();
+  }
+
+  /// Absolute path to an SVG icon sidecar if one is referenced by
+  /// `manifest.icon`. Null when the manifest points elsewhere or
+  /// isn't path-shaped at all. The launcher uses this to decide
+  /// whether to render the SVG instead of falling back to
+  /// [iconData].
+  String? get svgIconPath {
+    final raw = icon;
+    if (raw == null || raw.isEmpty) return null;
+    if (!raw.toLowerCase().endsWith('.svg')) return null;
+    if (!raw.contains('/') && !raw.contains('\\')) return null;
+    return '$dirPath${Platform.pathSeparator}$raw';
+  }
+
   /// Pick a color based on the id hash.
   Color get color {
     final colors = [
@@ -203,6 +281,24 @@ class _LauncherPageState extends State<LauncherPage> {
   @override
   void initState() {
     super.initState();
+    _scanArchive();
+    // Re-scan whenever the user switches profiles so the grid
+    // reflects the new profile's apps/ folder. storage_paths.dart
+    // already routes through the active profile, so just triggering
+    // a rescan is enough.
+    ProfileService.instance.activeProfileNotifier
+        .addListener(_onProfileChanged);
+  }
+
+  @override
+  void dispose() {
+    ProfileService.instance.activeProfileNotifier
+        .removeListener(_onProfileChanged);
+    super.dispose();
+  }
+
+  void _onProfileChanged() {
+    setState(() => _wapps = null);
     _scanArchive();
   }
 
@@ -301,6 +397,7 @@ class _LauncherPageState extends State<LauncherPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        title: const _ProfileSwitcher(),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
@@ -330,6 +427,8 @@ class _LauncherPageState extends State<LauncherPage> {
           // field still show something.
           name: wapp.title.isNotEmpty ? wapp.title : wapp.name,
           icon: wapp.iconData,
+          textIcon: wapp.textIcon,
+          svgIconPath: wapp.svgIconPath,
           color: wapp.color,
           onTap: () => _openWapp(wapp),
         ),
@@ -355,6 +454,8 @@ class _LauncherPageState extends State<LauncherPage> {
           return _AppIcon(
             name: e.name,
             icon: e.icon,
+            textIcon: e.textIcon,
+            svgIconPath: e.svgIconPath,
             color: e.color,
             onTap: e.onTap,
           );
@@ -367,6 +468,8 @@ class _LauncherPageState extends State<LauncherPage> {
 class _LauncherEntry {
   final String name;
   final IconData icon;
+  final String? textIcon;
+  final String? svgIconPath;
   final Color color;
   final VoidCallback onTap;
 
@@ -375,12 +478,138 @@ class _LauncherEntry {
     required this.icon,
     required this.color,
     required this.onTap,
+    this.textIcon,
+    this.svgIconPath,
   });
+}
+
+/// Compact AppBar title showing the active profile's display name
+/// with a popup menu to switch to any other profile or add a new one.
+/// Listens directly to [ProfileService.instance.activeProfileNotifier]
+/// so the label updates the instant `switchTo` fires.
+class _ProfileSwitcher extends StatefulWidget {
+  const _ProfileSwitcher();
+
+  @override
+  State<_ProfileSwitcher> createState() => _ProfileSwitcherState();
+}
+
+class _ProfileSwitcherState extends State<_ProfileSwitcher> {
+  @override
+  void initState() {
+    super.initState();
+    ProfileService.instance.activeProfileNotifier.addListener(_refresh);
+  }
+
+  @override
+  void dispose() {
+    ProfileService.instance.activeProfileNotifier.removeListener(_refresh);
+    super.dispose();
+  }
+
+  void _refresh() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _addProfileFlow() async {
+    // Push the welcome page as a modal to generate / import another
+    // profile. On completion, saveAndActivate fires the notifier and
+    // this widget rebuilds with the fresh display name. canCancel
+    // adds a back arrow and leaves the user inside the current
+    // profile if they bail out.
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => WelcomePage(
+          canCancel: true,
+          onComplete: () => Navigator.of(context).pop(),
+        ),
+        fullscreenDialog: true,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final service = ProfileService.instance;
+    final active = service.activeProfile;
+    final label = active?.displayName ?? 'No profile';
+    final cs = Theme.of(context).colorScheme;
+
+    return PopupMenuButton<String>(
+      tooltip: 'Switch profile',
+      offset: const Offset(0, 40),
+      onSelected: (value) async {
+        if (value == '__add__') {
+          await _addProfileFlow();
+        } else {
+          await service.switchTo(value);
+        }
+      },
+      itemBuilder: (ctx) => [
+        for (final p in service.profiles)
+          PopupMenuItem<String>(
+            value: p.id,
+            child: Row(
+              children: [
+                Icon(
+                  p.id == active?.id
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 18,
+                  color: cs.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(p.displayName,
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(p.callsign,
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: cs.onSurfaceVariant,
+                              fontFamily: 'monospace')),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: '__add__',
+          child: Row(
+            children: [
+              Icon(Icons.person_add, size: 18),
+              SizedBox(width: 8),
+              Text('Add profile…'),
+            ],
+          ),
+        ),
+      ],
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.badge, size: 20, color: cs.primary),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const Icon(Icons.arrow_drop_down, size: 20),
+        ],
+      ),
+    );
+  }
 }
 
 class _AppIcon extends StatelessWidget {
   final String name;
   final IconData icon;
+  final String? textIcon;
+  final String? svgIconPath;
   final Color color;
   final VoidCallback onTap;
 
@@ -389,10 +618,47 @@ class _AppIcon extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.onTap,
+    this.textIcon,
+    this.svgIconPath,
   });
 
   @override
   Widget build(BuildContext context) {
+    // Icon resolution order: SVG file (picked by the user in App
+    // Creator and persisted as media/icons/icon.svg), then a short
+    // text label (emoji / single char), then the Material icon
+    // guess from [WappManifest.iconData]. All three cases render
+    // into the same 56x56 coloured tile used on the launcher grid.
+    final hasSvg = svgIconPath != null && svgIconPath!.isNotEmpty;
+    final hasText = textIcon != null && textIcon!.isNotEmpty;
+    Widget inner;
+    if (hasSvg) {
+      inner = Padding(
+        padding: const EdgeInsets.all(8),
+        child: SvgPicture.file(
+          File(svgIconPath!),
+          fit: BoxFit.contain,
+          placeholderBuilder: (_) => const SizedBox.shrink(),
+        ),
+      );
+    } else if (hasText) {
+      inner = FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Text(
+            textIcon!,
+            style: const TextStyle(
+              fontSize: 32,
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    } else {
+      inner = Icon(icon, size: 28, color: Colors.white);
+    }
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: onTap,
@@ -407,7 +673,7 @@ class _AppIcon extends StatelessWidget {
               borderRadius: BorderRadius.circular(14),
             ),
             alignment: Alignment.center,
-            child: Icon(icon, size: 28, color: Colors.white),
+            child: inner,
           ),
           const SizedBox(height: 6),
           Text(

@@ -53,6 +53,13 @@ static void my_application_activate(GApplication* application) {
   }
 
   gtk_window_set_default_size(window, 1280, 720);
+  // Some window managers (and the last-remembered state on this
+  // machine) will happily maximize a brand-new top-level unless we
+  // explicitly tell them not to. Undo any inherited maximized state
+  // before the window is shown, and center it so the default size
+  // above actually lands somewhere sensible.
+  gtk_window_unmaximize(window);
+  gtk_window_set_position(window, GTK_WIN_POS_CENTER);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(

@@ -39,6 +39,12 @@ dependencies:
   ffi: ^2.1.0
   highlighting: ^0.9.0+11.8.0            # Dart port of highlight.js
   flutter_highlighting: ^0.9.0+11.8.0    # Flutter themes for highlighting
+  flutter_svg: ^2.0.10+1                 # SVG rendering for wapp icons
+  file_selector: ^1.0.3                  # Native file picker (Linux: GTK)
+  crypto: ^3.0.3                         # SHA256 for NOSTR event ids + wapp hashing
+  pointycastle: ^3.9.1                   # secp256k1 / BIP-340 Schnorr
+  bech32: ^0.2.2                         # npub / nsec encoding
+  hex: ^0.2.0                            # hex ↔ bytes
 
 dev_dependencies:
   flutter_test:

@@ -248,6 +248,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     // For edit-in-place installs that never touched the source, the
     // installer carries the existing main.c forward automatically.
     final sourceC = (_fieldValues['source'] as String?) ?? '';
+    final icon = (_fieldValues['wapp_icon'] as String?) ?? '';
 
     final result = await WappInstallerService.instance.installFromCompiled(
       id: id,
@@ -257,6 +258,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       wasmBytes: freshBytes,
       homeScreenJson: sourceUi.isEmpty ? null : sourceUi,
       sourceC: sourceC.isEmpty ? null : sourceC,
+      icon: icon.isEmpty ? null : icon,
       overwrite: true,
     );
     if (!result.ok) {
@@ -327,6 +329,29 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     final id = manifest['id'] as String? ?? '';
     final title = manifest['description'] as String? ?? '';
     final description = manifest['summary'] as String? ?? '';
+    // Normalise manifest.icon into the shape the IconField binding
+    // expects (see widgets/icon_field.dart):
+    //   - empty                → empty binding
+    //   - short text / emoji   → binding verbatim
+    //   - path to a .svg file  → read the file and prefix with
+    //                            `svg:` so the editor shows a
+    //                            preview and a subsequent Install
+    //                            round-trips the bytes cleanly
+    //   - any other path       → skip (we can't render non-svg
+    //                            image formats yet)
+    final rawIcon = manifest['icon'] as String? ?? '';
+    String iconForField = '';
+    if (rawIcon.isNotEmpty) {
+      if (rawIcon.endsWith('.svg') &&
+          (rawIcon.contains('/') || rawIcon.contains('\\'))) {
+        final svgContent = await pkg.readString(rawIcon) ?? '';
+        if (svgContent.isNotEmpty) {
+          iconForField = 'svg:$svgContent';
+        }
+      } else if (!rawIcon.contains('/') && !rawIcon.contains('\\')) {
+        iconForField = rawIcon;
+      }
+    }
     final uiJson =
         await pkg.readString('screens/home.ui.json') ?? '';
     final wasm = await pkg.readBytes('app.wasm');
@@ -339,6 +364,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     _fieldValues['wapp_id'] = id;
     _fieldValues['wapp_description'] = description;
     _fieldValues['wapp_name'] = entry.folder;
+    _fieldValues['wapp_icon'] = iconForField;
     _fieldValues['source_ui'] = uiJson;
     _fieldValues['source'] = sourceC;
     // Lock the Code tab when the loaded wapp didn't ship main.c.
@@ -378,6 +404,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       'wapp_name',
       'wapp_id',
       'wapp_description',
+      'wapp_icon',
       'source',
       'source_ui',
       'source__readonly',

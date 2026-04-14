@@ -106,6 +106,14 @@
             "label": "Description",
             "default": "A wapp I wrote inside geogram.",
             "tip": "Longer description. Goes into manifest.summary."
+          },
+          {
+            "$": "field",
+            "name": "wapp_icon",
+            "$type": "icon",
+            "label": "Icon",
+            "default": "",
+            "tip": "Type an emoji / single character, or click Choose SVG… to pick a vector icon file. Leave blank for the default Material icon."
           }
         ]
       }

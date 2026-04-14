@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'geoui_ast.dart';
 import 'widgets/code_editor_field.dart';
+import 'widgets/icon_field.dart';
 import 'widgets/log_view_field.dart';
 
 /// Bindings interface for reading/writing field values.
@@ -209,6 +210,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       'enum' => _renderEnumField(fieldName, label, tip, field),
       'code' => _renderCodeField(fieldName, label, tip, field),
       'log' => _renderLogField(fieldName, label, tip, field),
+      'icon' => _renderIconField(fieldName, label, tip, field),
       _ => _renderStringField(fieldName, label, tip, field),
     };
   }
@@ -235,6 +237,20 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       languageId: languageId,
       initialValue: current,
       readOnly: readOnly,
+      onChanged: (v) => widget.bindings.setValue(name, v),
+    );
+  }
+
+  Widget _renderIconField(
+      String name, String label, String? tip, GeoUiBlock field) {
+    // Pure read — _seedFieldDefaults has already written the default
+    // into bindings before the first build.
+    final current = widget.bindings.getValue(name)?.toString() ?? '';
+    return IconField(
+      fieldName: name,
+      label: label,
+      tip: tip,
+      initialValue: current,
       onChanged: (v) => widget.bindings.setValue(name, v),
     );
   }

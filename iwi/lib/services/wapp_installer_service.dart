@@ -63,6 +63,12 @@ class WappInstallerService {
   ///   `app.wasm`. Null or empty skips the write (edit-in-place
   ///   installs that don't touch the source keep whatever `main.c`
   ///   was already on disk, so we don't clobber it with nothing).
+  /// - [icon] — icon string written as `manifest.icon`. Either a
+  ///   short free-form character/emoji (the launcher renders this
+  ///   as text inside the tile) or a path like `media/icons/foo.svg`
+  ///   (reserved for future file-based rendering; today the launcher
+  ///   treats path-shaped icons as "no text icon" and falls back to
+  ///   its Material icon guess).
   /// - [overwrite] — collisions fail unless explicitly allowed.
   Future<InstallResult> installFromCompiled({
     required String id,
@@ -73,6 +79,7 @@ class WappInstallerService {
     String version = '1.0.0',
     String? homeScreenJson,
     String? sourceC,
+    String? icon,
     bool overwrite = false,
   }) async {
     if (id.isEmpty) {
@@ -119,8 +126,52 @@ class WappInstallerService {
       effectiveSource = await installed.readString('$folder/main.c');
     }
 
+    // Same carry-forward logic for the icon: a pure metadata edit
+    // that leaves the icon field blank should not strip a previously
+    // saved icon out of the manifest. Also grab the previous inline
+    // SVG file so we can re-copy it after the delete-and-rewrite
+    // dance the overwrite path does below.
+    String? effectiveIcon = icon;
+    String? carriedSvg;
+    if (exists && (effectiveIcon == null || effectiveIcon.isEmpty)) {
+      final prevManifest =
+          await installed.readJson('$folder/manifest.json');
+      final prevIcon = prevManifest?['icon'];
+      if (prevIcon is String && prevIcon.isNotEmpty) {
+        effectiveIcon = prevIcon;
+        // A previously-installed wapp may have had its icon saved
+        // as a media/icons/icon.svg sidecar. Read the bytes now so
+        // we can restore them after the directory is cleared.
+        if (prevIcon.endsWith('.svg')) {
+          carriedSvg = await installed.readString('$folder/$prevIcon');
+        }
+      }
+    }
+
     if (exists && overwrite) {
       await installed.deleteDirectory(folder, recursive: true);
+    }
+
+    // Split the incoming icon value into its two canonical forms:
+    //   - inline SVG XML (prefixed with `svg:`) → write to
+    //     media/icons/icon.svg and store the path in manifest.icon
+    //   - anything else → emoji / short string / existing path →
+    //     store verbatim in manifest.icon
+    String? manifestIcon;
+    String? svgToWrite;
+    if (effectiveIcon != null && effectiveIcon.isNotEmpty) {
+      const prefix = 'svg:';
+      if (effectiveIcon.startsWith(prefix)) {
+        svgToWrite = effectiveIcon.substring(prefix.length);
+        manifestIcon = 'media/icons/icon.svg';
+      } else if (carriedSvg != null && effectiveIcon.endsWith('.svg')) {
+        // Carry-forward path: a metadata-only edit kept the old
+        // manifest.icon path. Restore the sidecar we just read.
+        svgToWrite = carriedSvg;
+        manifestIcon = effectiveIcon;
+      } else {
+        manifestIcon = effectiveIcon;
+      }
     }
 
     // Manifest — matches the hand-written shapes in
@@ -133,7 +184,7 @@ class WappInstallerService {
       'kind': 'app',
       'description': title.isNotEmpty ? title : folder,
       'summary': description,
-      'icon': null,
+      'icon': manifestIcon,
       'tags': const ['user'],
       'entry_ui': 'screens/home.ui.json',
       'tick_interval_ms': 5000,
@@ -166,6 +217,12 @@ class WappInstallerService {
       // convention: main.c sits next to app.wasm.
       if (effectiveSource != null && effectiveSource.isNotEmpty) {
         await installed.writeString('$folder/main.c', effectiveSource);
+      }
+      // Write the inline SVG as a sidecar file when present. The
+      // manifest already points at its relative location.
+      if (svgToWrite != null && svgToWrite.isNotEmpty) {
+        await installed.writeString(
+            '$folder/media/icons/icon.svg', svgToWrite);
       }
     } catch (e) {
       return InstallResult.failure(id, 'failed to write wapp files: $e');
