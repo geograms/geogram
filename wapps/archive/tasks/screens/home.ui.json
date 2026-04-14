@@ -1,0 +1,15 @@
+[
+  {
+    "$": "screen",
+    "name": "Tasks",
+    "tip": "Live task monitor — pause, resume, or stop background tasks.",
+    "children": [
+      {
+        "$": "group",
+        "name": "task-list",
+        "$type": "tasks",
+        "tip": "Every registered MonitoredTask in the geogram host."
+      }
+    ]
+  }
+]

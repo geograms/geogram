@@ -1,28 +1,88 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+import 'dart:io' show Directory, Platform, Process;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import 'apps/terminal_page.dart';
+import 'models/monitored_task.dart';
+import 'services/event_bus.dart';
+import 'services/host_event_bridge.dart';
+import 'services/notification_service.dart';
 import 'services/preferences_service.dart';
+import 'services/profile_storage.dart';
+import 'services/storage_paths.dart';
+import 'services/task_monitor_service.dart';
 import 'wapp/wapp_engine.dart';
 import 'wapp/wapp_page.dart';
 
-void main() {
-  runApp(const IwiApp());
+/// Global messenger key. Held outside any widget so the
+/// [NotificationService] can drive snackbars without needing a
+/// BuildContext from inside an event handler.
+final GlobalKey<ScaffoldMessengerState> rootMessengerKey =
+    GlobalKey<ScaffoldMessengerState>();
+
+Future<void> main() async {
+  // Required before any async work that touches platform channels.
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Register core host services as parallel boot tasks so they run
+  // through the orchestrator (and show up in the tasks wapp with the
+  // boot:parallel pill). They are cheap and independent, so parallel
+  // is correct — no contention for CPU or memory.
+  BootOrchestrator.instance.register(
+    id: 'notification-service',
+    name: 'Notification service',
+    description:
+        'Registers the system tray notification backend and subscribes '
+        'to host ErrorEvent. In-app display is handled by the '
+        'NotificationLayer overlay wrapping the launcher.',
+    mode: BootStart.parallel,
+    init: () async {
+      NotificationService.instance.init();
+    },
+  );
+  BootOrchestrator.instance.register(
+    id: 'host-event-bridge',
+    name: 'Host → wapp event bridge',
+    description:
+        'Republishes AppStarted/WappLoaded/WappUnloaded/WappCrashed/'
+        'ErrorEvent on the wapp event broker as system.* topics.',
+    mode: BootStart.parallel,
+    init: () async {
+      HostEventBridge.instance.install();
+    },
+  );
+
+  // Run every registered boot task. Sequential boot tasks run first,
+  // alone, in registration order; then all parallels run concurrently.
+  await BootOrchestrator.instance.runAll();
+
+  runApp(IwiApp(messengerKey: rootMessengerKey));
 }
 
 class IwiApp extends StatelessWidget {
-  const IwiApp({super.key});
+  final GlobalKey<ScaffoldMessengerState> messengerKey;
+  const IwiApp({super.key, required this.messengerKey});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Iwi',
+      title: 'geogram',
+      // Kept for ad-hoc Flutter snackbars (e.g. settings delete errors).
+      // The unified NotificationService does NOT use this — it pipes
+      // everything through the NotificationLayer overlay below.
+      scaffoldMessengerKey: messengerKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark(useMaterial3: true),
+      // The NotificationLayer is installed via `builder`, not `home:`,
+      // so it sits ABOVE the Navigator. That way its stacking overlay
+      // renders on top of whatever route is currently visible — the
+      // launcher AND every pushed wapp page. If we wrapped only
+      // `home:`, wapp pages (which are siblings of home in the
+      // navigator stack) would cover the notification cards.
+      builder: (context, child) {
+        return NotificationLayer(child: child ?? const SizedBox.shrink());
+      },
       home: const LauncherPage(),
     );
   }
@@ -109,44 +169,66 @@ class _LauncherPageState extends State<LauncherPage> {
   }
 
   Future<void> _scanArchive() async {
+    // Wrap the scan in the task monitor so its startup time and any
+    // failures are visible in the same place as every other startup
+    // step. This is the canonical "template process method" pattern —
+    // every startup task should go through runMonitoredStartup.
+    await runMonitoredStartup(
+      'launcher.scan',
+      'Scan installed wapps',
+      _scanArchiveBody,
+      description: 'Reads the in-repo install wapp + every installed-apps '
+          'subdirectory and parses their manifest.json',
+    );
+    if (_wapps != null) {
+      EventBus().fire(AppStartedEvent());
+    }
+  }
+
+  Future<void> _scanArchiveBody() async {
     final wapps = <WappManifest>[];
     final seen = <String>{};
 
-    // 1. The install wapp is built-in (from the archive source dir)
-    final candidates = [
-      '${Directory.current.path}/../wapps/archive/install',
-      '${Directory.current.path}/../../wapps/archive/install',
+    // 1. Built-in wapps from the in-repo wapps/archive/ tree. Every
+    // subdirectory with a manifest.json is a candidate. Directory.current.path
+    // is OK to read here — it is the runtime CWD, not profile data, and is
+    // the only reliable anchor for relative dev-time paths into the source.
+    final archiveCandidates = [
+      '${Directory.current.path}/../wapps/archive',
+      '${Directory.current.path}/../../wapps/archive',
     ];
-    for (final path in candidates) {
-      final dir = Directory(path);
-      if (dir.existsSync()) {
-        await _scanManifest(dir, wapps, seen);
-        break;
+    for (final archivePath in archiveCandidates) {
+      final archive = wappPackageStorage(archivePath);
+      if (!await archive.directoryExists('')) continue;
+      final entries = await archive.listDirectory('');
+      for (final entry in entries) {
+        if (!entry.isDirectory) continue;
+        final pkg = wappPackageStorage(archive.getAbsolutePath(entry.path));
+        await _scanManifest(pkg, wapps, seen);
+      }
+      break; // first archive dir that exists wins
+    }
+
+    // 2. User-installed wapps (extracted by the installer).
+    final installed = installedAppsStorage();
+    if (await installed.directoryExists('')) {
+      final entries = await installed.listDirectory('');
+      for (final entry in entries) {
+        if (!entry.isDirectory) continue;
+        final pkg = wappPackageStorage(installed.getAbsolutePath(entry.path));
+        await _scanManifest(pkg, wapps, seen);
       }
     }
 
-    // 2. User-installed wapps (extracted by the installer)
-    final installedDir = Directory(installedAppsDir());
-    if (installedDir.existsSync()) {
-      for (final entry in installedDir.listSync()) {
-        if (entry is! Directory) continue;
-        await _scanManifest(entry as Directory, wapps, seen);
-      }
-    }
-
-    setState(() => _wapps = wapps);
+    if (mounted) setState(() => _wapps = wapps);
   }
 
   Future<void> _scanManifest(
-      Directory dir, List<WappManifest> wapps, Set<String> seen) async {
-    final manifestFile = File('${dir.path}/manifest.json');
-    if (!manifestFile.existsSync()) return;
+      ProfileStorage pkg, List<WappManifest> wapps, Set<String> seen) async {
+    final json = await pkg.readJson('manifest.json');
+    if (json == null) return;
     try {
-      final json = jsonDecode(await manifestFile.readAsString());
-      final manifest = WappManifest.fromJson(
-        json as Map<String, dynamic>,
-        dir.path,
-      );
+      final manifest = WappManifest.fromJson(json, pkg.basePath);
       if (manifest.kind == 'app' && seen.add(manifest.id)) {
         wapps.add(manifest);
       }
@@ -168,7 +250,6 @@ class _LauncherPageState extends State<LauncherPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Iwi'),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
@@ -299,6 +380,7 @@ class IwiSettingsPage extends StatefulWidget {
 class _IwiSettingsPageState extends State<IwiSettingsPage> {
   PreferencesService? _prefs;
   String? _dataDir;
+  List<_WappDataEntry> _wappDataEntries = [];
 
   @override
   void initState() {
@@ -308,21 +390,48 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
 
   Future<void> _load() async {
     final prefs = await PreferencesService.instance();
+    final defaultPath = wappsDataStorage(prefs).basePath;
+    if (!mounted) return;
     setState(() {
       _prefs = prefs;
-      _dataDir = prefs.wappDataDir ?? _defaultDataDir();
+      _dataDir = prefs.wappDataDir ?? defaultPath;
     });
+    await _refreshWappData();
   }
 
-  static String _defaultDataDir() {
-    final home = Platform.environment['HOME'] ??
-        Platform.environment['USERPROFILE'] ??
-        '/tmp';
-    return '$home/.local/share/iwi/wapps';
+  Future<void> _refreshWappData() async {
+    final dataDir = _dataDir;
+    if (dataDir == null) return;
+    final storage = FilesystemProfileStorage(dataDir);
+    if (!await storage.directoryExists('')) {
+      if (mounted) setState(() => _wappDataEntries = []);
+      return;
+    }
+    final subdirs = await storage.listDirectory('');
+    final entries = <_WappDataEntry>[];
+    for (final sub in subdirs) {
+      if (!sub.isDirectory) continue;
+      var size = 0;
+      try {
+        final children =
+            await storage.listDirectory(sub.path, recursive: true);
+        for (final c in children) {
+          if (!c.isDirectory) size += c.size ?? 0;
+        }
+      } catch (_) {}
+      entries.add(_WappDataEntry(
+        sub.name,
+        storage.getAbsolutePath(sub.path),
+        size,
+      ));
+    }
+    entries.sort((a, b) => a.name.compareTo(b.name));
+    if (mounted) setState(() => _wappDataEntries = entries);
   }
 
   Future<void> _pickDirectory() async {
-    // Show a dialog to type the path (no file_picker dependency needed)
+    final defaultPath =
+        _prefs == null ? '' : wappsDataStorage(_prefs!).basePath;
     final controller = TextEditingController(text: _dataDir);
     final result = await showDialog<String>(
       context: context,
@@ -350,7 +459,7 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.folder_open),
                   tooltip: 'Reset to default',
-                  onPressed: () => controller.text = _defaultDataDir(),
+                  onPressed: () => controller.text = defaultPath,
                 ),
               ),
               autofocus: true,
@@ -371,49 +480,28 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
     );
 
     if (result != null && result.isNotEmpty && _prefs != null) {
-      // Ensure directory exists
-      final dir = Directory(result);
-      if (!dir.existsSync()) {
-        dir.createSync(recursive: true);
-      }
+      // Create the directory through the abstraction so the same code path
+      // will work later with encrypted/IndexedDB backends.
+      await FilesystemProfileStorage(result).createDirectory('');
       _prefs!.wappDataDir = result;
-      setState(() => _dataDir = result);
+      if (mounted) setState(() => _dataDir = result);
+      await _refreshWappData();
     }
   }
 
   Future<void> _openDataDir() async {
-    if (_dataDir == null) return;
-    final dir = Directory(_dataDir!);
-    if (!dir.existsSync()) dir.createSync(recursive: true);
-    final uri = Uri.directory(dir.absolute.path);
+    final dataDir = _dataDir;
+    if (dataDir == null) return;
+    // Make sure it exists (via the abstraction), then hand the absolute
+    // path to the platform's external file manager.
+    await FilesystemProfileStorage(dataDir).createDirectory('');
     if (Platform.isLinux) {
-      await Process.run('xdg-open', [dir.absolute.path]);
+      await Process.run('xdg-open', [dataDir]);
     } else if (Platform.isMacOS) {
-      await Process.run('open', [dir.absolute.path]);
+      await Process.run('open', [dataDir]);
     } else if (Platform.isWindows) {
-      await Process.run('explorer', [dir.absolute.path]);
+      await Process.run('explorer', [dataDir]);
     }
-  }
-
-  /// List existing wapp data subdirectories.
-  List<_WappDataEntry> _listWappData() {
-    if (_dataDir == null) return [];
-    final dir = Directory(_dataDir!);
-    if (!dir.existsSync()) return [];
-    final entries = <_WappDataEntry>[];
-    for (final sub in dir.listSync()) {
-      if (sub is! Directory) continue;
-      final name = sub.path.split(Platform.pathSeparator).last;
-      var size = 0;
-      try {
-        for (final f in sub.listSync(recursive: true)) {
-          if (f is File) size += f.lengthSync();
-        }
-      } catch (_) {}
-      entries.add(_WappDataEntry(name, sub.path, size));
-    }
-    entries.sort((a, b) => a.name.compareTo(b.name));
-    return entries;
   }
 
   String _humanSize(int bytes) {
@@ -502,7 +590,7 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
   }
 
   List<Widget> _buildWappDataList(ColorScheme cs) {
-    final entries = _listWappData();
+    final entries = _wappDataEntries;
     if (entries.isEmpty) {
       return [
         Card(
@@ -584,8 +672,18 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
 
     if (confirm == true) {
       try {
-        Directory(entry.path).deleteSync(recursive: true);
-        setState(() {}); // Refresh list
+        // Split the absolute path into parent + leaf and delete via the
+        // abstraction so the same code path works with non-filesystem
+        // backends in the future.
+        final sep = Platform.pathSeparator;
+        final slashIdx = entry.path.lastIndexOf(sep);
+        if (slashIdx > 0) {
+          final parent = entry.path.substring(0, slashIdx);
+          final leaf = entry.path.substring(slashIdx + 1);
+          await FilesystemProfileStorage(parent)
+              .deleteDirectory(leaf, recursive: true);
+        }
+        await _refreshWappData();
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -644,7 +742,19 @@ class _WappRunnerPageState extends State<WappRunnerPage> {
   Future<void> _loadWasmFromFile(String path) async {
     setState(() => _status = 'Loading...');
     try {
-      final bytes = await File(path).readAsBytes();
+      final sep = Platform.pathSeparator;
+      final slashIdx = path.lastIndexOf(sep);
+      if (slashIdx < 0) {
+        setState(() => _status = 'Invalid path: $path');
+        return;
+      }
+      final dir = path.substring(0, slashIdx);
+      final file = path.substring(slashIdx + 1);
+      final bytes = await FilesystemProfileStorage(dir).readBytes(file);
+      if (bytes == null) {
+        setState(() => _status = 'wasm not found: $path');
+        return;
+      }
       await _startEngine(bytes);
     } catch (e) {
       setState(() => _status = 'Error: $e');

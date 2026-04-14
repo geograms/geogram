@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
+import 'dart:io' show HttpClient, Platform, Process;
 import 'dart:math';
 
 import 'package:flutter/gestures.dart';
@@ -9,18 +9,14 @@ import 'package:flutter/material.dart';
 import '../geoui/geoui_ast.dart';
 import '../geoui/geoui_parser.dart';
 import '../geoui/geoui_renderer.dart';
+import '../models/monitored_task.dart';
+import '../services/event_bus.dart';
+import '../services/notification_service.dart';
 import '../services/preferences_service.dart';
+import '../services/profile_storage.dart';
+import '../services/storage_paths.dart';
+import '../services/task_monitor_service.dart';
 import 'wapp_engine.dart';
-
-/// Directory where installed wapps are extracted and runnable.
-String installedAppsDir() {
-  final home = Platform.environment['HOME'] ??
-      Platform.environment['USERPROFILE'] ??
-      '/tmp';
-  final dir = '$home/.local/share/iwi/apps';
-  Directory(dir).createSync(recursive: true);
-  return dir;
-}
 
 /// Generic wapp page — loads .ui.json screens from a wapp directory,
 /// instantiates the WASM module, and renders screens as tabs.
@@ -39,6 +35,22 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   final _engine = WappEngine();
   Timer? _tickTimer;
   String _status = 'Loading...';
+
+  /// Wapp folder name — used as a stable id for storage, task monitor,
+  /// and lifecycle events.
+  late final String _wappName =
+      _pkg.basePath.split(Platform.pathSeparator).last;
+
+  /// Compound id for the per-wapp tick task in [TaskMonitorService].
+  late final String _tickTaskId = 'wapp.$_wappName.${_engine.engineId}';
+
+  /// Storage rooted at the wapp package dir (read-only source of manifest,
+  /// app.wasm, screens, media).
+  late final ProfileStorage _pkg = wappPackageStorage(widget.wappDir);
+
+  /// Storage for installed wapps (extracted .wapp packages) — used by the
+  /// install/uninstall flow.
+  final ProfileStorage _installed = installedAppsStorage();
 
   // Screens parsed from .ui.json
   final _screens = <GeoUiBlock>[];
@@ -59,6 +71,14 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   String _tileUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
   bool _hasMap = false;
 
+  // Cached MonitoredTask snapshot (refreshed when the wapp polls
+  // system.tasks.list — see _refreshTaskSnapshot).
+  List<MonitoredTask> _taskSnapshot = const [];
+
+  void _refreshTaskSnapshot() {
+    _taskSnapshot = TaskMonitorService.instance.tasks;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -66,13 +86,15 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   }
 
   Future<void> _loadWapp() async {
-    // Parse .ui.json screens
-    final screensDir = Directory('${widget.wappDir}/screens');
-    if (screensDir.existsSync()) {
-      for (final file in screensDir.listSync()) {
-        if (file is! File || !file.path.endsWith('.ui.json')) continue;
+    // Parse .ui.json screens from the package's screens/ directory.
+    if (await _pkg.directoryExists('screens')) {
+      final entries = await _pkg.listDirectory('screens');
+      for (final entry in entries) {
+        if (entry.isDirectory || !entry.path.endsWith('.ui.json')) continue;
+        final content = await _pkg.readString(entry.path);
+        if (content == null) continue;
         try {
-          final parsed = GeoUiParser(await file.readAsString()).parse();
+          final parsed = GeoUiParser(content).parse();
           for (final block in parsed.blocks) {
             if (block.keyword == 'screen') {
               _addScreen(block);
@@ -111,39 +133,74 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     // Build tab controller
     _tabController = TabController(length: _screenNames.length, vsync: this);
 
-    // Set up persistent KV storage
-    final wappName = widget.wappDir.split(Platform.pathSeparator).last;
-    final kvDir = '${_defaultDataDir()}/$wappName';
-    _engine.setStorageDir(kvDir);
+    // Set up persistent KV storage under the per-wapp data dir.
+    final prefs = await PreferencesService.instance();
+    final wappData = wappDataStorageFor(prefs, _wappName);
+    await wappData.createDirectory('');
+    _engine.setStorage(wappData);
 
-    // Auto-set default source for install wapp if not yet configured
-    if (wappName == 'install') {
-      final binDir = Directory('${widget.wappDir}/../../binaries');
-      if (binDir.existsSync() && !_engine.hasKvKey('source')) {
-        _engine.kvSet('source', binDir.absolute.path);
+    // Auto-configure the install wapp's `source` KV to point at the
+    // in-repo wapps/binaries/ dir when running from a source checkout.
+    if (_wappName == 'install' && !_engine.hasKvKey('source')) {
+      final binStorage = wappPackageStorage('${widget.wappDir}/../../binaries');
+      if (await binStorage.directoryExists('')) {
+        _engine.kvSet('source', binStorage.basePath);
       }
     }
 
-    // Load WASM
-    final wasmFile = File('${widget.wappDir}/app.wasm');
-    if (!wasmFile.existsSync()) {
+    // Load the WASM binary from the package.
+    final wasmBytes = await _pkg.readBytes('app.wasm');
+    if (wasmBytes == null) {
       setState(() => _status = 'app.wasm not found');
+      EventBus().fire(WappCrashedEvent(
+        wappId: _wappName, phase: 'load',
+        error: 'app.wasm not found at ${_pkg.basePath}/app.wasm',
+      ));
       return;
     }
 
     try {
-      await _engine.load(await wasmFile.readAsBytes());
+      await _engine.load(wasmBytes);
       _engine.init();
       _drainOutbox();
 
       final interval = _engine.tickIntervalMs;
+
+      // Register this wapp's tick loop with the task monitor.
+      TaskMonitorService.instance.register(MonitoredTask(
+        id: _tickTaskId,
+        name: _wappName,
+        description: 'Tick loop for $_wappName',
+        serviceName: 'wapps',
+        priority: TaskPriority.normal,
+        type: TaskType.periodic,
+        interval: Duration(milliseconds: interval),
+      ));
+
       _tickTimer = Timer.periodic(Duration(milliseconds: interval), (_) {
-        _engine.tick();
-        _drainOutbox();
+        // Honour pause-from-task-monitor: skip the tick body but keep
+        // the timer alive so resume just works.
+        final task = TaskMonitorService.instance.getTask(_tickTaskId);
+        if (task?.status == TaskStatus.paused) return;
+        TaskMonitorService.instance.reportStart(_tickTaskId);
+        try {
+          _engine.tick();
+          _drainOutbox();
+          TaskMonitorService.instance.reportSuccess(_tickTaskId);
+        } catch (e) {
+          TaskMonitorService.instance.reportFailure(_tickTaskId, e);
+          EventBus().fire(WappCrashedEvent(
+            wappId: _wappName, phase: 'tick', error: e,
+          ));
+        }
       });
 
+      EventBus().fire(WappLoadedEvent(wappId: _wappName, wappName: _wappName));
       setState(() => _status = 'Running');
     } catch (e) {
+      EventBus().fire(WappCrashedEvent(
+        wappId: _wappName, phase: 'load', error: e,
+      ));
       setState(() => _status = 'Error: $e');
     }
   }
@@ -177,15 +234,60 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           _mapZoom = (data['zoom'] as num?)?.toInt() ?? _mapZoom;
           changed = true;
         } else if (type == 'ui.toast') {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(data['message'] as String? ?? '')),
-            );
-          }
+          // Legacy message shape — route through the unified service
+          // so old wapps inherit system-tray delivery + history.
+          NotificationService.instance.show(GeogramNotification(
+            level: NotificationLevel.info,
+            title: _wappName,
+            body: data['message'] as String? ?? '',
+            source: 'wapp:$_wappName',
+          ));
+        } else if (type == 'notify') {
+          // New unified notification protocol.
+          final levelStr = (data['level'] as String? ?? 'info').toLowerCase();
+          final level = switch (levelStr) {
+            'success' => NotificationLevel.success,
+            'warning' || 'warn' => NotificationLevel.warning,
+            'error' || 'err' => NotificationLevel.error,
+            _ => NotificationLevel.info,
+          };
+          final scopeStr = (data['scope'] as String? ?? 'app').toLowerCase();
+          final scope = switch (scopeStr) {
+            'system' => NotificationScope.system,
+            'both' => NotificationScope.both,
+            _ => NotificationScope.app,
+          };
+          NotificationService.instance.show(GeogramNotification(
+            level: level,
+            title: data['title'] as String? ?? _wappName,
+            body: data['body'] as String?,
+            source: 'wapp:$_wappName',
+            tag: data['tag'] as String?,
+            scope: scope,
+          ));
         } else if (type == 'wapp.fetch_index') {
-          _handleFetchIndex(data);
+          unawaited(_handleFetchIndex(data));
         } else if (type == 'wapp.install') {
-          _handleWappInstall(data);
+          unawaited(_handleWappInstall(data));
+        } else if (type == 'system.tasks.list') {
+          _refreshTaskSnapshot();
+          changed = true;
+        } else if (type == 'system.tasks.pause') {
+          TaskMonitorService.instance.pause(data['id'] as String? ?? '');
+          _refreshTaskSnapshot();
+          changed = true;
+        } else if (type == 'system.tasks.resume') {
+          TaskMonitorService.instance.resume(data['id'] as String? ?? '');
+          _refreshTaskSnapshot();
+          changed = true;
+        } else if (type == 'system.tasks.pause_all') {
+          TaskMonitorService.instance.pauseAllNonCritical();
+          _refreshTaskSnapshot();
+          changed = true;
+        } else if (type == 'system.tasks.resume_all') {
+          TaskMonitorService.instance.resumeAll();
+          _refreshTaskSnapshot();
+          changed = true;
         }
       } catch (_) {}
     }
@@ -199,89 +301,99 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     }
   }
 
-  void _handleFetchIndex(Map<String, dynamic> data) {
+  Future<void> _handleFetchIndex(Map<String, dynamic> data) async {
     final source = data['source'] as String? ?? '';
     if (source.isEmpty) return;
 
-    var path = source;
-    if (!path.endsWith('.json')) {
-      if (!path.endsWith('/')) path += '/';
-      path += 'index.json';
+    // Resolve the source into (dir, file) and wrap the dir in a transient
+    // ProfileStorage. The source may be either a directory (implicit
+    // index.json) or an explicit path to a .json file.
+    String absPath = source;
+    if (!absPath.endsWith('.json')) {
+      if (!absPath.endsWith('/')) absPath += '/';
+      absPath += 'index.json';
     }
+    final sep = Platform.pathSeparator;
+    final slashIdx = absPath.replaceAll(sep, '/').lastIndexOf('/');
+    if (slashIdx <= 0) {
+      _outputLines.add(_OutputLine('Invalid index path: $absPath', 'err'));
+      if (mounted) setState(() {});
+      return;
+    }
+    final dir = absPath.substring(0, slashIdx);
+    final file = absPath.substring(slashIdx + 1);
+    final dirStorage = wappPackageStorage(dir);
 
-
-    final file = File(path);
-    if (!file.existsSync()) {
-
-      _outputLines.add(_OutputLine('Index not found: $path', 'err'));
+    final content = await dirStorage.readString(file);
+    if (content == null) {
+      _outputLines.add(_OutputLine('Index not found: $absPath', 'err'));
       if (mounted) setState(() {});
       return;
     }
 
     try {
-      final contents = jsonDecode(file.readAsStringSync());
+      final contents = jsonDecode(content);
       final msg = jsonEncode({'type': 'wapp.index', 'data': contents});
-
       _engine.sendMessage(msg);
       _engine.handleEvent();
       _drainOutbox();
-
       if (mounted) setState(() {});
     } catch (e) {
-
       _outputLines.add(_OutputLine('Failed to read index: $e', 'err'));
       if (mounted) setState(() {});
     }
   }
 
-  void _handleWappInstall(Map<String, dynamic> data) {
+  Future<void> _handleWappInstall(Map<String, dynamic> data) async {
     final source = data['source'] as String? ?? '';
     final filePath = data['file'] as String? ?? '';
     final name = data['name'] as String? ?? '';
     final version = data['version'] as String? ?? '';
-    if (source.isEmpty || filePath.isEmpty) return;
+    if (source.isEmpty || filePath.isEmpty || name.isEmpty) return;
 
-    var basePath = source;
-    if (basePath.endsWith('.json')) {
-      basePath = basePath.substring(0, basePath.lastIndexOf('/'));
+    // Resolve the source dir (may be a .json path or a plain directory).
+    var baseDir = source;
+    if (baseDir.endsWith('.json')) {
+      final slashIdx = baseDir.replaceAll(Platform.pathSeparator, '/').lastIndexOf('/');
+      if (slashIdx <= 0) return;
+      baseDir = baseDir.substring(0, slashIdx);
     }
-    if (!basePath.endsWith('/')) basePath += '/';
-    final srcPath = '$basePath$filePath';
-
-    final srcFile = File(srcPath);
-    if (!srcFile.existsSync()) {
-      _outputLines.add(_OutputLine('File not found: $srcPath', 'err'));
+    final srcStorage = wappPackageStorage(baseDir);
+    if (!await srcStorage.exists(filePath)) {
+      _outputLines.add(_OutputLine('File not found: $baseDir/$filePath', 'err'));
       if (mounted) setState(() {});
       return;
     }
 
     try {
-      // Extract .wapp (ZIP) to the apps directory so it shows in the launcher
-      final appsDir = installedAppsDir();
-      final appDir = '$appsDir/$name';
+      // Wipe any previous install, then re-create the target directory.
+      await _installed.deleteDirectory(name, recursive: true);
+      await _installed.createDirectory(name);
 
-      // Clean previous version
-      final dir = Directory(appDir);
-      if (dir.existsSync()) dir.deleteSync(recursive: true);
-      dir.createSync(recursive: true);
-
-      // Extract
-      final result = Process.runSync('unzip', ['-o', '-q', srcPath, '-d', appDir]);
+      // Extract .wapp (ZIP) into the installed-apps target directory. The
+      // external `unzip` tool needs a real on-disk path — this works today
+      // because installedAppsStorage() is a FilesystemProfileStorage. When
+      // an encrypted/IndexedDB backend is added, this will need to unzip
+      // into a temp dir and then copyFromExternal() each file.
+      final absSrcPath = srcStorage.getAbsolutePath(filePath);
+      final absAppDir = _installed.getAbsolutePath(name);
+      final result =
+          Process.runSync('unzip', ['-o', '-q', absSrcPath, '-d', absAppDir]);
       if (result.exitCode != 0) {
         _outputLines.add(_OutputLine('Extract failed: ${result.stderr}', 'err'));
         if (mounted) setState(() {});
         return;
       }
 
-      // Verify app.wasm exists
-      if (!File('$appDir/app.wasm').existsSync()) {
+      // Verify app.wasm landed.
+      if (!await _installed.exists('$name/app.wasm')) {
         _outputLines.add(_OutputLine('Invalid wapp: no app.wasm', 'err'));
-        Directory(appDir).deleteSync(recursive: true);
+        await _installed.deleteDirectory(name, recursive: true);
         if (mounted) setState(() {});
         return;
       }
 
-      // Confirm installation to the module so it updates its KV
+      // Confirm installation to the module so it updates its KV.
       final confirmMsg = jsonEncode({
         'type': 'wapp.installed',
         'name': name,
@@ -299,23 +411,12 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     }
   }
 
-  void _uninstallWapp(String name) {
-    final appDir = Directory('${installedAppsDir()}/$name');
-    if (appDir.existsSync()) {
-      appDir.deleteSync(recursive: true);
-    }
-    // Also tell the module so it updates its KV
+  Future<void> _uninstallWapp(String name) async {
+    await _installed.deleteDirectory(name, recursive: true);
     _sendCommand('remove $name');
     _engine.handleEvent();
     _drainOutbox();
     if (mounted) setState(() {});
-  }
-
-  static String _defaultDataDir() {
-    final home = Platform.environment['HOME'] ??
-        Platform.environment['USERPROFILE'] ??
-        '/tmp';
-    return '$home/.local/share/iwi/wapps';
   }
 
   void _sendCommand(String cmd) {
@@ -327,6 +428,8 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   @override
   void dispose() {
     _tickTimer?.cancel();
+    TaskMonitorService.instance.unregister(_tickTaskId);
+    EventBus().fire(WappUnloadedEvent(wappId: _wappName, wappName: _wappName));
     _engine.dispose();
     _cmdController.dispose();
     _scrollController.dispose();
@@ -372,6 +475,14 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         .firstOrNull;
     if (mapGroup != null) return _buildMapScreen(screen, mapGroup);
 
+    // Tasks viewer — host renders cards from the cached MonitoredTask
+    // snapshot kept in _taskSnapshot, refreshed each time the wapp polls.
+    final hasTasksGroup = screen.children.any((c) =>
+        c.keyword == 'group' && c.type == 'tasks');
+    if (hasTasksGroup) {
+      return _buildTasksScreen();
+    }
+
     // Output-only screen (e.g. Shop catalog) — no command input
     final hasOutputGroup = screen.children.any((c) =>
         c.keyword == 'group' && c.type == 'output');
@@ -389,6 +500,203 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
 
     // Settings-like screen — use GeoUI renderer
     return _buildSettingsScreen(screen);
+  }
+
+  // ── Tasks viewer ──────────────────────────────────────────────────
+
+  Widget _buildTasksScreen() {
+    final cs = Theme.of(context).colorScheme;
+    final tasks = _taskSnapshot;
+
+    final running =
+        tasks.where((t) => t.status == TaskStatus.running).length;
+    final idle = tasks.where((t) => t.status == TaskStatus.idle).length;
+    final paused = tasks.where((t) => t.status == TaskStatus.paused).length;
+    final errored = tasks.where((t) => t.status == TaskStatus.error).length;
+
+    return Column(
+      children: [
+        // Header summary + bulk actions
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+            ),
+          ),
+          child: Row(
+            children: [
+              _StatusPill(
+                  label: 'running', count: running, color: Colors.green),
+              const SizedBox(width: 6),
+              _StatusPill(label: 'idle', count: idle, color: cs.primary),
+              const SizedBox(width: 6),
+              _StatusPill(
+                  label: 'paused', count: paused, color: Colors.amber),
+              const SizedBox(width: 6),
+              _StatusPill(label: 'error', count: errored, color: cs.error),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => _sendCommand('pause-all'),
+                icon: const Icon(Icons.pause_circle, size: 18),
+                label: const Text('Pause all'),
+                style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact),
+              ),
+              TextButton.icon(
+                onPressed: () => _sendCommand('resume-all'),
+                icon: const Icon(Icons.play_circle, size: 18),
+                label: const Text('Resume all'),
+                style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: tasks.isEmpty
+              ? const Center(
+                  child: Text('No tasks registered yet.',
+                      style: TextStyle(color: Colors.grey)))
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  itemCount: tasks.length,
+                  itemBuilder: (context, i) => _buildTaskCard(tasks[i], cs),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTaskCard(MonitoredTask task, ColorScheme cs) {
+    final statusColor = switch (task.status) {
+      TaskStatus.running => Colors.green,
+      TaskStatus.idle => cs.primary,
+      TaskStatus.paused => Colors.amber,
+      TaskStatus.error => cs.error,
+    };
+    final priorityColor = switch (task.priority) {
+      TaskPriority.critical => cs.error,
+      TaskPriority.normal => cs.primary,
+      TaskPriority.low => cs.onSurfaceVariant,
+    };
+    final bootColor = switch (task.bootStart) {
+      BootStart.sequential => Colors.deepOrange,
+      BootStart.parallel => Colors.cyan,
+      BootStart.none => cs.onSurfaceVariant,
+    };
+    final isCritical = task.priority == TaskPriority.critical;
+    final isPaused = task.status == TaskStatus.paused;
+    final lastMs = task.lastDuration?.inMilliseconds;
+
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+      ),
+      color: cs.surfaceContainerLow,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Title row: name + pills
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(task.name,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w600, fontSize: 14)),
+                      const SizedBox(height: 2),
+                      Text(task.id,
+                          style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              color: cs.onSurfaceVariant)),
+                    ],
+                  ),
+                ),
+                _MiniPill(label: task.status.name, color: statusColor),
+                const SizedBox(width: 4),
+                _MiniPill(label: task.priority.name, color: priorityColor),
+                const SizedBox(width: 4),
+                _MiniPill(
+                    label: task.type.name, color: cs.onSurfaceVariant),
+                if (task.bootStart != BootStart.none) ...[
+                  const SizedBox(width: 4),
+                  _MiniPill(
+                      label: 'boot:${task.bootStart.name}',
+                      color: bootColor),
+                ],
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Stats
+            Wrap(
+              spacing: 14,
+              runSpacing: 4,
+              children: [
+                _Stat(label: 'service', value: task.serviceName),
+                _Stat(label: 'runs', value: '${task.runCount}'),
+                _Stat(label: 'ok', value: '${task.successCount}'),
+                _Stat(label: 'fail', value: '${task.failCount}'),
+                if (lastMs != null)
+                  _Stat(label: 'last', value: '${lastMs}ms'),
+                _Stat(label: 'cpu', value: '${task.totalCpuMs}ms'),
+                if (task.interval != null)
+                  _Stat(
+                      label: 'every',
+                      value: '${task.interval!.inMilliseconds}ms'),
+              ],
+            ),
+            if (task.lastError != null) ...[
+              const SizedBox(height: 6),
+              Text(task.lastError!,
+                  style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: cs.error)),
+            ],
+            const SizedBox(height: 8),
+            // Actions
+            Row(
+              children: [
+                if (!isCritical && !isPaused)
+                  TextButton.icon(
+                    onPressed: () => _sendCommand('pause ${task.id}'),
+                    icon: const Icon(Icons.pause, size: 16),
+                    label: const Text('Pause'),
+                    style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact),
+                  ),
+                if (isPaused)
+                  TextButton.icon(
+                    onPressed: () => _sendCommand('resume ${task.id}'),
+                    icon: const Icon(Icons.play_arrow, size: 16),
+                    label: const Text('Resume'),
+                    style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact),
+                  ),
+                const Spacer(),
+                if (isCritical)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Text('critical — cannot pause',
+                        style: TextStyle(
+                            fontSize: 11, color: cs.onSurfaceVariant)),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ── Output-only screen (Shop catalog) ──────────────────────────────
@@ -433,10 +741,9 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           }
         }
 
-        // Check actual install state from disk, not module KV
-        final appDir = Directory('${installedAppsDir()}/$name');
-        final actuallyInstalled = appDir.existsSync() &&
-            File('${appDir.path}/app.wasm').existsSync();
+        // Check actual install state from disk, not module KV.
+        // Uses the sync variant because this runs inside build().
+        final actuallyInstalled = _installed.existsSync('$name/app.wasm');
 
         wapps.add(_CatalogWapp(
           name: name,
@@ -664,6 +971,11 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           if (_tabController != null && _tabController!.index != 0) {
             _tabController!.animateTo(0);
           }
+        } else {
+          // Any other action name is forwarded to the wapp as a plain
+          // command string. Lets debug/test wapps use standard GeoUI
+          // action buttons without needing custom Flutter code.
+          _sendCommand(action);
         }
       },
     );
@@ -700,6 +1012,89 @@ class _OutputLine {
   final String text;
   final String level;
   _OutputLine(this.text, this.level);
+}
+
+// ── Tasks screen helper widgets ──────────────────────────────────────
+
+class _StatusPill extends StatelessWidget {
+  final String label;
+  final int count;
+  final Color color;
+  const _StatusPill({
+    required this.label,
+    required this.count,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withAlpha(40),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        '$count $label',
+        style: TextStyle(
+            color: color, fontSize: 11, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+class _MiniPill extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _MiniPill({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withAlpha(35),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+            color: color,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.3),
+      ),
+    );
+  }
+}
+
+class _Stat extends StatelessWidget {
+  final String label;
+  final String value;
+  const _Stat({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return RichText(
+      text: TextSpan(
+        children: [
+          TextSpan(
+            text: '$label ',
+            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+          ),
+          TextSpan(
+            text: value,
+            style: TextStyle(
+                fontSize: 11,
+                fontFamily: 'monospace',
+                color: cs.onSurface,
+                fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _CatalogWapp {

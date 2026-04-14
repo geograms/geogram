@@ -1,9 +1,11 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:wasm_run/wasm_run.dart';
+
+import '../services/profile_storage.dart';
+import '../services/wapp_event_broker.dart';
 
 /// Log entry from a WASM module.
 class WappLogEntry {
@@ -18,6 +20,12 @@ class WappLogEntry {
 
 /// Lightweight WASM engine that loads a module and provides the full Geogram HAL.
 class WappEngine {
+  static int _nextEngineId = 0;
+
+  /// Stable identifier for this engine instance, used by
+  /// [WappEventBroker] for routing cross-wapp pub/sub.
+  final String engineId = 'engine-${_nextEngineId++}';
+
   WasmInstance? _instance;
   WasmMemory? _memory;
   final List<WappLogEntry> logs = [];
@@ -26,25 +34,31 @@ class WappEngine {
   final _stopwatch = Stopwatch();
   final _random = Random.secure();
   final Map<String, Uint8List> _kv = {};
-  String? _kvDir;
+  ProfileStorage? _storage;
   bool _loaded = false;
+
+  WappEngine() {
+    WappEventBroker.instance.registerEngine(engineId);
+  }
 
   bool get isLoaded => _loaded;
   List<String> get outbox => List.unmodifiable(_outbox);
 
-  /// Set a storage directory for persistent KV. Call before load().
-  void setStorageDir(String dir) {
-    _kvDir = dir;
-    Directory(dir).createSync(recursive: true);
+  /// Attach a [ProfileStorage] for persistent KV. Call before [load].
+  /// The storage must support sync variants (FilesystemProfileStorage is
+  /// fine); the WASM KV callbacks run synchronously and cannot await.
+  void setStorage(ProfileStorage storage) {
+    _storage = storage;
     _loadKv();
   }
 
   void _loadKv() {
-    if (_kvDir == null) return;
-    final file = File('$_kvDir/kv.json');
-    if (!file.existsSync()) return;
+    final storage = _storage;
+    if (storage == null) return;
+    final bytes = storage.readBytesSync('kv.json');
+    if (bytes == null) return;
     try {
-      final data = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+      final data = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
       for (final e in data.entries) {
         _kv[e.key] = Uint8List.fromList((e.value as String).codeUnits);
       }
@@ -52,12 +66,13 @@ class WappEngine {
   }
 
   void _saveKv() {
-    if (_kvDir == null) return;
+    final storage = _storage;
+    if (storage == null) return;
     final data = <String, String>{};
     for (final e in _kv.entries) {
       data[e.key] = String.fromCharCodes(e.value);
     }
-    File('$_kvDir/kv.json').writeAsStringSync(jsonEncode(data));
+    storage.writeStringSync('kv.json', jsonEncode(data));
   }
 
   /// Check if a KV key exists (before module is loaded).
@@ -212,6 +227,53 @@ class WappEngine {
       params: [ValueTy.i32, ValueTy.i32],
     );
 
+    // ── Event HAL (cross-wapp pub/sub via WappEventBroker) ──
+
+    final halEventSubscribe = WasmFunction(
+      (int tPtr, int tLen) => WappEventBroker.instance
+          .subscribe(engineId, _readStr(tPtr, tLen)),
+      params: [ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+    final halEventUnsubscribe = WasmFunction(
+      (int tPtr, int tLen) => WappEventBroker.instance
+          .unsubscribe(engineId, _readStr(tPtr, tLen)),
+      params: [ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+    final halEventPublish = WasmFunction(
+      (int tPtr, int tLen, int dPtr, int dLen) =>
+          WappEventBroker.instance.publish(
+        engineId,
+        _readStr(tPtr, tLen),
+        _readStr(dPtr, dLen),
+      ),
+      params: [ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+    final halEventAvailable = WasmFunction(
+      () => WappEventBroker.instance.availableSize(engineId),
+      params: [],
+      results: [ValueTy.i32],
+    );
+    final halEventRecv = WasmFunction(
+      (int tPtr, int tLen, int dPtr, int dLen) {
+        final ev = WappEventBroker.instance.recv(engineId);
+        if (ev == null) return 0;
+        // Null-terminate both buffers so C wapps can read them with
+        // strlen(). Reserve one byte of each buffer for the null.
+        final tWritten = _writeStr(tPtr, tLen - 1, ev.topic);
+        _memory!.view[tPtr + tWritten] = 0;
+        final dWritten = _writeStr(dPtr, dLen - 1, ev.data);
+        _memory!.view[dPtr + dWritten] = 0;
+        // Return value is bytes written to the DATA buffer, not
+        // counting the null terminator — matches hal_msg_recv.
+        return dWritten;
+      },
+      params: [ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+
     // ── Stubs (return sentinel values) ──
 
     WasmFunction stubVoid(List<ValueTy> p) =>
@@ -247,7 +309,11 @@ class WappEngine {
       WasmImport('hal', 'msg_available', halMsgAvailable),
       WasmImport('hal', 'msg_recv', halMsgRecv),
       WasmImport('hal', 'msg_send', halMsgSend),
-      // File (stubs)
+      // File (stubs — TODO: implement on top of _storage once sync/async
+      // ABI question is resolved. FilesystemProfileStorage exposes sync
+      // variants that would work for desktop; encrypted/browser backends
+      // need either a redesign of hal_file_* to be async-polling like
+      // hal_http_*, or a host-side read-ahead cache.)
       WasmImport('hal', 'file_open', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32], -1)),
       WasmImport('hal', 'file_read', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32], -1)),
       WasmImport('hal', 'file_write', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32], -1)),
@@ -289,12 +355,12 @@ class WappEngine {
       WasmImport('hal', 'gpio_write', stubVoid([ValueTy.i32, ValueTy.i32])),
       // Library calls (stub)
       WasmImport('hal', 'lib_call', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32], -1)),
-      // Events (stubs)
-      WasmImport('hal', 'event_subscribe', stubI32([ValueTy.i32, ValueTy.i32], 0)),
-      WasmImport('hal', 'event_unsubscribe', stubI32([ValueTy.i32, ValueTy.i32], 0)),
-      WasmImport('hal', 'event_publish', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32], 0)),
-      WasmImport('hal', 'event_available', stubI32([], 0)),
-      WasmImport('hal', 'event_recv', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32], 0)),
+      // Events (real — backed by WappEventBroker)
+      WasmImport('hal', 'event_subscribe', halEventSubscribe),
+      WasmImport('hal', 'event_unsubscribe', halEventUnsubscribe),
+      WasmImport('hal', 'event_publish', halEventPublish),
+      WasmImport('hal', 'event_available', halEventAvailable),
+      WasmImport('hal', 'event_recv', halEventRecv),
       // WASI
       WasmImport('wasi_snapshot_preview1', 'random_get', wasiRandomGet),
       WasmImport('wasi_snapshot_preview1', 'args_get', stubI32([ValueTy.i32, ValueTy.i32], 0)),
@@ -338,6 +404,7 @@ class WappEngine {
 
   void dispose() {
     if (_loaded) { destroy(); _loaded = false; }
+    WappEventBroker.instance.unregisterEngine(engineId);
     _stopwatch.stop();
   }
 }

@@ -1,0 +1,23 @@
+{
+  "id":              "tools.geogram.tester",
+  "version":         "1.0.0",
+  "kind":            "app",
+  "description":     "Tester",
+  "summary":         "End-user test harness for geogram host services. Fire notifications of every flavour to verify stacking, levels, bodies, and system-tray routing.",
+  "icon":            "media/icons/tester.svg",
+  "tags":            ["system", "tools", "debug", "tester"],
+  "entry_ui":        "screens/home.ui.json",
+  "tick_interval_ms": 5000,
+  "permissions":     [],
+  "provides": {
+    "functions": [],
+    "events":    [],
+    "variables": []
+  },
+  "requires": {
+    "hal":       ["log", "msg"],
+    "events":    [],
+    "libraries": [],
+    "variables": []
+  }
+}

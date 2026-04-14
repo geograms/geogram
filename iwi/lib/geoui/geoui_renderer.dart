@@ -34,9 +34,35 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final actions = widget.screen.childrenOf('action');
-    final nonActions =
-        widget.screen.children.where((c) => c.keyword != 'action').toList();
+    final children = widget.screen.children;
+
+    // Render children in document order. Runs of adjacent `action`
+    // children get collapsed into a single Wrap so many buttons flow
+    // naturally (multiple rows on narrow screens, a single row on
+    // wide ones) and stay grouped next to the preceding heading.
+    final rendered = <Widget>[];
+    var i = 0;
+    while (i < children.length) {
+      if (children[i].keyword == 'action') {
+        final run = <GeoUiBlock>[];
+        while (i < children.length && children[i].keyword == 'action') {
+          run.add(children[i]);
+          i++;
+        }
+        rendered.add(Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            alignment: WrapAlignment.start,
+            children: [for (final a in run) _renderAction(a)],
+          ),
+        ));
+      } else {
+        rendered.add(_renderBlock(children[i]));
+        i++;
+      }
+    }
 
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -54,21 +80,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
                     ),
               ),
             ),
-          // Render groups/fields/labels
-          for (final child in nonActions) _renderBlock(child),
-          // Render action buttons in a row at the bottom
-          if (actions.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                for (var i = 0; i < actions.length; i++) ...[
-                  if (i > 0) const SizedBox(width: 12),
-                  _renderAction(actions[i]),
-                ],
-              ],
-            ),
-          ],
+          ...rendered,
         ],
       ),
     );

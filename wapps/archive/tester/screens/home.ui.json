@@ -1,0 +1,164 @@
+[
+  {
+    "$": "screen",
+    "name": "Notifications",
+    "tip": "Fire notifications of every flavour. Useful to verify level colours, stacking, auto-dismiss timings, and system-tray routing.",
+    "children": [
+      {
+        "$": "group",
+        "name": "Levels",
+        "tip": "One button per level. Title-only, in-app scope.",
+        "children": []
+      },
+      {
+        "$": "action",
+        "name": "notify-info",
+        "label": "Info",
+        "style": "secondary",
+        "tip": "Fires a title-only info-level notification."
+      },
+      {
+        "$": "action",
+        "name": "notify-success",
+        "label": "Success",
+        "style": "secondary",
+        "tip": "Fires a title-only success-level notification."
+      },
+      {
+        "$": "action",
+        "name": "notify-warning",
+        "label": "Warning",
+        "style": "secondary",
+        "tip": "Fires a title-only warning-level notification."
+      },
+      {
+        "$": "action",
+        "name": "notify-error",
+        "label": "Error",
+        "style": "secondary",
+        "tip": "Fires a title-only error-level notification. 6-second auto-dismiss."
+      },
+      {
+        "$": "group",
+        "name": "With body",
+        "tip": "Level + title + multi-line body.",
+        "children": []
+      },
+      {
+        "$": "action",
+        "name": "notify-body",
+        "label": "Info + body",
+        "style": "secondary",
+        "tip": "Info-level notification with a body paragraph."
+      },
+      {
+        "$": "action",
+        "name": "notify-error-body",
+        "label": "Error + body",
+        "style": "secondary",
+        "tip": "Error-level notification with a body paragraph."
+      },
+      {
+        "$": "group",
+        "name": "Scope",
+        "tip": "Which backend(s) receive the notification.",
+        "children": []
+      },
+      {
+        "$": "action",
+        "name": "notify-system",
+        "label": "System tray only",
+        "style": "secondary",
+        "tip": "Skips the in-app overlay, goes straight to notify-send / osascript."
+      },
+      {
+        "$": "action",
+        "name": "notify-both",
+        "label": "In-app + system",
+        "style": "secondary",
+        "tip": "Shown both in the overlay and in the OS notification area."
+      },
+      {
+        "$": "group",
+        "name": "Stacking",
+        "tip": "Fire multiple notifications in a burst to see them stack in the overlay.",
+        "children": []
+      },
+      {
+        "$": "action",
+        "name": "notify-stack",
+        "label": "Fire 5 in a row",
+        "style": "primary",
+        "tip": "Emits 5 notifications of mixed levels as fast as possible. The in-app overlay should show them stacked, newer ones below older ones."
+      }
+    ]
+  },
+  {
+    "$": "screen",
+    "name": "Events",
+    "tip": "Exercise the cross-wapp event bus and host → wapp triggers. Each received event is surfaced as an in-app notification so you can see the pipeline working end-to-end.",
+    "children": [
+      {
+        "$": "group",
+        "name": "Local pub/sub",
+        "tip": "Subscribe to a topic, publish to it, and see the event come back as a notification.",
+        "children": []
+      },
+      {
+        "$": "action",
+        "name": "event-sub-hello",
+        "label": "Subscribe test.hello",
+        "style": "secondary",
+        "tip": "hal_event_subscribe(test.hello)"
+      },
+      {
+        "$": "action",
+        "name": "event-pub-hello",
+        "label": "Publish test.hello",
+        "style": "secondary",
+        "tip": "hal_event_publish(test.hello, greetings). Subscribe first or nothing receives it."
+      },
+      {
+        "$": "action",
+        "name": "event-unsub-hello",
+        "label": "Unsubscribe test.hello",
+        "style": "secondary",
+        "tip": "hal_event_unsubscribe(test.hello). Subsequent publishes are dropped."
+      },
+      {
+        "$": "action",
+        "name": "event-echo",
+        "label": "Full echo (sub + pub)",
+        "style": "primary",
+        "tip": "Subscribes to test.echo, publishes to it, and drains the result. Should produce one notification in under 500ms."
+      },
+      {
+        "$": "group",
+        "name": "Host triggers (via HostEventBridge)",
+        "tip": "Subscribe to the system.* topics that the host republishes from its own EventBus. Useful for reacting to wapp lifecycle or error events from inside a wapp.",
+        "children": []
+      },
+      {
+        "$": "action",
+        "name": "event-sub-wapp-loaded",
+        "label": "Subscribe system.wapp.loaded",
+        "style": "secondary",
+        "tip": "Fires whenever any wapp finishes its module_init. Open another wapp from the launcher to see it."
+      },
+      {
+        "$": "action",
+        "name": "event-sub-wapp-unloaded",
+        "label": "Subscribe system.wapp.unloaded",
+        "style": "secondary",
+        "tip": "Fires when a wapp page is disposed."
+      },
+      {
+        "$": "action",
+        "name": "event-sub-error",
+        "label": "Subscribe system.error",
+        "style": "secondary",
+        "tip": "Fires whenever an ErrorEvent is published on the host EventBus."
+      }
+    ]
+  }
+]
