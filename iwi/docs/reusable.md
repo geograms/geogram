@@ -518,3 +518,189 @@ also fire `ErrorEvent` on `EventBus`.
 - For `type=periodic` tasks, the `interval` field is metadata for
   the UI; the actual scheduling is done by whatever `Timer.periodic`
   the owner created. The monitor doesn't drive timers.
+
+---
+
+## App authoring
+
+These components exist so the **App Creator** wapp
+(`wapps/archive/app-creator/`) can let a user write, compile, and
+install a new wapp without leaving geogram. They are deliberately
+reusable: any future wapp that needs a syntax-highlighted editor, a
+log surface, a compile pipeline, or a "write this into
+`installedAppsStorage()` and rescan the launcher" step gets to drop
+in the existing pieces instead of re-implementing them.
+
+### CodeEditorField + LogViewField — GeoUI field types
+
+**Files:**
+- `lib/geoui/widgets/code_editor_field.dart`
+- `lib/geoui/widgets/log_view_field.dart`
+- `lib/widgets/syntax_highlight_controller.dart` (ported from the
+  parent repo's `lib/widgets/syntax_highlight_controller.dart` — all
+  languages the `highlighting` package supports are available,
+  including `c`, `cpp`, `dart`, `javascript`)
+
+**What they are.** Two new GeoUI field types wired into
+`geoui_renderer.dart` at the `_renderFieldWidget` switch:
+
+- `$type:"code"` → `CodeEditorField`: a monospaced `TextField` whose
+  controller is a `SyntaxHighlightController`, wrapped in a dark
+  container with a line-number gutter. The `language` attribute on
+  the field block picks the highlight.js language id (`c`, `cpp`,
+  `dart`, ...). `default` sets the initial source text.
+- `$type:"log"` → `LogViewField`: a scrollable monospace list view
+  backed by a `List<String>` stored in the GeoUI bindings map under
+  the field name. Auto-scrolls to the bottom on each new line.
+
+**Backed by a shared mutable list.** The list lives in the wapp
+page's `_fieldValues` map under the field name. The host side
+appends to it via `_drainOutbox` (`ui.log.append` handler) or
+directly via the `_resolveLogBuffer(fieldName)` helper on
+`_WappPageState`. The widget reads but does not mutate.
+
+**Wapp → host protocol for log appends:**
+
+```
+{"type":"ui.log.append","field":"<field-name>","line":"..."}
+```
+
+The `field` key defaults to `output` if omitted, so most wapps can
+just emit `{"type":"ui.log.append","line":"..."}` and rely on the
+convention that the log group is called `output`.
+
+**Seed defaults at load time, not at render time.** `_loadWapp`
+walks every screen's block tree (`_seedFieldDefaults`) and writes
+default values for every `field` descendant into `_fieldValues`
+**before** the first build. `_renderCodeField` and `_renderLogField`
+are therefore pure reads — they never call `widget.bindings.setValue`
+from inside a `build` method (doing so would throw "setState during
+build"). New field types that want defaults must either add them to
+`_seedFieldDefaults` or rely on the existing string/num/bool /
+`List<String>` paths.
+
+**Don't forget:**
+- `ui.log.append` lines render one per `List<String>` entry — pass
+  the message pre-split, don't cram newlines in. `_logMultiline` in
+  `wapp_page.dart` splits on `LineSplitter` for you if you have a
+  multi-line blob.
+- The log view's max height is hard-coded in
+  `log_view_field.dart`. Bump it there if a log surface needs more
+  screen real estate.
+
+### WappCompilerService + CompilerBackend — the compile pipeline
+
+**Files:** `lib/services/wapp_compiler_service.dart`
+
+**What it is.** Thin singleton in front of a `CompilerBackend`
+abstraction. A backend takes a source string + the calling wapp's
+`pkg` and `workStorage`, produces a `CompileResult { ok, wasmBytes,
+stdout, stderr, exitCode, durationMs, error }`. The service wraps
+every call in a `MonitoredTask` (`compiler.compile`) so it appears
+in the tasks wapp with wall-clock timing and success/fail counts.
+
+**Active backend today (Phase 2a, dev-only):**
+`NativeWasiSdkBackend` — shells out to `$HOME/wasi-sdk/bin/clang`
+via `Process.run`. Writes the source to
+`<wappData>/compile-tmp/source.c`, invokes clang with the exact
+flag set the existing wapps use (`--target=wasm32-wasi -O2 -flto
+-I<hal-dir> -Wl,--no-entry -Wl,--export=module_{init,tick,...}
+-nostartfiles -o output.wasm source.c`), reads the output from
+`<wappData>/compile-tmp/output.wasm`. The HAL header is located by
+walking up from `Directory.current.path` looking for
+`wapps/hal/geogram_wasm_hal.h`.
+
+**Phase 2b todo:** add `InWasmClangBackend` that reads a bundled
+wasm-clang binary from `pkg.readBytes('media/compilers/cpp.wasm')`
+and runs it under a custom `WappWasiHost` (still unwritten).
+`WappCompilerService.backend` becomes a runtime pick: prefer
+in-wasm when the wapp package ships a compiler, fall back to native
+for developers. The public API stays the same — `compile(source,
+pkg, workStorage)` returns a `CompileResult` either way — so no
+caller needs to change.
+
+**Don't forget:**
+- `CompileResult.failure` is the only error path — the service
+  never throws. Callers check `result.ok` and surface
+  `result.error` / `result.stderr`.
+- The service caches nothing itself — callers are responsible for
+  writing `result.wasmBytes` somewhere durable (the App Creator
+  handler writes it to `<workStorage>/last_compiled.wasm`).
+- `CompilerBackend.isAvailable` gates actual use; when the only
+  backend is unavailable, the service returns a failure with a
+  human-readable message. Don't silently fall back to a stub.
+
+### WappInstallerService — install compiled wasm as a launcher wapp
+
+**Files:** `lib/services/wapp_installer_service.dart`
+
+**What it is.** Writes a new wapp directory under
+`installedAppsStorage()` (`~/.local/share/geogram/apps/<folder>/`),
+matching the on-disk layout the launcher's `_scanArchiveBody`
+already knows how to read. Fires `WappLoadedEvent` on `EventBus`
+so the launcher rescans without a restart.
+
+**API:**
+
+```dart
+final result = await WappInstallerService.instance.installFromCompiled(
+  id: 'user.geogram.my-first',
+  name: 'My first wapp',
+  description: 'A wapp I wrote inside geogram.',
+  wasmBytes: compiledBytes,
+  version: '1.0.0',          // default
+  homeScreenJson: null,      // default: auto-generate a label screen
+  overwrite: false,          // reject collisions unless explicit
+);
+```
+
+Returns `InstallResult { ok, wappId, error }`. Collisions fail by
+default — pass `overwrite: true` to replace an existing install.
+Folder name is derived from the id's last dot-separated segment,
+sanitised to `[A-Za-z0-9_-]`.
+
+**Writes three files per install:**
+- `manifest.json` — id, version, kind, description, tags, tick
+  interval, `permissions: []` (sandboxed by default),
+  `requires.hal: [log]`.
+- `app.wasm` — the compiled bytes verbatim.
+- `screens/home.ui.json` — caller-supplied or a default label
+  screen that just says "Created with App Creator" so the wapp
+  renders without errors when opened.
+
+**Don't forget:**
+- The installer does **not** validate the wasm. A broken
+  `app.wasm` installs fine and fails at wapp-open time with the
+  normal `WappEngine.load` error path. If that turns out to be
+  painful, pre-validate by spinning up a throwaway `WappEngine` and
+  calling `load`+`init` before the install (same trick the plan's
+  "Run preview" follow-up will use).
+- `WappLoadedEvent` is slightly overloaded — it originally fired
+  when a wapp finished `module_init`, and the launcher subscribes
+  to it for a different reason there. Using it for "rescan the
+  launcher" works today but a dedicated `WappInstalledEvent` would
+  be cleaner if we ever need to distinguish the two in the same
+  handler.
+
+### `_sendCommand` field forwarding — how actions reach compile/install
+
+`wapp_page.dart` `_sendCommand(cmd)` now bundles a **scalar**
+projection of `_fieldValues` under a `fields` key alongside the
+command name:
+
+```json
+{"command":"compile","fields":{"source":"...","wapp_id":"...",...}}
+```
+
+Non-scalar entries (`List<String>` log buffers, etc.) are dropped
+so log history isn't carried with every action click. Existing
+wapps that only read `data['command']` ignore the extra `fields`
+key harmlessly — backward-compatible.
+
+Wapps that need the field values (App Creator is the first) parse
+the nested object with the same C-side helpers `tester/main.c`
+uses (`find_substr`, `extract_json_string_field`). The escaped
+string values can be re-embedded verbatim into outgoing JSON
+messages without un-escaping — host-side `jsonDecode` handles the
+unescape on the other end. See `wapps/archive/app-creator/main.c`
+for the reference implementation of a field extractor.

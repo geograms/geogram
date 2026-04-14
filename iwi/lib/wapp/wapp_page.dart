@@ -16,6 +16,8 @@ import '../services/preferences_service.dart';
 import '../services/profile_storage.dart';
 import '../services/storage_paths.dart';
 import '../services/task_monitor_service.dart';
+import '../services/wapp_compiler_service.dart';
+import '../services/wapp_installer_service.dart';
 import '../services/widget_broker.dart';
 import 'wapp_engine.dart';
 
@@ -53,6 +55,11 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   /// install/uninstall flow.
   final ProfileStorage _installed = installedAppsStorage();
 
+  /// Per-wapp work folder storage, set up by `_loadWapp`. Holds the
+  /// wapp's KV, its draft projects, and any host-service scratch data
+  /// (e.g. App Creator's compile-tmp/ and last_compiled.wasm).
+  ProfileStorage? _wappData;
+
   // Screens parsed from .ui.json
   final _screens = <GeoUiBlock>[];
   final _screenNames = <String>[];
@@ -78,6 +85,185 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
 
   void _refreshTaskSnapshot() {
     _taskSnapshot = TaskMonitorService.instance.tasks;
+  }
+
+  /// Return the `List<String>` backing a `$type:"log"` field, creating
+  /// it if it does not yet exist. Used by host-side handlers (compile
+  /// stub, install stub, ui.log.append) that need to push lines into
+  /// a log field without caring whether the renderer has seeded it.
+  List<String> _resolveLogBuffer(String fieldName) {
+    final existing = _fieldValues[fieldName];
+    if (existing is List<String>) return existing;
+    final fresh = <String>[];
+    _fieldValues[fieldName] = fresh;
+    return fresh;
+  }
+
+  /// Push a log line into the `output` log field and mark the UI
+  /// dirty. Used by the compile/install handlers so their progress
+  /// shows up in the App Creator log view without round-tripping
+  /// through the wapp.
+  void _logLine(String line) {
+    _resolveLogBuffer('output').add(line);
+    if (mounted) setState(() {});
+  }
+
+  /// Append every non-empty line of [blob] individually so multi-line
+  /// compiler output renders as separate log entries (easier to read,
+  /// works with auto-scroll).
+  void _logMultiline(String blob) {
+    if (blob.isEmpty) return;
+    final buf = _resolveLogBuffer('output');
+    for (final line in const LineSplitter().convert(blob)) {
+      if (line.isEmpty) continue;
+      buf.add(line);
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// App Creator compile pipeline. Called from `_drainOutbox` when
+  /// the wapp emits a `{"type":"compile","source":"..."}` message.
+  /// Runs the current compiler backend and caches the result in the
+  /// wapp's work folder under `last_compiled.wasm`.
+  Future<void> _handleCompile(Map<String, dynamic> data) async {
+    final wappData = _wappData;
+    if (wappData == null) {
+      _logLine('(compile) internal error: wapp data storage not ready');
+      return;
+    }
+    final source = data['source'] as String? ?? '';
+    if (source.isEmpty) {
+      _logLine('(compile) empty source — nothing to build');
+      return;
+    }
+
+    _logLine('── compile started (${source.length} chars) ──');
+    final result = await WappCompilerService.instance.compile(
+      source: source,
+      pkg: _pkg,
+      workStorage: wappData,
+    );
+
+    if (result.stdout.isNotEmpty) _logMultiline(result.stdout);
+    if (result.stderr.isNotEmpty) _logMultiline(result.stderr);
+
+    if (!result.ok) {
+      _logLine('compile failed: ${result.error}');
+      NotificationService.instance.show(GeogramNotification(
+        level: NotificationLevel.error,
+        title: 'Compile failed',
+        body: result.error ?? 'see log view for details',
+        source: 'host:app-creator',
+      ));
+      return;
+    }
+
+    final bytes = result.wasmBytes!;
+    await wappData.writeBytes('last_compiled.wasm', bytes);
+    _logLine(
+        'compile ok: ${bytes.length} bytes in ${result.durationMs}ms');
+    NotificationService.instance.show(GeogramNotification(
+      level: NotificationLevel.success,
+      title: 'Compile succeeded',
+      body:
+          '${bytes.length} bytes, ${result.durationMs}ms via ${WappCompilerService.instance.backend.name}',
+      source: 'host:app-creator',
+    ));
+  }
+
+  /// App Creator install pipeline. Called from `_drainOutbox` when
+  /// the wapp emits a `{"type":"install","id":...,"name":...,
+  /// "description":...}` message. Reads the last compile output
+  /// from the wapp's work folder and hands it to the installer
+  /// service.
+  Future<void> _handleInstall(Map<String, dynamic> data) async {
+    final wappData = _wappData;
+    if (wappData == null) {
+      _logLine('(install) internal error: wapp data storage not ready');
+      return;
+    }
+    final id = data['id'] as String? ?? '';
+    final name = data['name'] as String? ?? id;
+    final description = data['description'] as String? ?? '';
+    if (id.isEmpty) {
+      _logLine('(install) empty id — fill the Settings tab first');
+      return;
+    }
+
+    final bytes = await wappData.readBytes('last_compiled.wasm');
+    if (bytes == null || bytes.isEmpty) {
+      _logLine('(install) no compiled wasm yet — run Compile first');
+      NotificationService.instance.show(GeogramNotification(
+        level: NotificationLevel.warning,
+        title: 'Install blocked',
+        body: 'Run Compile first — last_compiled.wasm is missing.',
+        source: 'host:app-creator',
+      ));
+      return;
+    }
+
+    _logLine('── install started: $id ──');
+    final result = await WappInstallerService.instance.installFromCompiled(
+      id: id,
+      name: name,
+      description: description,
+      wasmBytes: bytes,
+      overwrite: true,
+    );
+    if (!result.ok) {
+      _logLine('install failed: ${result.error}');
+      NotificationService.instance.show(GeogramNotification(
+        level: NotificationLevel.error,
+        title: 'Install failed',
+        body: result.error ?? 'see log view',
+        source: 'host:app-creator',
+      ));
+      return;
+    }
+    _logLine('install ok: $id (${bytes.length} bytes)');
+    NotificationService.instance.show(GeogramNotification(
+      level: NotificationLevel.success,
+      title: 'Installed',
+      body:
+          '$name — return to the launcher to see it on the grid.',
+      source: 'host:app-creator',
+    ));
+  }
+
+  /// Recursively walk a GeoUI block tree and seed [_fieldValues] with
+  /// the right initial value for every `field` descendant. This runs
+  /// during `_loadWapp`, BEFORE the widget tree builds, so the
+  /// renderers can stay pure reads — they never call `setValue` from
+  /// inside a build method.
+  ///
+  /// - `log` fields get an empty `List<String>` (shared mutable
+  ///   buffer between host-side appenders and the LogViewField).
+  /// - `int` / `float` fields get their numeric default.
+  /// - `bool` fields get their boolean default.
+  /// - Every other field (including `code`, `string`, `enum`) gets
+  ///   its string default if declared.
+  void _seedFieldDefaults(GeoUiBlock block) {
+    if (block.keyword == 'field') {
+      final name = block.name;
+      if (name != null && !_fieldValues.containsKey(name)) {
+        final type = block.type ?? 'string';
+        if (type == 'log') {
+          _fieldValues[name] = <String>[];
+        } else {
+          final def = block.decls['default'];
+          if (def is GeoUiNumber) {
+            _fieldValues[name] = def.value;
+          } else if (def is GeoUiBool) {
+            _fieldValues[name] = def.value;
+          } else if (def is GeoUiString) {
+            _fieldValues[name] = def.value;
+          }
+        }
+      }
+    }
+    for (final child in block.children) {
+      _seedFieldDefaults(child);
+    }
   }
 
   @override
@@ -109,10 +295,11 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       }
     }
 
-    // Load field defaults from screens
+    // Load field defaults from screens (recursive — fields can live
+    // either inside a group card or directly under the screen).
     for (final screen in _screens) {
+      // Map screens still carry their viewport knobs on the group block.
       for (final group in screen.childrenOf('group')) {
-        // Detect map group
         if (group.type == 'map') {
           _hasMap = true;
           _mapLat = group.getNumber('default-lat') ?? 0;
@@ -120,15 +307,8 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           _mapZoom = group.getNumber('default-zoom')?.toInt() ?? 12;
           _tileUrl = group.getString('tile-url') ?? _tileUrl;
         }
-        for (final field in group.childrenOf('field')) {
-          final name = field.name;
-          if (name == null) continue;
-          final def = field.decls['default'];
-          if (def is GeoUiNumber) _fieldValues[name] = def.value;
-          else if (def is GeoUiBool) _fieldValues[name] = def.value;
-          else if (def is GeoUiString) _fieldValues[name] = def.value;
-        }
       }
+      _seedFieldDefaults(screen);
     }
 
     // Build tab controller
@@ -138,6 +318,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     final prefs = await PreferencesService.instance();
     final wappData = wappDataStorageFor(prefs, _wappName);
     await wappData.createDirectory('');
+    _wappData = wappData;
     _engine.setStorage(wappData);
 
     // Auto-configure the install wapp's `source` KV to point at the
@@ -229,6 +410,23 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
             item['level'] as String? ?? 'out',
           ));
           changed = true;
+        } else if (type == 'ui.log.append') {
+          // Append a single line to a $type:"log" field's buffer.
+          // The wapp addresses the target field by name. If the
+          // field's backing list doesn't exist yet (first line
+          // before the renderer ran) we create it lazily.
+          final fieldName = data['field'] as String? ?? 'output';
+          final line = data['line'] as String? ?? '';
+          final existing = _fieldValues[fieldName];
+          final List<String> buf;
+          if (existing is List<String>) {
+            buf = existing;
+          } else {
+            buf = <String>[];
+            _fieldValues[fieldName] = buf;
+          }
+          buf.add(line);
+          changed = true;
         } else if (type == 'ui.map.viewport') {
           _mapLat = (data['lat'] as num?)?.toDouble() ?? _mapLat;
           _mapLon = (data['lon'] as num?)?.toDouble() ?? _mapLon;
@@ -300,6 +498,10 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
             reqId: data['req_id'] as String? ?? '',
             args: (data['args'] as Map<String, dynamic>?) ?? const {},
           ));
+        } else if (type == 'compile') {
+          unawaited(_handleCompile(data));
+        } else if (type == 'install') {
+          unawaited(_handleInstall(data));
         }
       } catch (_) {}
     }
@@ -432,7 +634,24 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   }
 
   void _sendCommand(String cmd) {
-    _engine.sendMessage(jsonEncode({'command': cmd}));
+    // Bundle a scalar projection of the current field values so the
+    // wapp's module_handle_event can read (source, wapp_id, ...) from
+    // a single message without round-tripping through a separate save
+    // step. Non-scalar entries — primarily the List<String> log
+    // buffers — are dropped so we don't ship log history with every
+    // action click. Wapps that only read data['command'] ignore the
+    // extra "fields" key harmlessly.
+    final scalarFields = <String, dynamic>{};
+    for (final entry in _fieldValues.entries) {
+      final v = entry.value;
+      if (v is String || v is num || v is bool) {
+        scalarFields[entry.key] = v;
+      }
+    }
+    _engine.sendMessage(jsonEncode({
+      'command': cmd,
+      'fields': scalarFields,
+    }));
     _engine.handleEvent();
     _drainOutbox();
   }

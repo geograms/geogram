@@ -1,0 +1,24 @@
+{
+  "id":              "tools.geogram.app-creator",
+  "version":         "0.1.0",
+  "kind":            "app",
+  "description":     "App Creator",
+  "summary":         "Write a geogram wapp in C, compile it, and install it — all without leaving geogram. The compiler ships inside this wapp's package so end users never download anything.",
+  "icon":            "media/icons/app-creator.svg",
+  "tags":            ["system", "tools", "dev"],
+  "entry_ui":        "screens/home.ui.json",
+  "tick_interval_ms": 500,
+  "permissions":     [],
+  "provides": {
+    "functions": [],
+    "events":    [],
+    "variables": [],
+    "widgets":   []
+  },
+  "requires": {
+    "hal":       ["log", "kv", "msg"],
+    "events":    [],
+    "libraries": [],
+    "variables": []
+  }
+}

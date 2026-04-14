@@ -1,0 +1,90 @@
+[
+  {
+    "$": "screen",
+    "name": "Code",
+    "tip": "Write a geogram wapp in C. Hit Compile to build it against the bundled wasm-clang, then Install to add it to the launcher.",
+    "children": [
+      {
+        "$": "field",
+        "name": "source",
+        "$type": "code",
+        "label": "source.c",
+        "language": "c",
+        "tip": "Plain C against the geogram HAL (wapps/hal/geogram_wasm_hal.h). No libc.",
+        "default": "#include \"geogram_wasm_hal.h\"\n\nstatic unsigned str_len(const char *s) {\n    unsigned n = 0;\n    while (s[n]) n++;\n    return n;\n}\n\nvoid module_init(void) {\n    const char *msg = \"[my-first] init\";\n    hal_log(1, msg, str_len(msg));\n}\n\nvoid module_tick(void) {\n    const char *msg = \"[my-first] tick\";\n    hal_log(0, msg, str_len(msg));\n}\n\nvoid module_handle_event(void) { }\nvoid module_destroy(void) { }\n\nuint32_t module_tick_interval_ms(void) {\n    return 5000;\n}\n"
+      },
+      {
+        "$": "action",
+        "name": "compile",
+        "label": "Compile",
+        "style": "primary",
+        "tip": "Run the bundled wasm-clang over the source above. Output goes to the log view below."
+      },
+      {
+        "$": "action",
+        "name": "install",
+        "label": "Install",
+        "style": "secondary",
+        "tip": "Write the compiled wapp into the launcher's installed-apps folder. Requires a successful compile first."
+      },
+      {
+        "$": "field",
+        "name": "output",
+        "$type": "log",
+        "label": "Compiler output",
+        "tip": "Compiler stdout and stderr, plus host-side progress messages."
+      }
+    ]
+  },
+  {
+    "$": "screen",
+    "name": "Settings",
+    "tip": "Metadata for the wapp that will be produced. These values end up in the generated manifest.json when you click Install.",
+    "children": [
+      {
+        "$": "group",
+        "name": "Identity",
+        "tip": "Identifying information baked into the new wapp's manifest.",
+        "children": [
+          {
+            "$": "field",
+            "name": "wapp_id",
+            "$type": "string",
+            "label": "Wapp id",
+            "default": "user.geogram.my-first",
+            "tip": "Reverse-domain identifier. Used as the installed-apps folder name."
+          },
+          {
+            "$": "field",
+            "name": "wapp_name",
+            "$type": "string",
+            "label": "Display name",
+            "default": "My first wapp"
+          },
+          {
+            "$": "field",
+            "name": "wapp_description",
+            "$type": "string",
+            "label": "Description",
+            "default": "A wapp I wrote inside geogram."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "$": "screen",
+    "name": "UI",
+    "tip": "Visual drag-and-drop UI editor. Not yet implemented — reserved as a tab so the layout stays stable once it lands.",
+    "children": [
+      {
+        "$": "label",
+        "text": "Coming later."
+      },
+      {
+        "$": "label",
+        "text": "A visual editor that lets you drag-and-drop GeoUI groups, fields and actions directly into the home screen JSON will live here. For now, edit screens/home.ui.json by hand (the 'tasks' and 'tester' wapps are good references)."
+      }
+    ]
+  }
+]

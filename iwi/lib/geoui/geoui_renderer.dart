@@ -3,6 +3,8 @@
 import 'package:flutter/material.dart';
 
 import 'geoui_ast.dart';
+import 'widgets/code_editor_field.dart';
+import 'widgets/log_view_field.dart';
 
 /// Bindings interface for reading/writing field values.
 abstract class GeoUiBindings {
@@ -205,8 +207,44 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       'float' => _renderNumericField(fieldName, label, tip,
           isInt: false, block: field),
       'enum' => _renderEnumField(fieldName, label, tip, field),
+      'code' => _renderCodeField(fieldName, label, tip, field),
+      'log' => _renderLogField(fieldName, label, tip, field),
       _ => _renderStringField(fieldName, label, tip, field),
     };
+  }
+
+  Widget _renderCodeField(
+      String name, String label, String? tip, GeoUiBlock field) {
+    final languageId = field.getString('language') ?? 'c';
+    // Pure read — _loadWapp's _seedFieldDefaults has already written
+    // the default text into bindings before the first build. Calling
+    // setValue here would trigger setState() inside a build method.
+    final current = widget.bindings.getValue(name)?.toString() ?? '';
+    return CodeEditorField(
+      fieldName: name,
+      label: label,
+      tip: tip,
+      languageId: languageId,
+      initialValue: current,
+      onChanged: (v) => widget.bindings.setValue(name, v),
+    );
+  }
+
+  Widget _renderLogField(
+      String name, String label, String? tip, GeoUiBlock field) {
+    // Pure read — _loadWapp's _seedFieldDefaults seeds an empty
+    // List<String> for every log field before the first build. If a
+    // log field somehow slips past the seeder (e.g. dynamic screen
+    // injection later) we fall back to a throwaway empty list rather
+    // than mutating bindings from inside build().
+    final stored = widget.bindings.getValue(name);
+    final lines = stored is List<String> ? stored : const <String>[];
+    return LogViewField(
+      fieldName: name,
+      label: label,
+      tip: tip,
+      lines: lines,
+    );
   }
 
   Widget _renderBoolField(String name, String label, String? tip) {
