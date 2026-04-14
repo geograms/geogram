@@ -42,20 +42,30 @@ class WappInstallerService {
   WappInstallerService._();
   static final WappInstallerService instance = WappInstallerService._();
 
-  /// Write a new wapp under `installedAppsStorage()` / `<id>/`.
+  /// Write (or overwrite) a wapp under `installedAppsStorage()`.
   ///
-  /// [homeScreenJson] is optional — if null the installer drops a
-  /// tiny default `home.ui.json` that just shows a label so the wapp
-  /// renders without errors when opened.
-  ///
-  /// [overwrite] must be set explicitly to true to replace an
-  /// existing install with the same id. Default false returns a
-  /// failure result so the user has to confirm.
+  /// Field semantics:
+  /// - [title] — human-readable display name. Stored as
+  ///   `manifest.description` (matching the existing wapp convention
+  ///   where `description` is the short/title and `summary` is the
+  ///   longer body).
+  /// - [folderName] — slug used as the on-disk directory and the
+  ///   per-user data directory key. Sanitised to `[A-Za-z0-9_-]`.
+  /// - [id] — reverse-domain identifier stored as `manifest.id`.
+  /// - [description] — longer prose, stored as `manifest.summary`.
+  /// - [wasmBytes] — the compiled wasm, OR null to reuse whatever
+  ///   `app.wasm` is already at `apps/<folderName>/`. This is the
+  ///   edit-in-place path: let the user change metadata or the UI
+  ///   without recompiling.
+  /// - [homeScreenJson] — raw `home.ui.json` to write. Null/empty
+  ///   triggers a default label screen.
+  /// - [overwrite] — collisions fail unless explicitly allowed.
   Future<InstallResult> installFromCompiled({
     required String id,
-    required String name,
+    required String title,
+    required String folderName,
     required String description,
-    required Uint8List wasmBytes,
+    Uint8List? wasmBytes,
     String version = '1.0.0',
     String? homeScreenJson,
     bool overwrite = false,
@@ -63,36 +73,51 @@ class WappInstallerService {
     if (id.isEmpty) {
       return InstallResult.failure(id, 'wapp id is required');
     }
-    if (wasmBytes.isEmpty) {
+
+    final folder = _sanitiseFolder(folderName, fallbackId: id);
+    final installed = installedAppsStorage();
+    final exists = await installed.directoryExists(folder);
+
+    // Resolve the wasm bytes. When the caller passes null (the
+    // edit-in-place path) we read the bytes already sitting at
+    // apps/<folder>/app.wasm. If neither a fresh compile nor an
+    // existing install exists, we have to fail — nothing to write.
+    Uint8List? effectiveWasm = wasmBytes;
+    if (effectiveWasm == null) {
+      effectiveWasm =
+          await installed.readBytes('$folder/app.wasm');
+      if (effectiveWasm == null || effectiveWasm.isEmpty) {
+        return InstallResult.failure(
+          id,
+          'no compiled wasm and no existing install at apps/$folder — '
+              'compile first or fill Name with an installed wapp',
+        );
+      }
+    }
+    if (effectiveWasm.isEmpty) {
       return InstallResult.failure(id, 'wasm bytes are empty');
     }
 
-    // The installer always uses a slug-safe folder name derived from
-    // the id. The last dot-separated segment keeps things short and
-    // sorts nicely in the launcher grid.
-    final folder = _folderFromId(id);
-
-    final installed = installedAppsStorage();
-    final exists = await installed.directoryExists(folder);
     if (exists && !overwrite) {
       return InstallResult.failure(
         id,
-        'a wapp already exists at apps/$folder — pass overwrite:true to replace',
+        'a wapp already exists at apps/$folder — pass overwrite:true '
+            'to replace (App Creator passes overwrite implicitly)',
       );
     }
     if (exists && overwrite) {
       await installed.deleteDirectory(folder, recursive: true);
     }
 
-    // Manifest — mirrors the hand-written manifests in
-    // wapps/archive/*/manifest.json. `permissions` stays empty so
-    // the user's first wapp is sandboxed by default.
+    // Manifest — matches the hand-written shapes in
+    // wapps/archive/*/manifest.json. `description` carries the short
+    // title (what the launcher grid shows); `summary` carries the
+    // longer prose.
     final manifest = <String, dynamic>{
       'id': id,
       'version': version,
       'kind': 'app',
-      'description':
-          description.isNotEmpty ? description : 'Created with App Creator',
+      'description': title.isNotEmpty ? title : folder,
       'summary': description,
       'icon': null,
       'tags': const ['user'],
@@ -113,37 +138,49 @@ class WappInstallerService {
     };
 
     try {
-      await installed.writeBytes('$folder/app.wasm', wasmBytes);
+      await installed.writeBytes('$folder/app.wasm', effectiveWasm);
       await installed.writeJson('$folder/manifest.json', manifest);
+      final homeJson = (homeScreenJson ?? '').trim().isEmpty
+          ? _defaultHomeScreen(title, description)
+          : homeScreenJson!;
       await installed.writeString(
         '$folder/screens/home.ui.json',
-        homeScreenJson ?? _defaultHomeScreen(name, description),
+        homeJson,
       );
     } catch (e) {
       return InstallResult.failure(id, 'failed to write wapp files: $e');
     }
 
-    // Nudge the launcher to rescan. `WappLoadedEvent` is the right
-    // signal — `LauncherPage` already subscribes to it for other
-    // rescan triggers (e.g. when a wapp finishes module_init).
-    EventBus().fire(WappLoadedEvent(wappId: id, wappName: name));
+    // Nudge the launcher to rescan. WappLoadedEvent is the signal
+    // LauncherPage already subscribes to for other rescan triggers.
+    EventBus().fire(WappLoadedEvent(wappId: id, wappName: title));
 
     return InstallResult.success(id);
   }
 
-  String _folderFromId(String id) {
-    final parts = id.split('.');
-    final leaf = parts.isNotEmpty ? parts.last : id;
-    // Sanitise — keep alphanumerics, dashes, underscores only.
-    final cleaned = leaf.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '-');
-    return cleaned.isEmpty ? 'wapp' : cleaned;
+  /// Sanitise a user-provided folder slug. Keeps alphanumerics,
+  /// dashes, and underscores; everything else becomes a dash. Falls
+  /// back to the id's last dot-segment, then to "wapp".
+  String _sanitiseFolder(String name, {required String fallbackId}) {
+    String slug = name.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '-');
+    while (slug.startsWith('-')) {
+      slug = slug.substring(1);
+    }
+    while (slug.endsWith('-')) {
+      slug = slug.substring(0, slug.length - 1);
+    }
+    if (slug.isNotEmpty) return slug;
+    final parts = fallbackId.split('.');
+    final leaf = parts.isNotEmpty ? parts.last : fallbackId;
+    final clean = leaf.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '-');
+    return clean.isEmpty ? 'wapp' : clean;
   }
 
-  String _defaultHomeScreen(String name, String description) {
+  String _defaultHomeScreen(String title, String description) {
     final screen = [
       {
         '\$': 'screen',
-        'name': name.isNotEmpty ? name : 'Home',
+        'name': title.isNotEmpty ? title : 'Home',
         'tip': description.isNotEmpty ? description : null,
         'children': [
           {

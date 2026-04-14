@@ -93,8 +93,22 @@ class IwiApp extends StatelessWidget {
 
 class WappManifest {
   final String id;
+
+  /// On-disk folder name (last path segment of [dirPath]). Slug-only,
+  /// no spaces — used as the key into `installedAppsStorage()` and
+  /// `wappDataStorageFor()`.
   final String name;
+
+  /// Human-readable display name. Read from `manifest.description`
+  /// (which is the convention used by every hand-written wapp —
+  /// short title in `description`, long text in `summary`). Falls
+  /// back to the folder name when `description` is blank.
+  final String title;
+
+  /// Long-form description. Read from `manifest.summary`, falling
+  /// back to `manifest.description`.
   final String description;
+
   final String kind;
   final String? icon;
   final String dirPath;
@@ -107,6 +121,7 @@ class WappManifest {
   WappManifest({
     required this.id,
     required this.name,
+    required this.title,
     required this.description,
     required this.kind,
     this.icon,
@@ -115,9 +130,10 @@ class WappManifest {
   });
 
   factory WappManifest.fromJson(Map<String, dynamic> json, String dirPath) {
-    final desc = json['description'] as String? ?? '';
     final id = json['id'] as String? ?? '';
     final folderName = dirPath.split(Platform.pathSeparator).last;
+    final manifestDescription = json['description'] as String? ?? '';
+    final manifestSummary = json['summary'] as String? ?? '';
 
     // Parse provides.widgets — an array of widget IDs this wapp
     // registers as a provider for. Anything non-string is dropped.
@@ -132,7 +148,10 @@ class WappManifest {
     return WappManifest(
       id: id,
       name: folderName.isNotEmpty ? folderName : id.split('.').last,
-      description: desc.isNotEmpty ? desc : (json['summary'] as String? ?? ''),
+      title: manifestDescription.isNotEmpty ? manifestDescription : folderName,
+      description: manifestSummary.isNotEmpty
+          ? manifestSummary
+          : manifestDescription,
       kind: json['kind'] as String? ?? 'app',
       icon: json['icon'] as String?,
       dirPath: dirPath,
@@ -208,10 +227,26 @@ class _LauncherPageState extends State<LauncherPage> {
     final wapps = <WappManifest>[];
     final seen = <String>{};
 
-    // 1. Built-in wapps from the in-repo wapps/archive/ tree. Every
-    // subdirectory with a manifest.json is a candidate. Directory.current.path
-    // is OK to read here — it is the runtime CWD, not profile data, and is
-    // the only reliable anchor for relative dev-time paths into the source.
+    // 1. User-installed wapps first so a forked built-in overrides
+    //    the source-tree original — this is how editing a built-in
+    //    via the App Creator Projects tab actually takes effect on
+    //    the launcher grid.
+    final installed = installedAppsStorage();
+    if (await installed.directoryExists('')) {
+      final entries = await installed.listDirectory('');
+      for (final entry in entries) {
+        if (!entry.isDirectory) continue;
+        final pkg = wappPackageStorage(installed.getAbsolutePath(entry.path));
+        await _scanManifest(pkg, wapps, seen);
+      }
+    }
+
+    // 2. Built-in wapps from the in-repo wapps/archive/ tree. The
+    //    seen-set dedup means any id already brought in by a user
+    //    install is skipped here. Directory.current.path is OK to
+    //    read — it is the runtime CWD, not profile data, and is the
+    //    only reliable anchor for relative dev-time paths into the
+    //    source.
     final archiveCandidates = [
       '${Directory.current.path}/../wapps/archive',
       '${Directory.current.path}/../../wapps/archive',
@@ -226,17 +261,6 @@ class _LauncherPageState extends State<LauncherPage> {
         await _scanManifest(pkg, wapps, seen);
       }
       break; // first archive dir that exists wins
-    }
-
-    // 2. User-installed wapps (extracted by the installer).
-    final installed = installedAppsStorage();
-    if (await installed.directoryExists('')) {
-      final entries = await installed.listDirectory('');
-      for (final entry in entries) {
-        if (!entry.isDirectory) continue;
-        final pkg = wappPackageStorage(installed.getAbsolutePath(entry.path));
-        await _scanManifest(pkg, wapps, seen);
-      }
     }
 
     // Rebuild the widget registry from the fresh scan. Wapps that
@@ -267,7 +291,7 @@ class _LauncherPageState extends State<LauncherPage> {
       MaterialPageRoute(
         builder: (_) => WappPage(
           wappDir: manifest.dirPath,
-          title: manifest.name,
+          title: manifest.title.isNotEmpty ? manifest.title : manifest.name,
         ),
       ),
     ).then((_) => _scanArchive()); // Rescan after returning (new installs)
@@ -301,7 +325,10 @@ class _LauncherPageState extends State<LauncherPage> {
     final entries = <_LauncherEntry>[
       for (final wapp in _wapps!)
         _LauncherEntry(
-          name: wapp.name,
+          // Prefer the manifest-declared title; fall back to the
+          // folder name so old wapps without a proper description
+          // field still show something.
+          name: wapp.title.isNotEmpty ? wapp.title : wapp.name,
           icon: wapp.iconData,
           color: wapp.color,
           onTap: () => _openWapp(wapp),

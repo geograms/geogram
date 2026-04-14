@@ -1,6 +1,19 @@
 [
   {
     "$": "screen",
+    "name": "Projects",
+    "tip": "Pick an existing wapp to edit or start a new one. Selecting a wapp loads its title, id, description, and home.ui.json into the editor tabs.",
+    "children": [
+      {
+        "$": "group",
+        "name": "Projects",
+        "$type": "projects",
+        "tip": "Every wapp installed under ~/.local/share/geogram/apps/. Built-in wapps (tester, tasks, …) are not editable here yet."
+      }
+    ]
+  },
+  {
+    "$": "screen",
     "name": "Code",
     "tip": "Write a geogram wapp in C. Hit Compile to build it against the bundled wasm-clang, then Install to add it to the launcher.",
     "children": [
@@ -25,7 +38,7 @@
         "name": "install",
         "label": "Install",
         "style": "secondary",
-        "tip": "Write the compiled wapp into the launcher's installed-apps folder. Requires a successful compile first."
+        "tip": "Write the compiled wapp into the launcher's installed-apps folder. If no fresh compile is available this reuses the existing app.wasm (edit metadata / UI only)."
       },
       {
         "$": "field",
@@ -39,34 +52,44 @@
   {
     "$": "screen",
     "name": "Settings",
-    "tip": "Metadata for the wapp that will be produced. These values end up in the generated manifest.json when you click Install.",
+    "tip": "Metadata for the wapp you're editing. Title is what shows on the launcher grid; Name is the folder slug used on disk.",
     "children": [
       {
         "$": "group",
         "name": "Identity",
-        "tip": "Identifying information baked into the new wapp's manifest.",
+        "tip": "These values end up in the generated manifest.json when you click Install.",
         "children": [
           {
             "$": "field",
-            "name": "wapp_id",
+            "name": "wapp_title",
             "$type": "string",
-            "label": "Wapp id",
-            "default": "user.geogram.my-first",
-            "tip": "Reverse-domain identifier. Used as the installed-apps folder name."
+            "label": "Title",
+            "default": "My first wapp",
+            "tip": "Human-readable display name. This is what the launcher grid shows."
           },
           {
             "$": "field",
             "name": "wapp_name",
             "$type": "string",
-            "label": "Display name",
-            "default": "My first wapp"
+            "label": "Name (folder slug)",
+            "default": "my-first",
+            "tip": "Short slug used as the folder name under ~/.local/share/geogram/apps/ and ~/.local/share/geogram/wapps/. Lowercase, no spaces."
+          },
+          {
+            "$": "field",
+            "name": "wapp_id",
+            "$type": "string",
+            "label": "ID (reverse domain)",
+            "default": "user.geogram.my-first",
+            "tip": "Stable identifier, goes into manifest.id. Convention: reverse-domain."
           },
           {
             "$": "field",
             "name": "wapp_description",
             "$type": "string",
             "label": "Description",
-            "default": "A wapp I wrote inside geogram."
+            "default": "A wapp I wrote inside geogram.",
+            "tip": "Longer description. Goes into manifest.summary."
           }
         ]
       }
@@ -75,15 +98,16 @@
   {
     "$": "screen",
     "name": "UI",
-    "tip": "Visual drag-and-drop UI editor. Not yet implemented — reserved as a tab so the layout stays stable once it lands.",
+    "tip": "Raw home.ui.json for the wapp. Selecting a project on the Projects tab populates this; Install writes it back. A visual drag-and-drop editor will layer on top of this later.",
     "children": [
       {
-        "$": "label",
-        "text": "Coming later."
-      },
-      {
-        "$": "label",
-        "text": "A visual editor that lets you drag-and-drop GeoUI groups, fields and actions directly into the home screen JSON will live here. For now, edit screens/home.ui.json by hand (the 'tasks' and 'tester' wapps are good references)."
+        "$": "field",
+        "name": "source_ui",
+        "$type": "code",
+        "label": "home.ui.json",
+        "language": "json",
+        "tip": "GeoUI screen definition. Leave empty for a default label screen. See wapps/wapps.md for the full schema.",
+        "default": ""
       }
     ]
   }

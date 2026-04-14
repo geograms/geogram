@@ -182,7 +182,13 @@ void module_handle_event(void) {
             append_cstr(out_buf, sizeof(out_buf), &op, "\"}");
             hal_msg_send(out_buf, op);
         } else if (clen == 7 && str_eq_n(cmd, "install", 7)) {
-            /* Extract id, name, description from fields. */
+            /* Build
+             * {"type":"install","id":"...","title":"...","name":"...",
+             *  "description":"...","source_ui":"..."}. Every field is
+             * already JSON-escaped from the inbound command message so
+             * we copy the extracted bytes verbatim. wapp_name is
+             * required for the folder slug; everything else is
+             * optional. */
             const int id_len = extract_json_string_field(
                 inbox, n, "wapp_id", field_buf, sizeof(field_buf));
             if (id_len < 0) {
@@ -196,6 +202,15 @@ void module_handle_event(void) {
                         "{\"type\":\"install\",\"id\":\"");
             append_range(out_buf, sizeof(out_buf), &op, field_buf,
                          (unsigned)id_len);
+
+            append_cstr(out_buf, sizeof(out_buf), &op, "\",\"title\":\"");
+            const int title_len = extract_json_string_field(
+                inbox, n, "wapp_title", field_buf, sizeof(field_buf));
+            if (title_len > 0) {
+                append_range(out_buf, sizeof(out_buf), &op, field_buf,
+                             (unsigned)title_len);
+            }
+
             append_cstr(out_buf, sizeof(out_buf), &op, "\",\"name\":\"");
             const int name_len = extract_json_string_field(
                 inbox, n, "wapp_name", field_buf, sizeof(field_buf));
@@ -203,6 +218,7 @@ void module_handle_event(void) {
                 append_range(out_buf, sizeof(out_buf), &op, field_buf,
                              (unsigned)name_len);
             }
+
             append_cstr(out_buf, sizeof(out_buf), &op, "\",\"description\":\"");
             const int desc_len = extract_json_string_field(
                 inbox, n, "wapp_description", field_buf, sizeof(field_buf));
@@ -210,8 +226,22 @@ void module_handle_event(void) {
                 append_range(out_buf, sizeof(out_buf), &op, field_buf,
                              (unsigned)desc_len);
             }
+
+            /* source_ui (home.ui.json) may be multi-kilobyte — reuse
+             * the larger source_buf. */
+            append_cstr(out_buf, sizeof(out_buf), &op, "\",\"source_ui\":\"");
+            const int ui_len = extract_json_string_field(
+                inbox, n, "source_ui", source_buf, sizeof(source_buf));
+            if (ui_len > 0) {
+                append_range(out_buf, sizeof(out_buf), &op, source_buf,
+                             (unsigned)ui_len);
+            }
+
             append_cstr(out_buf, sizeof(out_buf), &op, "\"}");
             hal_msg_send(out_buf, op);
         }
+        /* No other commands: project switching happens entirely
+         * host-side via the $type:"projects" screen renderer in
+         * wapp_page.dart. Nothing to forward from the wapp. */
     }
 }

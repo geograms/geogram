@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show HttpClient, Platform, Process;
+import 'dart:io' show Directory, HttpClient, Platform, Process;
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -160,6 +161,8 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
 
     final bytes = result.wasmBytes!;
     await wappData.writeBytes('last_compiled.wasm', bytes);
+    // A fresh compile supersedes any bytes loaded from disk.
+    _loadedWasmBytes = null;
     _logLine(
         'compile ok: ${bytes.length} bytes in ${result.durationMs}ms');
     NotificationService.instance.show(GeogramNotification(
@@ -172,10 +175,20 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   }
 
   /// App Creator install pipeline. Called from `_drainOutbox` when
-  /// the wapp emits a `{"type":"install","id":...,"name":...,
-  /// "description":...}` message. Reads the last compile output
-  /// from the wapp's work folder and hands it to the installer
-  /// service.
+  /// the wapp emits a `{"type":"install","id":...,"title":...,
+  /// "name":...,"description":...,"source_ui":...}` message.
+  ///
+  /// Two modes:
+  ///
+  /// 1. **Fresh compile**: `last_compiled.wasm` exists in the wapp
+  ///    work folder. The installer writes a new wapp with those
+  ///    bytes, then the cache is deleted so the next install reverts
+  ///    to edit-in-place unless the user recompiles.
+  /// 2. **Edit in place**: no `last_compiled.wasm`. The installer
+  ///    reuses whatever `app.wasm` is already at `apps/<folderName>/`
+  ///    — this is the "change title, change UI, keep the wasm" path.
+  ///    Fails cleanly if neither a fresh compile nor an existing
+  ///    install is available.
   Future<void> _handleInstall(Map<String, dynamic> data) async {
     final wappData = _wappData;
     if (wappData == null) {
@@ -183,31 +196,45 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       return;
     }
     final id = data['id'] as String? ?? '';
-    final name = data['name'] as String? ?? id;
+    final title = data['title'] as String? ?? '';
+    final folderName = data['name'] as String? ?? '';
     final description = data['description'] as String? ?? '';
+    final sourceUi = data['source_ui'] as String? ?? '';
     if (id.isEmpty) {
       _logLine('(install) empty id — fill the Settings tab first');
       return;
     }
-
-    final bytes = await wappData.readBytes('last_compiled.wasm');
-    if (bytes == null || bytes.isEmpty) {
-      _logLine('(install) no compiled wasm yet — run Compile first');
-      NotificationService.instance.show(GeogramNotification(
-        level: NotificationLevel.warning,
-        title: 'Install blocked',
-        body: 'Run Compile first — last_compiled.wasm is missing.',
-        source: 'host:app-creator',
-      ));
+    if (folderName.isEmpty) {
+      _logLine('(install) empty name — fill the Settings tab first');
       return;
     }
 
-    _logLine('── install started: $id ──');
+    // Pick the wasm bytes to install. Priority order:
+    //  1. A fresh compile (last_compiled.wasm written by _handleCompile)
+    //  2. Bytes loaded by _loadProject when the user picked a project
+    //     from the Projects tab (this is the "fork a built-in" path)
+    //  3. Existing installed-apps app.wasm (pure metadata / UI edit
+    //     on an already-installed user wapp)
+    //  4. Nothing — installer returns a clean error.
+    Uint8List? freshBytes = await wappData.readBytes('last_compiled.wasm');
+    String mode;
+    if (freshBytes != null && freshBytes.isNotEmpty) {
+      mode = 'fresh compile';
+    } else if (_loadedWasmBytes != null && _loadedWasmBytes!.isNotEmpty) {
+      freshBytes = _loadedWasmBytes;
+      mode = 'loaded wasm (forking into user install)';
+    } else {
+      mode = 'edit in place';
+    }
+    _logLine('── install started: $id ($mode) ──');
+
     final result = await WappInstallerService.instance.installFromCompiled(
       id: id,
-      name: name,
+      title: title,
+      folderName: folderName,
       description: description,
-      wasmBytes: bytes,
+      wasmBytes: freshBytes,
+      homeScreenJson: sourceUi.isEmpty ? null : sourceUi,
       overwrite: true,
     );
     if (!result.ok) {
@@ -220,14 +247,479 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       ));
       return;
     }
-    _logLine('install ok: $id (${bytes.length} bytes)');
+
+    // Consume the fresh compile cache so a subsequent install
+    // without a recompile takes the edit-in-place path.
+    try {
+      await wappData.delete('last_compiled.wasm');
+    } catch (_) {}
+    // And drop any bytes loaded from a Projects-tab pick — the
+    // installer has written them out; further installs should read
+    // from the (now-existing) installedAppsStorage copy.
+    _loadedWasmBytes = null;
+
+    _logLine('install ok: $id');
     NotificationService.instance.show(GeogramNotification(
       level: NotificationLevel.success,
       title: 'Installed',
-      body:
-          '$name — return to the launcher to see it on the grid.',
+      body: (title.isNotEmpty ? title : folderName) +
+          ' — back to the launcher to see it on the grid.',
       source: 'host:app-creator',
     ));
+    // Refresh the Projects tab so a freshly installed wapp shows up
+    // immediately if the user switches back to it.
+    unawaited(_refreshProjects());
+  }
+
+  /// Load a wapp into the App Creator editor — called from the
+  /// Projects tab Edit button with a `_ProjectEntry` that tells us
+  /// the dir path to read from (works for both user installs under
+  /// `installedAppsStorage()` and built-ins under `wapps/archive/`).
+  ///
+  /// Reads manifest + home.ui.json + app.wasm from the entry's
+  /// dirPath. The wasm bytes land in [_loadedWasmBytes] so the
+  /// subsequent install — even without a fresh compile — has bytes
+  /// to write. For built-ins this effectively forks the source-tree
+  /// wapp into `installedAppsStorage()` on the next install.
+  ///
+  /// Source C code is NOT loaded — we only keep compiled wasm on
+  /// disk, not the original C. The user edits title / id /
+  /// description / UI JSON against the existing compiled binary.
+  Future<void> _loadProject(_ProjectEntry entry) async {
+    final pkg = wappPackageStorage(entry.dirPath);
+    final manifest = await pkg.readJson('manifest.json');
+    if (manifest == null) {
+      _logLine('(load) missing or invalid manifest.json at ${entry.dirPath}');
+      NotificationService.instance.show(GeogramNotification(
+        level: NotificationLevel.error,
+        title: 'Load failed',
+        body: 'manifest.json not found at ${entry.dirPath}',
+        source: 'host:app-creator',
+      ));
+      return;
+    }
+    final id = manifest['id'] as String? ?? '';
+    final title = manifest['description'] as String? ?? '';
+    final description = manifest['summary'] as String? ?? '';
+    final uiJson =
+        await pkg.readString('screens/home.ui.json') ?? '';
+    final wasm = await pkg.readBytes('app.wasm');
+
+    // Mutate the bindings map in place. A subsequent setState lets
+    // CodeEditorField / TextField widgets pick up the new values
+    // via their didUpdateWidget paths.
+    _fieldValues['wapp_title'] = title;
+    _fieldValues['wapp_id'] = id;
+    _fieldValues['wapp_description'] = description;
+    _fieldValues['wapp_name'] = entry.folder;
+    _fieldValues['source_ui'] = uiJson;
+    _loadedWasmBytes = wasm;
+
+    _logLine('loaded ${entry.folder}: id=$id, '
+        'title=${title.isEmpty ? '(empty)' : title}, '
+        'ui=${uiJson.length} chars, wasm=${wasm?.length ?? 0} bytes'
+        '${entry.isBuiltIn ? ' (built-in)' : ''}');
+    NotificationService.instance.show(GeogramNotification(
+      level: NotificationLevel.success,
+      title: 'Loaded ${entry.folder}',
+      body: entry.isBuiltIn
+          ? 'Built-in wapp — installing will create a user fork at apps/${entry.folder}.'
+          : (title.isNotEmpty ? title : '(no title in manifest)'),
+      source: 'host:app-creator',
+    ));
+    if (mounted) setState(() {});
+  }
+
+  /// Clear the identity / source / source_ui fields from the
+  /// bindings and re-run `_seedFieldDefaults` on every screen so the
+  /// editor snaps back to its default new-wapp state. Called from
+  /// `_showProjectPicker` when the user picks "Create new wapp".
+  /// Log buffers (`output`) are intentionally preserved.
+  void _resetToNewProject() {
+    const keysToReset = {
+      'wapp_title',
+      'wapp_name',
+      'wapp_id',
+      'wapp_description',
+      'source',
+      'source_ui',
+    };
+    for (final key in keysToReset) {
+      _fieldValues.remove(key);
+    }
+    for (final screen in _screens) {
+      _seedFieldDefaults(screen);
+    }
+    _logLine('── new project — fields reset to defaults ──');
+    NotificationService.instance.show(GeogramNotification(
+      level: NotificationLevel.info,
+      title: 'New wapp',
+      body: 'Fields reset. Edit Settings, then Compile + Install.',
+      source: 'host:app-creator',
+    ));
+    if (mounted) setState(() {});
+  }
+
+  /// Project-picker state for the App Creator Projects tab. `null`
+  /// means "haven't scanned yet" — the screen renderer kicks off a
+  /// refresh on first build. Subsequent edits to installedAppsStorage
+  /// (install, delete) call `_refreshProjects` to pick up changes.
+  List<_ProjectEntry>? _projects;
+  bool _projectsLoading = false;
+
+  /// Bytes of the currently-loaded wapp's `app.wasm`. Populated by
+  /// `_loadProject` so that installing an edited-in-place wapp can
+  /// reuse the original compiled binary without round-tripping
+  /// through the compiler. Cleared after a successful install (so
+  /// subsequent installs fall back to reading from
+  /// installedAppsStorage) and after a fresh compile (so the new
+  /// bytes take precedence).
+  Uint8List? _loadedWasmBytes;
+
+  /// Scan both `installedAppsStorage()` and the source-tree
+  /// `wapps/archive/` path for installed wapps. Dedup by
+  /// `manifest.id` — user installs take precedence over built-ins
+  /// with the same id so that an edited fork hides the original.
+  /// Sort: user installs first, then built-ins, alphabetical by
+  /// folder within each group.
+  Future<void> _refreshProjects() async {
+    if (_projectsLoading) return;
+    if (mounted) setState(() => _projectsLoading = true);
+
+    final userEntries = <_ProjectEntry>[];
+    final builtInEntries = <_ProjectEntry>[];
+    final seenIds = <String>{};
+
+    // --- User installs first (they win dedup) ---
+    final installed = installedAppsStorage();
+    if (await installed.directoryExists('')) {
+      final entries = await installed.listDirectory('');
+      for (final entry in entries) {
+        if (!entry.isDirectory) continue;
+        final manifest =
+            await installed.readJson('${entry.name}/manifest.json');
+        if (manifest == null) continue;
+        final id = manifest['id'] as String? ?? '';
+        if (id.isNotEmpty) seenIds.add(id);
+        userEntries.add(_ProjectEntry(
+          folder: entry.name,
+          id: id,
+          title: (manifest['description'] as String?) ?? '',
+          description: (manifest['summary'] as String?) ?? '',
+          dirPath: installed.getAbsolutePath(entry.name),
+          isBuiltIn: false,
+        ));
+      }
+    }
+
+    // --- Then built-ins, skipping ids already in user installs ---
+    // Same candidate paths as main.dart _scanArchiveBody.
+    final cwd = Directory.current.path;
+    final archiveCandidates = [
+      '$cwd/../wapps/archive',
+      '$cwd/../../wapps/archive',
+    ];
+    for (final archivePath in archiveCandidates) {
+      final archive = wappPackageStorage(archivePath);
+      if (!await archive.directoryExists('')) continue;
+      final entries = await archive.listDirectory('');
+      for (final entry in entries) {
+        if (!entry.isDirectory) continue;
+        final pkgDir = archive.getAbsolutePath(entry.name);
+        final pkg = wappPackageStorage(pkgDir);
+        final manifest = await pkg.readJson('manifest.json');
+        if (manifest == null) continue;
+        final id = manifest['id'] as String? ?? '';
+        if (id.isNotEmpty && seenIds.contains(id)) continue;
+        if (id.isNotEmpty) seenIds.add(id);
+        builtInEntries.add(_ProjectEntry(
+          folder: entry.name,
+          id: id,
+          title: (manifest['description'] as String?) ?? '',
+          description: (manifest['summary'] as String?) ?? '',
+          dirPath: pkgDir,
+          isBuiltIn: true,
+        ));
+      }
+      break; // first archive dir that exists wins
+    }
+
+    userEntries.sort((a, b) => a.folder.compareTo(b.folder));
+    builtInEntries.sort((a, b) => a.folder.compareTo(b.folder));
+    final list = <_ProjectEntry>[...userEntries, ...builtInEntries];
+
+    if (!mounted) return;
+    setState(() {
+      _projects = list;
+      _projectsLoading = false;
+    });
+  }
+
+  /// Confirm-and-delete a project. Pops a dialog; on confirm,
+  /// nukes the installed-apps folder and refreshes the list. Also
+  /// fires `WappLoadedEvent` so the launcher rescan drops the tile.
+  Future<void> _deleteProject(_ProjectEntry entry) async {
+    if (!mounted) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete ${entry.folder}?'),
+        content: Text(
+          'This will permanently delete apps/${entry.folder}/ and '
+          'everything inside it (manifest, wasm, screens). This '
+          'cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    try {
+      await installedAppsStorage()
+          .deleteDirectory(entry.folder, recursive: true);
+    } catch (e) {
+      NotificationService.instance.show(GeogramNotification(
+        level: NotificationLevel.error,
+        title: 'Delete failed',
+        body: e.toString(),
+        source: 'host:app-creator',
+      ));
+      return;
+    }
+    NotificationService.instance.show(GeogramNotification(
+      level: NotificationLevel.info,
+      title: 'Deleted ${entry.folder}',
+      source: 'host:app-creator',
+    ));
+    // WappLoadedEvent doubles as "launcher, please rescan" — reuse it.
+    EventBus().fire(WappLoadedEvent(wappId: entry.id, wappName: entry.folder));
+    await _refreshProjects();
+  }
+
+  /// Switch the tab bar to the screen with [screenName] (case-
+  /// insensitive). Used after Edit / Create new so the user lands
+  /// on the Code tab without a second click.
+  void _switchToScreen(String screenName) {
+    if (_tabController == null) return;
+    for (var i = 0; i < _screenNames.length; i++) {
+      if (_screenNames[i].toLowerCase() == screenName.toLowerCase()) {
+        _tabController!.animateTo(i);
+        return;
+      }
+    }
+  }
+
+  /// Build the App Creator Projects tab. First call kicks off the
+  /// async scan; subsequent calls render the cached list.
+  Widget _buildProjectsScreen() {
+    if (_projects == null && !_projectsLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _refreshProjects();
+      });
+    }
+
+    final cs = Theme.of(context).colorScheme;
+    final projects = _projects ?? const <_ProjectEntry>[];
+
+    return Column(
+      children: [
+        // Header: Create new + refresh.
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          decoration: BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+            ),
+          ),
+          child: Row(
+            children: [
+              FilledButton.icon(
+                onPressed: () {
+                  _resetToNewProject();
+                  _switchToScreen('Code');
+                },
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Create new wapp'),
+              ),
+              const Spacer(),
+              IconButton(
+                onPressed: _projectsLoading ? null : _refreshProjects,
+                icon: _projectsLoading
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh),
+                tooltip: 'Refresh',
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: projects.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      _projectsLoading
+                          ? 'Scanning installed wapps…'
+                          : 'No user-installed wapps yet.\n'
+                              'Click "Create new wapp" to start one, or use '
+                              'the Install wapp from the launcher to pull '
+                              'one from a repository.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: cs.onSurfaceVariant),
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  itemCount: projects.length,
+                  itemBuilder: (context, i) =>
+                      _buildProjectCard(projects[i], cs),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProjectCard(_ProjectEntry entry, ColorScheme cs) {
+    final pathPrefix = entry.isBuiltIn ? 'wapps/archive/' : 'apps/';
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 10),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+      ),
+      color: cs.surfaceContainerLow,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () async {
+          await _loadProject(entry);
+          _switchToScreen('Code');
+        },
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.extension, color: cs.primary, size: 26),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            entry.title.isNotEmpty
+                                ? entry.title
+                                : entry.folder,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14),
+                          ),
+                        ),
+                        if (entry.isBuiltIn) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: cs.secondaryContainer,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'built-in',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: cs.onSecondaryContainer,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$pathPrefix${entry.folder}',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: cs.onSurfaceVariant,
+                        fontFamily: 'monospace',
+                      ),
+                    ),
+                    if (entry.id.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        entry.id,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                    if (entry.description.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        entry.description,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                children: [
+                  TextButton.icon(
+                    onPressed: () async {
+                      await _loadProject(entry);
+                      _switchToScreen('Code');
+                    },
+                    icon: const Icon(Icons.edit, size: 16),
+                    label: const Text('Edit'),
+                    style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact),
+                  ),
+                  if (!entry.isBuiltIn)
+                    TextButton.icon(
+                      onPressed: () => _deleteProject(entry),
+                      icon: Icon(Icons.delete_outline,
+                          size: 16, color: cs.error),
+                      label: Text('Delete',
+                          style: TextStyle(color: cs.error)),
+                      style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// Recursively walk a GeoUI block tree and seed [_fieldValues] with
@@ -712,6 +1204,14 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         c.keyword == 'group' && c.type == 'tasks');
     if (hasTasksGroup) {
       return _buildTasksScreen();
+    }
+
+    // Projects picker (App Creator) — host renders a list of installed
+    // wapps so the user can pick one to edit or start a new one.
+    final hasProjectsGroup = screen.children.any((c) =>
+        c.keyword == 'group' && c.type == 'projects');
+    if (hasProjectsGroup) {
+      return _buildProjectsScreen();
     }
 
     // Output-only screen (e.g. Shop catalog) — no command input
@@ -1243,6 +1743,46 @@ class _OutputLine {
   final String text;
   final String level;
   _OutputLine(this.text, this.level);
+}
+
+/// One row rendered by the App Creator Projects tab. Immutable —
+/// refresh replaces the list rather than mutating entries.
+class _ProjectEntry {
+  /// Folder slug (on-disk directory name under apps/ or
+  /// wapps/archive/). Used as the install target.
+  final String folder;
+
+  /// `manifest.id` — used for dedup between user installs and
+  /// built-in source-tree copies.
+  final String id;
+
+  /// Short human-readable title pulled from `manifest.description`.
+  final String title;
+
+  /// Long form from `manifest.summary`.
+  final String description;
+
+  /// Absolute path to the wapp's package directory. For user
+  /// installs that's `~/.local/share/geogram/apps/<folder>/`; for
+  /// built-ins it's `<cwd>/wapps/archive/<folder>/` (or an ancestor).
+  /// `_loadProject` reads manifest + home.ui.json + app.wasm from
+  /// here.
+  final String dirPath;
+
+  /// True when the wapp lives in the source tree under
+  /// `wapps/archive/` rather than in `installedAppsStorage()`. The
+  /// Projects tab hides the Delete button on pristine built-ins and
+  /// flags them with a visual badge.
+  final bool isBuiltIn;
+
+  const _ProjectEntry({
+    required this.folder,
+    required this.id,
+    required this.title,
+    required this.description,
+    required this.dirPath,
+    required this.isBuiltIn,
+  });
 }
 
 // ── Tasks screen helper widgets ──────────────────────────────────────

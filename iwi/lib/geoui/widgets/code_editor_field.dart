@@ -73,6 +73,27 @@ class _CodeEditorFieldState extends State<CodeEditorField> {
   }
 
   @override
+  void didUpdateWidget(CodeEditorField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The parent (GeoUI renderer) passes `initialValue` from the
+    // bindings map on every rebuild. When the host mutates those
+    // bindings outside the widget (e.g. App Creator's load_existing
+    // action pushes a whole new source string), the new initialValue
+    // differs from BOTH the old widget value and the current
+    // controller text. That combination means "someone replaced the
+    // content from underneath us" — sync the controller.
+    //
+    // The double comparison is important: during normal typing the
+    // new initialValue equals the current controller text (because
+    // onChanged already ran and wrote it back to the bindings), so
+    // we must not reset.
+    if (oldWidget.initialValue != widget.initialValue &&
+        widget.initialValue != _controller.text) {
+      _controller.text = widget.initialValue;
+    }
+  }
+
+  @override
   void dispose() {
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
