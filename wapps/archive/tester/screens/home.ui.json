@@ -160,5 +160,45 @@
         "tip": "Fires whenever an ErrorEvent is published on the host EventBus."
       }
     ]
+  },
+  {
+    "$": "screen",
+    "name": "Widgets",
+    "tip": "Call widgets declared by other wapps. The host's WidgetBroker looks up providers from the installed wapps' manifest.json provides.widgets array, spins up a headless engine for the selected provider, and delivers the response back here. Each response arrives as an in-app notification.",
+    "children": [
+      {
+        "$": "group",
+        "name": "Demo provider (widget_demo)",
+        "tip": "widget_demo provides both text.greet and text.shout from a single wapp — demonstrating that one wapp can provide multiple widgets.",
+        "children": []
+      },
+      {
+        "$": "action",
+        "name": "widget-call-greet",
+        "label": "Call text.greet",
+        "style": "primary",
+        "tip": "Sends a widget.request for text.greet. Expects {greeting: ...}."
+      },
+      {
+        "$": "action",
+        "name": "widget-call-shout",
+        "label": "Call text.shout",
+        "style": "primary",
+        "tip": "Sends a widget.request for text.shout. Expects {loud: ...}."
+      },
+      {
+        "$": "group",
+        "name": "Error paths",
+        "tip": "Make sure error flows also surface cleanly.",
+        "children": []
+      },
+      {
+        "$": "action",
+        "name": "widget-call-missing",
+        "label": "Call nonexistent widget",
+        "style": "secondary",
+        "tip": "Calls widget id \"does.not.exist\". Should surface an error notification."
+      }
+    ]
   }
 ]

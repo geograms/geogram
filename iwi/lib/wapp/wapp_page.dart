@@ -16,6 +16,7 @@ import '../services/preferences_service.dart';
 import '../services/profile_storage.dart';
 import '../services/storage_paths.dart';
 import '../services/task_monitor_service.dart';
+import '../services/widget_broker.dart';
 import 'wapp_engine.dart';
 
 /// Generic wapp page — loads .ui.json screens from a wapp directory,
@@ -288,6 +289,17 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           TaskMonitorService.instance.resumeAll();
           _refreshTaskSnapshot();
           changed = true;
+        } else if (type == 'widget.request') {
+          // Caller wapp is requesting a widget. Delegate to the
+          // host-side broker which spins up a headless provider
+          // engine and delivers the response back to this engine's
+          // inbox on the next tick.
+          unawaited(WidgetBroker.instance.handleRequest(
+            callerEngineId: _engine.engineId,
+            widgetId: data['widget'] as String? ?? '',
+            reqId: data['req_id'] as String? ?? '',
+            args: (data['args'] as Map<String, dynamic>?) ?? const {},
+          ));
         }
       } catch (_) {}
     }

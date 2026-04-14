@@ -12,6 +12,7 @@ import 'services/preferences_service.dart';
 import 'services/profile_storage.dart';
 import 'services/storage_paths.dart';
 import 'services/task_monitor_service.dart';
+import 'services/widget_registry.dart';
 import 'wapp/wapp_engine.dart';
 import 'wapp/wapp_page.dart';
 
@@ -98,6 +99,11 @@ class WappManifest {
   final String? icon;
   final String dirPath;
 
+  /// Widget IDs this wapp advertises in its `provides.widgets` array.
+  /// Empty list means the wapp is not a widget provider. One wapp
+  /// can provide any number of widgets.
+  final List<String> providedWidgets;
+
   WappManifest({
     required this.id,
     required this.name,
@@ -105,12 +111,24 @@ class WappManifest {
     required this.kind,
     this.icon,
     required this.dirPath,
+    this.providedWidgets = const [],
   });
 
   factory WappManifest.fromJson(Map<String, dynamic> json, String dirPath) {
     final desc = json['description'] as String? ?? '';
     final id = json['id'] as String? ?? '';
     final folderName = dirPath.split(Platform.pathSeparator).last;
+
+    // Parse provides.widgets — an array of widget IDs this wapp
+    // registers as a provider for. Anything non-string is dropped.
+    final provides = json['provides'];
+    final widgetsList = provides is Map<String, dynamic>
+        ? provides['widgets']
+        : null;
+    final providedWidgets = widgetsList is List
+        ? widgetsList.whereType<String>().toList()
+        : const <String>[];
+
     return WappManifest(
       id: id,
       name: folderName.isNotEmpty ? folderName : id.split('.').last,
@@ -118,6 +136,7 @@ class WappManifest {
       kind: json['kind'] as String? ?? 'app',
       icon: json['icon'] as String?,
       dirPath: dirPath,
+      providedWidgets: providedWidgets,
     );
   }
 
@@ -218,6 +237,14 @@ class _LauncherPageState extends State<LauncherPage> {
         final pkg = wappPackageStorage(installed.getAbsolutePath(entry.path));
         await _scanManifest(pkg, wapps, seen);
       }
+    }
+
+    // Rebuild the widget registry from the fresh scan. Wapps that
+    // got uninstalled since last scan stop appearing as providers;
+    // newly installed ones immediately become available.
+    WidgetRegistry.instance.clear();
+    for (final m in wapps) {
+      WidgetRegistry.instance.register(m);
     }
 
     if (mounted) setState(() => _wapps = wapps);

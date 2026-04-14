@@ -149,6 +149,65 @@ static void event_publish(const char *topic, const char *data) {
     hal_event_publish(topic, str_len(topic), data, str_len(data));
 }
 
+/* ── Widget request helpers ───────────────────────────────────────── */
+
+/* Monotonic request id counter — every widget.request gets a unique
+ * value so the broker can match the response. */
+static uint32_t next_req_id = 1;
+
+static unsigned uint_to_str(uint32_t v, char *buf, unsigned buf_len) {
+    char tmp[16];
+    unsigned i = 0;
+    if (v == 0) {
+        tmp[i++] = '0';
+    } else {
+        while (v > 0 && i < 15) {
+            tmp[i++] = '0' + (char)(v % 10);
+            v /= 10;
+        }
+    }
+    unsigned out = 0;
+    while (i > 0 && out + 1 < buf_len) {
+        buf[out++] = tmp[--i];
+    }
+    buf[out] = '\0';
+    return out;
+}
+
+static void send_widget_request(const char *widget_id) {
+    char rid[16];
+    uint_to_str(next_req_id++, rid, sizeof(rid));
+
+    char buf[384];
+    unsigned pos = 0;
+    append_cstr(buf, sizeof(buf), &pos, "{\"type\":\"widget.request\",\"widget\":\"");
+    append_cstr(buf, sizeof(buf), &pos, widget_id);
+    append_cstr(buf, sizeof(buf), &pos, "\",\"req_id\":\"");
+    append_cstr(buf, sizeof(buf), &pos, rid);
+    append_cstr(buf, sizeof(buf), &pos, "\",\"args\":{}}");
+    hal_msg_send(buf, pos);
+}
+
+/* Surface an incoming widget.response as an in-app notification
+ * whose body is the raw message (JSON-escaped). Level is `error` if
+ * the response contains an `"error"` field, `success` otherwise. */
+static void handle_widget_response(const char *buf, unsigned n) {
+    int is_error = find_substr(buf, n, "\"error\":\"") >= 0;
+    const char *level = is_error ? "error" : "success";
+    const char *title = is_error ? "Widget error" : "Widget response";
+
+    char out[1024];
+    unsigned pos = 0;
+    append_cstr(out, sizeof(out), &pos, "{\"type\":\"notify\",\"level\":\"");
+    append_cstr(out, sizeof(out), &pos, level);
+    append_cstr(out, sizeof(out), &pos, "\",\"title\":\"");
+    append_cstr(out, sizeof(out), &pos, title);
+    append_cstr(out, sizeof(out), &pos, "\",\"body\":\"");
+    append_json_escaped(out, sizeof(out), &pos, buf, n);
+    append_cstr(out, sizeof(out), &pos, "\"}");
+    hal_msg_send(out, pos);
+}
+
 /* Drain every pending event from this wapp's queue and surface each
  * one as an in-app notification. Called from both module_tick and
  * module_handle_event so events surface whether they arrived during a
@@ -196,6 +255,16 @@ void module_handle_event(void) {
         uint32_t n = hal_msg_recv(buf, sizeof(buf) - 1);
         if (n == 0) break;
         buf[n] = '\0';
+
+        /* widget.response messages come in from the WidgetBroker
+         * when a widget we called has produced a result. Surface
+         * them as notifications and move on — they don't have a
+         * "command" field so the normal parser below would drop
+         * them anyway. */
+        if (find_substr(buf, n, "\"type\":\"widget.response\"") >= 0) {
+            handle_widget_response(buf, n);
+            continue;
+        }
 
         /* Find the "command" key — same pattern as the tasks wapp. */
         int key_idx = find_substr(buf, n, "\"command\"");
@@ -279,6 +348,15 @@ void module_handle_event(void) {
             send_notify("success", "Subscribed",
                 "system.error — any ErrorEvent on the host bus will "
                 "surface here.", 0);
+
+        /* ── Widget tests ── */
+
+        } else if (str_eq_literal(cmd, clen, "widget-call-greet")) {
+            send_widget_request("text.greet");
+        } else if (str_eq_literal(cmd, clen, "widget-call-shout")) {
+            send_widget_request("text.shout");
+        } else if (str_eq_literal(cmd, clen, "widget-call-missing")) {
+            send_widget_request("does.not.exist");
         }
     }
 

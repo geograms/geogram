@@ -43,4 +43,21 @@ class PreferencesService {
       _prefs.setString('wapp.dataDir', v);
     }
   }
+
+  // Widget provider preferences — when multiple wapps advertise the
+  // same widgetId, this tells the [WidgetBroker] which provider to
+  // prefer. Stored as one entry per widgetId keyed
+  // `widget.provider.<widget-id>`. `null` means "no preference —
+  // pick the first registered provider".
+  String? getPreferredProvider(String widgetId) =>
+      _prefs.getString('widget.provider.$widgetId');
+
+  void setPreferredProvider(String widgetId, String? providerWappId) {
+    final key = 'widget.provider.$widgetId';
+    if (providerWappId == null || providerWappId.isEmpty) {
+      _prefs.remove(key);
+    } else {
+      _prefs.setString(key, providerWappId);
+    }
+  }
 }

@@ -315,15 +315,145 @@ backends whose `handlesScope` returns false. Default scope is `app`.
 history / debug UI.
 
 **Don't forget:**
-- `NotificationService.init(messengerKey:)` must be called exactly
-  once, before `runApp`. It is wired as a `BootStart.parallel` task
-  in `main.dart`; don't duplicate.
+- `NotificationService.init()` must be called exactly once, before
+  `runApp`. It is wired as a `BootStart.parallel` task in
+  `main.dart`; don't duplicate.
+- In-app display is NOT a backend — it is handled by
+  `NotificationLayer` subscribing to `NotificationShownEvent` on
+  `EventBus`. The layer is installed via `MaterialApp.builder` so it
+  sits above the `Navigator` and its stacking overlay renders on
+  top of every route.
 - Backend exceptions are **swallowed** — one broken backend cannot
   starve the others. Failures do not fire another notification to
   avoid loops.
 - Never call `ScaffoldMessenger.showSnackBar` directly from wapp
   code or from services; always go through `NotificationService` so
   the behaviour stays uniform.
+
+---
+
+## Widgets
+
+### WidgetRegistry + WidgetBroker — provider-registration system
+
+**Files:**
+- `lib/services/widget_registry.dart` — `WidgetRegistry` singleton,
+  `{widgetId → [WappManifest]}`
+- `lib/services/widget_broker.dart` — `WidgetBroker` singleton that
+  routes `widget.request` / `widget.response` between caller and
+  provider wapps
+
+**What it is.** Android-intent-style resolution for wapp-to-wapp
+widget calls. A wapp declares which widgets it can provide in its
+`manifest.json` — one wapp can provide any number of widgets:
+
+```json
+"provides": {
+  "widgets": ["text.greet", "text.shout"]
+}
+```
+
+`LauncherPage._scanArchiveBody` rebuilds `WidgetRegistry` after
+every scan. Widget IDs are free-form dot-separated strings
+(`file.pick`, `image.gallery`, `text.greet`). Exact match only —
+no wildcards today.
+
+**Wire protocol — caller side (wapp → host):**
+
+```
+{"type":"widget.request",
+ "widget":"<widget-id>",
+ "req_id":"<opaque caller-chosen token>",
+ "args":{...}}
+```
+
+**Wire protocol — host → provider (injected into provider's inbox):**
+
+```
+{"type":"widget.request",
+ "widget":"<widget-id>",
+ "req_id":"<opaque>",
+ "reply_to":"<caller engineId>",
+ "args":{...}}
+```
+
+**Wire protocol — provider → host:**
+
+```
+{"type":"widget.response",
+ "req_id":"<matching caller token>",
+ "result":{...}}         // on success
+{"type":"widget.response",
+ "req_id":"<matching caller token>",
+ "error":"<message>"}     // on failure
+```
+
+**Wire protocol — host → caller (delivered to caller's inbox):**
+
+Same shape as the provider response, plus `widget_provider: "<wapp id>"`
+so the caller can tell which provider answered when preferences
+change.
+
+**Resolution rules.** When multiple wapps register for the same
+widget ID, the broker picks one in this order:
+
+1. `PreferencesService.getPreferredProvider(widgetId)` — if a
+   stored preference exists AND that wapp is still installed, use
+   it.
+2. Otherwise, the first provider in registration order (scan order).
+
+`PreferencesService.setPreferredProvider(widgetId, wappId)` stores
+the preference; no settings UI yet (reserved for a later pass).
+
+**Execution model — headless.** `WidgetBroker.handleRequest`
+spins up a **fresh** `WappEngine` for the provider, loads the
+provider's `app.wasm`, calls `module_init`, injects the request,
+calls `module_handle_event`, scrapes the outbox for the matching
+`widget.response`, and disposes the engine. The response is then
+delivered to the caller via `WappEngine.lookup(callerEngineId)`
++ `sendMessage` + `handleEvent` — so the caller's
+`module_handle_event` runs with the response in its inbox within
+the same Dart microtask. Any outbox messages the caller emits in
+response (e.g., a notification) drain on the caller's next tick
+(≤ one tick interval of latency).
+
+**No UI providers yet.** Providers that need to render UI (file
+picker, gallery) cannot use the headless path — the WASM module
+would have to emit `widget.response` without any user interaction.
+A windowed-provider code path (route push + widget.response
+interception) is planned for when a real UI widget lands; the
+broker's `handleRequest` signature is stable so the switch will be
+internal.
+
+**Error handling.** Every failure mode in the broker produces a
+`widget.response` with an `error` field so the caller always gets a
+response and never hangs:
+
+- Widget id not declared by any installed wapp
+- Provider has no `app.wasm`
+- Provider threw during load / init / handle_event
+- Provider did not emit a matching `widget.response`
+
+**Working end-to-end example.** The `widget_demo` wapp
+(`wapps/archive/widget_demo/`) is a provider that declares both
+`text.greet` and `text.shout` in a single manifest — the
+canonical example of one wapp providing multiple widgets. The
+**Tester** wapp's **Widgets** screen has Call buttons for each of
+those widget IDs plus a "Call nonexistent widget" button that
+exercises the error path. Each received response surfaces as an
+in-app notification with the raw response JSON in the body.
+
+**Don't forget:**
+- Caller wapps MUST pick a unique `req_id` per request. The broker
+  matches responses to requests by `req_id`. Collisions lose
+  responses silently.
+- The provider's `app.wasm` is re-loaded on every request. For a
+  hot-path widget this is expensive — cache the engine across
+  requests as a follow-up optimisation once we have a real
+  workload.
+- Adding a new widget id = add it to the provider's manifest +
+  handle it in the provider's `module_handle_event`. Nothing else
+  to register — the launcher scan picks it up on next boot.
 
 ---
 

@@ -1,0 +1,24 @@
+{
+  "id":              "tools.geogram.widget-demo",
+  "version":         "1.0.0",
+  "kind":            "app",
+  "description":     "Widget Demo",
+  "summary":         "Minimal provider wapp that demonstrates one wapp providing multiple widgets. Responds to widget.request messages for text.greet and text.shout with fixed results.",
+  "icon":            "media/icons/widget-demo.svg",
+  "tags":            ["system", "demo", "widgets"],
+  "entry_ui":        "screens/home.ui.json",
+  "tick_interval_ms": 5000,
+  "permissions":     [],
+  "provides": {
+    "functions": [],
+    "events":    [],
+    "variables": [],
+    "widgets":   ["text.greet", "text.shout"]
+  },
+  "requires": {
+    "hal":       ["log", "msg"],
+    "events":    [],
+    "libraries": [],
+    "variables": []
+  }
+}

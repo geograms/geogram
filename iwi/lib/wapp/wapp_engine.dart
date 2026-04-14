@@ -22,8 +22,18 @@ class WappLogEntry {
 class WappEngine {
   static int _nextEngineId = 0;
 
+  /// Lookup table of every live engine, keyed by [engineId]. Used by
+  /// [WidgetBroker] to find a caller engine and inject a
+  /// widget.response message without needing a widget tree reference.
+  static final Map<String, WappEngine> _byId = {};
+
+  /// Find a live engine by id, or null if none is registered. Called
+  /// by the widget broker on the response delivery path.
+  static WappEngine? lookup(String engineId) => _byId[engineId];
+
   /// Stable identifier for this engine instance, used by
-  /// [WappEventBroker] for routing cross-wapp pub/sub.
+  /// [WappEventBroker] for routing cross-wapp pub/sub and by
+  /// [WidgetBroker] for delivering widget.response messages.
   final String engineId = 'engine-${_nextEngineId++}';
 
   WasmInstance? _instance;
@@ -38,6 +48,7 @@ class WappEngine {
   bool _loaded = false;
 
   WappEngine() {
+    _byId[engineId] = this;
     WappEventBroker.instance.registerEngine(engineId);
   }
 
@@ -404,7 +415,13 @@ class WappEngine {
 
   void dispose() {
     if (_loaded) { destroy(); _loaded = false; }
+    _byId.remove(engineId);
     WappEventBroker.instance.unregisterEngine(engineId);
     _stopwatch.stop();
   }
+
+  /// Direct handle on the outbox for the widget broker's headless
+  /// provider path. Ordinary callers should use [drainOutbox] instead,
+  /// which also clears the list.
+  List<String> peekOutbox() => List<String>.unmodifiable(_outbox);
 }
