@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Directory, HttpClient, Platform, Process;
+import 'dart:io' show Directory, File, HttpClient, Platform, Process;
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../geoui/geoui_ast.dart';
 import '../geoui/geoui_parser.dart';
 import '../geoui/geoui_renderer.dart';
+import '../geoui/widgets/code_editor_field.dart';
 import '../models/monitored_task.dart';
 import '../services/event_bus.dart';
 import '../services/notification_service.dart';
@@ -19,7 +21,9 @@ import '../services/storage_paths.dart';
 import '../services/task_monitor_service.dart';
 import '../services/wapp_compiler_service.dart';
 import '../services/wapp_installer_service.dart';
+import '../services/wapp_signing_service.dart';
 import '../services/widget_broker.dart';
+import '../util/wapp_icons.dart';
 import 'wapp_engine.dart';
 
 /// Generic wapp page — loads .ui.json screens from a wapp directory,
@@ -85,6 +89,49 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   final _outputLines = <_OutputLine>[];
   final _cmdController = TextEditingController();
   final _scrollController = ScrollController();
+
+  // Wapp Store (install wapp) — search query for filtering cards.
+  // Empty string means "show everything".
+  String _storeSearch = '';
+
+  // ── App Creator UI editor state ────────────────────────────────
+  //
+  // The UI tab can either render the raw JSON in a code field
+  // ([_uiEditorMode = code]) or walk the parsed block tree and
+  // let the user click-to-edit each node in a side panel
+  // ([_uiEditorMode = visual]). The visual path operates on a
+  // mutable `dynamic` copy of the JSON that is re-serialised back
+  // into `_fieldValues['source_ui']` on every mutation so Install
+  // always picks up the latest edit.
+  _UiEditorMode _uiEditorMode = _UiEditorMode.visual;
+
+  /// Which top-level screen the visual editor is currently showing.
+  /// Matches index into the top-level JSON array when `source_ui` is
+  /// a list of screens; clamped to a safe value every render.
+  int _uiActiveScreenIndex = 0;
+
+  /// Path to the currently-selected block, expressed as a list of
+  /// child indices. `[]` means "the screen itself is selected";
+  /// `[2]` means "children[2]"; `[2, 0]` means "children[2].children[0]".
+  /// Null means nothing is selected.
+  List<int>? _uiSelectedPath;
+
+  // Structured mirror of the install wapp's sources list, pushed by
+  // the wapp on init / after save via {"type":"store.sources"}.
+  // Drives the sources manager UI on the Settings tab. Starts as an
+  // empty list until the wapp has confirmed its state — _sourcesLoaded
+  // flips true the first time a store.sources message arrives so the
+  // UI can distinguish "no sources yet" from "still booting".
+  List<String> _storeSources = const [];
+  bool _sourcesLoaded = false;
+
+  // New-source input state for the sources manager. _sourcesInput
+  // is the live text in the URL field; _sourcesError holds the most
+  // recent validation failure (cleared on successful Add or edit);
+  // _sourcesBusy gates the UI during the async HTTP probe.
+  final _sourcesInputController = TextEditingController();
+  String _sourcesError = '';
+  bool _sourcesBusy = false;
 
   // Settings bindings
   final _fieldValues = <String, dynamic>{};
@@ -996,6 +1043,19 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
             item['level'] as String? ?? 'out',
           ));
           changed = true;
+        } else if (type == 'store.sources') {
+          // Install wapp push: the current source list straight out
+          // of its KV store. Mirror it to _fieldValues['source'] as
+          // a newline-joined string so the sources group renderer
+          // (and any other reader) sees the same shape the wapp has
+          // on disk.
+          final list = data['sources'] as List?;
+          final asStrings =
+              list == null ? <String>[] : list.whereType<String>().toList();
+          _fieldValues['source'] = asStrings.join('\n');
+          _storeSources = asStrings;
+          _sourcesLoaded = true;
+          changed = true;
         } else if (type == 'ui.log.append') {
           // Append a single line to a $type:"log" field's buffer.
           // The wapp addresses the target field by name. If the
@@ -1093,11 +1153,20 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     }
     if (changed && mounted) {
       setState(() {});
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        }
-      });
+      // Terminal-style wapps tail their log — auto-scroll to the
+      // newest line. The Wapp Store (install wapp) reuses the same
+      // controller but wants the user to land at the TOP with the
+      // featured banner + first cards visible, so we skip the jump
+      // there. Any wapp that doesn't want auto-tail can be added
+      // to this exclusion list.
+      if (_wappName != 'install') {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_scrollController.hasClients) {
+            _scrollController
+                .jumpTo(_scrollController.position.maxScrollExtent);
+          }
+        });
+      }
     }
   }
 
@@ -1133,7 +1202,17 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
 
     try {
       final contents = jsonDecode(content);
-      final msg = jsonEncode({'type': 'wapp.index', 'data': contents});
+      // Enrich every catalog entry with the real publisher_npub
+      // from the matching wapp's signature.json. The sibling
+      // `wapps/archive/<name>/` layout is the canonical location —
+      // that's where the launcher scans built-ins and writes their
+      // signatures. We also fall back to `<dir>/<name>/` in case a
+      // binaries-style layout placed signature.json alongside the
+      // .wapp file. If neither has a signature the entry stays
+      // unsigned (empty publisher_npub) and the store card shows
+      // the "unknown publisher" state.
+      final enriched = _enrichCatalogWithSignatures(contents, dir);
+      final msg = jsonEncode({'type': 'wapp.index', 'data': enriched});
       _engine.sendMessage(msg);
       _engine.handleEvent();
       _drainOutbox();
@@ -1142,6 +1221,55 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       _outputLines.add(_OutputLine('Failed to read index: $e', 'err'));
       if (mounted) setState(() {});
     }
+  }
+
+  /// Walk [catalog] (the parsed index.json) and fill in each entry's
+  /// `publisher_npub` from the actual wapp's `signature.json` sidecar.
+  /// The canonical source tree for built-ins is `wapps/archive/<name>/`;
+  /// [indexDir] is the directory of the index.json (e.g. `wapps/binaries/`)
+  /// and we look up the signing side at `../archive/<name>/` relative
+  /// to it. The fallback path checks `<indexDir>/<name>/` in case the
+  /// consumer put signatures next to the binaries.
+  dynamic _enrichCatalogWithSignatures(dynamic catalog, String indexDir) {
+    if (catalog is! List) return catalog;
+    // Compute the two candidate lookup roots once.
+    final normalized = indexDir.replaceAll(Platform.pathSeparator, '/');
+    final parent = normalized.contains('/')
+        ? normalized.substring(0, normalized.lastIndexOf('/'))
+        : normalized;
+    final archiveRoot = '$parent/archive';
+    final result = <dynamic>[];
+    for (final rawEntry in catalog) {
+      if (rawEntry is! Map<String, dynamic>) {
+        result.add(rawEntry);
+        continue;
+      }
+      final entry = Map<String, dynamic>.of(rawEntry);
+      final fileField = entry['file'] as String? ?? '';
+      // Derive folder name from the "file" path, e.g.
+      // "maps/maps-1.0.0.wapp" → "maps".
+      final slashIdx = fileField.indexOf('/');
+      if (slashIdx > 0) {
+        final name = fileField.substring(0, slashIdx);
+        final candidates = <String>[
+          '$archiveRoot/$name',
+          '$indexDir/$name',
+        ];
+        for (final candidate in candidates) {
+          final pkg = wappPackageStorage(candidate);
+          if (pkg.existsSync('signature.json')) {
+            final npub =
+                WappSigningService.instance.readPublisherNpubSync(pkg);
+            if (npub.isNotEmpty) {
+              entry['publisher_npub'] = npub;
+              break;
+            }
+          }
+        }
+      }
+      result.add(entry);
+    }
+    return result;
   }
 
   Future<void> _handleWappInstall(Map<String, dynamic> data) async {
@@ -1250,6 +1378,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     _engine.dispose();
     _cmdController.dispose();
     _scrollController.dispose();
+    _sourcesInputController.dispose();
     _tabController?.dispose();
     _editorTabController?.dispose();
     super.dispose();
@@ -1375,6 +1504,24 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         c.keyword == 'group' && c.type == 'output');
     if (hasOutputGroup) {
       return _buildOutputScreen();
+    }
+
+    // Sources manager — install wapp's Settings tab. Shows the
+    // current repository list (pushed by the wapp via store.sources)
+    // with add+remove affordances and URL validation.
+    final hasSourcesGroup = screen.children.any((c) =>
+        c.keyword == 'group' && c.type == 'sources');
+    if (hasSourcesGroup) {
+      return _buildSourcesScreen();
+    }
+
+    // UI editor — App Creator's UI tab. A split Code/Visual editor
+    // that lets the author click-to-edit GeoUI blocks or drop into
+    // raw JSON. Bound to `_fieldValues['source_ui']`.
+    final hasUiEditorGroup = screen.children.any((c) =>
+        c.keyword == 'group' && c.type == 'ui-editor');
+    if (hasUiEditorGroup) {
+      return _buildUiEditorScreen();
     }
 
     // Terminal screen — has output + command input
@@ -1588,20 +1735,1753 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
 
   // ── Output-only screen (Shop catalog) ──────────────────────────────
 
-  Widget _buildOutputScreen() {
-    if (_outputLines.isEmpty) {
-      return const Center(
-        child: Text('No wapps loaded yet.\nSet a repository path in Settings.',
+  /// Install wapp Settings tab — a list of configured repositories
+  /// with a single input + Add button and per-row remove affordances.
+  /// Pulls its initial state from the {"type":"store.sources"} message
+  /// the wapp pushes on init. Every mutation re-sends the whole list
+  /// back to the wapp via a `set_sources` action — the wapp persists
+  /// to its KV under "source" and echoes store.sources back so the
+  /// two sides stay in sync.
+  /// App Creator UI editor — the `UI` tab. Switches between a raw
+  /// JSON code view (reuses [CodeEditorField]) and a click-to-edit
+  /// block tree. Both sides operate on the same `_fieldValues['source_ui']`
+  /// string, so the install pipeline doesn't need to know which mode
+  /// the author was using.
+  ///
+  /// Visual-mode data model:
+  /// - Parses `source_ui` as dynamic JSON. Top-level may be a list
+  ///   of screens (the convention) or a single screen object.
+  /// - Screens are addressed by [_uiActiveScreenIndex].
+  /// - Any block inside the active screen is addressed by a path
+  ///   (list of indices into the chain of `children` arrays) stored
+  ///   in [_uiSelectedPath]. An empty list means "the screen itself";
+  ///   `null` means "nothing selected".
+  /// - Mutations walk the live `dynamic` copy, apply the change,
+  ///   then re-encode the whole thing back into `_fieldValues['source_ui']`.
+  Widget _buildUiEditorScreen() {
+    final cs = Theme.of(context).colorScheme;
+    final raw = (_fieldValues['source_ui'] as String?) ?? '';
+
+    // Header row: Code | Visual toggle + context-dependent actions.
+    Widget header = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Row(
+        children: [
+          SegmentedButton<_UiEditorMode>(
+            segments: const [
+              ButtonSegment(
+                value: _UiEditorMode.visual,
+                icon: Icon(Icons.account_tree, size: 18),
+                label: Text('Visual'),
+              ),
+              ButtonSegment(
+                value: _UiEditorMode.code,
+                icon: Icon(Icons.code, size: 18),
+                label: Text('Code'),
+              ),
+            ],
+            selected: {_uiEditorMode},
+            onSelectionChanged: (s) =>
+                setState(() => _uiEditorMode = s.first),
+            showSelectedIcon: false,
+          ),
+          const Spacer(),
+          if (_uiEditorMode == _UiEditorMode.visual)
+            FilledButton.tonalIcon(
+              onPressed: _uiNewScreen,
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('New screen'),
+            ),
+        ],
+      ),
+    );
+
+    Widget body;
+    if (_uiEditorMode == _UiEditorMode.code) {
+      body = Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: CodeEditorField(
+          fieldName: 'source_ui',
+          label: 'home.ui.json',
+          languageId: 'json',
+          initialValue: raw,
+          onChanged: (v) {
+            _fieldValues['source_ui'] = v;
+            // Reset the visual selection so switching back to the
+            // tree view doesn't point at a stale path.
+            if (mounted) setState(() => _uiSelectedPath = null);
+          },
+          tip: 'GeoUI screens, raw JSON. Changes round-trip to the '
+              'visual editor on save.',
+        ),
+      );
+    } else {
+      // Visual mode — parse, show screen tabs + tree + inspector.
+      dynamic parsed;
+      try {
+        parsed = raw.trim().isEmpty
+            ? <dynamic>[]
+            : jsonDecode(raw);
+      } catch (e) {
+        body = _buildUiEditorError('This UI has a JSON syntax error — '
+            'switch to Code mode to fix it.\n\n$e');
+        return Column(children: [header, Expanded(child: body)]);
+      }
+      final screens = _uiScreensOf(parsed);
+      if (screens.isEmpty) {
+        body = _buildUiEditorEmpty();
+      } else {
+        if (_uiActiveScreenIndex >= screens.length) {
+          _uiActiveScreenIndex = 0;
+        }
+        body = _buildUiEditorVisual(screens, cs);
+      }
+    }
+
+    return Column(children: [header, Expanded(child: body)]);
+  }
+
+  /// Extract the top-level screen list from a parsed `source_ui`.
+  /// Handles both shapes: a List of blocks (convention) and a single
+  /// block object. Non-screen top-level blocks are passed through
+  /// too so the user can see + delete them.
+  List<Map<String, dynamic>> _uiScreensOf(dynamic parsed) {
+    if (parsed is List) {
+      return parsed.whereType<Map<String, dynamic>>().toList();
+    }
+    if (parsed is Map<String, dynamic>) return [parsed];
+    return [];
+  }
+
+  /// Write [screens] back to `_fieldValues['source_ui']` as pretty
+  /// printed JSON so the Code view (and the Install pipeline) see
+  /// the mutation immediately.
+  void _uiPersist(List<Map<String, dynamic>> screens) {
+    const encoder = JsonEncoder.withIndent('  ');
+    _fieldValues['source_ui'] = encoder.convert(screens);
+  }
+
+  Widget _buildUiEditorError(String message) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.error_outline, size: 48, color: cs.error),
+          const SizedBox(height: 12),
+          Text(
+            message,
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey)),
+            style: TextStyle(color: cs.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUiEditorEmpty() {
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.dashboard_customize_outlined,
+                size: 56, color: cs.primary),
+            const SizedBox(height: 12),
+            Text(
+              'No screens yet',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Click "New screen" above to add a blank screen and '
+              'start building the UI.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: cs.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUiEditorVisual(
+      List<Map<String, dynamic>> screens, ColorScheme cs) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Screen tabs — one chip per top-level screen.
+        Container(
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: screens.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 6),
+            itemBuilder: (_, i) {
+              final screen = screens[i];
+              final label = (screen['name'] as String?) ?? 'Screen ${i + 1}';
+              final selected = i == _uiActiveScreenIndex;
+              return ChoiceChip(
+                label: Text(label),
+                selected: selected,
+                onSelected: (_) => setState(() {
+                  _uiActiveScreenIndex = i;
+                  _uiSelectedPath = null;
+                }),
+              );
+            },
+          ),
+        ),
+        Divider(height: 1, color: cs.outlineVariant.withAlpha(80)),
+
+        // Three-pane editor: palette | canvas | inspector. The
+        // palette holds draggable block templates, the canvas
+        // renders the active screen as clickable mock widgets with
+        // drop zones between children, and the inspector edits the
+        // attributes of whatever is selected on the canvas.
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 200,
+                child: _buildUiPalette(cs),
+              ),
+              VerticalDivider(
+                  width: 1, color: cs.outlineVariant.withAlpha(80)),
+              Expanded(
+                flex: 3,
+                child: _buildUiCanvas(screens, cs),
+              ),
+              VerticalDivider(
+                  width: 1, color: cs.outlineVariant.withAlpha(80)),
+              SizedBox(
+                width: 300,
+                child: _buildUiInspector(screens, cs),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Palette ─────────────────────────────────────────────────────
+
+  /// Left-side panel — a scrollable list of draggable block
+  /// templates. Each tile is a [Draggable] carrying a
+  /// `Map<String, dynamic>` payload; the canvas drop targets read
+  /// the payload and insert a deep-copy at the drop position.
+  Widget _buildUiPalette(ColorScheme cs) {
+    return Container(
+      color: cs.surfaceContainerLow,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        children: [
+          Text(
+            'Palette',
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Drag onto the canvas',
+            style: TextStyle(
+              fontSize: 11,
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
+          for (final entry in _uiPaletteEntries())
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _buildPaletteTile(entry, cs),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPaletteTile(_UiPaletteEntry entry, ColorScheme cs) {
+    final tile = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: cs.outlineVariant.withAlpha(100)),
+      ),
+      child: Row(
+        children: [
+          Icon(entry.icon, size: 18, color: cs.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  entry.label,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (entry.subLabel != null) ...[
+                  const SizedBox(height: 1),
+                  Text(
+                    entry.subLabel!,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Icon(Icons.drag_indicator, size: 16, color: cs.onSurfaceVariant),
+        ],
+      ),
+    );
+    return Draggable<_UiDragPayload>(
+      data: _UiDragPayload.fromPalette(entry.template),
+      feedback: Material(
+        elevation: 6,
+        color: Colors.transparent,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 180),
+          child: Opacity(opacity: 0.88, child: tile),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.35, child: tile),
+      child: tile,
+    );
+  }
+
+  /// Static catalogue of block types the user can drag from the
+  /// palette. Each entry bundles the icon, the label, an optional
+  /// subtitle, and a template JSON to deep-copy at drop time.
+  List<_UiPaletteEntry> _uiPaletteEntries() {
+    return [
+      const _UiPaletteEntry(
+        label: 'Screen',
+        subLabel: 'Top-level tab',
+        icon: Icons.web,
+        template: {
+          r'$': 'screen',
+          'name': 'Screen',
+          'tip': '',
+          'children': <dynamic>[],
+        },
+      ),
+      const _UiPaletteEntry(
+        label: 'Group',
+        subLabel: 'Card container',
+        icon: Icons.folder_special,
+        template: {
+          r'$': 'group',
+          'name': 'Group',
+          'tip': '',
+          'children': <dynamic>[],
+        },
+      ),
+      const _UiPaletteEntry(
+        label: 'Label',
+        subLabel: 'Plain text',
+        icon: Icons.label,
+        template: {r'$': 'label', 'text': 'Hello world'},
+      ),
+      const _UiPaletteEntry(
+        label: 'Action button',
+        subLabel: 'Sends action to wapp',
+        icon: Icons.smart_button,
+        template: {
+          r'$': 'action',
+          'name': 'save',
+          'label': 'Save',
+          'style': 'primary',
+        },
+      ),
+      const _UiPaletteEntry(
+        label: 'Text field',
+        subLabel: 'Single-line input',
+        icon: Icons.text_fields,
+        template: {
+          r'$': 'field',
+          r'$type': 'string',
+          'name': 'field1',
+          'label': 'Field',
+          'default': '',
+        },
+      ),
+      const _UiPaletteEntry(
+        label: 'Multi-line field',
+        subLabel: 'Text area',
+        icon: Icons.subject,
+        template: {
+          r'$': 'field',
+          r'$type': 'string',
+          'name': 'field1',
+          'label': 'Field',
+          'multiline': true,
+          'lines': 5,
+          'default': '',
+        },
+      ),
+      const _UiPaletteEntry(
+        label: 'Toggle',
+        subLabel: 'On / off switch',
+        icon: Icons.toggle_on,
+        template: {
+          r'$': 'field',
+          r'$type': 'bool',
+          'name': 'enabled',
+          'label': 'Enabled',
+          'default': false,
+        },
+      ),
+      const _UiPaletteEntry(
+        label: 'Number',
+        subLabel: 'Integer input',
+        icon: Icons.numbers,
+        template: {
+          r'$': 'field',
+          r'$type': 'int',
+          'name': 'count',
+          'label': 'Count',
+          'default': 0,
+        },
+      ),
+      const _UiPaletteEntry(
+        label: 'Code editor',
+        subLabel: 'Syntax highlighted',
+        icon: Icons.code,
+        template: {
+          r'$': 'field',
+          r'$type': 'code',
+          'name': 'source',
+          'label': 'Source',
+          'language': 'c',
+          'default': '',
+        },
+      ),
+      const _UiPaletteEntry(
+        label: 'Log view',
+        subLabel: 'Append-only list',
+        icon: Icons.description,
+        template: {
+          r'$': 'field',
+          r'$type': 'log',
+          'name': 'output',
+          'label': 'Output',
+        },
+      ),
+      const _UiPaletteEntry(
+        label: 'Icon picker',
+        subLabel: 'Emoji or SVG',
+        icon: Icons.image,
+        template: {
+          r'$': 'field',
+          r'$type': 'icon',
+          'name': 'icon',
+          'label': 'Icon',
+          'default': '',
+        },
+      ),
+    ];
+  }
+
+  // ── Canvas ──────────────────────────────────────────────────────
+
+  /// Center pane — a scrollable, click-to-select preview of the
+  /// current screen. Each block renders as a mock widget that looks
+  /// roughly like the real thing (text field, button, log viewer,
+  /// etc.), wrapped in a [GestureDetector] that flips the selection
+  /// and an outline decoration when selected. Drop zones sit between
+  /// children so palette items and reordered blocks can be inserted
+  /// at exact positions.
+  Widget _buildUiCanvas(
+      List<Map<String, dynamic>> screens, ColorScheme cs) {
+    final active = screens[_uiActiveScreenIndex];
+    return Container(
+      color: cs.surface,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 40),
+        children: [
+          _buildCanvasHeader(active, cs),
+          const SizedBox(height: 12),
+          _buildCanvasBlock(active, const [], cs, asRoot: true),
+        ],
+      ),
+    );
+  }
+
+  /// Thin bar above the canvas body that shows which screen we're
+  /// editing plus its tip.
+  Widget _buildCanvasHeader(Map<String, dynamic> screen, ColorScheme cs) {
+    final name = (screen['name'] as String?) ?? 'Screen';
+    final tip = (screen['tip'] as String?) ?? '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.phone_android, size: 18, color: cs.primary),
+            const SizedBox(width: 8),
+            Text(
+              name,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+            ),
+          ],
+        ),
+        if (tip.isNotEmpty) ...[
+          const SizedBox(height: 2),
+          Text(
+            tip,
+            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Recursive canvas renderer. A block is drawn as:
+  /// - container blocks (screen, group) → outlined card containing
+  ///   its children interleaved with drop zones
+  /// - leaf blocks (field, action, label) → a mock widget that
+  ///   resembles the live rendering
+  ///
+  /// [path] is the chain of child indices that reaches this block
+  /// from the active screen. The outermost call passes `const []`
+  /// which addresses the screen itself. `asRoot` disables the outer
+  /// outline + drag handle because the screen isn't draggable — it
+  /// lives in the top-level `screens` array, not a `children` list.
+  Widget _buildCanvasBlock(
+    Map<String, dynamic> block,
+    List<int> path,
+    ColorScheme cs, {
+    bool asRoot = false,
+  }) {
+    final kw = (block[r'$'] as String?) ?? 'block';
+    final isContainer = kw == 'screen' || kw == 'group';
+    final selected = _uiSelectedPath != null &&
+        _listEquals(_uiSelectedPath!, path);
+
+    final inner = isContainer
+        ? _buildCanvasContainer(block, path, cs)
+        : _buildCanvasLeaf(block, cs);
+
+    // Selection outline. Also used to highlight containers so the
+    // user sees the boundary of each group / screen even when not
+    // selected.
+    final outlineColor = selected
+        ? cs.primary
+        : isContainer
+            ? cs.outlineVariant.withAlpha(140)
+            : Colors.transparent;
+    final outlineWidth = selected ? 2.0 : (isContainer ? 1.0 : 0.0);
+
+    Widget wrapped = Container(
+      margin: asRoot
+          ? EdgeInsets.zero
+          : const EdgeInsets.symmetric(vertical: 2),
+      decoration: BoxDecoration(
+        color: selected
+            ? cs.primaryContainer.withAlpha(60)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: outlineColor, width: outlineWidth),
+      ),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => setState(() => _uiSelectedPath = path),
+        child: Padding(
+          padding: isContainer
+              ? const EdgeInsets.fromLTRB(10, 10, 10, 10)
+              : const EdgeInsets.fromLTRB(4, 4, 4, 4),
+          child: inner,
+        ),
+      ),
+    );
+
+    // Non-root blocks are draggable so the user can grab them and
+    // drop them into another container / position.
+    if (!asRoot) {
+      wrapped = LongPressDraggable<_UiDragPayload>(
+        data: _UiDragPayload.fromMove(path),
+        feedback: Material(
+          elevation: 6,
+          color: Colors.transparent,
+          child: Opacity(
+            opacity: 0.85,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 320),
+              child: wrapped,
+            ),
+          ),
+        ),
+        childWhenDragging: Opacity(opacity: 0.3, child: wrapped),
+        delay: const Duration(milliseconds: 250),
+        child: wrapped,
       );
     }
 
-    // Parse output lines into wapp entries for card display.
-    // Format from module:
+    return wrapped;
+  }
+
+  /// Build the interior of a container block: a header line with
+  /// the keyword + name, then every child interleaved with drop
+  /// zones so users can drop into exact positions.
+  Widget _buildCanvasContainer(
+      Map<String, dynamic> block, List<int> path, ColorScheme cs) {
+    final kw = (block[r'$'] as String?) ?? 'block';
+    final type = (block[r'$type'] as String?) ?? '';
+    final name = (block['name'] as String?) ?? '';
+    final children = (block['children'] as List?) ?? const [];
+
+    // Special group renderings: show a chip stand-in so the user
+    // understands these groups are rendered natively by the host
+    // and don't have editable children in the WYSIWYG sense.
+    final isSpecialGroup =
+        kw == 'group' && const {
+              'projects',
+              'tasks',
+              'map',
+              'output',
+              'sources',
+              'ui-editor'
+            }.contains(type);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Icon(_uiIconForBlock(kw, type), size: 14, color: cs.primary),
+            const SizedBox(width: 6),
+            Text(
+              kw.toUpperCase(),
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1,
+                color: cs.primary,
+              ),
+            ),
+            if (type.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Text(
+                ':$type',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: cs.onSurfaceVariant,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                name,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (isSpecialGroup)
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: cs.secondaryContainer.withAlpha(120),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: cs.outlineVariant.withAlpha(120)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.auto_awesome,
+                    size: 16, color: cs.onSecondaryContainer),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'This group is rendered natively by the host '
+                    '(type: $type). It has no drag-and-drop children.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: cs.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else ...[
+          _buildCanvasDropZone(path, 0, cs),
+          for (var i = 0; i < children.length; i++)
+            if (children[i] is Map<String, dynamic>) ...[
+              _buildCanvasBlock(
+                children[i] as Map<String, dynamic>,
+                [...path, i],
+                cs,
+              ),
+              _buildCanvasDropZone(path, i + 1, cs),
+            ],
+          if (children.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Drop blocks from the palette here',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: cs.onSurfaceVariant,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+
+  /// Drop-target thin bar placed between (or around) children of a
+  /// container. When a drag hovers over it, it expands and highlights
+  /// so the user sees exactly where the block will land.
+  Widget _buildCanvasDropZone(
+      List<int> parentPath, int insertIndex, ColorScheme cs) {
+    return DragTarget<_UiDragPayload>(
+      onWillAcceptWithDetails: (_) => true,
+      onAcceptWithDetails: (details) =>
+          _uiHandleDrop(details.data, parentPath, insertIndex),
+      builder: (context, candidate, rejected) {
+        final active = candidate.isNotEmpty;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          height: active ? 26 : 8,
+          margin: const EdgeInsets.symmetric(vertical: 2),
+          decoration: BoxDecoration(
+            color: active
+                ? cs.primary.withAlpha(60)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: active
+                  ? cs.primary
+                  : cs.outlineVariant.withAlpha(60),
+              width: active ? 2 : 1,
+              style: BorderStyle.solid,
+            ),
+          ),
+          alignment: Alignment.center,
+          child: active
+              ? Text(
+                  'Drop here',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: cs.primary,
+                  ),
+                )
+              : null,
+        );
+      },
+    );
+  }
+
+  /// Render a leaf block (field / action / label) as a mock widget
+  /// that resembles the live rendering: text fields show a placeholder
+  /// TextField, actions show a real button styled the same way, etc.
+  /// Everything is non-interactive so the user can click to select
+  /// without accidentally editing the preview.
+  Widget _buildCanvasLeaf(Map<String, dynamic> block, ColorScheme cs) {
+    final kw = (block[r'$'] as String?) ?? '';
+    if (kw == 'action') {
+      final label = (block['label'] as String?) ?? 'Action';
+      final style = (block['style'] as String?) ?? 'secondary';
+      return IgnorePointer(
+        child: switch (style) {
+          'primary' => FilledButton(
+              onPressed: () {},
+              child: Text(label),
+            ),
+          'danger' => FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: cs.error,
+                foregroundColor: cs.onError,
+              ),
+              onPressed: () {},
+              child: Text(label),
+            ),
+          _ => OutlinedButton(
+              onPressed: () {},
+              child: Text(label),
+            ),
+        },
+      );
+    }
+    if (kw == 'label') {
+      final text = (block['text'] as String?) ?? '';
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Text(text, style: const TextStyle(fontSize: 13)),
+      );
+    }
+    if (kw == 'field') {
+      final type = (block[r'$type'] as String?) ?? 'string';
+      final label = (block['label'] as String?) ?? (block['name'] as String? ?? '');
+      final tip = (block['tip'] as String?) ?? '';
+      return _buildCanvasFieldMock(type, label, tip, block, cs);
+    }
+    // Unknown leaf — show generic pill.
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        (block['name'] as String?) ?? kw,
+        style: const TextStyle(fontSize: 12),
+      ),
+    );
+  }
+
+  /// Mock rendering for a `$type:"..."` field. Keeps the real
+  /// Flutter widget shapes (TextField, Switch, …) so the preview
+  /// matches what the user will see at runtime.
+  Widget _buildCanvasFieldMock(
+    String type,
+    String label,
+    String tip,
+    Map<String, dynamic> block,
+    ColorScheme cs,
+  ) {
+    final base = InputDecoration(
+      labelText: label,
+      helperText: tip.isEmpty ? null : tip,
+      filled: true,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      isDense: true,
+    );
+    switch (type) {
+      case 'bool':
+        return SwitchListTile(
+          value: (block['default'] as bool?) ?? false,
+          title: Text(label),
+          subtitle: tip.isEmpty ? null : Text(tip),
+          onChanged: null,
+          contentPadding: EdgeInsets.zero,
+        );
+      case 'int':
+      case 'float':
+        return IgnorePointer(
+          child: TextField(
+            controller: TextEditingController(
+                text: '${block['default'] ?? ''}'),
+            decoration: base,
+          ),
+        );
+      case 'enum':
+        return IgnorePointer(
+          child: DropdownButtonFormField<String>(
+            initialValue: null,
+            decoration: base,
+            items: const [],
+            onChanged: (_) {},
+          ),
+        );
+      case 'code':
+        final lang = (block['language'] as String?) ?? 'text';
+        return Container(
+          height: 120,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E1E1E),
+            borderRadius: BorderRadius.circular(10),
+            border:
+                Border.all(color: cs.outlineVariant.withAlpha(100)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label.isEmpty ? '$lang source' : label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white70,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Expanded(
+                child: Text(
+                  '// $lang code editor\n// syntax highlighted at runtime',
+                  style: const TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    color: Colors.white54,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      case 'log':
+        return Container(
+          height: 120,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0B1020),
+            borderRadius: BorderRadius.circular(10),
+            border:
+                Border.all(color: cs.outlineVariant.withAlpha(100)),
+          ),
+          child: Text(
+            label.isEmpty ? 'Log output' : label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: Colors.white70,
+            ),
+          ),
+        );
+      case 'icon':
+        return Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: cs.primary,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              alignment: Alignment.center,
+              child: const Icon(Icons.extension,
+                  color: Colors.white, size: 26),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+          ],
+        );
+      case 'string':
+      default:
+        final multiline = (block['multiline'] as bool?) ?? false;
+        return IgnorePointer(
+          child: TextField(
+            controller: TextEditingController(
+                text: '${block['default'] ?? ''}'),
+            maxLines: multiline ? ((block['lines'] as num?)?.toInt() ?? 3) : 1,
+            decoration: base,
+          ),
+        );
+    }
+  }
+
+  // ── Drop handling ──────────────────────────────────────────────
+
+  /// Insert or move a block based on a drag payload. Called from
+  /// every drop zone.
+  void _uiHandleDrop(
+      _UiDragPayload data, List<int> parentPath, int insertIndex) {
+    final raw = (_fieldValues['source_ui'] as String?) ?? '[]';
+    final dynamic parsed;
+    try {
+      parsed = jsonDecode(raw);
+    } catch (_) {
+      return;
+    }
+    final screens = _uiScreensOf(parsed);
+    if (_uiActiveScreenIndex >= screens.length) return;
+    final activeScreen = screens[_uiActiveScreenIndex];
+
+    if (data.kind == _UiDragKind.palette) {
+      // Fresh insert from the palette — deep-copy the template.
+      final block = _deepClone(data.payload!);
+      _uiInsertBlockAt(activeScreen, parentPath, insertIndex, block);
+      _uiPersist(screens);
+      setState(() => _uiSelectedPath = [...parentPath, insertIndex]);
+      return;
+    }
+
+    // Move existing block.
+    final sourcePath = data.movePath!;
+    if (sourcePath.isEmpty) return; // can't move the screen itself
+    // Avoid dropping a block into its own subtree.
+    if (_isDescendant(parentPath, sourcePath)) return;
+    final sourceParentPath = sourcePath.sublist(0, sourcePath.length - 1);
+    final sourceParent = _uiLookup(activeScreen, sourceParentPath);
+    if (sourceParent == null) return;
+    final sourceKidsRaw = sourceParent['children'];
+    if (sourceKidsRaw is! List) return;
+    final sourceKids = sourceKidsRaw;
+    final sourceIndex = sourcePath.last;
+    if (sourceIndex < 0 || sourceIndex >= sourceKids.length) return;
+    final movingBlock = sourceKids.removeAt(sourceIndex);
+
+    // Adjust the insert index if the source was a sibling earlier
+    // in the same parent (removing it shifts everyone up by one).
+    var adjustedInsert = insertIndex;
+    final sameParent = _listEquals(sourceParentPath, parentPath);
+    if (sameParent && sourceIndex < adjustedInsert) {
+      adjustedInsert--;
+    }
+    _uiInsertBlockAt(
+        activeScreen, parentPath, adjustedInsert, movingBlock as Map<String, dynamic>);
+    _uiPersist(screens);
+    setState(() => _uiSelectedPath = [...parentPath, adjustedInsert]);
+  }
+
+  void _uiInsertBlockAt(
+    Map<String, dynamic> activeScreen,
+    List<int> parentPath,
+    int insertIndex,
+    Map<String, dynamic> block,
+  ) {
+    final parent = _uiLookup(activeScreen, parentPath);
+    if (parent == null) return;
+    var kidsRaw = parent['children'];
+    List<dynamic> kids;
+    if (kidsRaw is List) {
+      kids = kidsRaw;
+    } else {
+      kids = <dynamic>[];
+      parent['children'] = kids;
+    }
+    final clamped = insertIndex < 0
+        ? 0
+        : (insertIndex > kids.length ? kids.length : insertIndex);
+    kids.insert(clamped, block);
+  }
+
+  /// True when [path] is inside the subtree rooted at [ancestor].
+  bool _isDescendant(List<int> path, List<int> ancestor) {
+    if (ancestor.isEmpty) return false;
+    if (path.length < ancestor.length) return false;
+    for (var i = 0; i < ancestor.length; i++) {
+      if (path[i] != ancestor[i]) return false;
+    }
+    return true;
+  }
+
+  /// Deep clone a JSON-shaped map so palette templates are inserted
+  /// as independent instances. `jsonDecode(jsonEncode(x))` is the
+  /// canonical way to deep-copy a JSON value in Dart.
+  Map<String, dynamic> _deepClone(Map<String, dynamic> source) {
+    return jsonDecode(jsonEncode(source)) as Map<String, dynamic>;
+  }
+
+  // ── Inspector (right pane) ─────────────────────────────────────
+
+  /// Right-side pane — edits the scalar attributes of the currently
+  /// selected block. Fields are typed (Switch for bool, number
+  /// keyboard for num, text area for `multiline` strings) so the
+  /// user isn't just typing into a JSON string.
+  Widget _buildUiInspector(
+      List<Map<String, dynamic>> screens, ColorScheme cs) {
+    final selected = _uiSelectedPath;
+    if (selected == null) {
+      return Container(
+        color: cs.surfaceContainerLow,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'Click a block on the canvas to edit its properties.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: cs.onSurfaceVariant),
+            ),
+          ),
+        ),
+      );
+    }
+    final active = screens[_uiActiveScreenIndex];
+    final block = _uiLookup(active, selected);
+    if (block == null) {
+      return Container(
+        color: cs.surfaceContainerLow,
+        child: Center(
+          child: Text(
+            'Selection is stale — pick another block.',
+            style: TextStyle(color: cs.onSurfaceVariant),
+          ),
+        ),
+      );
+    }
+    final kw = (block[r'$'] as String?) ?? 'block';
+    final type = (block[r'$type'] as String?) ?? '';
+    final isRoot = selected.isEmpty;
+
+    return Container(
+      color: cs.surfaceContainerLow,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+        children: [
+          Row(
+            children: [
+              Icon(_uiIconForBlock(kw, type),
+                  size: 18, color: cs.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  kw.toUpperCase() + (type.isNotEmpty ? ' : $type' : ''),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
+              if (!isRoot)
+                IconButton(
+                  onPressed: _uiDeleteSelected,
+                  icon: Icon(Icons.delete_outline, color: cs.error),
+                  tooltip: 'Delete',
+                  visualDensity: VisualDensity.compact,
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          for (final field in _uiInspectorFields(block))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: field,
+            ),
+          if (!isRoot) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => _uiMoveSelected(-1),
+                  icon: const Icon(Icons.arrow_upward, size: 14),
+                  label: const Text('Up'),
+                  style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact),
+                ),
+                const SizedBox(width: 6),
+                OutlinedButton.icon(
+                  onPressed: () => _uiMoveSelected(1),
+                  icon: const Icon(Icons.arrow_downward, size: 14),
+                  label: const Text('Down'),
+                  style: OutlinedButton.styleFrom(
+                      visualDensity: VisualDensity.compact),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Produce per-attribute editor widgets for [block]. Skips
+  /// `children` (edited via drag-drop) and uses typed widgets for
+  /// known attribute shapes.
+  List<Widget> _uiInspectorFields(Map<String, dynamic> block) {
+    final widgets = <Widget>[];
+    final keys = [
+      for (final k in block.keys)
+        if (k != 'children') k
+    ];
+    for (final key in keys) {
+      final v = block[key];
+      widgets.add(_uiInspectorField(key, v));
+    }
+    return widgets;
+  }
+
+  /// Single attribute editor. Picks the right widget based on the
+  /// current value's type.
+  Widget _uiInspectorField(String key, dynamic value) {
+    if (value is bool) {
+      return SwitchListTile(
+        title: Text(key, style: const TextStyle(fontSize: 12)),
+        value: value,
+        contentPadding: EdgeInsets.zero,
+        dense: true,
+        onChanged: (v) => _uiUpdateAttributeTyped(key, v),
+      );
+    }
+    if (value is num) {
+      return TextField(
+        controller: TextEditingController(text: value.toString()),
+        decoration: InputDecoration(
+          labelText: key,
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+        keyboardType: const TextInputType.numberWithOptions(
+            signed: true, decimal: true),
+        onChanged: (v) {
+          final parsed = num.tryParse(v);
+          if (parsed != null) _uiUpdateAttributeTyped(key, parsed);
+        },
+      );
+    }
+    // String (or missing) fallback. Use multiline for `default` when
+    // the block is marked multiline, and for `tip` which is often
+    // long.
+    final s = value?.toString() ?? '';
+    final wantsMulti = key == 'tip' || (key == 'default' && s.contains('\n'));
+    return TextField(
+      controller: TextEditingController(text: s),
+      decoration: InputDecoration(
+        labelText: key,
+        isDense: true,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      maxLines: wantsMulti ? 4 : 1,
+      minLines: wantsMulti ? 2 : 1,
+      onChanged: (v) => _uiUpdateAttributeTyped(key, v),
+    );
+  }
+
+  /// Updater that preserves the value's JSON type. Used from the
+  /// inspector widgets that already know whether they're editing a
+  /// bool / num / string.
+  void _uiUpdateAttributeTyped(String key, dynamic value) {
+    final path = _uiSelectedPath;
+    if (path == null) return;
+    final raw = (_fieldValues['source_ui'] as String?) ?? '[]';
+    try {
+      final parsed = jsonDecode(raw);
+      final screens = _uiScreensOf(parsed);
+      if (_uiActiveScreenIndex >= screens.length) return;
+      final block = _uiLookup(screens[_uiActiveScreenIndex], path);
+      if (block == null) return;
+      block[key] = value;
+      _uiPersist(screens);
+    } catch (_) {}
+  }
+
+  /// Walk [screen] along [path] and return the leaf block (mutable
+  /// reference into the dynamic tree). Returns null when any index
+  /// runs off the end of its parent's `children` array.
+  Map<String, dynamic>? _uiLookup(
+      Map<String, dynamic> screen, List<int> path) {
+    dynamic current = screen;
+    for (final i in path) {
+      if (current is! Map) return null;
+      final kids = current['children'];
+      if (kids is! List || i < 0 || i >= kids.length) return null;
+      current = kids[i];
+    }
+    return current is Map<String, dynamic> ? current : null;
+  }
+
+  /// Delete the currently-selected block from its parent's children
+  /// array. Cannot delete the screen itself — the inspector hides
+  /// the button in that case.
+  void _uiDeleteSelected() {
+    final path = _uiSelectedPath;
+    if (path == null || path.isEmpty) return;
+    final raw = (_fieldValues['source_ui'] as String?) ?? '[]';
+    try {
+      final parsed = jsonDecode(raw);
+      final screens = _uiScreensOf(parsed);
+      if (_uiActiveScreenIndex >= screens.length) return;
+      final parentPath = path.sublist(0, path.length - 1);
+      final parent =
+          _uiLookup(screens[_uiActiveScreenIndex], parentPath);
+      if (parent == null) return;
+      final kids = parent['children'];
+      if (kids is! List) return;
+      final idx = path.last;
+      if (idx < 0 || idx >= kids.length) return;
+      kids.removeAt(idx);
+      _uiPersist(screens);
+      setState(() => _uiSelectedPath = null);
+    } catch (_) {}
+  }
+
+  /// Shift the selected block up (delta = -1) or down (delta = +1)
+  /// within its siblings. Clamped to the children array bounds.
+  void _uiMoveSelected(int delta) {
+    final path = _uiSelectedPath;
+    if (path == null || path.isEmpty) return;
+    final raw = (_fieldValues['source_ui'] as String?) ?? '[]';
+    try {
+      final parsed = jsonDecode(raw);
+      final screens = _uiScreensOf(parsed);
+      if (_uiActiveScreenIndex >= screens.length) return;
+      final parentPath = path.sublist(0, path.length - 1);
+      final parent =
+          _uiLookup(screens[_uiActiveScreenIndex], parentPath);
+      if (parent == null) return;
+      final kids = parent['children'];
+      if (kids is! List) return;
+      final idx = path.last;
+      final target = idx + delta;
+      if (target < 0 || target >= kids.length) return;
+      final block = kids.removeAt(idx);
+      kids.insert(target, block);
+      _uiPersist(screens);
+      setState(() => _uiSelectedPath = [...parentPath, target]);
+    } catch (_) {}
+  }
+
+  /// Append a new blank screen to the top-level list and select it.
+  void _uiNewScreen() {
+    final raw = (_fieldValues['source_ui'] as String?) ?? '';
+    List<Map<String, dynamic>> screens;
+    try {
+      final parsed =
+          raw.trim().isEmpty ? <dynamic>[] : jsonDecode(raw);
+      screens = _uiScreensOf(parsed);
+    } catch (_) {
+      screens = <Map<String, dynamic>>[];
+    }
+    final next = <String, dynamic>{
+      r'$': 'screen',
+      'name': 'Screen ${screens.length + 1}',
+      'children': <dynamic>[],
+    };
+    screens.add(next);
+    _uiPersist(screens);
+    setState(() {
+      _uiActiveScreenIndex = screens.length - 1;
+      _uiSelectedPath = const [];
+    });
+  }
+
+  /// Pick a representative Material icon for a block keyword+type so
+  /// the tree rows have a quick visual anchor. Keyword wins when
+  /// there is no specific type override.
+  IconData _uiIconForBlock(String keyword, String type) {
+    final kwLower = keyword.toLowerCase();
+    final typeLower = type.toLowerCase();
+    if (kwLower == 'screen') return Icons.web;
+    if (kwLower == 'group') {
+      if (typeLower == 'projects') return Icons.folder_open;
+      if (typeLower == 'tasks') return Icons.task_alt;
+      if (typeLower == 'map') return Icons.map;
+      if (typeLower == 'output') return Icons.receipt_long;
+      if (typeLower == 'sources') return Icons.cloud;
+      if (typeLower == 'ui-editor') return Icons.account_tree;
+      return Icons.folder_special;
+    }
+    if (kwLower == 'field') {
+      if (typeLower == 'code') return Icons.code;
+      if (typeLower == 'log') return Icons.description;
+      if (typeLower == 'icon') return Icons.image;
+      if (typeLower == 'bool') return Icons.toggle_on;
+      if (typeLower == 'int' || typeLower == 'float') return Icons.numbers;
+      if (typeLower == 'enum') return Icons.list;
+      return Icons.text_fields;
+    }
+    if (kwLower == 'action') return Icons.smart_button;
+    if (kwLower == 'label') return Icons.label;
+    return Icons.widgets;
+  }
+
+  bool _listEquals(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  Widget _buildSourcesScreen() {
+    final cs = Theme.of(context).colorScheme;
+
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        // Header.
+        Text(
+          'Repositories',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'The wapp store downloads its catalog from every repository '
+          'listed here. New entries are validated — only URLs that '
+          'reply with a valid /wapps/index.json are accepted.',
+          style: TextStyle(color: cs.onSurfaceVariant, height: 1.35),
+        ),
+        const SizedBox(height: 20),
+
+        // Existing repositories list.
+        if (!_sourcesLoaded)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_storeSources.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: cs.outlineVariant.withAlpha(80)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, color: cs.onSurfaceVariant),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'No repositories yet. Add one below to see wapps '
+                    'in the Store tab.',
+                    style: TextStyle(color: cs.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          for (var i = 0; i < _storeSources.length; i++)
+            _buildSourceRow(_storeSources[i], i, cs),
+
+        const SizedBox(height: 24),
+
+        // Add new.
+        Text(
+          'Add a repository',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+        ),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: cs.outlineVariant.withAlpha(80)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _sourcesInputController,
+                      enabled: !_sourcesBusy,
+                      decoration: InputDecoration(
+                        hintText: 'https://example.com',
+                        prefixIcon: const Icon(Icons.link, size: 20),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        isDense: true,
+                      ),
+                      onSubmitted: (_) => _addSource(),
+                      onChanged: (_) {
+                        if (_sourcesError.isNotEmpty) {
+                          setState(() => _sourcesError = '');
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  FilledButton.icon(
+                    onPressed: _sourcesBusy ? null : _addSource,
+                    icon: _sourcesBusy
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.add, size: 18),
+                    label: const Text('Add'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 18, vertical: 14),
+                    ),
+                  ),
+                ],
+              ),
+              if (_sourcesError.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Icon(Icons.error_outline, size: 16, color: cs.error),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _sourcesError,
+                        style: TextStyle(fontSize: 12, color: cs.error),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 8),
+              Text(
+                'The store will try <url>/wapps/index.json first, then '
+                '<url>/index.json. For local paths, pass the directory '
+                'that contains the index.',
+                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// One row inside the repositories list — shows the host chip,
+  /// the raw URL in monospace, and a red remove button.
+  Widget _buildSourceRow(String url, int index, ColorScheme cs) {
+    final host = _extractHostForDisplay(url);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cs.outlineVariant.withAlpha(80)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: cs.primaryContainer,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            alignment: Alignment.center,
+            child: Icon(Icons.cloud_outlined,
+                size: 20, color: cs.onPrimaryContainer),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  host,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  url,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: cs.onSurfaceVariant,
+                    fontFamily: 'monospace',
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            onPressed: _sourcesBusy ? null : () => _removeSource(index),
+            icon: Icon(Icons.delete_outline, color: cs.error),
+            tooltip: 'Remove',
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Human-readable host extracted from a URL / path. Mirrors the
+  /// wapp's own `extract_host` behaviour so chips look the same on
+  /// both sides.
+  String _extractHostForDisplay(String url) {
+    var p = url;
+    if (p.startsWith('https://')) {
+      p = p.substring(8);
+    } else if (p.startsWith('http://')) {
+      p = p.substring(7);
+    } else {
+      return 'local';
+    }
+    final end = p.indexOf(RegExp(r'[/:?]'));
+    return end < 0 ? p : p.substring(0, end);
+  }
+
+  /// Kick off the Add flow: validate the URL, and if it passes,
+  /// append it to [_storeSources] and push the new list to the wapp.
+  Future<void> _addSource() async {
+    final raw = _sourcesInputController.text.trim();
+    if (raw.isEmpty) return;
+    if (_storeSources.contains(raw)) {
+      setState(() => _sourcesError = 'This repository is already in the list.');
+      return;
+    }
+    setState(() {
+      _sourcesBusy = true;
+      _sourcesError = '';
+    });
+    try {
+      final resolved = await _validateSource(raw);
+      if (resolved == null) {
+        if (mounted) {
+          setState(() {
+            _sourcesBusy = false;
+            _sourcesError =
+                'Could not find a valid index.json at this URL. '
+                'Check the address and try again.';
+          });
+        }
+        return;
+      }
+      if (_storeSources.contains(resolved)) {
+        if (mounted) {
+          setState(() {
+            _sourcesBusy = false;
+            _sourcesError =
+                'This repository is already in the list (as $resolved).';
+          });
+        }
+        return;
+      }
+      final next = [..._storeSources, resolved];
+      _pushSources(next);
+      if (mounted) {
+        _sourcesInputController.clear();
+        setState(() {
+          _sourcesBusy = false;
+          _sourcesError = '';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _sourcesBusy = false;
+          _sourcesError = 'Validation failed: $e';
+        });
+      }
+    }
+  }
+
+  /// Drop the entry at [index] from [_storeSources] and push the
+  /// shorter list back to the wapp. The wapp will echo the new
+  /// store.sources and trigger a catalog refresh.
+  void _removeSource(int index) {
+    if (index < 0 || index >= _storeSources.length) return;
+    final next = [..._storeSources];
+    next.removeAt(index);
+    _pushSources(next);
+  }
+
+  /// Send the authoritative sources list back to the wapp as a
+  /// `set_sources` action. The wapp persists, re-parses, re-fetches,
+  /// and echoes store.sources so this widget rebuilds with the
+  /// confirmed state.
+  void _pushSources(List<String> next) {
+    _fieldValues['source'] = next.join('\n');
+    setState(() => _storeSources = next);
+    _engine.sendMessage(jsonEncode({
+      'type': 'action',
+      'action': 'set_sources',
+      'fields': {'source': next.join('\n')},
+    }));
+    _engine.handleEvent();
+    _drainOutbox();
+  }
+
+  /// Probe [raw] for a valid wapp index. Tries `<raw>/wapps/index.json`
+  /// first, falls back to `<raw>/index.json`, and finally accepts the
+  /// bare URL if it already points at a `.json` file. Returns the
+  /// normalised URL that will be stored on success, or null on
+  /// failure. Local paths are checked via filesystem I/O.
+  Future<String?> _validateSource(String raw) async {
+    final lowered = raw.toLowerCase();
+    final isUrl = lowered.startsWith('http://') || lowered.startsWith('https://');
+    if (isUrl) {
+      // Build candidate URLs to try in priority order.
+      final trimmed = raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw;
+      final candidates = <String>[];
+      if (lowered.endsWith('.json')) {
+        candidates.add(raw);
+      } else {
+        candidates.add('$trimmed/wapps/index.json');
+        candidates.add('$trimmed/index.json');
+      }
+      for (final candidate in candidates) {
+        if (await _probeJsonUrl(candidate)) {
+          // Store the candidate that worked — the wapp uses it as-is
+          // because it ends with .json.
+          return candidate;
+        }
+      }
+      return null;
+    }
+    // Local path. Try <raw>/wapps/index.json then <raw>/index.json.
+    final candidates = <String>[];
+    if (lowered.endsWith('.json')) {
+      candidates.add(raw);
+    } else {
+      final base =
+          raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw;
+      candidates.add('$base/wapps/index.json');
+      candidates.add('$base/index.json');
+    }
+    for (final candidate in candidates) {
+      try {
+        final file = File(candidate);
+        if (await file.exists()) {
+          final contents = await file.readAsString();
+          try {
+            final parsed = jsonDecode(contents);
+            if (parsed is List) return candidate;
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Fetch [url] via a short-lived HttpClient and return true if it
+  /// responds 200 with a JSON array body. Used by [_validateSource].
+  Future<bool> _probeJsonUrl(String url) async {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 6);
+    try {
+      final uri = Uri.parse(url);
+      final req = await client.getUrl(uri);
+      final resp = await req.close();
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return false;
+      final body = await resp.transform(const Utf8Decoder()).join();
+      final parsed = jsonDecode(body);
+      return parsed is List;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Widget _buildOutputScreen() {
+    // Parse output lines into wapp entries for card display. The wapp's
+    // main.c still speaks a text-log protocol, so we regex-lift the
+    // structured catalog rows out of it on the host side. Format:
     //   [info] N wapp(s) available:
     //   [out]   name            vX.Y.Z  (NKB)  [installed] or [update: ...]
     //   [out]     Description text
+    //   [out]     @host.example.com       <- optional source chip
+    //   [out]     by:npub1…              <- optional publisher chip
+    //
+    // The description / host / publisher lines all use a 4-space
+    // indent and are attached to the most recently emitted wapp
+    // entry. That lets the wapp emit them in any order without
+    // needing a strict grammar on the host side.
     final wapps = <_CatalogWapp>[];
     final errors = <String>[];
 
@@ -1609,7 +3489,6 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       final line = _outputLines[i];
       final text = line.text;
 
-      // Wapp entry line: starts with "  " + name, has version
       final match = RegExp(r'^\s{2}(\S+)\s+v(\S+)(?:\s+\(([^)]+)\))?(.*)$')
           .firstMatch(text);
       if (match != null && line.level == 'out') {
@@ -1618,157 +3497,724 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         final size = match.group(3) ?? '';
         final status = match.group(4)?.trim() ?? '';
 
-        // Next line might be the description (indented with 4 spaces)
-        String desc = '';
-        if (i + 1 < _outputLines.length) {
-          final next = _outputLines[i + 1].text;
-          if (next.startsWith('    ') && _outputLines[i + 1].level == 'out') {
-            desc = next.trim();
-            i++; // skip description line
-          }
-        }
-
-        // Check actual install state from disk, not module KV.
-        // Uses the sync variant because this runs inside build().
         final actuallyInstalled = _installed.existsSync('$name/app.wasm');
 
         wapps.add(_CatalogWapp(
           name: name,
           version: version,
           size: size,
-          description: desc,
           installed: actuallyInstalled,
           updateAvailable: status.contains('[update:'),
         ));
         continue;
       }
 
-      // Error lines
+      // Metadata line attached to the previously-added wapp. The
+      // four-space indent is the wapp's way of saying "this belongs
+      // to the entry above me".
+      if (line.level == 'out' &&
+          text.startsWith('    ') &&
+          wapps.isNotEmpty) {
+        final meta = text.trimLeft();
+        final last = wapps.last;
+        if (meta.startsWith('@')) {
+          last.sourceHost = meta.substring(1);
+        } else if (meta.startsWith('by:')) {
+          last.publisherNpub = meta.substring(3);
+        } else if (last.description.isEmpty) {
+          last.description = meta;
+        }
+        continue;
+      }
+
       if (line.level == 'err') {
         errors.add(text);
       }
     }
 
-    if (wapps.isEmpty && errors.isEmpty) {
-      // Fallback to raw output if we can't parse
-      return ListView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.all(12),
-        itemCount: _outputLines.length,
-        itemBuilder: (context, i) => Text(
-          _outputLines[i].text,
+    final cs = Theme.of(context).colorScheme;
+    final source = (_fieldValues['source'] as String?) ?? '';
+    final query = _storeSearch.toLowerCase();
+    final visibleWapps = query.isEmpty
+        ? wapps
+        : wapps
+            .where((w) =>
+                w.name.toLowerCase().contains(query) ||
+                w.description.toLowerCase().contains(query))
+            .toList();
+
+    final hasCatalog = wapps.isNotEmpty;
+
+    return CustomScrollView(
+      controller: _scrollController,
+      slivers: [
+        // Store header — search + refresh + source chip. Pinned so it
+        // stays visible while the catalog scrolls.
+        // Plain adapter rather than a pinned persistent header — the
+        // latter requires a fixed extent that Flutter's layout engine
+        // clamps against the child's paintExtent, and any mismatch
+        // throws "layoutExtent exceeds paintExtent" which tears down
+        // the whole CustomScrollView before any card can render.
+        // Losing the pin-on-scroll behaviour is a fair trade for a
+        // store view that actually shows content.
+        SliverToBoxAdapter(
+          child: _buildStoreHeader(cs, total: wapps.length),
+        ),
+
+        // Featured banner for the first catalog entry — a little
+        // Play-Store-flavoured spotlight on what's "new" in the repo.
+        if (hasCatalog)
+          SliverToBoxAdapter(
+            child: _buildFeaturedCard(wapps.first, cs),
+          ),
+
+        // Error strip — only shown when the wapp emitted [err] lines.
+        if (errors.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: cs.errorContainer.withAlpha(120),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: cs.error.withAlpha(120)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Icon(Icons.error_outline, size: 18, color: cs.error),
+                      const SizedBox(width: 8),
+                      Text('Something went wrong',
+                          style: TextStyle(
+                              color: cs.onErrorContainer,
+                              fontWeight: FontWeight.w600)),
+                    ]),
+                    const SizedBox(height: 6),
+                    for (final err in errors)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(err,
+                            style: TextStyle(
+                                color: cs.onErrorContainer, fontSize: 12)),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+        // Section heading above the list.
+        if (hasCatalog)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+              child: Row(
+                children: [
+                  Text(
+                    query.isEmpty ? 'All apps' : 'Results',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: cs.primaryContainer,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '${visibleWapps.length}',
+                      style: TextStyle(
+                        color: cs.onPrimaryContainer,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+        // Empty / error states.
+        if (!hasCatalog)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: _buildStoreEmptyState(cs, source: source),
+          )
+        else if (visibleWapps.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: Text(
+                  'No wapps match "$_storeSearch"',
+                  style: TextStyle(color: cs.onSurfaceVariant),
+                ),
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            sliver: SliverList.separated(
+              itemCount: visibleWapps.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
+              itemBuilder: (_, i) => _buildWappCard(visibleWapps[i], cs),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildStoreHeader(
+    ColorScheme cs, {
+    required int total,
+  }) {
+    return Container(
+      color: cs.surface,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: cs.outlineVariant.withAlpha(80)),
+              ),
+              child: TextField(
+                textInputAction: TextInputAction.search,
+                onChanged: (v) => setState(() => _storeSearch = v),
+                decoration: InputDecoration(
+                  hintText: 'Search wapps',
+                  prefixIcon:
+                      Icon(Icons.search, color: cs.onSurfaceVariant),
+                  suffixIcon: _storeSearch.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => setState(() => _storeSearch = ''),
+                        ),
+                  border: InputBorder.none,
+                  contentPadding:
+                      const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Material(
+            color: cs.surfaceContainerHigh,
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () {
+                _sendCommand('list');
+                _engine.handleEvent();
+                _drainOutbox();
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Icon(Icons.refresh, color: cs.primary),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStoreEmptyState(ColorScheme cs, {required String source}) {
+    final hasSource = source.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 96,
+            height: 96,
+            decoration: BoxDecoration(
+              color: cs.primaryContainer,
+              borderRadius: BorderRadius.circular(28),
+            ),
+            alignment: Alignment.center,
+            child: Icon(Icons.storefront, size: 56, color: cs.primary),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            hasSource ? 'Loading catalog…' : 'No repository configured',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            hasSource
+                ? 'Fetching index.json from your repository. Use '
+                    'Refresh above if the list stays empty.'
+                : 'Set a repository URL or local path in the Settings tab, '
+                    'then pull to refresh to see the wapps available for '
+                    'install.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: cs.onSurfaceVariant, height: 1.4),
+          ),
+          if (!hasSource) ...[
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: () {
+                if (_tabController != null) _tabController!.animateTo(1);
+              },
+              icon: const Icon(Icons.settings, size: 18),
+              label: const Text('Open settings'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFeaturedCard(_CatalogWapp wapp, ColorScheme cs) {
+    final color = _storeCardColor(wapp.name);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              color.withAlpha(180),
+              color.withAlpha(90),
+            ],
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: Colors.white.withAlpha(40),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withAlpha(90)),
+              ),
+              alignment: Alignment.center,
+              child: _storeIconWidget(wapp.name, size: 40),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Featured',
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(200),
+                      fontSize: 11,
+                      letterSpacing: 1.2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    wapp.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  if (wapp.description.isNotEmpty)
+                    Text(
+                      wapp.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.white.withAlpha(230),
+                        fontSize: 13,
+                        height: 1.3,
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                  _storeActionButton(wapp, cs, dark: true),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWappCard(_CatalogWapp wapp, ColorScheme cs) {
+    final tileColor = _storeCardColor(wapp.name);
+
+    return Material(
+      color: cs.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () {},
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: cs.outlineVariant.withAlpha(70)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: tileColor,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                alignment: Alignment.center,
+                child: _storeIconWidget(wapp.name, size: 30),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      wapp.name,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Text(
+                          'v${wapp.version}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                        if (wapp.size.isNotEmpty) ...[
+                          Text(' · ',
+                              style: TextStyle(
+                                  fontSize: 11, color: cs.onSurfaceVariant)),
+                          Text(
+                            wapp.size,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                        if (wapp.updateAvailable) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: cs.tertiaryContainer,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'UPDATE',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: cs.onTertiaryContainer,
+                                letterSpacing: 0.6,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (wapp.description.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        wapp.description,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: cs.onSurfaceVariant,
+                          height: 1.3,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                    if (wapp.sourceHost.isNotEmpty ||
+                        wapp.publisherNpub.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          if (wapp.sourceHost.isNotEmpty)
+                            _storeMetaChip(
+                              icon: wapp.sourceHost == 'local'
+                                  ? Icons.folder_outlined
+                                  : Icons.cloud_outlined,
+                              label: wapp.sourceHost,
+                              cs: cs,
+                            ),
+                          if (wapp.publisherNpub.isNotEmpty)
+                            _storeMetaChip(
+                              icon: Icons.verified_user_outlined,
+                              label: _formatPublisher(wapp.publisherNpub),
+                              cs: cs,
+                              tooltip: wapp.publisherNpub,
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              _storeActionButton(wapp, cs),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Render the right-side action button for a store card. Same widget
+  /// used by both the featured banner and the list cards — the `dark`
+  /// flag flips it to a white-on-transparent variant for the banner's
+  /// coloured background.
+  Widget _storeActionButton(_CatalogWapp wapp, ColorScheme cs,
+      {bool dark = false}) {
+    // The store wapp itself (`install`) is what we're currently
+    // running — there's no meaningful "install" action on its own
+    // card, so show a muted "Running" chip.
+    if (wapp.name == 'install') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: (dark ? Colors.white : cs.onSurfaceVariant).withAlpha(40),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          'Running',
           style: TextStyle(
-            fontFamily: 'monospace',
-            fontSize: 13,
-            color: _outputColor(_outputLines[i].level),
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: dark ? Colors.white : cs.onSurfaceVariant,
           ),
         ),
       );
     }
 
-    final cs = Theme.of(context).colorScheme;
+    if (wapp.installed && !wapp.updateAvailable) {
+      return OutlinedButton.icon(
+        onPressed: () => _uninstallWapp(wapp.name),
+        icon: const Icon(Icons.check, size: 16),
+        label: const Text('Installed'),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: dark ? Colors.white : cs.primary,
+          side: BorderSide(
+              color: dark
+                  ? Colors.white.withAlpha(160)
+                  : cs.primary.withAlpha(120)),
+          visualDensity: VisualDensity.compact,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        ),
+      );
+    }
 
-    return ListView(
-      controller: _scrollController,
-      padding: const EdgeInsets.all(16),
-      children: [
-        if (errors.isNotEmpty)
-          for (final err in errors)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(err, style: TextStyle(color: cs.error, fontSize: 13)),
-            ),
-        Text('${wapps.length} wapp${wapps.length == 1 ? '' : 's'} available',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                )),
-        const SizedBox(height: 12),
-        for (final wapp in wapps) _buildWappCard(wapp, cs),
-      ],
+    final label = wapp.updateAvailable ? 'Update' : 'Install';
+    void onPressed() {
+      _sendCommand('install ${wapp.name}');
+      _engine.handleEvent();
+      _drainOutbox();
+    }
+
+    if (dark) {
+      return FilledButton.icon(
+        onPressed: onPressed,
+        icon: Icon(
+            wapp.updateAvailable ? Icons.upgrade : Icons.download_rounded,
+            size: 16),
+        label: Text(label),
+        style: FilledButton.styleFrom(
+          backgroundColor: Colors.white,
+          foregroundColor: Colors.black87,
+          visualDensity: VisualDensity.compact,
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20)),
+        ),
+      );
+    }
+    return FilledButton.icon(
+      onPressed: onPressed,
+      icon: Icon(
+          wapp.updateAvailable ? Icons.upgrade : Icons.download_rounded,
+          size: 16),
+      label: Text(label),
+      style: FilledButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
     );
   }
 
-  Widget _buildWappCard(_CatalogWapp wapp, ColorScheme cs) {
-    final isInstall = wapp.name == 'install';
+  /// Resolve the absolute path to a wapp's `manifest.icon` sidecar
+  /// SVG for store-card rendering. Matches the priority the
+  /// launcher grid uses in `WappManifest.svgIconPath` so the Install
+  /// wapp shows identically on both surfaces:
+  ///
+  ///   1. If the named wapp is the currently-running one, read its
+  ///      package (works for the Install/Store wapp itself, which
+  ///      runs from `wapps/archive/install/`).
+  ///   2. Otherwise, read from the active profile's installed-apps
+  ///      folder. Catalog entries that haven't been installed yet
+  ///      return null — the caller falls back to [wappIconFor].
+  ///
+  /// Returns null when no `.svg` path is available or the sidecar
+  /// doesn't exist on disk.
+  String? _storeSvgPathFor(String name) {
+    ProfileStorage? pkg;
+    if (name == _wappName) {
+      pkg = _pkg;
+    } else if (_installed.existsSync('$name/manifest.json')) {
+      pkg = ScopedProfileStorage(_installed, name);
+    }
+    if (pkg == null) return null;
+    final bytes = pkg.readBytesSync('manifest.json');
+    if (bytes == null) return null;
+    try {
+      final manifest = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+      final icon = manifest['icon'] as String?;
+      if (icon == null || icon.isEmpty) return null;
+      if (!icon.toLowerCase().endsWith('.svg')) return null;
+      if (!icon.contains('/') && !icon.contains('\\')) return null;
+      final abs = '${pkg.basePath}${Platform.pathSeparator}$icon';
+      if (!File(abs).existsSync()) return null;
+      return abs;
+    } catch (_) {
+      return null;
+    }
+  }
 
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+  /// Build the icon widget that goes inside a store card's coloured
+  /// tile. Prefers the wapp's own SVG (matches the launcher grid),
+  /// falls back to the shared Material heuristic. [size] matches the
+  /// enclosing tile so a white-on-colour Material icon fills cleanly.
+  /// SVGs pass through a srcIn white colour filter so wapps whose
+  /// icons are authored in dark strokes still read cleanly on the
+  /// coloured tile.
+  Widget _storeIconWidget(String name, {required double size}) {
+    const whiteFilter = ColorFilter.mode(Colors.white, BlendMode.srcIn);
+    final svgPath = _storeSvgPathFor(name);
+    if (svgPath != null) {
+      return Padding(
+        padding: EdgeInsets.all(size * 0.12),
+        child: SvgPicture.file(
+          File(svgPath),
+          fit: BoxFit.contain,
+          colorFilter: whiteFilter,
+          placeholderBuilder: (_) => Icon(
+            wappIconFor(name),
+            size: size,
+            color: Colors.white,
+          ),
+        ),
+      );
+    }
+    return Icon(wappIconFor(name), size: size, color: Colors.white);
+  }
+
+  /// Small pill-shaped chip used on store cards to show origin and
+  /// publisher metadata. Tooltipable so the user can hover-reveal a
+  /// truncated npub. Keeps the visual weight light so it doesn't
+  /// compete with the primary action button.
+  Widget _storeMetaChip({
+    required IconData icon,
+    required String label,
+    required ColorScheme cs,
+    String? tooltip,
+  }) {
+    final chip = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: cs.outlineVariant.withAlpha(110)),
       ),
-      color: cs.surfaceContainerLow,
-      child: ListTile(
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        leading: Icon(
-          isInstall
-              ? Icons.download
-              : wapp.name == 'maps'
-                  ? Icons.map
-                  : wapp.name == 'terminal'
-                      ? Icons.terminal
-                      : Icons.extension,
-          color: cs.primary,
-          size: 28,
-        ),
-        title: Row(
-          children: [
-            Text(wapp.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(width: 8),
-            Text('v${wapp.version}',
-                style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant)),
-            if (wapp.size.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              Text(wapp.size,
-                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant)),
-            ],
-          ],
-        ),
-        subtitle: wapp.description.isNotEmpty
-            ? Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text(wapp.description,
-                    style: TextStyle(
-                        fontSize: 12, color: cs.onSurfaceVariant)),
-              )
-            : null,
-        trailing: wapp.installed
-            ? TextButton(
-                onPressed: () => _uninstallWapp(wapp.name),
-                style: TextButton.styleFrom(
-                  foregroundColor: cs.error,
-                  visualDensity: VisualDensity.compact,
-                ),
-                child: const Text('Uninstall', style: TextStyle(fontSize: 12)),
-              )
-            : wapp.updateAvailable
-                ? FilledButton.tonal(
-                    onPressed: () {
-                      _sendCommand('install ${wapp.name}');
-                      _engine.handleEvent();
-                      _drainOutbox();
-                    },
-                    style: FilledButton.styleFrom(
-                        visualDensity: VisualDensity.compact),
-                    child: const Text('Update', style: TextStyle(fontSize: 12)),
-                  )
-                : isInstall
-                    ? null
-                    : FilledButton(
-                        onPressed: () {
-                          _sendCommand('install ${wapp.name}');
-                          _engine.handleEvent();
-                          _drainOutbox();
-                        },
-                        style: FilledButton.styleFrom(
-                            visualDensity: VisualDensity.compact),
-                        child: const Text('Install',
-                            style: TextStyle(fontSize: 12)),
-                      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: cs.onSurfaceVariant),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: cs.onSurfaceVariant,
+              fontFamily: 'monospace',
+            ),
+          ),
+        ],
       ),
     );
+    return tooltip == null ? chip : Tooltip(message: tooltip, child: chip);
+  }
+
+  /// Format a publisher identity for display on a store card. Given
+  /// a bech32 npub (or any string), produces `X1ABCD (npub1abcd…wxyz)`
+  /// — the X1-prefixed callsign derived from the key, followed by a
+  /// shortened form of the key in parentheses. The full npub goes
+  /// into the tooltip so the user can read or copy-paste it.
+  /// Non-npub strings are shown as-is (truncated if long).
+  String _formatPublisher(String raw) {
+    if (raw.isEmpty) return '';
+    String shortNpub;
+    if (raw.length <= 16) {
+      shortNpub = raw;
+    } else {
+      final head = raw.substring(0, 9);
+      final tail = raw.substring(raw.length - 4);
+      shortNpub = '$head…$tail';
+    }
+    if (!raw.toLowerCase().startsWith('npub1') || raw.length < 10) {
+      return shortNpub;
+    }
+    // Callsign: X1 + first 4 chars after 'npub1', uppercased.
+    final callsign = 'X1${raw.substring(5, 9).toUpperCase()}';
+    return '$callsign ($shortNpub)';
+  }
+
+  /// Deterministic card-tile colour based on the wapp name so every
+  /// entry has a stable, recognisable swatch.
+  Color _storeCardColor(String name) {
+    const palette = <Color>[
+      Color(0xFF6750A4),
+      Color(0xFF3F6CFF),
+      Color(0xFF0A8754),
+      Color(0xFFCC4A1B),
+      Color(0xFF1E6091),
+      Color(0xFF7B3F98),
+      Color(0xFFCF8D2E),
+      Color(0xFF2E7D32),
+    ];
+    return palette[name.hashCode.abs() % palette.length];
   }
 
   // ── Terminal screen ────────────────────────────────────────────────
@@ -1901,6 +4347,49 @@ class _OutputLine {
   _OutputLine(this.text, this.level);
 }
 
+/// Mode flag for App Creator's UI editor screen — either the raw
+/// JSON in a code field, or a click-to-edit block tree. See
+/// [_WappPageState._buildUiEditorScreen] for the consumer.
+enum _UiEditorMode { visual, code }
+
+/// Palette entry describing one draggable block type shown on the
+/// left side of the WYSIWYG editor. The template map is deep-cloned
+/// at drop time so every insertion gets its own copy.
+class _UiPaletteEntry {
+  final String label;
+  final String? subLabel;
+  final IconData icon;
+  final Map<String, dynamic> template;
+
+  const _UiPaletteEntry({
+    required this.label,
+    this.subLabel,
+    required this.icon,
+    required this.template,
+  });
+}
+
+/// Discriminates between a palette insert and a canvas-to-canvas
+/// move when a drop lands on a drop zone.
+enum _UiDragKind { palette, move }
+
+/// Payload carried by a [Draggable] inside the WYSIWYG editor.
+/// `kind == palette` means "insert this template"; `kind == move`
+/// means "relocate the block currently at movePath".
+class _UiDragPayload {
+  final _UiDragKind kind;
+  final Map<String, dynamic>? payload;
+  final List<int>? movePath;
+
+  const _UiDragPayload._(this.kind, this.payload, this.movePath);
+
+  factory _UiDragPayload.fromPalette(Map<String, dynamic> template) =>
+      _UiDragPayload._(_UiDragKind.palette, template, null);
+
+  factory _UiDragPayload.fromMove(List<int> path) =>
+      _UiDragPayload._(_UiDragKind.move, null, List<int>.from(path));
+}
+
 /// One row rendered by the App Creator Projects tab. Immutable —
 /// refresh replaces the list rather than mutating entries.
 class _ProjectEntry {
@@ -2028,15 +4517,19 @@ class _CatalogWapp {
   final String name;
   final String version;
   final String size;
-  final String description;
   final bool installed;
   final bool updateAvailable;
+  // Mutable metadata — attached by [_WappPageState._buildOutputScreen]
+  // after the entry has been pushed, in order to keep the line-by-line
+  // text-log parser simple (one walk, no lookahead).
+  String description = '';
+  String sourceHost = '';
+  String publisherNpub = '';
 
   _CatalogWapp({
     required this.name,
     required this.version,
     this.size = '',
-    this.description = '',
     this.installed = false,
     this.updateAvailable = false,
   });

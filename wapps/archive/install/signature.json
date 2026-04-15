@@ -1,0 +1,48 @@
+{
+  "schema": "geogram.wapp.signature/1",
+  "wapp_id": "tools.geogram.install",
+  "wapp_version": "1.0.0",
+  "signed_at": 1776243140,
+  "publisher_npub": "npub1lut3k0m4mue97yuyj7f50qrnwz06kwgk8x03uta904ujsu4lcehq9u67tm",
+  "publisher_hex": "ff171b3f75df325f13849793478073709fab3916399f1e2fa57d792872bfc66e",
+  "hash_algo": "sha256",
+  "manifest_digest_hex": "2840707499dc21dc732dba64baff264899f2ec866f278da57a0b704e42c8e9c9",
+  "hashes": {
+    "main.c": "7648874ba3d8b9d9b9798b1eaa897196963ebbbd3951b1a89ed0ed0b0dbc3e5f",
+    "Makefile": "cd848e35d56fa12e921865ac821b312028a157067f9518a0217cbf105ad8bc59",
+    "screens/home.ui.json": "cb612fc899ea12417cff3ec65db98935c8f67e8998cf8763705f9dabba9811ac",
+    "manifest.json": "211e78494598067e17133e0af16dc83af119b178eaa90a1c52690f797b08fd30",
+    "media/icons/install.svg": "c45a5d4d337cb88031c6a6b5d48afa01e3c5a0b84e5be7ba953a65a0a274b052",
+    "app.wasm": "55ad9ae4e74965b80374ad686f30ef395a1591ce639b3fd90750b2292b5f9328"
+  },
+  "event": {
+    "id": "dd1df5f8694a94b37d70e5a93d3482e7ed1e4ced47a58165425332e2a7b9bccd",
+    "pubkey": "ff171b3f75df325f13849793478073709fab3916399f1e2fa57d792872bfc66e",
+    "created_at": 1776243140,
+    "kind": 30078,
+    "tags": [
+      [
+        "d",
+        "geogram.wapp:tools.geogram.install"
+      ],
+      [
+        "t",
+        "geogram-wapp-signature"
+      ],
+      [
+        "wapp_id",
+        "tools.geogram.install"
+      ],
+      [
+        "wapp_version",
+        "1.0.0"
+      ],
+      [
+        "manifest_digest",
+        "2840707499dc21dc732dba64baff264899f2ec866f278da57a0b704e42c8e9c9"
+      ]
+    ],
+    "content": "2840707499dc21dc732dba64baff264899f2ec866f278da57a0b704e42c8e9c9",
+    "sig": "c07878f8855b7977562aa0779b549d1fbe9d944f3997a0d7a565e2fd04f945894ad7d1b1a62c60342b48f35dfb798a452b45d0ca90d8e0b06c0fb9127804dc04"
+  }
+}

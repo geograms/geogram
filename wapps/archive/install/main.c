@@ -98,17 +98,23 @@ static void send_output(const char *text, const char *level) {
     hal_msg_send(buf, len);
 }
 
+/* Forward declaration — defined later next to the sources state. */
+static void send_sources_list(void);
+
 /* ── Catalog entry ───────────────────────────────────────────────────── */
 
-#define MAX_ENTRIES 32
+#define MAX_ENTRIES 64
 
 typedef struct {
-    char name[64];         /* folder name, e.g. "maps" */
-    char id[128];          /* manifest id */
+    char name[64];              /* folder name, e.g. "maps" */
+    char id[128];               /* manifest id */
     char version[32];
     char description[128];
-    char file[128];        /* relative path, e.g. "maps/maps-1.0.0.wapp" */
+    char file[128];             /* relative path, e.g. "maps/maps-1.0.0.wapp" */
     uint32_t size;
+    char source_raw[256];       /* the raw source URL/path this came from */
+    char source_host[96];       /* extracted host part (or "local" for files) */
+    char publisher_npub[80];    /* optional — from index.json, empty if unsigned */
 } CatalogEntry;
 
 static CatalogEntry catalog[MAX_ENTRIES];
@@ -116,20 +122,107 @@ static int catalog_count = 0;
 
 /* ── Source config ───────────────────────────────────────────────────── */
 
-static char source[512] = "";
+/* Multi-source support: the Settings tab hands us a newline-separated
+ * list of repositories (URLs or local paths). The wapp stores the raw
+ * buffer in KV under the same "source" key used by the old
+ * single-source build — the extra newlines are ignored by any older
+ * consumer. A `list`/`refresh` command fetches each source sequentially
+ * using a small state machine, accumulating catalog entries across
+ * every source. */
 
-static int source_is_url(void) {
-    return str_starts(source, "http://") || str_starts(source, "https://");
+#define MAX_SOURCES 16
+#define SOURCES_RAW_CAP 4096
+
+static char sources_raw[SOURCES_RAW_CAP] = "";
+static char sources[MAX_SOURCES][256];
+static int source_count = 0;
+
+/* Current fetch state for the multi-source queue. */
+static int fetching_idx = -1;           /* -1 = idle */
+static char fetch_current_src[256] = "";
+static char fetch_current_host[96] = "";
+
+static int source_str_is_url(const char *s) {
+    return str_starts(s, "http://") || str_starts(s, "https://");
 }
 
-static void load_source(void) {
-    uint32_t n = hal_kv_get("source", 6, source, sizeof(source) - 1);
-    if (n > 0) source[n] = '\0';
-    else source[0] = '\0';
+/* Extract a short human-readable host label from a source string.
+ * For URLs, this is the hostname (before any port / path). For file
+ * paths, we use the literal string "local" so cards have something
+ * to display. */
+static void extract_host(const char *src, char *host, unsigned host_len) {
+    const char *p = src;
+    if (str_starts(p, "https://")) p += 8;
+    else if (str_starts(p, "http://")) p += 7;
+    else {
+        str_copy(host, "local", host_len);
+        return;
+    }
+    unsigned i = 0;
+    while (*p && *p != '/' && *p != ':' && i < host_len - 1) {
+        host[i++] = *p++;
+    }
+    host[i] = '\0';
+    if (i == 0) str_copy(host, "local", host_len);
 }
 
-static void save_source(void) {
-    hal_kv_set("source", 6, source, str_len(source));
+/* Parse the newline-separated sources_raw into the sources[] array. */
+static void parse_sources_raw(void) {
+    source_count = 0;
+    const char *p = sources_raw;
+    while (*p && source_count < MAX_SOURCES) {
+        while (*p == '\n' || *p == '\r' || *p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        unsigned i = 0;
+        while (*p && *p != '\n' && *p != '\r' && i < 255) {
+            sources[source_count][i++] = *p++;
+        }
+        /* trim trailing whitespace */
+        while (i > 0 && (sources[source_count][i - 1] == ' ' ||
+                         sources[source_count][i - 1] == '\t')) {
+            i--;
+        }
+        sources[source_count][i] = '\0';
+        if (i > 0) source_count++;
+    }
+}
+
+static void load_sources(void) {
+    uint32_t n = hal_kv_get("source", 6, sources_raw, sizeof(sources_raw) - 1);
+    if (n > 0) sources_raw[n] = '\0';
+    else sources_raw[0] = '\0';
+    parse_sources_raw();
+}
+
+static void save_sources(void) {
+    hal_kv_set("source", 6, sources_raw, str_len(sources_raw));
+    parse_sources_raw();
+}
+
+/* Emit the current sources[] list as a structured message so the
+ * host can render a proper list UI (instead of guessing the state by
+ * parsing text logs). Format:
+ *   {"type":"store.sources","sources":["url1","url2",...]}
+ * Sent on module_init and after every save_sources() call so the
+ * settings tab stays in sync across add / remove cycles. */
+static void send_sources_list(void) {
+    char buf[SOURCES_RAW_CAP + 128];
+    str_copy(buf, "{\"type\":\"store.sources\",\"sources\":[", sizeof(buf));
+    unsigned len = str_len(buf);
+    for (int i = 0; i < source_count; i++) {
+        if (i > 0 && len < sizeof(buf) - 2) { buf[len++] = ','; }
+        if (len < sizeof(buf) - 2) { buf[len++] = '"'; }
+        for (unsigned j = 0; sources[i][j] && len < sizeof(buf) - 8; j++) {
+            char c = sources[i][j];
+            if (c == '"')      { buf[len++] = '\\'; buf[len++] = '"'; }
+            else if (c == '\\'){ buf[len++] = '\\'; buf[len++] = '\\'; }
+            else               { buf[len++] = c; }
+        }
+        if (len < sizeof(buf) - 2) { buf[len++] = '"'; }
+    }
+    if (len < sizeof(buf) - 3) { buf[len++] = ']'; buf[len++] = '}'; }
+    buf[len] = '\0';
+    hal_msg_send(buf, len);
 }
 
 /* ── Installed versions (stored in KV as "inst:<name>" = "<version>") ─ */
@@ -228,9 +321,14 @@ static int str_to_int(const char *s) {
     return v;
 }
 
-/* Parse index.json buffer into catalog[]. */
+/* Parse index.json buffer and APPEND entries to catalog[]. Each
+ * appended entry is tagged with the current fetch's source_raw and
+ * source_host so the host can render per-origin chips on the store
+ * cards. The multi-source state machine calls this once per fetched
+ * index and then advances to the next source without resetting
+ * catalog_count — the caller resets the count only when a new
+ * `list`/`refresh` command fires. */
 static void parse_index(const char *json, unsigned json_len) {
-    catalog_count = 0;
     const char *end = json + json_len;
     const char *p = json;
 
@@ -252,14 +350,21 @@ static void parse_index(const char *json, unsigned json_len) {
         CatalogEntry *e = &catalog[catalog_count];
         char size_str[16] = "";
 
+        /* Zero the whole entry so leftover bytes from a previous
+         * list don't leak into the new one. */
+        for (unsigned i = 0; i < sizeof(*e); i++) ((char *)e)[i] = 0;
+
         json_find_str(obj_start, obj_end, "file", e->file, sizeof(e->file));
         json_find_str(obj_start, obj_end, "id", e->id, sizeof(e->id));
         json_find_str(obj_start, obj_end, "version", e->version, sizeof(e->version));
         json_find_str(obj_start, obj_end, "description", e->description, sizeof(e->description));
         json_find_str(obj_start, obj_end, "size", size_str, sizeof(size_str));
+        json_find_str(obj_start, obj_end, "publisher_npub", e->publisher_npub, sizeof(e->publisher_npub));
 
         e->size = (uint32_t)str_to_int(size_str);
         extract_name(e->file, e->name, sizeof(e->name));
+        str_copy(e->source_raw, fetch_current_src, sizeof(e->source_raw));
+        str_copy(e->source_host, fetch_current_host, sizeof(e->source_host));
 
         if (e->name[0] && e->version[0]) {
             catalog_count++;
@@ -269,54 +374,94 @@ static void parse_index(const char *json, unsigned json_len) {
 
 /* Forward declarations */
 static void show_catalog(void);
+static void advance_fetch_queue(void);
 
 /* ── Fetch index ─────────────────────────────────────────────────────── */
 
 /* Pending HTTP request for async fetch. */
 static int32_t pending_req = -1;
+static char index_buf[8192];
 
-static void fetch_index_url(void) {
-    char url[600] = "";
-    str_cat(url, source, sizeof(url));
-    /* Append /index.json if source doesn't end with .json */
-    unsigned slen = str_len(source);
-    if (slen < 5 || !str_eq(source + slen - 5, ".json")) {
-        if (source[slen - 1] != '/') str_cat(url, "/", sizeof(url));
-        str_cat(url, "index.json", sizeof(url));
-    }
+/* Kick off the fetch for sources[fetching_idx]. For URL sources the
+ * HTTP request is started via hal_http and polled from module_tick.
+ * For local paths we delegate to the host via a
+ * {"type":"wapp.fetch_index",...} message and the response lands in
+ * module_handle_event as `wapp.index`. Either way, on completion
+ * advance_fetch_queue() is invoked to move to the next source. */
+static void start_current_fetch(void) {
+    if (fetching_idx < 0 || fetching_idx >= source_count) return;
+    const char *src = sources[fetching_idx];
+    str_copy(fetch_current_src, src, sizeof(fetch_current_src));
+    extract_host(src, fetch_current_host, sizeof(fetch_current_host));
 
-    send_output("Fetching catalog...", "info");
-    pending_req = hal_http_request(0, url, str_len(url), "", 0);
-    if (pending_req < 0) {
-        send_output("Failed to start HTTP request.", "err");
+    char msg[256] = "Fetching ";
+    str_cat(msg, fetch_current_host, sizeof(msg));
+    str_cat(msg, "...", sizeof(msg));
+    send_output(msg, "info");
+
+    if (source_str_is_url(src)) {
+        char url[600] = "";
+        str_cat(url, src, sizeof(url));
+        unsigned slen = str_len(src);
+        if (slen < 5 || !str_eq(src + slen - 5, ".json")) {
+            if (src[slen - 1] != '/') str_cat(url, "/", sizeof(url));
+            str_cat(url, "index.json", sizeof(url));
+        }
+        pending_req = hal_http_request(0, url, str_len(url), "", 0);
+        if (pending_req < 0) {
+            send_output("  failed to start HTTP request", "err");
+            advance_fetch_queue();
+        }
+    } else {
+        char m[700] = "{\"type\":\"wapp.fetch_index\",\"source\":\"";
+        str_cat(m, src, sizeof(m));
+        str_cat(m, "\"}", sizeof(m));
+        hal_msg_send(m, str_len(m));
     }
 }
 
-static char index_buf[8192];
+/* Called after a source's response is fully parsed (success or skip).
+ * Moves to the next source in the queue, or finalises the catalog
+ * display when every source has been consulted. */
+static void advance_fetch_queue(void) {
+    fetching_idx++;
+    if (fetching_idx >= source_count) {
+        fetching_idx = -1;
+        show_catalog();
+        return;
+    }
+    start_current_fetch();
+}
 
-static void fetch_index_file(void) {
-    /* Local file access is sandboxed — ask the renderer to read the
-     * index and send it back as a {"type":"wapp.index","data":"..."} message. */
-    char msg[700] = "{\"type\":\"wapp.fetch_index\",\"source\":\"";
-    str_cat(msg, source, sizeof(msg));
-    str_cat(msg, "\"}", sizeof(msg));
-    hal_msg_send(msg, str_len(msg));
-    send_output("Loading catalog...", "info");
+/* Entry point for the `list`/`refresh` command. Wipes the catalog
+ * and starts walking the sources[] array. */
+static void begin_fetch_all(void) {
+    if (source_count == 0) {
+        send_output("No repositories configured. Add at least one URL or path in Settings.", "err");
+        return;
+    }
+    catalog_count = 0;
+    fetching_idx = 0;
+    start_current_fetch();
 }
 
 /* ── Display ─────────────────────────────────────────────────────────── */
 
 static void show_catalog(void) {
     if (catalog_count == 0) {
-        send_output("No wapps found in catalog.", "info");
+        send_output("No wapps found across the configured repositories.", "info");
         return;
     }
 
     char hdr[32];
     u64_to_str((uint64_t)catalog_count, hdr, sizeof(hdr));
-    char msg[64] = "";
+    char msg[96] = "";
     str_cat(msg, hdr, sizeof(msg));
-    str_cat(msg, " wapp(s) available:", sizeof(msg));
+    str_cat(msg, " wapp(s) available across ", sizeof(msg));
+    char src_hdr[16];
+    u64_to_str((uint64_t)source_count, src_hdr, sizeof(src_hdr));
+    str_cat(msg, src_hdr, sizeof(msg));
+    str_cat(msg, " repo(s):", sizeof(msg));
     send_output(msg, "info");
 
     for (int i = 0; i < catalog_count; i++) {
@@ -364,6 +509,20 @@ static void show_catalog(void) {
             str_cat(desc, e->description, sizeof(desc));
             send_output(desc, "out");
         }
+
+        /* Source host chip: "    @host.example.com" */
+        if (e->source_host[0]) {
+            char host_line[160] = "    @";
+            str_cat(host_line, e->source_host, sizeof(host_line));
+            send_output(host_line, "out");
+        }
+
+        /* Publisher chip: "    by:npub1..." */
+        if (e->publisher_npub[0]) {
+            char pub_line[128] = "    by:";
+            str_cat(pub_line, e->publisher_npub, sizeof(pub_line));
+            send_output(pub_line, "out");
+        }
     }
 }
 
@@ -388,11 +547,14 @@ static void do_install(const char *name) {
         return;
     }
 
-    /* Build install message for the renderer:
-     * {"type":"wapp.install","source":"<source>","file":"<file>",
-     *  "name":"<name>","version":"<version>"} */
+    /* Build install message for the renderer. The source is whatever
+     * repository THIS entry came from, not a global — that way a
+     * multi-repo catalog can still install each wapp from its own
+     * origin without the user needing to toggle sources.
+     *   {"type":"wapp.install","source":"<source>","file":"<file>",
+     *    "name":"<name>","version":"<version>"} */
     char msg[1024] = "{\"type\":\"wapp.install\",\"source\":\"";
-    str_cat(msg, source, sizeof(msg));
+    str_cat(msg, e->source_raw, sizeof(msg));
     str_cat(msg, "\",\"file\":\"", sizeof(msg));
     str_cat(msg, e->file, sizeof(msg));
     str_cat(msg, "\",\"name\":\"", sizeof(msg));
@@ -524,9 +686,9 @@ static void show_installed(void) {
 /* ── Command dispatch ────────────────────────────────────────────────── */
 
 static void cmd_help(void) {
-    send_output("Wapp Installer commands:", "info");
-    send_output("  source [url|path]  Get/set repository source", "out");
-    send_output("  list               Fetch catalog and show wapps", "out");
+    send_output("Wapp Store commands:", "info");
+    send_output("  sources            List configured repositories", "out");
+    send_output("  list               Fetch all repos and show catalog", "out");
     send_output("  install <name>     Install a wapp", "out");
     send_output("  update [name]      Update one or all wapps", "out");
     send_output("  remove <name>      Remove a wapp", "out");
@@ -537,37 +699,32 @@ static void cmd_help(void) {
 static void dispatch(const char *input) {
     char cmd[32];
     const char *args = next_word(input, cmd, sizeof(cmd));
+    (void)args;
 
     if (cmd[0] == '\0') return;
 
     if (str_eq(cmd, "help")) {
         cmd_help();
     }
-    else if (str_eq(cmd, "source")) {
-        char arg[512];
-        next_word(args, arg, sizeof(arg));
-        if (arg[0]) {
-            str_copy(source, arg, sizeof(source));
-            save_source();
-            char msg[256] = "Source set to: ";
-            str_cat(msg, source, sizeof(msg));
-            send_output(msg, "info");
-        } else if (source[0]) {
-            send_output(source, "out");
-        } else {
-            send_output("No source configured. Use: source <url-or-path>", "err");
+    else if (str_eq(cmd, "sources") || str_eq(cmd, "source")) {
+        if (source_count == 0) {
+            send_output("No repositories configured. Add them in Settings.", "err");
+            return;
+        }
+        char hdr[32];
+        u64_to_str((uint64_t)source_count, hdr, sizeof(hdr));
+        char msg[64] = "";
+        str_cat(msg, hdr, sizeof(msg));
+        str_cat(msg, " repositories:", sizeof(msg));
+        send_output(msg, "info");
+        for (int i = 0; i < source_count; i++) {
+            char line[320] = "  ";
+            str_cat(line, sources[i], sizeof(line));
+            send_output(line, "out");
         }
     }
     else if (str_eq(cmd, "list") || str_eq(cmd, "refresh")) {
-        if (!source[0]) {
-            send_output("No source configured. Use: source <url-or-path>", "err");
-            return;
-        }
-        if (source_is_url()) {
-            fetch_index_url();
-        } else {
-            fetch_index_file();
-        }
+        begin_fetch_all();
     }
     else if (str_eq(cmd, "install")) {
         char name[64];
@@ -601,19 +758,15 @@ static void dispatch(const char *input) {
 
 void module_init(void) {
     hal_log(1, "[install] init", 14);
-    load_source();
+    load_sources();
+    send_sources_list();
 
-    send_output("Wapp Installer v1.0", "info");
-    if (source[0]) {
-        /* Auto-fetch catalog on startup */
-        if (source_is_url()) {
-            fetch_index_url();
-        } else {
-            fetch_index_file();
-        }
+    send_output("Wapp Store v2.0", "info");
+    if (source_count > 0) {
+        begin_fetch_all();
     } else {
-        send_output("No source configured.", "info");
-        send_output("Set a repository path in Settings.", "info");
+        send_output("No repositories configured.", "info");
+        send_output("Open Settings to add a URL or local path.", "info");
     }
 }
 
@@ -624,21 +777,27 @@ void module_tick(void) {
         if (status == 0) return; /* still pending */
 
         if (status < 0) {
-            send_output("HTTP request failed.", "err");
+            char msg[96] = "HTTP request failed for ";
+            str_cat(msg, fetch_current_host, sizeof(msg));
+            send_output(msg, "err");
             hal_http_free(pending_req);
             pending_req = -1;
+            advance_fetch_queue();
             return;
         }
 
         int32_t code = hal_http_status(pending_req);
         if (code < 200 || code >= 300) {
-            char msg[64] = "HTTP error: ";
+            char msg[96] = "HTTP error ";
             char code_buf[16];
             u64_to_str((uint64_t)(code > 0 ? code : 0), code_buf, sizeof(code_buf));
             str_cat(msg, code_buf, sizeof(msg));
+            str_cat(msg, " from ", sizeof(msg));
+            str_cat(msg, fetch_current_host, sizeof(msg));
             send_output(msg, "err");
             hal_http_free(pending_req);
             pending_req = -1;
+            advance_fetch_queue();
             return;
         }
 
@@ -648,12 +807,13 @@ void module_tick(void) {
         pending_req = -1;
 
         if (n <= 0) {
-            send_output("Empty response.", "err");
+            send_output("  empty response", "err");
+            advance_fetch_queue();
             return;
         }
         index_buf[n] = '\0';
         parse_index(index_buf, (unsigned)n);
-        show_catalog();
+        advance_fetch_queue();
     }
 }
 
@@ -683,8 +843,13 @@ void module_handle_event(void) {
                     action[ai++] = *p++;
                 action[ai] = '\0';
 
-                if (str_eq(action, "save")) {
-                    /* Extract source field from fields object */
+                if (str_eq(action, "set_sources")) {
+                    /* The host already validated each URL and hands
+                     * us a pre-joined newline-separated list in the
+                     * "source" field. The value is a JSON string
+                     * that may contain escaped newlines (\\n); un-
+                     * escape those back to real newlines before
+                     * persisting. */
                     const char *src_key = "\"source\":\"";
                     const char *q = buf;
                     while (*q) {
@@ -695,27 +860,36 @@ void module_handle_event(void) {
                         }
                         if (m) {
                             q += skl;
-                            char new_source[512];
                             unsigned si = 0;
-                            while (*q && *q != '"' && si < sizeof(new_source) - 1)
-                                new_source[si++] = *q++;
-                            new_source[si] = '\0';
-                            if (new_source[0]) {
-                                str_copy(source, new_source, sizeof(source));
-                                save_source();
-                                /* Toast confirmation */
-                                hal_msg_send("{\"type\":\"ui.toast\",\"message\":\"Settings saved\"}", 46);
-                                /* Auto-fetch catalog */
-                                if (source_is_url()) {
-                                    fetch_index_url();
+                            while (*q && *q != '"' &&
+                                   si < sizeof(sources_raw) - 1) {
+                                if (*q == '\\' && *(q + 1)) {
+                                    q++;
+                                    if (*q == 'n') sources_raw[si++] = '\n';
+                                    else if (*q == 't') sources_raw[si++] = '\t';
+                                    else if (*q == 'r') sources_raw[si++] = '\r';
+                                    else sources_raw[si++] = *q;
+                                    q++;
                                 } else {
-                                    fetch_index_file();
+                                    sources_raw[si++] = *q++;
                                 }
+                            }
+                            sources_raw[si] = '\0';
+                            save_sources();
+                            send_sources_list();
+                            if (source_count > 0) {
+                                begin_fetch_all();
+                            } else {
+                                catalog_count = 0;
+                                show_catalog();
                             }
                             return;
                         }
                         q++;
                     }
+                    /* save with no source field → just ack */
+                    send_sources_list();
+                    return;
                 }
                 return;
             }
@@ -777,12 +951,13 @@ void module_handle_event(void) {
                                 index_buf[i] = dq[i];
                             index_buf[dlen] = '\0';
                             parse_index(index_buf, dlen);
-                            show_catalog();
                         }
+                        advance_fetch_queue();
                         return;
                     }
                     dq++;
                 }
+                advance_fetch_queue();
                 return;
             }
             tp++;

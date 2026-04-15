@@ -1,0 +1,48 @@
+{
+  "schema": "geogram.wapp.signature/1",
+  "wapp_id": "tools.geogram.maps",
+  "wapp_version": "1.0.0",
+  "signed_at": 1776243141,
+  "publisher_npub": "npub1lut3k0m4mue97yuyj7f50qrnwz06kwgk8x03uta904ujsu4lcehq9u67tm",
+  "publisher_hex": "ff171b3f75df325f13849793478073709fab3916399f1e2fa57d792872bfc66e",
+  "hash_algo": "sha256",
+  "manifest_digest_hex": "3ba178b8007df7c9d58850bd89f77f9098b72154da81cf782c9f0400108b622a",
+  "hashes": {
+    "main.c": "3b27b0c99dd97685cf564464639a8960117953451a2bde01c837343c758ab295",
+    "Makefile": "cd848e35d56fa12e921865ac821b312028a157067f9518a0217cbf105ad8bc59",
+    "screens/home.ui.json": "687b200be53c7e21762a103e7d8029325fe36b1c38c62f0075a2e2430a0fe021",
+    "manifest.json": "675317c88c7e65cc022556ef057c24ad008bf3247b57907e23a79bba442da74b",
+    "media/icons/map.svg": "133b7749baa63961827ce6aedcba92622905b1c837748cd59522f1ef5a202b47",
+    "app.wasm": "8e671a6b9d50750dc280e583908c19dc7e9f512459e9f526631746267a6d44d9"
+  },
+  "event": {
+    "id": "84fe3101d430b33d9172ed4fc4339d6b104f0361a2e8dd6e92b86970ef398bba",
+    "pubkey": "ff171b3f75df325f13849793478073709fab3916399f1e2fa57d792872bfc66e",
+    "created_at": 1776243141,
+    "kind": 30078,
+    "tags": [
+      [
+        "d",
+        "geogram.wapp:tools.geogram.maps"
+      ],
+      [
+        "t",
+        "geogram-wapp-signature"
+      ],
+      [
+        "wapp_id",
+        "tools.geogram.maps"
+      ],
+      [
+        "wapp_version",
+        "1.0.0"
+      ],
+      [
+        "manifest_digest",
+        "3ba178b8007df7c9d58850bd89f77f9098b72154da81cf782c9f0400108b622a"
+      ]
+    ],
+    "content": "3ba178b8007df7c9d58850bd89f77f9098b72154da81cf782c9f0400108b622a",
+    "sig": "29ae424a4d3893c45c9cc33b60b59b8551482831b28786546f45d49355d61249990a0314ece89dd3e06e8de4207354f0d2861588d71ed3339c222e1d951b10fc"
+  }
+}

@@ -52,16 +52,13 @@
   {
     "$": "screen",
     "name": "UI",
-    "tip": "Raw home.ui.json for the wapp. Selecting a project on the Projects tab populates this; Install writes it back. A visual drag-and-drop editor will layer on top of this later.",
+    "tip": "Visual + code editor for the wapp's GeoUI screens. Switch between a drag-free tree view of the blocks and the raw JSON in the same tab.",
     "children": [
       {
-        "$": "field",
-        "name": "source_ui",
-        "$type": "code",
-        "label": "home.ui.json",
-        "language": "json",
-        "tip": "GeoUI screen definition. Leave empty for a default label screen. See wapps/wapps.md for the full schema.",
-        "default": ""
+        "$": "group",
+        "name": "ui",
+        "$type": "ui-editor",
+        "tip": "Edit the screens bound to `source_ui`. Install writes them to screens/home.ui.json."
       }
     ]
   },

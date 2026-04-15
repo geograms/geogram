@@ -484,16 +484,31 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       String name, String label, String? tip, GeoUiBlock field) {
     final hint = field.getString('hint');
     final readOnly = field.getBool('readonly') ?? false;
+    // Multi-line attribute: when true, the TextField grows to [lines]
+    // visible rows and accepts the Enter key as a newline. Useful for
+    // fields like the install wapp's "Repositories" list where one
+    // URL/path lives per line.
+    final multiline = field.getBool('multiline') ?? false;
+    final lines = (field.getNumber('lines') ?? 6).toInt();
     final val = widget.bindings.getValue(name)?.toString() ?? '';
     return TextField(
       decoration: InputDecoration(
         labelText: label,
         helperText: tip,
+        helperMaxLines: 3,
         hintText: hint,
+        alignLabelWithHint: multiline,
         filled: true,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
       readOnly: readOnly,
+      maxLines: multiline ? lines : 1,
+      minLines: multiline ? 3 : 1,
+      keyboardType:
+          multiline ? TextInputType.multiline : TextInputType.text,
+      style: multiline
+          ? const TextStyle(fontFamily: 'monospace', fontSize: 13)
+          : null,
       controller: TextEditingController(text: val),
       onChanged: (v) => widget.bindings.setValue(name, v),
     );

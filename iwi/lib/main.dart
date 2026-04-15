@@ -15,7 +15,9 @@ import 'services/profile_service.dart';
 import 'services/profile_storage.dart';
 import 'services/storage_paths.dart';
 import 'services/task_monitor_service.dart';
+import 'services/wapp_signing_service.dart';
 import 'services/widget_registry.dart';
+import 'util/wapp_icons.dart';
 import 'wapp/wapp_engine.dart';
 import 'wapp/wapp_page.dart';
 
@@ -166,6 +168,11 @@ class WappManifest {
   final String? icon;
   final String dirPath;
 
+  /// Publisher npub extracted from this wapp's `signature.json`
+  /// sidecar (if any). Empty means the wapp is unsigned. Populated
+  /// during launcher scan via [WappSigningService.readPublisherNpub].
+  final String publisherNpub;
+
   /// Widget IDs this wapp advertises in its `provides.widgets` array.
   /// Empty list means the wapp is not a widget provider. One wapp
   /// can provide any number of widgets.
@@ -179,10 +186,15 @@ class WappManifest {
     required this.kind,
     this.icon,
     required this.dirPath,
+    this.publisherNpub = '',
     this.providedWidgets = const [],
   });
 
-  factory WappManifest.fromJson(Map<String, dynamic> json, String dirPath) {
+  factory WappManifest.fromJson(
+    Map<String, dynamic> json,
+    String dirPath, {
+    String publisherNpub = '',
+  }) {
     final id = json['id'] as String? ?? '';
     final folderName = dirPath.split(Platform.pathSeparator).last;
     final manifestDescription = json['description'] as String? ?? '';
@@ -208,22 +220,15 @@ class WappManifest {
       kind: json['kind'] as String? ?? 'app',
       icon: json['icon'] as String?,
       dirPath: dirPath,
+      publisherNpub: publisherNpub,
       providedWidgets: providedWidgets,
     );
   }
 
-  /// Map wapp IDs to Material icons.
-  IconData get iconData {
-    final lower = id.toLowerCase();
-    if (lower.contains('install')) return Icons.download;
-    if (lower.contains('terminal')) return Icons.terminal;
-    if (lower.contains('chat')) return Icons.chat;
-    if (lower.contains('radio')) return Icons.radio;
-    if (lower.contains('map')) return Icons.map;
-    if (lower.contains('file')) return Icons.folder;
-    if (lower.contains('settings')) return Icons.settings;
-    return Icons.extension;
-  }
+  /// Map wapp IDs to Material icons. Delegates to the shared
+  /// [wappIconFor] so the launcher grid and the wapp Store use the
+  /// same visual identity for any given wapp.
+  IconData get iconData => wappIconFor('$id $name');
 
   /// Extract a short text label from `manifest.icon` if one is set.
   /// Path-shaped values (`media/icons/foo.svg`) return null so the
@@ -375,7 +380,34 @@ class _LauncherPageState extends State<LauncherPage> {
     final json = await pkg.readJson('manifest.json');
     if (json == null) return;
     try {
-      final manifest = WappManifest.fromJson(json, pkg.basePath);
+      // Backfill signature on the fly when missing — phase 1 of the
+      // wapp-signing plan. If the active profile has no nsec yet the
+      // sign step is a no-op and publisherNpub stays empty. Signing
+      // writes a `signature.json` sidecar into the wapp's directory
+      // so built-ins (writable in dev checkouts) and user installs
+      // (writable under the profile data dir) both get covered.
+      var publisher = await WappSigningService.instance.readPublisherNpub(pkg);
+      if (publisher.isEmpty &&
+          ProfileService.instance.activeProfile != null) {
+        final wappId = (json['id'] as String?) ?? '';
+        final wappVersion = (json['version'] as String?) ?? '1.0.0';
+        if (wappId.isNotEmpty) {
+          final ok = await WappSigningService.instance.signPackage(
+            pkg,
+            wappId: wappId,
+            wappVersion: wappVersion,
+          );
+          if (ok) {
+            publisher =
+                await WappSigningService.instance.readPublisherNpub(pkg);
+          }
+        }
+      }
+      final manifest = WappManifest.fromJson(
+        json,
+        pkg.basePath,
+        publisherNpub: publisher,
+      );
       if (manifest.kind == 'app' && seen.add(manifest.id)) {
         wapps.add(manifest);
       }
@@ -628,7 +660,13 @@ class _AppIcon extends StatelessWidget {
     // Creator and persisted as media/icons/icon.svg), then a short
     // text label (emoji / single char), then the Material icon
     // guess from [WappManifest.iconData]. All three cases render
-    // into the same 56x56 coloured tile used on the launcher grid.
+    // as white glyphs inside the 56x56 coloured tile: SVGs get a
+    // srcIn colour filter that repaints every non-transparent pixel
+    // white (SVGs in the wild are authored in black or dark
+    // strokes), and emoji glyphs — which ignore TextStyle.color
+    // because they come from a colour font — are wrapped in a
+    // ColorFiltered so their alpha mask is repainted white too.
+    const whiteFilter = ColorFilter.mode(Colors.white, BlendMode.srcIn);
     final hasSvg = svgIconPath != null && svgIconPath!.isNotEmpty;
     final hasText = textIcon != null && textIcon!.isNotEmpty;
     Widget inner;
@@ -638,20 +676,24 @@ class _AppIcon extends StatelessWidget {
         child: SvgPicture.file(
           File(svgIconPath!),
           fit: BoxFit.contain,
+          colorFilter: whiteFilter,
           placeholderBuilder: (_) => const SizedBox.shrink(),
         ),
       );
     } else if (hasText) {
-      inner = FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Text(
-            textIcon!,
-            style: const TextStyle(
-              fontSize: 32,
-              color: Colors.white,
-              fontWeight: FontWeight.w600,
+      inner = ColorFiltered(
+        colorFilter: whiteFilter,
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Text(
+              textIcon!,
+              style: const TextStyle(
+                fontSize: 32,
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ),

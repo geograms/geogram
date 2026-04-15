@@ -18,7 +18,9 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'event_bus.dart';
+import 'profile_storage.dart';
 import 'storage_paths.dart';
+import 'wapp_signing_service.dart';
 
 class InstallResult {
   final bool ok;
@@ -227,6 +229,18 @@ class WappInstallerService {
     } catch (e) {
       return InstallResult.failure(id, 'failed to write wapp files: $e');
     }
+
+    // Sign the freshly written wapp with the active profile's nsec
+    // so `signature.json` lands next to the other sidecars. This is
+    // best-effort: an unsigned install still succeeds, so a user
+    // without a profile can still install wapps (phase 2 will turn
+    // this into a hard requirement).
+    final pkg = ScopedProfileStorage(installed, folder);
+    await WappSigningService.instance.signPackage(
+      pkg,
+      wappId: id,
+      wappVersion: version,
+    );
 
     // Nudge the launcher to rescan. WappLoadedEvent is the signal
     // LauncherPage already subscribes to for other rescan triggers.
