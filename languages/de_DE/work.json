@@ -474,5 +474,9 @@
   "work_accounting_cat_freelance": "Freiberuflich",
   "work_accounting_cat_investment": "Investition",
   "work_accounting_cat_gift": "Geschenk",
-  "work_accounting_cat_other_income": "Sonstige Einnahmen"
+  "work_accounting_cat_other_income": "Sonstige Einnahmen",
+  "work_accounting_category_breakdown": "Ausgaben nach Kategorie",
+  "work_accounting_no_expenses_month": "Keine Ausgaben in diesem Monat",
+  "work_accounting_no_expenses_year": "Keine Ausgaben in diesem Jahr",
+  "work_accounting_view_yearly": "Jährlich"
 }

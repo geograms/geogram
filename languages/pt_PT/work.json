@@ -474,5 +474,9 @@
   "work_accounting_cat_freelance": "Freelance",
   "work_accounting_cat_investment": "Investimento",
   "work_accounting_cat_gift": "Oferta",
-  "work_accounting_cat_other_income": "Outra Receita"
+  "work_accounting_cat_other_income": "Outra Receita",
+  "work_accounting_category_breakdown": "Despesas por Categoria",
+  "work_accounting_no_expenses_month": "Sem despesas este mês",
+  "work_accounting_no_expenses_year": "Sem despesas este ano",
+  "work_accounting_view_yearly": "Anual"
 }

@@ -22,6 +22,7 @@ import '../widgets/document_interaction_widget.dart';
 import '../widgets/document_visibility_widget.dart';
 import '../widgets/accounting/accounting_entry_card_widget.dart';
 import '../widgets/accounting/accounting_chart_widget.dart';
+import '../widgets/accounting/accounting_category_breakdown_widget.dart';
 
 /// Accounting editor page for tracking income and expenses
 class AccountingEditorPage extends StatefulWidget {
@@ -461,6 +462,23 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
               viewPeriod: _content!.settings.viewPeriod,
               currencyCode: _content!.currency,
             ),
+          ),
+
+        // Category breakdown (pie chart + ranked list)
+        if (_entries.where((e) => e.type == AccountingEntryType.expense).isNotEmpty)
+          ExpansionTile(
+            title: Text(_i18n.t('work_accounting_category_breakdown'),
+                style: Theme.of(context).textTheme.titleSmall),
+            initiallyExpanded: true,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+            childrenPadding: EdgeInsets.zero,
+            children: [
+              AccountingCategoryBreakdownWidget(
+                entries: _entries,
+                currencyCode: _content!.currency,
+                getCategoryLabel: _getCategoryLabel,
+              ),
+            ],
           ),
 
         // Filter chips

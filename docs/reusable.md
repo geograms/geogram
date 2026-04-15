@@ -294,6 +294,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 - [AccountingContent](#accountingcontent-model) - Accounting content models (entries, categories, settings)
 - [AccountingChartWidget](#accountingchartwidget) - CustomPaint bar chart for income vs expenses by week/month
 - [AccountingEntryCardWidget](#accountingentrycardwidget) - Entry card with swipe-to-delete and currency formatting
+- [AccountingCategoryBreakdownWidget](#accountingcategorybreakdownwidget) - Donut pie chart + ranked category list with monthly/yearly toggle
 
 ### API Common Utilities
 - [GeometryUtils](#geometryutils) - Haversine distance calculation between coordinates
@@ -11797,5 +11798,19 @@ AccountingEntryCardWidget(
   currencyCode: 'EUR',
   onEdit: () => editEntry(entry),
   onDelete: () => deleteEntry(entry),
+)
+```
+
+### AccountingCategoryBreakdownWidget
+
+Donut pie chart with ranked category list showing expense breakdown. Includes a monthly/yearly toggle to filter entries by current period. Categories are sorted by amount (biggest first) with percentage. Responsive: side-by-side on wide screens, stacked on narrow.
+
+**File:** `lib/work/widgets/accounting/accounting_category_breakdown_widget.dart`
+
+```dart
+AccountingCategoryBreakdownWidget(
+  entries: allEntries,
+  currencyCode: 'EUR',
+  getCategoryLabel: (cat) => i18n.t(categoryI18nKeys[cat] ?? cat),
 )
 ```
