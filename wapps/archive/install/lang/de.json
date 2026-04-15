@@ -1,0 +1,9 @@
+{
+  "screen.store": "Store",
+  "screen.store_tip": "Wapps aus einem Repository durchsuchen, installieren und aktualisieren.",
+  "screen.settings": "Einstellungen",
+  "screen.settings_tip": "Repositories verwalten, aus denen der Wapp-Store lädt.",
+  "group.output_tip": "Wapp-Katalog und Statusmeldungen.",
+  "group.sources_name": "Quellen",
+  "group.sources_tip": "URL eingeben und auf Hinzufügen klicken — der Store prüft /wapps/index.json bevor er akzeptiert. Einträge lassen sich jederzeit entfernen."
+}

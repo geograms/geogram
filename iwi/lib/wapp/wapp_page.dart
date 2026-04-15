@@ -18,6 +18,7 @@ import '../services/notification_service.dart';
 import '../services/preferences_service.dart';
 import '../services/profile_storage.dart';
 import '../services/storage_paths.dart';
+import '../services/i18n_context.dart';
 import '../services/task_monitor_service.dart';
 import '../services/wapp_compiler_service.dart';
 import '../services/wapp_installer_service.dart';
@@ -116,6 +117,13 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   /// Null means nothing is selected.
   List<int>? _uiSelectedPath;
 
+  /// Currently-editing locale on App Creator's Translations tab. The
+  /// key-value map for this locale is what the form actually edits;
+  /// the inspector pulls straight from
+  /// `_fieldValues['translations'][locale]`. Null when no locale is
+  /// selected (also when the wapp doesn't have any lang/*.json yet).
+  String? _translationsLocale;
+
   // Structured mirror of the install wapp's sources list, pushed by
   // the wapp on init / after save via {"type":"store.sources"}.
   // Drives the sources manager UI on the Settings tab. Starts as an
@@ -135,6 +143,17 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
 
   // Settings bindings
   final _fieldValues = <String, dynamic>{};
+
+  /// Per-wapp translation context. Loaded from `lang/<locale>.json`
+  /// inside the wapp package on mount and refreshed whenever the
+  /// user switches language via [LocaleChangedEvent]. Passed to
+  /// every [GeoUiScreenRenderer] so `@key` sentinels resolve to the
+  /// user's preferred locale. Empty until `_loadWapp` populates it.
+  I18nContext _i18n = I18nContext.empty();
+
+  /// Subscription to [LocaleChangedEvent] so the open wapp rebuilds
+  /// its translations live on locale change. Cancelled in [dispose].
+  EventSubscription<LocaleChangedEvent>? _localeSub;
 
   // Map state
   double _mapLat = 0, _mapLon = 0;
@@ -296,6 +315,12 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     // installer carries the existing main.c forward automatically.
     final sourceC = (_fieldValues['source'] as String?) ?? '';
     final icon = (_fieldValues['wapp_icon'] as String?) ?? '';
+    // Translations come from the App Creator Translations tab as a
+    // `Map<String, Map<String, String>>` (locale → key → value).
+    // Pass null when empty so the installer's edit-in-place path
+    // doesn't strip a previously-written lang/ dir.
+    final translationsRaw = _fieldValues['translations'];
+    final translations = _coerceTranslations(translationsRaw);
 
     final result = await WappInstallerService.instance.installFromCompiled(
       id: id,
@@ -306,6 +331,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       homeScreenJson: sourceUi.isEmpty ? null : sourceUi,
       sourceC: sourceC.isEmpty ? null : sourceC,
       icon: icon.isEmpty ? null : icon,
+      translations: translations,
       overwrite: true,
     );
     if (!result.ok) {
@@ -404,6 +430,28 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     final wasm = await pkg.readBytes('app.wasm');
     final sourceC = await pkg.readString('main.c') ?? '';
 
+    // Load every lang/*.json sidecar so the Translations tab opens
+    // pre-populated. Keys are locale codes (without extension),
+    // values are flat string→string maps.
+    final translations = <String, Map<String, String>>{};
+    if (await pkg.directoryExists('lang')) {
+      final langEntries = await pkg.listDirectory('lang');
+      for (final langEntry in langEntries) {
+        if (langEntry.isDirectory) continue;
+        final path = langEntry.path;
+        if (!path.endsWith('.json')) continue;
+        final base = path.split('/').last;
+        final code = base.substring(0, base.length - 5);
+        final asJson = await pkg.readJson('lang/$base');
+        if (asJson == null) continue;
+        final inner = <String, String>{};
+        for (final e in asJson.entries) {
+          if (e.value is String) inner[e.key] = e.value as String;
+        }
+        translations[code] = inner;
+      }
+    }
+
     // Mutate the bindings map in place. A subsequent setState lets
     // CodeEditorField / TextField widgets pick up the new values
     // via their didUpdateWidget paths.
@@ -414,6 +462,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     _fieldValues['wapp_icon'] = iconForField;
     _fieldValues['source_ui'] = uiJson;
     _fieldValues['source'] = sourceC;
+    _fieldValues['translations'] = translations;
     // Lock the Code tab when the loaded wapp didn't ship main.c.
     // User can still start fresh via the "Create new wapp" button.
     _fieldValues['source__readonly'] = sourceC.isEmpty;
@@ -455,6 +504,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       'source',
       'source_ui',
       'source__readonly',
+      'translations',
     };
     for (final key in keysToReset) {
       _fieldValues.remove(key);
@@ -905,7 +955,43 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     _loadWapp();
   }
 
+  /// Refresh [_i18n] from the wapp package using the currently-
+  /// preferred locale. Called once on wapp load and again every
+  /// time the user switches language so the change takes effect
+  /// without reloading the whole wapp.
+  Future<void> _reloadI18n() async {
+    final prefs = await PreferencesService.instance();
+    final locale = prefs.activeLocale();
+    final lang = prefs.activeLanguageCode();
+    _i18n = await I18nContext.loadFromPackage(
+      _pkg,
+      locale: locale,
+      languageOnly: lang,
+    );
+    // Also hand the fresh table to the engine so hal_i18n_get()
+    // calls from the wapp code see the same translations as the
+    // GeoUI renderer.
+    _engine.setI18n(_i18n);
+  }
+
   Future<void> _loadWapp() async {
+    // Load the wapp's translation tables first so the screens we're
+    // about to parse can resolve their `@key` references right away.
+    // On first run this reads `lang/<locale>.json` from the wapp
+    // package (e.g. wapps/archive/install/lang/pt_PT.json) and
+    // merges the English fallback. Wapps without a `lang/` dir
+    // produce an empty context and every string passes through as-
+    // authored.
+    await _reloadI18n();
+    // Live reload on language switch: the Settings row fires
+    // LocaleChangedEvent, we rebuild the context and setState so
+    // every GeoUiScreenRenderer picks up the new i18n on its next
+    // build pass.
+    _localeSub = EventBus().on<LocaleChangedEvent>((_) async {
+      await _reloadI18n();
+      if (mounted) setState(() {});
+    });
+
     // Parse .ui.json screens from the package's screens/ directory.
     if (await _pkg.directoryExists('screens')) {
       final entries = await _pkg.listDirectory('screens');
@@ -1375,6 +1461,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     _tickTimer?.cancel();
     TaskMonitorService.instance.unregister(_tickTaskId);
     EventBus().fire(WappUnloadedEvent(wappId: _wappName, wappName: _wappName));
+    _localeSub?.cancel();
     _engine.dispose();
     _cmdController.dispose();
     _scrollController.dispose();
@@ -1405,7 +1492,9 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         bottom: _screenNames.length > 1
             ? TabBar(
                 controller: _tabController,
-                tabs: _screenNames.map((n) => Tab(text: n)).toList(),
+                tabs: _screenNames
+                    .map((n) => Tab(text: _i18n.resolve(n)))
+                    .toList(),
                 isScrollable: true,
               )
             : null,
@@ -1462,7 +1551,9 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         title: Text('${widget.title}$titleSuffix'),
         bottom: TabBar(
           controller: _editorTabController,
-          tabs: editorNames.map((n) => Tab(text: n)).toList(),
+          tabs: editorNames
+              .map((n) => Tab(text: _i18n.resolve(n)))
+              .toList(),
           isScrollable: true,
         ),
       ),
@@ -1522,6 +1613,16 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         c.keyword == 'group' && c.type == 'ui-editor');
     if (hasUiEditorGroup) {
       return _buildUiEditorScreen();
+    }
+
+    // Translations editor — App Creator's Translations tab. Edits
+    // the wapp's `lang/<locale>.json` sidecars as a flat key-value
+    // table per locale; the install pipeline ships whichever locales
+    // the author filled in.
+    final hasTranslationsGroup = screen.children.any((c) =>
+        c.keyword == 'group' && c.type == 'translations');
+    if (hasTranslationsGroup) {
+      return _buildTranslationsScreen();
     }
 
     // Terminal screen — has output + command input
@@ -2971,6 +3072,521 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     } catch (_) {}
   }
 
+  // ── Translations editor ───────────────────────────────────────
+
+  /// App Creator Translations tab — per-locale key/value table
+  /// editor for the wapp's `lang/<locale>.json` sidecars. The
+  /// authoritative state lives in
+  /// `_fieldValues['translations']` as
+  /// `Map<String /*locale*/, Map<String, String>>`, seeded by
+  /// [_loadProject] and shipped through [WappInstallerService] on
+  /// install. Empty string values are kept so the extract-keys
+  /// button can surface untranslated stubs.
+  Widget _buildTranslationsScreen() {
+    final cs = Theme.of(context).colorScheme;
+    final translations = _translationsMap();
+
+    // Sorted locale list for the dropdown. Always includes `en`
+    // as the de-facto fallback so authors can start there even
+    // when no lang/*.json files exist yet.
+    final locales = translations.keys.toList()..sort();
+    if (locales.isEmpty) locales.add('en');
+    // Clamp the active selection to something valid.
+    if (_translationsLocale == null ||
+        !locales.contains(_translationsLocale)) {
+      _translationsLocale = locales.first;
+    }
+    final activeLocale = _translationsLocale!;
+    final currentMap = translations.putIfAbsent(
+        activeLocale, () => <String, String>{});
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      children: [
+        Text(
+          'Translations',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Each locale becomes a lang/<code>.json sidecar inside '
+          'the wapp package. Strings in the UI prefixed with @key '
+          'resolve to the value below at runtime — the fallback '
+          'chain is exact tag → language-only → en → the literal '
+          'key.',
+          style: TextStyle(color: cs.onSurfaceVariant, height: 1.35),
+        ),
+        const SizedBox(height: 12),
+
+        // Persistence banner + save button. Typing into the rows
+        // below only mutates the in-memory bindings — the actual
+        // lang/*.json sidecars are written by the installer, which
+        // also writes everything else (source, UI, icon, …). The
+        // Save button is a convenience that triggers the same code
+        // path Install on the Code tab does, so the author can
+        // commit translations without tab-hopping.
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+          decoration: BoxDecoration(
+            color: cs.primaryContainer.withAlpha(80),
+            borderRadius: BorderRadius.circular(12),
+            border:
+                Border.all(color: cs.outlineVariant.withAlpha(100)),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, color: cs.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Edits are kept in memory while you type. '
+                  'Click Save to write every lang/<locale>.json '
+                  'sidecar to disk (same as clicking Install '
+                  'on the Code tab).',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: cs.onPrimaryContainer,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: _translationsSaveToDisk,
+                icon: const Icon(Icons.save, size: 16),
+                label: const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Locale picker + add / remove buttons.
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: activeLocale,
+                decoration: InputDecoration(
+                  labelText: 'Locale',
+                  isDense: true,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                items: [
+                  for (final code in locales)
+                    DropdownMenuItem(
+                      value: code,
+                      child: Text(
+                        '$code  (${currentMap.length} key'
+                        '${currentMap.length == 1 ? '' : 's'})'
+                        .replaceAll(
+                            '${currentMap.length}', '${translations[code]?.length ?? 0}'),
+                      ),
+                    ),
+                ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _translationsLocale = v);
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            OutlinedButton.icon(
+              onPressed: _translationsAddLocale,
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add locale'),
+            ),
+            const SizedBox(width: 6),
+            OutlinedButton.icon(
+              onPressed: activeLocale == 'en'
+                  ? null
+                  : () => _translationsRemoveLocale(activeLocale),
+              icon: Icon(Icons.delete_outline,
+                  size: 16, color: cs.error),
+              label: Text('Remove',
+                  style: TextStyle(color: cs.error)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+
+        // Toolbar: extract @keys from UI + add a blank key.
+        Row(
+          children: [
+            FilledButton.tonalIcon(
+              onPressed: () => _translationsExtractKeys(activeLocale),
+              icon: const Icon(Icons.auto_fix_high, size: 16),
+              label: const Text('Extract @keys from UI'),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: () => _translationsAddKey(activeLocale),
+              icon: const Icon(Icons.add, size: 16),
+              label: const Text('Add key'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+
+        // Key/value rows.
+        if (currentMap.isEmpty)
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: cs.outlineVariant.withAlpha(80)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, color: cs.onSurfaceVariant),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'No keys yet. Click "Extract @keys from UI" to '
+                    'scan the UI tab for references, or "Add key" '
+                    'to create one manually.',
+                    style: TextStyle(color: cs.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          for (final key in (currentMap.keys.toList()..sort()))
+            _buildTranslationsRow(activeLocale, key, currentMap[key] ?? '', cs),
+      ],
+    );
+  }
+
+  Widget _buildTranslationsRow(
+      String locale, String key, String value, ColorScheme cs) {
+    // Use a keyed TextEditingController so the row survives locale
+    // switches without dropping the user's in-flight edit.
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: cs.outlineVariant.withAlpha(80)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.key_outlined,
+                    size: 14, color: cs.onSurfaceVariant),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    key,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: cs.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => _translationsRemoveKey(locale, key),
+                  icon: Icon(Icons.close, size: 16, color: cs.error),
+                  tooltip: 'Remove key',
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            TextField(
+              controller: TextEditingController(text: value),
+              decoration: InputDecoration(
+                hintText: value.isEmpty ? '(untranslated)' : null,
+                isDense: true,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              maxLines: 3,
+              minLines: 1,
+              onChanged: (v) => _translationsSetValue(locale, key, v),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Shortcut used by the Translations tab's Save button. Fires the
+  /// same `_handleInstall` path the Code tab's Install action uses,
+  /// so every `lang/<locale>.json` sidecar lands on disk without the
+  /// author having to switch tabs. The payload fields are drawn
+  /// directly from the current bindings (title, id, name,
+  /// description, source_ui) so the installer's downstream logic
+  /// sees exactly the same inputs.
+  Future<void> _translationsSaveToDisk() async {
+    final id = (_fieldValues['wapp_id'] as String?) ?? '';
+    if (id.isEmpty) {
+      NotificationService.instance.show(GeogramNotification(
+        level: NotificationLevel.error,
+        title: 'Cannot save translations',
+        body: 'Open or create a project first (ID is empty).',
+        source: 'host:app-creator',
+      ));
+      return;
+    }
+    await _handleInstall(<String, dynamic>{
+      'id': id,
+      'title': (_fieldValues['wapp_title'] as String?) ?? '',
+      'name': (_fieldValues['wapp_name'] as String?) ?? '',
+      'description':
+          (_fieldValues['wapp_description'] as String?) ?? '',
+      'source_ui': (_fieldValues['source_ui'] as String?) ?? '',
+    });
+  }
+
+  /// Convert whatever's sitting in `_fieldValues['translations']`
+  /// into the strongly-typed shape the installer expects. Returns
+  /// null when there's nothing usable so the installer can skip
+  /// the lang/ write path entirely.
+  Map<String, Map<String, String>>? _coerceTranslations(dynamic raw) {
+    if (raw is Map<String, Map<String, String>>) {
+      return raw.isEmpty ? null : raw;
+    }
+    if (raw is Map) {
+      final out = <String, Map<String, String>>{};
+      for (final e in raw.entries) {
+        final loc = e.key.toString();
+        final inner = e.value;
+        if (inner is Map) {
+          final map = <String, String>{};
+          for (final kv in inner.entries) {
+            map[kv.key.toString()] = kv.value?.toString() ?? '';
+          }
+          if (map.isNotEmpty) out[loc] = map;
+        }
+      }
+      return out.isEmpty ? null : out;
+    }
+    return null;
+  }
+
+  /// Access (or lazily create) the nested translations map inside
+  /// `_fieldValues`. Returns a live reference so mutations persist
+  /// without a manual writeback.
+  Map<String, Map<String, String>> _translationsMap() {
+    var existing = _fieldValues['translations'];
+    if (existing is Map<String, Map<String, String>>) return existing;
+    // Be tolerant of stale shapes: rebuild from scratch with a
+    // proper typed map if the binding was seeded as plain dynamic
+    // (e.g. by JSON deserialisation of a loaded project).
+    final next = <String, Map<String, String>>{};
+    if (existing is Map) {
+      for (final e in existing.entries) {
+        final loc = e.key.toString();
+        final raw = e.value;
+        if (raw is Map) {
+          final inner = <String, String>{};
+          for (final kv in raw.entries) {
+            inner[kv.key.toString()] = kv.value?.toString() ?? '';
+          }
+          next[loc] = inner;
+        }
+      }
+    }
+    _fieldValues['translations'] = next;
+    return next;
+  }
+
+  void _translationsSetValue(String locale, String key, String value) {
+    final map = _translationsMap();
+    final inner = map.putIfAbsent(locale, () => <String, String>{});
+    inner[key] = value;
+    // No setState — the text field is controlled by its own
+    // controller; we only need the mutation to land in the
+    // bindings so Install picks it up.
+  }
+
+  Future<void> _translationsAddLocale() async {
+    final controller = TextEditingController();
+    final locale = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add locale'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Short tag, e.g. en, pt, de, fr, pt_BR.'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Locale code',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (locale == null || locale.isEmpty) return;
+    final map = _translationsMap();
+    if (map.containsKey(locale)) {
+      setState(() => _translationsLocale = locale);
+      return;
+    }
+    // Seed the new locale with every key that already exists in
+    // `en` (or in the first existing locale) so the author has a
+    // sensible starting point instead of an empty table.
+    final seed = map['en'] ?? (map.isNotEmpty ? map.values.first : null);
+    final fresh = <String, String>{};
+    if (seed != null) {
+      for (final k in seed.keys) {
+        fresh[k] = '';
+      }
+    }
+    map[locale] = fresh;
+    setState(() => _translationsLocale = locale);
+  }
+
+  void _translationsRemoveLocale(String locale) {
+    final map = _translationsMap();
+    map.remove(locale);
+    setState(() {
+      if (_translationsLocale == locale) {
+        _translationsLocale =
+            map.keys.isEmpty ? null : map.keys.first;
+      }
+    });
+  }
+
+  Future<void> _translationsAddKey(String locale) async {
+    final controller = TextEditingController();
+    final key = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add translation key'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Dot-separated name like `settings.title_label`. '
+              'The UI refers to it as `@settings.title_label`.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Key',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (key == null || key.isEmpty) return;
+    final map = _translationsMap();
+    // Add the key to EVERY locale so the row shows up everywhere.
+    // Empty value for locales that don't have it yet.
+    for (final loc in map.keys) {
+      map[loc]!.putIfAbsent(key, () => '');
+    }
+    // Seed into the active locale too if the map was empty.
+    map.putIfAbsent(locale, () => <String, String>{})[key] ??= '';
+    setState(() {});
+  }
+
+  void _translationsRemoveKey(String locale, String key) {
+    final map = _translationsMap();
+    // Removing a key from one locale removes it from all of them
+    // so the author's locale tables stay in sync.
+    for (final loc in map.keys) {
+      map[loc]?.remove(key);
+    }
+    setState(() {});
+  }
+
+  /// Walk the current UI JSON looking for every `@key` reference in
+  /// any string field and add the missing keys to every locale with
+  /// an empty value. Never overwrites an existing translation.
+  void _translationsExtractKeys(String locale) {
+    final rawUi = (_fieldValues['source_ui'] as String?) ?? '';
+    if (rawUi.trim().isEmpty) return;
+    final discovered = <String>{};
+    try {
+      final parsed = jsonDecode(rawUi);
+      _translationsWalk(parsed, discovered);
+    } catch (_) {
+      return;
+    }
+    if (discovered.isEmpty) return;
+    final map = _translationsMap();
+    // Create the active locale if it doesn't exist yet.
+    final target = map.putIfAbsent(locale, () => <String, String>{});
+    for (final key in discovered) {
+      target.putIfAbsent(key, () => '');
+      // Mirror the empty stub into every other locale so the row
+      // renders across the dropdown consistently.
+      for (final loc in map.keys) {
+        if (loc != locale) map[loc]!.putIfAbsent(key, () => '');
+      }
+    }
+    setState(() {});
+  }
+
+  /// Recursive walker for [_translationsExtractKeys]. Collects any
+  /// string value (at any depth) that starts with `@` and looks
+  /// like a valid key (no whitespace).
+  void _translationsWalk(dynamic node, Set<String> out) {
+    if (node is Map) {
+      for (final v in node.values) {
+        _translationsWalk(v, out);
+      }
+    } else if (node is List) {
+      for (final v in node) {
+        _translationsWalk(v, out);
+      }
+    } else if (node is String) {
+      if (node.startsWith('@') && node.length > 1 &&
+          !node.contains(' ') && !node.contains('\n')) {
+        out.add(node.substring(1));
+      }
+    }
+  }
+
   /// Walk [screen] along [path] and return the leaf block (mutable
   /// reference into the dynamic tree). Returns null when any index
   /// runs off the end of its parent's `children` array.
@@ -4290,6 +4906,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     return GeoUiScreenRenderer(
       screen: screen,
       bindings: _WappFieldBindings(_fieldValues, () => setState(() {})),
+      i18n: _i18n,
       onAction: (action) {
         if (action == 'save') {
           _engine.sendMessage(jsonEncode({

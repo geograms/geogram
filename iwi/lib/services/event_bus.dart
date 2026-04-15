@@ -129,3 +129,15 @@ class ErrorEvent extends AppEvent {
   final Object? error;
   ErrorEvent({required this.source, required this.message, this.error});
 }
+
+/// The active UI locale changed. Fired by the Settings language row
+/// after writing to [PreferencesService.localePreference]. Every
+/// open [WappPage] subscribes and reloads its translations so string
+/// attributes swap without requiring a wapp reload.
+class LocaleChangedEvent extends AppEvent {
+  /// New effective locale tag (`pt_PT`, `en`, etc). Stringly-typed
+  /// so consumers can compare or extract the language-only prefix
+  /// without importing PreferencesService.
+  final String locale;
+  LocaleChangedEvent({required this.locale});
+}

@@ -78,6 +78,18 @@ int32_t hal_kv_exists(const char *key, uint32_t key_len);
 __attribute__((import_module("hal"), import_name("kv_size")))
 uint32_t hal_kv_size(const char *key, uint32_t key_len);
 
+/* ── Internationalisation ───────────────────────────────────────────── */
+
+/* Look up a translation key against the wapp's lang/<locale>.json
+ * (merged with the English fallback). Writes up to out_cap bytes of
+ * the localised string into out (NOT null-terminated). Returns the
+ * number of bytes written. When the key is missing from both the
+ * primary and fallback maps, returns 0 and out is untouched — the
+ * caller should fall back to its hard-coded literal. */
+__attribute__((import_module("hal"), import_name("i18n_get")))
+uint32_t hal_i18n_get(const char *key, uint32_t key_len,
+                      char *out, uint32_t out_cap);
+
 /* ── Storage (file, scoped per module ID) ───────────────────────────── */
 
 /* Open file. mode: 0=read, 1=write, 2=append. Returns handle or -1. */

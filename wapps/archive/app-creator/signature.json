@@ -2,23 +2,23 @@
   "schema": "geogram.wapp.signature/1",
   "wapp_id": "tools.geogram.app-creator",
   "wapp_version": "0.1.0",
-  "signed_at": 1776248191,
+  "signed_at": 1776252601,
   "publisher_npub": "npub1lut3k0m4mue97yuyj7f50qrnwz06kwgk8x03uta904ujsu4lcehq9u67tm",
   "publisher_hex": "ff171b3f75df325f13849793478073709fab3916399f1e2fa57d792872bfc66e",
   "hash_algo": "sha256",
-  "manifest_digest_hex": "6c12659cc19e9fc67e86ae584f24d75a309f07e86c56702a76ae2598b9232b50",
+  "manifest_digest_hex": "b39a817fc540639fcdc29ea405e53d59923cf673c26d54834ea5a27cdf2ace98",
   "hashes": {
     "main.c": "1246b50180b136eec20cd6e21551da549cd9cba54aff7b120adf2f034c6c9c3c",
     "Makefile": "9834a69dc24bc5777a6337c836261ccd19a662d3360c9c5e3094520b7055d852",
-    "screens/home.ui.json": "1f1e06bd447fe244b2b44b393332f1042d5c1b39a1118966fd199d3bf700861f",
+    "screens/home.ui.json": "351d72de569b5a14242345e2dfa2aa6aec9723423a285272e296f94bc6480132",
     "manifest.json": "b3c42331fd6ebab96582093a3be229d8233d9c27bccc96b83618b957fb0a761e",
     "media/icons/app-creator.svg": "d0693e7f370791526901a7330fa84ccd3f4c4326691b3e086793765cd1d2d3c6",
     "app.wasm": "803bbc1c314204f7b1afdaebf5c393466a69436e9849ed8a441b9e33bae451ba"
   },
   "event": {
-    "id": "037ade92c32dd7ed593af6a17c850de5559a4ffabf10fea101ebc22e28067933",
+    "id": "4188952272220ff4a3215ec293dbf75e4fab6361d76ca96c62a3136086d88ca8",
     "pubkey": "ff171b3f75df325f13849793478073709fab3916399f1e2fa57d792872bfc66e",
-    "created_at": 1776248191,
+    "created_at": 1776252601,
     "kind": 30078,
     "tags": [
       [
@@ -39,10 +39,10 @@
       ],
       [
         "manifest_digest",
-        "6c12659cc19e9fc67e86ae584f24d75a309f07e86c56702a76ae2598b9232b50"
+        "b39a817fc540639fcdc29ea405e53d59923cf673c26d54834ea5a27cdf2ace98"
       ]
     ],
-    "content": "6c12659cc19e9fc67e86ae584f24d75a309f07e86c56702a76ae2598b9232b50",
-    "sig": "221104c4338d3a5d47ca95f990cf5184d351d42aa4b593cfc744893f6a80f8e2aba03b9595098555d48a3dc4810e3b4a2488c326d5d0ab322c3d414e5f4b1c49"
+    "content": "b39a817fc540639fcdc29ea405e53d59923cf673c26d54834ea5a27cdf2ace98",
+    "sig": "f5b0c7ee901922ef9c8402c18d98b74b18a9f59ca15f958951783d685c4d7fd67bea1d733046b9f51712fd9b028e35affc9e52840278c869d0e752f71be4c88e"
   }
 }

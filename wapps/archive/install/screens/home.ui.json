@@ -1,27 +1,27 @@
 [
   {
     "$": "screen",
-    "name": "Store",
-    "tip": "Browse, install and update wapps from a repository.",
+    "name": "@screen.store",
+    "tip": "@screen.store_tip",
     "children": [
       {
         "$": "group",
         "name": "output-list",
         "$type": "output",
-        "tip": "Wapp catalog and status messages."
+        "tip": "@group.output_tip"
       }
     ]
   },
   {
     "$": "screen",
-    "name": "Settings",
-    "tip": "Manage the repositories the wapp store downloads from.",
+    "name": "@screen.settings",
+    "tip": "@screen.settings_tip",
     "children": [
       {
         "$": "group",
-        "name": "Sources",
+        "name": "@group.sources_name",
         "$type": "sources",
-        "tip": "Type a URL and click Add — the store checks for /wapps/index.json before accepting it. Remove an entry any time."
+        "tip": "@group.sources_tip"
       }
     ]
   }

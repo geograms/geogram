@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Persistent user preferences backed by shared_preferences.
@@ -59,5 +61,53 @@ class PreferencesService {
     } else {
       _prefs.setString(key, providerWappId);
     }
+  }
+
+  // ── Locale preference ────────────────────────────────────────────
+  //
+  // The active UI locale controls how wapps resolve their `@key`
+  // translation sentinels. An empty / null value means "follow the
+  // OS" — [activeLocale] returns [Platform.localeName] in that case
+  // so callers don't have to special-case it.
+  //
+  // Stored as a short tag like `pt_PT`, `en_US`, `de_DE`, `pt`, `en`.
+  // Resolving a wapp's language file tries the full tag, then the
+  // language-only prefix, then `en`, then the literal source string.
+
+  /// The raw preference value. Null means "auto" (follow the OS).
+  String? get localePreference => _prefs.getString('locale');
+  set localePreference(String? v) {
+    if (v == null || v.isEmpty) {
+      _prefs.remove('locale');
+    } else {
+      _prefs.setString('locale', v);
+    }
+  }
+
+  /// The effective active locale. Returns the stored preference
+  /// when set, otherwise the OS locale ([Platform.localeName]), with
+  /// a final fallback to `en` so the rest of the app never sees an
+  /// empty string.
+  String activeLocale() {
+    final stored = localePreference;
+    if (stored != null && stored.isNotEmpty) return stored;
+    try {
+      final os = Platform.localeName;
+      if (os.isNotEmpty) return os;
+    } catch (_) {}
+    return 'en';
+  }
+
+  /// Language-only portion of [activeLocale] — `pt_PT` → `pt`,
+  /// `pt` → `pt`. Used by the fallback chain so a wapp that only
+  /// ships `lang/pt.json` still matches `pt_BR` users.
+  String activeLanguageCode() {
+    final full = activeLocale();
+    final sep = full.contains('_')
+        ? full.indexOf('_')
+        : full.contains('-')
+            ? full.indexOf('-')
+            : -1;
+    return sep < 0 ? full.toLowerCase() : full.substring(0, sep).toLowerCase();
   }
 }

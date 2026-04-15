@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:wasm_run/wasm_run.dart';
 
+import '../services/i18n_context.dart';
 import '../services/profile_storage.dart';
 import '../services/wapp_event_broker.dart';
 
@@ -46,6 +47,19 @@ class WappEngine {
   final Map<String, Uint8List> _kv = {};
   ProfileStorage? _storage;
   bool _loaded = false;
+
+  /// Translation tables handed over by [WappPage._reloadI18n]. Used
+  /// by the `hal_i18n_get` import to resolve `@key` / bare-key lookups
+  /// from the wapp's C code. An empty context (the default) means
+  /// `hal_i18n_get` always returns 0 — the wapp's fallback literal
+  /// takes over. See i18n_context.dart for the resolution rules.
+  I18nContext _i18n = I18nContext.empty();
+
+  /// Attach or replace the translation tables. Called once on wapp
+  /// load and again on every [LocaleChangedEvent].
+  void setI18n(I18nContext context) {
+    _i18n = context;
+  }
 
   WappEngine() {
     _byId[engineId] = this;
@@ -220,6 +234,35 @@ class WappEngine {
       params: [ValueTy.i32, ValueTy.i32], results: [ValueTy.i32],
     );
 
+    // ── i18n HAL ──
+    //
+    // Look up a translation key in the wapp's loaded [_i18n]
+    // context. Returns the number of bytes written. Zero means
+    // "not found" (empty buffer is OK for the caller) — the
+    // wapp's C code is expected to fall back to its hard-coded
+    // literal in that case. See docs/plan/wapp-i18n.md for the
+    // resolution rules.
+    final halI18nGet = WasmFunction(
+      (int kPtr, int kLen, int oPtr, int oCap) {
+        final key = _readStr(kPtr, kLen);
+        // Use resolve() so the key's `@` sentinel is stripped if
+        // the wapp happens to pass `@foo.bar` instead of `foo.bar`.
+        final raw = key.startsWith('@') ? key : '@$key';
+        final value = _i18n.resolve(raw);
+        // If the lookup missed, resolve() returns the bare key —
+        // detect that and report zero so the wapp falls back to
+        // its literal instead of writing "foo.bar" into the UI.
+        if (value == key || value == raw.substring(1)) return 0;
+        final bytes = utf8.encode(value);
+        final n = bytes.length < oCap ? bytes.length : oCap;
+        final mem = _memory!.view;
+        for (var i = 0; i < n; i++) mem[oPtr + i] = bytes[i];
+        return n;
+      },
+      params: [ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+
     // ── Message HAL ──
 
     final halMsgAvailable = WasmFunction(
@@ -316,6 +359,8 @@ class WappEngine {
       WasmImport('hal', 'kv_list', halKvList),
       WasmImport('hal', 'kv_exists', halKvExists),
       WasmImport('hal', 'kv_size', halKvSize),
+      // i18n
+      WasmImport('hal', 'i18n_get', halI18nGet),
       // Messages
       WasmImport('hal', 'msg_available', halMsgAvailable),
       WasmImport('hal', 'msg_recv', halMsgRecv),

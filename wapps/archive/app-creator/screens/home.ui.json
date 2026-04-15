@@ -64,6 +64,19 @@
   },
   {
     "$": "screen",
+    "name": "Translations",
+    "tip": "Edit the wapp's lang/<locale>.json sidecars. Keys referenced as `@key` from the UI get translated at runtime via the user's active language.",
+    "children": [
+      {
+        "$": "group",
+        "name": "translations",
+        "$type": "translations",
+        "tip": "Pick a locale, extract @keys from the UI JSON, and fill in the translations."
+      }
+    ]
+  },
+  {
+    "$": "screen",
     "name": "Settings",
     "tip": "Metadata for the wapp you're editing. Title is what shows on the launcher grid; Name is the folder slug used on disk.",
     "children": [

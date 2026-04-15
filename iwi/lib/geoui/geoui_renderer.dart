@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../services/i18n_context.dart';
 import 'geoui_ast.dart';
 import 'widgets/code_editor_field.dart';
 import 'widgets/icon_field.dart';
@@ -22,11 +23,21 @@ class GeoUiScreenRenderer extends StatefulWidget {
   final GeoUiBindings bindings;
   final GeoUiActionCallback? onAction;
 
+  /// Per-wapp translation context. Every string attribute (label,
+  /// tip, hint, default, option label, action label, confirm label,
+  /// the text of `label` blocks …) is piped through
+  /// [I18nContext.resolve] so authors can use `@key` sentinels in
+  /// their .ui.json and ship `lang/<locale>.json` sidecars. When
+  /// null (legacy or test callers), an empty context is used and
+  /// everything passes through as-is.
+  final I18nContext? i18n;
+
   const GeoUiScreenRenderer({
     super.key,
     required this.screen,
     required this.bindings,
     this.onAction,
+    this.i18n,
   });
 
   @override
@@ -34,6 +45,20 @@ class GeoUiScreenRenderer extends StatefulWidget {
 }
 
 class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
+  /// Lazy shortcut for [I18nContext.resolve] that also preserves the
+  /// "null in → null out" contract of nullable string getters. Every
+  /// user-visible string in this renderer goes through here so wapps
+  /// can swap `label: "Title"` for `label: "@settings.title"` with
+  /// zero code changes on the author side.
+  String? _t(String? raw) {
+    if (raw == null) return null;
+    return widget.i18n?.resolve(raw) ?? raw;
+  }
+
+  /// Non-null variant for sites that always have a value (action
+  /// labels, options, ...).
+  String _tRequired(String raw) => widget.i18n?.resolve(raw) ?? raw;
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -67,17 +92,18 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       }
     }
 
+    final screenTip = _t(widget.screen.getString('tip'));
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Screen tip
-          if (widget.screen.getString('tip') != null)
+          if (screenTip != null && screenTip.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 16),
               child: Text(
-                widget.screen.getString('tip')!,
+                screenTip,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: cs.onSurfaceVariant,
                     ),
@@ -103,7 +129,11 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
 
   Widget _renderGroup(GeoUiBlock group) {
     final cs = Theme.of(context).colorScheme;
-    final tip = group.getString('tip');
+    final tip = _t(group.getString('tip'));
+    // Group names aren't usually translatable (they're slugs more
+    // than labels), but authors can still opt in by passing
+    // `@key` — the resolver is lossless for literal strings.
+    final name = _t(group.name);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 20),
@@ -111,11 +141,11 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Section header
-          if (group.name != null)
+          if (name != null && name.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(left: 4, bottom: 2),
               child: Text(
-                group.name!,
+                name,
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                       color: cs.primary,
                       fontWeight: FontWeight.w600,
@@ -123,7 +153,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
                     ),
               ),
             ),
-          if (tip != null)
+          if (tip != null && tip.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(left: 4, bottom: 10),
               child: Text(
@@ -198,8 +228,11 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
   Widget _renderFieldWidget(GeoUiBlock field) {
     final fieldName = field.name ?? '';
     final type = field.type ?? 'string';
-    final label = field.getString('label') ?? fieldName;
-    final tip = field.getString('tip');
+    // Field labels and tips are the most translation-heavy surface
+    // in GeoUI — every input has at least one. They all route
+    // through _t() so `label: "@settings.title_label"` Just Works.
+    final label = _t(field.getString('label')) ?? fieldName;
+    final tip = _t(field.getString('tip'));
 
     return switch (type) {
       'bool' => _renderBoolField(fieldName, label, tip),
@@ -334,8 +367,8 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
     final fieldName = block.name ?? '';
     final type = block.type ?? 'float';
     final isInt = type == 'int';
-    final label = block.getString('label') ?? fieldName;
-    final tip = block.getString('tip');
+    final label = _t(block.getString('label')) ?? fieldName;
+    final tip = _t(block.getString('tip'));
     final min = block.getNumber('min')!;
     final max = block.getNumber('max')!;
     final step = block.getNumber('step');
@@ -442,7 +475,8 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
                 ),
                 segments: options.map((o) {
                   final optName = o.name ?? '';
-                  final optLabel = o.getString('label') ?? optName;
+                  final optLabel =
+                      _t(o.getString('label')) ?? optName;
                   return ButtonSegment(
                       value: optName, label: Text(optLabel));
                 }).toList(),
@@ -465,7 +499,8 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
               ),
               items: options.map((o) {
                 final optName = o.name ?? '';
-                final optLabel = o.getString('label') ?? optName;
+                final optLabel =
+                    _t(o.getString('label')) ?? optName;
                 return DropdownMenuItem(value: optName, child: Text(optLabel));
               }).toList(),
               onChanged: (v) {
@@ -482,7 +517,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
 
   Widget _renderStringField(
       String name, String label, String? tip, GeoUiBlock field) {
-    final hint = field.getString('hint');
+    final hint = _t(field.getString('hint'));
     final readOnly = field.getBool('readonly') ?? false;
     // Multi-line attribute: when true, the TextField grows to [lines]
     // visible rows and accepts the Enter key as a newline. Useful for
@@ -518,11 +553,11 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
 
   Widget _renderAction(GeoUiBlock action) {
     final name = action.name ?? '';
-    final label = action.getString('label') ?? name;
+    final label = _t(action.getString('label')) ?? name;
     final style = action.getString('style') ?? 'secondary';
-    final tip = action.getString('tip');
+    final tip = _t(action.getString('tip'));
     final confirm = action.getBool('confirm') ?? false;
-    final confirmLabel = action.getString('confirm-label');
+    final confirmLabel = _t(action.getString('confirm-label'));
 
     final onPressed = () {
       if (confirm) {
@@ -588,7 +623,8 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
   // ── Label ───────────────────────────────────────────────────────────
 
   Widget _renderLabel(GeoUiBlock label) {
-    final text = label.getString('text') ?? label.name ?? '';
+    final rawText = label.getString('text') ?? label.name ?? '';
+    final text = _tRequired(rawText);
     final style = label.getString('style');
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),

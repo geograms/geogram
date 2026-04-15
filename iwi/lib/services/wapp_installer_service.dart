@@ -82,6 +82,7 @@ class WappInstallerService {
     String? homeScreenJson,
     String? sourceC,
     String? icon,
+    Map<String, Map<String, String>>? translations,
     bool overwrite = false,
   }) async {
     if (id.isEmpty) {
@@ -225,6 +226,19 @@ class WappInstallerService {
       if (svgToWrite != null && svgToWrite.isNotEmpty) {
         await installed.writeString(
             '$folder/media/icons/icon.svg', svgToWrite);
+      }
+      // Write each configured locale to lang/<locale>.json. Empty
+      // maps are dropped — no point shipping a placeholder file
+      // with no translations. Keys with empty string values ARE
+      // persisted because they serve as "stub" entries in the
+      // App Creator's Translations tab.
+      if (translations != null && translations.isNotEmpty) {
+        for (final entry in translations.entries) {
+          final code = entry.key.trim();
+          final map = entry.value;
+          if (code.isEmpty || map.isEmpty) continue;
+          await installed.writeJson('$folder/lang/$code.json', map);
+        }
       }
     } catch (e) {
       return InstallResult.failure(id, 'failed to write wapp files: $e');

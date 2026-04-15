@@ -1,0 +1,9 @@
+{
+  "screen.store": "Loja",
+  "screen.store_tip": "Procurar, instalar e atualizar wapps a partir de um repositório.",
+  "screen.settings": "Definições",
+  "screen.settings_tip": "Gerir os repositórios de onde a loja de wapps descarrega.",
+  "group.output_tip": "Catálogo de wapps e mensagens de estado.",
+  "group.sources_name": "Fontes",
+  "group.sources_tip": "Escreva um URL e clique Adicionar — a loja verifica /wapps/index.json antes de aceitar. Pode remover qualquer entrada a qualquer momento."
+}

@@ -791,6 +791,30 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
     if (mounted) setState(() => _wappDataEntries = entries);
   }
 
+  /// Human-readable description of the current locale pref for the
+  /// Settings subtitle. Shows "Auto — pt_PT" when no explicit choice
+  /// has been made (so the user can see what "Auto" resolved to),
+  /// and just the explicit locale otherwise.
+  String _localeSubtitle() {
+    final p = _prefs;
+    if (p == null) return '';
+    final explicit = p.localePreference;
+    final effective = p.activeLocale();
+    if (explicit == null || explicit.isEmpty) return 'Auto — $effective';
+    return effective;
+  }
+
+  /// Persist the new locale preference and fire [LocaleChangedEvent]
+  /// so every open [WappPage] reloads its translations. The empty
+  /// string value ("") resets to "Auto" (follows the OS).
+  void _onLocaleChanged(String? value) {
+    final p = _prefs;
+    if (p == null) return;
+    p.localePreference = (value == null || value.isEmpty) ? null : value;
+    setState(() {});
+    EventBus().fire(LocaleChangedEvent(locale: p.activeLocale()));
+  }
+
   Future<void> _pickDirectory() async {
     final defaultPath =
         _prefs == null ? '' : wappsDataStorage(_prefs!).basePath;
@@ -883,6 +907,57 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
           : ListView(
               padding: const EdgeInsets.all(20),
               children: [
+                // ── Language ──
+                Text('Language',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: cs.primary,
+                          fontWeight: FontWeight.w600,
+                        )),
+                const SizedBox(height: 4),
+                Text(
+                  'Controls how wapps resolve their @key translation '
+                  'sentinels. "Auto" follows the operating system.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+                  ),
+                  color: cs.surfaceContainerLow,
+                  child: ListTile(
+                    leading: const Icon(Icons.language),
+                    title: const Text('Language'),
+                    subtitle: Text(
+                      _localeSubtitle(),
+                      style: TextStyle(color: cs.onSurfaceVariant),
+                    ),
+                    trailing: DropdownButton<String>(
+                      value: _prefs?.localePreference ?? '',
+                      underline: const SizedBox.shrink(),
+                      items: const [
+                        DropdownMenuItem(value: '', child: Text('Auto')),
+                        DropdownMenuItem(
+                            value: 'en', child: Text('English')),
+                        DropdownMenuItem(
+                            value: 'pt', child: Text('Português')),
+                        DropdownMenuItem(
+                            value: 'de', child: Text('Deutsch')),
+                        DropdownMenuItem(
+                            value: 'fr', child: Text('Français')),
+                        DropdownMenuItem(
+                            value: 'es', child: Text('Español')),
+                      ],
+                      onChanged: _onLocaleChanged,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+
                 // ── Data Directory ──
                 Text('Storage',
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
