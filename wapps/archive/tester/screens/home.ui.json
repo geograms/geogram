@@ -1,203 +1,203 @@
 [
   {
     "$": "screen",
-    "name": "Notifications",
-    "tip": "Fire notifications of every flavour. Useful to verify level colours, stacking, auto-dismiss timings, and system-tray routing.",
+    "name": "@screen.notifications",
+    "tip": "@screen.notifications_tip",
     "children": [
       {
         "$": "group",
-        "name": "Levels",
-        "tip": "One button per level. Title-only, in-app scope.",
+        "name": "@group.levels",
+        "tip": "@group.levels_tip",
         "children": []
       },
       {
         "$": "action",
         "name": "notify-info",
-        "label": "Info",
+        "label": "@action.notify_info",
         "style": "secondary",
-        "tip": "Fires a title-only info-level notification."
+        "tip": "@action.notify_info_tip"
       },
       {
         "$": "action",
         "name": "notify-success",
-        "label": "Success",
+        "label": "@action.notify_success",
         "style": "secondary",
-        "tip": "Fires a title-only success-level notification."
+        "tip": "@action.notify_success_tip"
       },
       {
         "$": "action",
         "name": "notify-warning",
-        "label": "Warning",
+        "label": "@action.notify_warning",
         "style": "secondary",
-        "tip": "Fires a title-only warning-level notification."
+        "tip": "@action.notify_warning_tip"
       },
       {
         "$": "action",
         "name": "notify-error",
-        "label": "Error",
+        "label": "@action.notify_error",
         "style": "secondary",
-        "tip": "Fires a title-only error-level notification. 6-second auto-dismiss."
+        "tip": "@action.notify_error_tip"
       },
       {
         "$": "group",
-        "name": "With body",
-        "tip": "Level + title + multi-line body.",
+        "name": "@group.with_body",
+        "tip": "@group.with_body_tip",
         "children": []
       },
       {
         "$": "action",
         "name": "notify-body",
-        "label": "Info + body",
+        "label": "@action.notify_body",
         "style": "secondary",
-        "tip": "Info-level notification with a body paragraph."
+        "tip": "@action.notify_body_tip"
       },
       {
         "$": "action",
         "name": "notify-error-body",
-        "label": "Error + body",
+        "label": "@action.notify_error_body",
         "style": "secondary",
-        "tip": "Error-level notification with a body paragraph."
+        "tip": "@action.notify_error_body_tip"
       },
       {
         "$": "group",
-        "name": "Scope",
-        "tip": "Which backend(s) receive the notification.",
+        "name": "@group.scope",
+        "tip": "@group.scope_tip",
         "children": []
       },
       {
         "$": "action",
         "name": "notify-system",
-        "label": "System tray only",
+        "label": "@action.notify_system",
         "style": "secondary",
-        "tip": "Skips the in-app overlay, goes straight to notify-send / osascript."
+        "tip": "@action.notify_system_tip"
       },
       {
         "$": "action",
         "name": "notify-both",
-        "label": "In-app + system",
+        "label": "@action.notify_both",
         "style": "secondary",
-        "tip": "Shown both in the overlay and in the OS notification area."
+        "tip": "@action.notify_both_tip"
       },
       {
         "$": "group",
-        "name": "Stacking",
-        "tip": "Fire multiple notifications in a burst to see them stack in the overlay.",
+        "name": "@group.stacking",
+        "tip": "@group.stacking_tip",
         "children": []
       },
       {
         "$": "action",
         "name": "notify-stack",
-        "label": "Fire 5 in a row",
+        "label": "@action.notify_stack",
         "style": "primary",
-        "tip": "Emits 5 notifications of mixed levels as fast as possible. The in-app overlay should show them stacked, newer ones below older ones."
+        "tip": "@action.notify_stack_tip"
       }
     ]
   },
   {
     "$": "screen",
-    "name": "Events",
-    "tip": "Exercise the cross-wapp event bus and host → wapp triggers. Each received event is surfaced as an in-app notification so you can see the pipeline working end-to-end.",
+    "name": "@screen.events",
+    "tip": "@screen.events_tip",
     "children": [
       {
         "$": "group",
-        "name": "Local pub/sub",
-        "tip": "Subscribe to a topic, publish to it, and see the event come back as a notification.",
+        "name": "@group.local_pubsub",
+        "tip": "@group.local_pubsub_tip",
         "children": []
       },
       {
         "$": "action",
         "name": "event-sub-hello",
-        "label": "Subscribe test.hello",
+        "label": "@action.event_sub_hello",
         "style": "secondary",
         "tip": "hal_event_subscribe(test.hello)"
       },
       {
         "$": "action",
         "name": "event-pub-hello",
-        "label": "Publish test.hello",
+        "label": "@action.event_pub_hello",
         "style": "secondary",
-        "tip": "hal_event_publish(test.hello, greetings). Subscribe first or nothing receives it."
+        "tip": "@action.event_pub_hello_tip"
       },
       {
         "$": "action",
         "name": "event-unsub-hello",
-        "label": "Unsubscribe test.hello",
+        "label": "@action.event_unsub_hello",
         "style": "secondary",
-        "tip": "hal_event_unsubscribe(test.hello). Subsequent publishes are dropped."
+        "tip": "@action.event_unsub_hello_tip"
       },
       {
         "$": "action",
         "name": "event-echo",
-        "label": "Full echo (sub + pub)",
+        "label": "@action.event_echo",
         "style": "primary",
-        "tip": "Subscribes to test.echo, publishes to it, and drains the result. Should produce one notification in under 500ms."
+        "tip": "@action.event_echo_tip"
       },
       {
         "$": "group",
-        "name": "Host triggers (via HostEventBridge)",
-        "tip": "Subscribe to the system.* topics that the host republishes from its own EventBus. Useful for reacting to wapp lifecycle or error events from inside a wapp.",
+        "name": "@group.host_triggers",
+        "tip": "@group.host_triggers_tip",
         "children": []
       },
       {
         "$": "action",
         "name": "event-sub-wapp-loaded",
-        "label": "Subscribe system.wapp.loaded",
+        "label": "@action.event_sub_wapp_loaded",
         "style": "secondary",
-        "tip": "Fires whenever any wapp finishes its module_init. Open another wapp from the launcher to see it."
+        "tip": "@action.event_sub_wapp_loaded_tip"
       },
       {
         "$": "action",
         "name": "event-sub-wapp-unloaded",
-        "label": "Subscribe system.wapp.unloaded",
+        "label": "@action.event_sub_wapp_unloaded",
         "style": "secondary",
-        "tip": "Fires when a wapp page is disposed."
+        "tip": "@action.event_sub_wapp_unloaded_tip"
       },
       {
         "$": "action",
         "name": "event-sub-error",
-        "label": "Subscribe system.error",
+        "label": "@action.event_sub_error",
         "style": "secondary",
-        "tip": "Fires whenever an ErrorEvent is published on the host EventBus."
+        "tip": "@action.event_sub_error_tip"
       }
     ]
   },
   {
     "$": "screen",
-    "name": "Widgets",
-    "tip": "Call widgets declared by other wapps. The host's WidgetBroker looks up providers from the installed wapps' manifest.json provides.widgets array, spins up a headless engine for the selected provider, and delivers the response back here. Each response arrives as an in-app notification.",
+    "name": "@screen.widgets",
+    "tip": "@screen.widgets_tip",
     "children": [
       {
         "$": "group",
-        "name": "Demo provider (widget_demo)",
-        "tip": "widget_demo provides both text.greet and text.shout from a single wapp — demonstrating that one wapp can provide multiple widgets.",
+        "name": "@group.demo_provider",
+        "tip": "@group.demo_provider_tip",
         "children": []
       },
       {
         "$": "action",
         "name": "widget-call-greet",
-        "label": "Call text.greet",
+        "label": "@action.widget_call_greet",
         "style": "primary",
-        "tip": "Sends a widget.request for text.greet. Expects {greeting: ...}."
+        "tip": "@action.widget_call_greet_tip"
       },
       {
         "$": "action",
         "name": "widget-call-shout",
-        "label": "Call text.shout",
+        "label": "@action.widget_call_shout",
         "style": "primary",
-        "tip": "Sends a widget.request for text.shout. Expects {loud: ...}."
+        "tip": "@action.widget_call_shout_tip"
       },
       {
         "$": "group",
-        "name": "Error paths",
-        "tip": "Make sure error flows also surface cleanly.",
+        "name": "@group.error_paths",
+        "tip": "@group.error_paths_tip",
         "children": []
       },
       {
         "$": "action",
         "name": "widget-call-missing",
-        "label": "Call nonexistent widget",
+        "label": "@action.widget_call_missing",
         "style": "secondary",
-        "tip": "Calls widget id \"does.not.exist\". Should surface an error notification."
+        "tip": "@action.widget_call_missing_tip"
       }
     ]
   }

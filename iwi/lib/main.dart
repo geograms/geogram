@@ -1,9 +1,14 @@
 import 'dart:async';
-import 'dart:io' show Directory, File, Platform, Process;
+import 'dart:convert';
 
+import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:http/http.dart' as http;
+
+import 'platform/platform.dart' as platform;
 
 import 'models/monitored_task.dart';
 import 'pages/welcome_page.dart';
@@ -13,6 +18,7 @@ import 'services/notification_service.dart';
 import 'services/preferences_service.dart';
 import 'services/profile_service.dart';
 import 'services/profile_storage.dart';
+import 'services/profile_storage_factory.dart';
 import 'services/storage_paths.dart';
 import 'services/task_monitor_service.dart';
 import 'services/wapp_signing_service.dart';
@@ -120,7 +126,17 @@ class _IwiAppState extends State<IwiApp> {
       // everything through the NotificationLayer overlay below.
       scaffoldMessengerKey: widget.messengerKey,
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(useMaterial3: true),
+      // Material 3's default seed is purple; override to blue so
+      // the launcher, buttons and accents land on a cooler palette
+      // that matches the geogram brand.
+      theme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF3F6CFF),
+          brightness: Brightness.dark,
+        ),
+      ),
       // The NotificationLayer is installed via `builder`, not `home:`,
       // so it sits ABOVE the Navigator. That way its stacking overlay
       // renders on top of whatever route is currently visible — the
@@ -196,7 +212,7 @@ class WappManifest {
     String publisherNpub = '',
   }) {
     final id = json['id'] as String? ?? '';
-    final folderName = dirPath.split(Platform.pathSeparator).last;
+    final folderName = dirPath.split(platform.pathSeparator).last;
     final manifestDescription = json['description'] as String? ?? '';
     final manifestSummary = json['summary'] as String? ?? '';
 
@@ -252,7 +268,7 @@ class WappManifest {
     if (raw == null || raw.isEmpty) return null;
     if (!raw.toLowerCase().endsWith('.svg')) return null;
     if (!raw.contains('/') && !raw.contains('\\')) return null;
-    return '$dirPath${Platform.pathSeparator}$raw';
+    return '$dirPath${platform.pathSeparator}$raw';
   }
 
   /// Pick a color based on the id hash.
@@ -344,24 +360,33 @@ class _LauncherPageState extends State<LauncherPage> {
 
     // 2. Built-in wapps from the in-repo wapps/archive/ tree. The
     //    seen-set dedup means any id already brought in by a user
-    //    install is skipped here. Directory.current.path is OK to
-    //    read — it is the runtime CWD, not profile data, and is the
-    //    only reliable anchor for relative dev-time paths into the
-    //    source.
-    final archiveCandidates = [
-      '${Directory.current.path}/../wapps/archive',
-      '${Directory.current.path}/../../wapps/archive',
-    ];
-    for (final archivePath in archiveCandidates) {
-      final archive = wappPackageStorage(archivePath);
-      if (!await archive.directoryExists('')) continue;
-      final entries = await archive.listDirectory('');
-      for (final entry in entries) {
-        if (!entry.isDirectory) continue;
-        final pkg = wappPackageStorage(archive.getAbsolutePath(entry.path));
-        await _scanManifest(pkg, wapps, seen);
+    //    install is skipped here. The archive path is derived from
+    //    the runtime CWD — works for desktop dev builds where the
+    //    binary runs next to the repo. On web the CWD is empty and
+    //    there is no filesystem archive at all, so we fall back to
+    //    the fetch-based loader below.
+    if (!kIsWeb) {
+      final cwd = platform.currentDirectory();
+      final archiveCandidates = [
+        '$cwd/../wapps/archive',
+        '$cwd/../../wapps/archive',
+      ];
+      for (final archivePath in archiveCandidates) {
+        final archive = wappPackageStorage(archivePath);
+        if (!await archive.directoryExists('')) continue;
+        final entries = await archive.listDirectory('');
+        for (final entry in entries) {
+          if (!entry.isDirectory) continue;
+          final pkg = wappPackageStorage(archive.getAbsolutePath(entry.path));
+          await _scanManifest(pkg, wapps, seen);
+        }
+        break; // first archive dir that exists wins
       }
-      break; // first archive dir that exists wins
+    } else {
+      // Web path — fetch /wapps.json relative to the served page,
+      // download each .wapp zip, extract in-memory, feed every
+      // wapp into the same _scanManifest call as native.
+      await _scanWebArchive(wapps, seen);
     }
 
     // Rebuild the widget registry from the fresh scan. Wapps that
@@ -373,6 +398,56 @@ class _LauncherPageState extends State<LauncherPage> {
     }
 
     if (mounted) setState(() => _wapps = wapps);
+  }
+
+  /// Web-only scan: fetch /wapps.json from the same origin the app
+  /// is being served from, download each listed `.wapp` archive,
+  /// extract it into an in-memory ProfileStorage, and feed the
+  /// resulting virtual package into the same [_scanManifest] path
+  /// the native scan uses. Every wapp ends up looking the same to
+  /// the launcher grid and to `WappPage._loadWapp` regardless of
+  /// whether it came from the filesystem or from HTTP.
+  Future<void> _scanWebArchive(
+      List<WappManifest> wapps, Set<String> seen) async {
+    try {
+      final indexRes = await http.get(Uri.parse('wapps.json'));
+      if (indexRes.statusCode != 200) return;
+      final decoded = jsonDecode(indexRes.body);
+      if (decoded is! List) return;
+      for (final entry in decoded) {
+        if (entry is! Map<String, dynamic>) continue;
+        final wappUrl = entry['wapp'] as String?;
+        if (wappUrl == null || wappUrl.isEmpty) continue;
+        try {
+          final zipRes = await http.get(Uri.parse(wappUrl));
+          if (zipRes.statusCode != 200) continue;
+          final archive = ZipDecoder().decodeBytes(zipRes.bodyBytes);
+          // Go through `makeFilesystemStorage` so the extracted
+          // contents land in the web registry keyed by wappUrl.
+          // Anyone who later calls `wappPackageStorage(wappUrl)` —
+          // e.g. `WappPage._loadWapp` when the user taps the tile —
+          // gets the SAME instance back and sees the files we just
+          // wrote. Without this the fetch-scan and the wapp-open
+          // path would each own their own empty memory map and
+          // every wapp would render as "app.wasm not found".
+          final pkg = makeFilesystemStorage(wappUrl);
+          for (final file in archive) {
+            if (!file.isFile) continue;
+            final bytes = file.content as List<int>;
+            await pkg.writeBytes(
+              file.name.replaceAll('\\', '/'),
+              Uint8List.fromList(bytes),
+            );
+          }
+          await _scanManifest(pkg, wapps, seen);
+        } catch (_) {
+          // Skip this wapp on any per-entry failure — one bad zip
+          // shouldn't take down the whole launcher.
+        }
+      }
+    } catch (_) {
+      // Index fetch failed entirely; launcher stays empty.
+    }
   }
 
   Future<void> _scanManifest(
@@ -669,12 +744,21 @@ class _AppIcon extends StatelessWidget {
     const whiteFilter = ColorFilter.mode(Colors.white, BlendMode.srcIn);
     final hasSvg = svgIconPath != null && svgIconPath!.isNotEmpty;
     final hasText = textIcon != null && textIcon!.isNotEmpty;
-    Widget inner;
+    // For the SVG case we read the bytes through the platform
+    // helper and render via SvgPicture.memory, so the same code
+    // path works on both desktop (real filesystem) and web (stub
+    // returns null and we fall through to the Material icon).
+    Uint8List? svgBytes;
     if (hasSvg) {
+      final raw = platform.readArbitraryFileBytesSync(svgIconPath!);
+      if (raw != null) svgBytes = Uint8List.fromList(raw);
+    }
+    Widget inner;
+    if (svgBytes != null) {
       inner = Padding(
         padding: const EdgeInsets.all(8),
-        child: SvgPicture.file(
-          File(svgIconPath!),
+        child: SvgPicture.memory(
+          svgBytes,
           fit: BoxFit.contain,
           colorFilter: whiteFilter,
           placeholderBuilder: (_) => const SizedBox.shrink(),
@@ -764,7 +848,7 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
   Future<void> _refreshWappData() async {
     final dataDir = _dataDir;
     if (dataDir == null) return;
-    final storage = FilesystemProfileStorage(dataDir);
+    final storage = makeFilesystemStorage(dataDir);
     if (!await storage.directoryExists('')) {
       if (mounted) setState(() => _wappDataEntries = []);
       return;
@@ -868,7 +952,7 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
     if (result != null && result.isNotEmpty && _prefs != null) {
       // Create the directory through the abstraction so the same code path
       // will work later with encrypted/IndexedDB backends.
-      await FilesystemProfileStorage(result).createDirectory('');
+      await makeFilesystemStorage(result).createDirectory('');
       _prefs!.wappDataDir = result;
       if (mounted) setState(() => _dataDir = result);
       await _refreshWappData();
@@ -879,15 +963,11 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
     final dataDir = _dataDir;
     if (dataDir == null) return;
     // Make sure it exists (via the abstraction), then hand the absolute
-    // path to the platform's external file manager.
-    await FilesystemProfileStorage(dataDir).createDirectory('');
-    if (Platform.isLinux) {
-      await Process.run('xdg-open', [dataDir]);
-    } else if (Platform.isMacOS) {
-      await Process.run('open', [dataDir]);
-    } else if (Platform.isWindows) {
-      await Process.run('explorer', [dataDir]);
-    }
+    // path to the platform's external file manager. Both calls flow
+    // through `platform.*` so the web build has a clean no-op instead
+    // of a dart:io Process spawn.
+    await makeFilesystemStorage(dataDir).createDirectory('');
+    await platform.openInFileManager(dataDir);
   }
 
   String _humanSize(int bytes) {
@@ -1112,12 +1192,12 @@ class _IwiSettingsPageState extends State<IwiSettingsPage> {
         // Split the absolute path into parent + leaf and delete via the
         // abstraction so the same code path works with non-filesystem
         // backends in the future.
-        final sep = Platform.pathSeparator;
+        final sep = platform.pathSeparator;
         final slashIdx = entry.path.lastIndexOf(sep);
         if (slashIdx > 0) {
           final parent = entry.path.substring(0, slashIdx);
           final leaf = entry.path.substring(slashIdx + 1);
-          await FilesystemProfileStorage(parent)
+          await makeFilesystemStorage(parent)
               .deleteDirectory(leaf, recursive: true);
         }
         await _refreshWappData();
@@ -1179,7 +1259,7 @@ class _WappRunnerPageState extends State<WappRunnerPage> {
   Future<void> _loadWasmFromFile(String path) async {
     setState(() => _status = 'Loading...');
     try {
-      final sep = Platform.pathSeparator;
+      final sep = platform.pathSeparator;
       final slashIdx = path.lastIndexOf(sep);
       if (slashIdx < 0) {
         setState(() => _status = 'Invalid path: $path');
@@ -1187,7 +1267,7 @@ class _WappRunnerPageState extends State<WappRunnerPage> {
       }
       final dir = path.substring(0, slashIdx);
       final file = path.substring(slashIdx + 1);
-      final bytes = await FilesystemProfileStorage(dir).readBytes(file);
+      final bytes = await makeFilesystemStorage(dir).readBytes(file);
       if (bytes == null) {
         setState(() => _status = 'wasm not found: $path');
         return;

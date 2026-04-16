@@ -1,0 +1,41 @@
+{
+  "screen.terminal": "Terminal",
+  "screen.terminal_tip": "Executar comandos e ver a saída.",
+  "screen.settings": "Definições",
+  "screen.settings_tip": "Configurar o aspecto e o comportamento do terminal.",
+
+  "group.output": "Saída",
+  "group.output_tip": "A saída dos comandos aparece aqui.",
+  "group.input": "Entrada",
+  "group.input_tip": "Escreva os comandos aqui.",
+  "group.appearance": "Aparência",
+  "group.appearance_tip": "Tipo de letra e apresentação.",
+  "group.behavior": "Comportamento",
+  "group.behavior_tip": "Definições da saída do terminal.",
+
+  "field.command_label": "Comando",
+  "field.command_hint": "ls, cd, cat, ping, curl, help ...",
+  "field.font_size": "Tamanho do tipo de letra",
+  "field.font_size_tip": "Tamanho do tipo de letra do terminal em pixels.",
+  "field.font_family": "Família do tipo de letra",
+  "field.line_height": "Altura da linha",
+  "field.line_height_tip": "Espaçamento vertical entre linhas.",
+  "field.color_scheme": "Esquema de cores",
+  "field.show_timestamps": "Mostrar horas",
+  "field.show_timestamps_tip": "Mostrar a hora junto de cada linha de saída.",
+  "field.buffer_size": "Tamanho do buffer",
+  "field.buffer_size_tip": "Número máximo de linhas mantidas no buffer do terminal.",
+
+  "option.dark": "Escuro",
+  "option.light": "Claro",
+  "option.solarized": "Solarized",
+
+  "action.run_label": "Executar",
+  "action.run_tip": "Executar o comando.",
+  "action.clear_label": "Limpar",
+  "action.clear_tip": "Limpar o buffer de saída.",
+  "action.save_settings": "Guardar definições",
+  "action.save_settings_tip": "Escrever as definições no armazenamento persistente.",
+  "action.cancel": "Cancelar",
+  "action.cancel_tip": "Descartar as alterações."
+}

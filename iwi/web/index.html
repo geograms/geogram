@@ -1,116 +1,65 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Iwi</title>
-<style>
-:root{--bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--primary:#58a6ff;--green:#7ee787;--red:#f85149;--yellow:#e3b341;--radius:12px;--font:'Segoe UI',system-ui,sans-serif;--mono:'SF Mono','Cascadia Code','Consolas',monospace}
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;height:100vh;display:flex;flex-direction:column}
-header{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 20px;display:flex;align-items:center;gap:12px}
-header h1{font-size:16px;font-weight:600}
-header .tabs{display:flex;gap:4px;margin-left:24px}
-header .tab{padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--muted);background:transparent;border:none;font-family:var(--font)}
-header .tab:hover{color:var(--text);background:var(--border)}
-header .tab.active{color:var(--primary);background:rgba(88,166,255,0.1)}
-header .spacer{flex:1}
-header .status{font-size:12px;color:var(--muted)}
-header .status.ok{color:var(--green)}
-header .back{background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;padding:4px 8px;border-radius:6px}
-header .back:hover{color:var(--text);background:var(--border)}
-main{flex:1;display:flex;overflow:hidden}
-#terminal{flex:1;display:flex;flex-direction:column}
-#output{flex:1;overflow-y:auto;padding:12px 16px;font-family:var(--mono);font-size:13px;line-height:1.6}
-#output .line{white-space:pre-wrap;word-break:break-all}
-#output .cmd{color:var(--green)} #output .err{color:var(--red)} #output .info{color:var(--primary)} #output .warn{color:var(--yellow)}
-#input-row{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface);border-top:1px solid var(--border)}
-#input-row .prompt{color:var(--green);font-family:var(--mono);font-size:13px;user-select:none}
-#cmd-input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-family:var(--mono);font-size:13px}
-#settings{flex:1;overflow-y:auto;padding:20px 24px;display:none}
-#settings .screen-tip{color:var(--muted);margin-bottom:16px;font-size:13px}
-#settings .group{margin-bottom:20px}
-#settings .group-header{font-weight:600;font-size:13px;color:var(--primary);margin-bottom:2px}
-#settings .group-tip{color:var(--muted);font-size:12px;margin-bottom:10px}
-#settings .field{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px}
-#settings .field label{min-width:140px;font-size:13px}
-#settings .field .tip{font-size:11px;color:var(--muted);margin-left:auto}
-#settings .field input[type="range"]{flex:1;accent-color:var(--primary)}
-#settings .field input[type="checkbox"]{accent-color:var(--primary);width:18px;height:18px}
-#settings .field select{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px;font-family:var(--font)}
-#settings .field .value{font-family:var(--mono);font-size:13px;min-width:40px;text-align:right}
-#settings .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
-#settings .actions button{padding:8px 20px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-family:var(--font)}
-#settings .actions .primary{background:var(--primary);color:#000;font-weight:600}
-#settings .actions .secondary{background:transparent;color:var(--muted);border:1px solid var(--border)}
-#settings .actions button:hover{filter:brightness(1.15)}
-.toast{position:fixed;bottom:20px;right:20px;padding:10px 18px;border-radius:8px;font-size:13px;z-index:100;animation:fadein .2s,fadeout .3s 2.7s}
-.toast.success{background:var(--green);color:#000} .toast.warning{background:var(--yellow);color:#000} .toast.error{background:var(--red);color:#fff}
-@keyframes fadein{from{opacity:0;transform:translateY(10px)}to{opacity:1}} @keyframes fadeout{to{opacity:0;transform:translateY(10px)}}
-#launcher{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
-#launcher h2{font-size:18px;color:var(--muted);font-weight:400}
-#launcher .apps{display:flex;gap:20px;flex-wrap:wrap;justify-content:center;padding:0 20px}
-#launcher .app-card{display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;padding:16px 20px;border-radius:16px;border:1px solid var(--border);background:var(--surface);min-width:100px;transition:border-color .15s}
-#launcher .app-card:hover{border-color:var(--primary)}
-#launcher .app-card .icon{width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff}
-#launcher .app-card .name{font-size:12px;text-align:center}
-#launcher .app-card .desc{font-size:11px;color:var(--muted);text-align:center;max-width:120px}
-.loading{position:fixed;inset:0;background:rgba(13,17,23,.8);display:flex;align-items:center;justify-content:center;z-index:50}
-.loading span{color:var(--primary);font-size:14px}
-#map-container{flex:1;position:relative;overflow:hidden;display:none;cursor:grab;background:#0a0e14}
-#map-container:active{cursor:grabbing}
-#map-tiles{position:absolute;top:0;left:0;width:100%;height:100%}
-#map-tiles img{position:absolute;width:256px;height:256px;image-rendering:auto;pointer-events:none;user-select:none;-webkit-user-drag:none}
-#map-overlay{position:absolute;bottom:12px;left:12px;display:flex;gap:6px;z-index:10}
-#map-overlay button{width:36px;height:36px;border-radius:8px;border:none;background:var(--surface);color:var(--text);font-size:18px;cursor:pointer;border:1px solid var(--border);display:flex;align-items:center;justify-content:center}
-#map-overlay button:hover{background:var(--border)}
-#map-coords{position:absolute;bottom:12px;right:12px;background:rgba(22,27,34,.85);color:var(--muted);font-size:11px;font-family:var(--mono);padding:4px 10px;border-radius:6px;z-index:10;pointer-events:none}
-#map-attribution{position:absolute;bottom:0;right:0;font-size:9px;color:var(--muted);padding:2px 6px;background:rgba(13,17,23,.7);z-index:10}
-#map-attribution a{color:var(--muted)}
-#map-search{position:absolute;top:12px;left:12px;right:12px;z-index:20}
-#map-search-input{display:flex;background:rgba(22,27,34,.94);border:1px solid var(--border);border-radius:10px;overflow:hidden}
-#map-search-input input{flex:1;background:transparent;border:none;outline:none;color:var(--text);font-size:13px;font-family:var(--font);padding:8px 12px}
-#map-search-input input::placeholder{color:var(--muted)}
-#map-search-input .icon{display:flex;align-items:center;padding:0 10px;color:var(--muted);font-size:16px}
-#map-search-input .clear{background:none;border:none;color:var(--muted);cursor:pointer;padding:0 10px;font-size:14px}
-#map-results{margin-top:4px;background:rgba(22,27,34,.94);border:1px solid var(--border);border-radius:10px;max-height:240px;overflow-y:auto}
-#map-results .result{padding:8px 12px;cursor:pointer;border-bottom:1px solid rgba(48,54,61,.5)}
-#map-results .result:last-child{border-bottom:none}
-#map-results .result:hover{background:var(--border)}
-#map-results .result .rname{font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#map-results .result .rcoord{font-size:10px;font-family:var(--mono);color:var(--muted)}
-</style>
+  <!--
+    Flutter web bootstrap scaffold for iwi (geogram launcher).
+    `flutter build web` / `flutter run -d chrome` emit
+    flutter_bootstrap.js which then loads main.dart.js. Replacing
+    the previous hand-written vanilla-JS implementation so the web
+    build renders through the SAME Dart/GeoUI codebase as desktop.
+  -->
+
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="geogram — offgrid wapp launcher">
+
+  <!-- iOS meta -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="geogram">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png">
+
+  <title>geogram</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!--
+    One-shot service-worker purge. Earlier builds registered a
+    Flutter PWA service worker that kept serving stale main.dart.js
+    from Cache Storage even after we rebuilt with --pwa-strategy=none
+    (which only prevents NEW registrations, it doesn't unregister
+    old ones). Incognito is unaffected because it gets a fresh SW
+    scope. This block unregisters any lingering SW, wipes the asset
+    cache, and hard-reloads — guarded by sessionStorage so we don't
+    loop.
+  -->
+  <script>
+    (function () {
+      if (!('serviceWorker' in navigator)) return;
+      if (sessionStorage.getItem('geogram.sw.purged') === '1') return;
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        if (regs.length === 0) return;
+        sessionStorage.setItem('geogram.sw.purged', '1');
+        Promise.all(regs.map(function (r) { return r.unregister(); }))
+          .then(function () {
+            if (window.caches && caches.keys) {
+              return caches.keys().then(function (keys) {
+                return Promise.all(keys.map(function (k) {
+                  return caches.delete(k);
+                }));
+              });
+            }
+          })
+          .then(function () { window.location.reload(); });
+      });
+    })();
+  </script>
 </head>
 <body>
-<header>
-  <button class="back" id="back-btn" style="display:none" title="Back to launcher">&larr;</button>
-  <h1 id="app-title">Iwi</h1>
-  <div class="tabs" id="tabs"></div>
-  <div class="spacer"></div>
-  <div class="status" id="status">Select a wapp</div>
-</header>
-<main>
-  <div id="launcher"><h2>Wapps</h2><div class="apps" id="app-list"></div></div>
-  <div id="terminal" style="display:none">
-    <div id="output"></div>
-    <div id="input-row"><span class="prompt">$</span><input id="cmd-input" type="text" autocomplete="off" spellcheck="false" placeholder="Type a command..."></div>
-  </div>
-  <div id="map-container">
-    <div id="map-tiles"></div>
-    <div id="map-search">
-      <div id="map-search-input">
-        <span class="icon">&#128269;</span>
-        <input id="map-query" type="text" placeholder="Search address or coordinates..." autocomplete="off" spellcheck="false">
-        <button class="clear" id="map-search-clear" style="display:none">&times;</button>
-      </div>
-      <div id="map-results" style="display:none"></div>
-    </div>
-    <div id="map-overlay"><button id="map-zin" title="Zoom in">+</button><button id="map-zout" title="Zoom out">&minus;</button></div>
-    <div id="map-coords"></div>
-    <div id="map-attribution">Tiles &copy; Esri</div>
-  </div>
-  <div id="settings"></div>
-</main>
-<script src="app.js"></script>
+  <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

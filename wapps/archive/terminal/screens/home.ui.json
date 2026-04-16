@@ -20,13 +20,13 @@
       },
       {
         "$": "screen",
-        "name": "Terminal",
-        "tip": "Execute commands and view output.",
+        "name": "@screen.terminal",
+        "tip": "@screen.terminal_tip",
         "children": [
           {
             "$": "group",
-            "name": "Output",
-            "tip": "Command output appears here.",
+            "name": "@group.output",
+            "tip": "@group.output_tip",
             "children": [
               {
                 "$": "watch",
@@ -83,8 +83,8 @@
           },
           {
             "$": "group",
-            "name": "Input",
-            "tip": "Enter commands here.",
+            "name": "@group.input",
+            "tip": "@group.input_tip",
             "children": [
               {
                 "$": "label",
@@ -96,10 +96,10 @@
                 "$": "field",
                 "name": "command",
                 "$type": "string",
-                "label": "Command",
+                "label": "@field.command_label",
                 "default": "",
                 "required": true,
-                "hint": "ls, cd, cat, ping, curl, help ...",
+                "hint": "@field.command_hint",
                 "children": [
                   {
                     "$": "icon",
@@ -114,10 +114,10 @@
           {
             "$": "action",
             "name": "run",
-            "label": "Run",
+            "label": "@action.run_label",
             "style": "primary",
             "confirm": false,
-            "tip": "Execute the command.",
+            "tip": "@action.run_tip",
             "children": [
               {
                 "$": "icon",
@@ -200,9 +200,9 @@
           {
             "$": "action",
             "name": "clear-screen",
-            "label": "Clear",
+            "label": "@action.clear_label",
             "style": "secondary",
-            "tip": "Clear the output buffer.",
+            "tip": "@action.clear_tip",
             "children": [
               {
                 "$": "icon",

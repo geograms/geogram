@@ -22,10 +22,10 @@
  */
 
 import 'dart:async';
-import 'dart:io' show Platform, Process;
 
 import 'package:flutter/material.dart';
 
+import '../platform/platform.dart' as platform;
 import 'event_bus.dart';
 
 enum NotificationLevel { info, success, warning, error }
@@ -104,32 +104,16 @@ class SystemTrayNotificationBackend implements NotificationBackend {
 
   @override
   Future<void> show(GeogramNotification n) async {
-    if (Platform.isLinux) {
-      final urgency = switch (n.level) {
-        NotificationLevel.error => 'critical',
-        NotificationLevel.warning => 'normal',
-        _ => 'low',
-      };
-      await Process.run('notify-send', [
-        '--urgency=$urgency',
-        '--app-name=geogram',
-        n.title,
-        if (n.body != null) n.body!,
-      ]);
-    } else if (Platform.isMacOS) {
-      final body = _escapeAppleScript(n.body ?? '');
-      final title = _escapeAppleScript(n.title);
-      await Process.run('osascript', [
-        '-e',
-        'display notification "$body" with title "$title"',
-      ]);
-    }
-    // Windows intentionally not implemented yet — needs a PowerShell
-    // call into the BurntToast module which may not be present.
+    // Native OS routing (notify-send / osascript) lives in the
+    // platform abstraction so this file stays dart:io-free and the
+    // web build can compile it. On web the call is a no-op; the
+    // in-app NotificationLayer is the only source of truth.
+    await platform.showSystemNotification(
+      title: n.title,
+      body: n.body,
+      error: n.level == NotificationLevel.error,
+    );
   }
-
-  String _escapeAppleScript(String s) =>
-      s.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 }
 
 // ── Service ─────────────────────────────────────────────────────────
@@ -159,9 +143,10 @@ class NotificationService {
     if (_initialised) return;
     _initialised = true;
 
-    if (Platform.isLinux || Platform.isMacOS) {
-      _backends.add(SystemTrayNotificationBackend());
-    }
+    // The system-tray backend defers its actual per-OS routing to
+    // the platform abstraction, so we always register it — on web
+    // its show() becomes a no-op anyway.
+    _backends.add(SystemTrayNotificationBackend());
 
     _errorSub = EventBus().on<ErrorEvent>((e) {
       show(GeogramNotification(

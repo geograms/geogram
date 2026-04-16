@@ -1,0 +1,5 @@
+{
+  "screen.tasks": "Tasks",
+  "screen.tasks_tip": "Live task monitor — pause, resume, or stop background tasks.",
+  "group.task_list_tip": "Every registered MonitoredTask in the geogram host."
+}

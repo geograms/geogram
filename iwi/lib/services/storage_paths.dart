@@ -19,25 +19,24 @@
  * auto-migrate it; if old data is present the user can copy it manually.
  */
 
-import 'dart:io';
-
+import '../platform/platform.dart' as platform;
 import 'preferences_service.dart';
 import 'profile_service.dart';
 import 'profile_storage.dart';
+import 'profile_storage_factory.dart';
 
 String _geogramBaseDir() {
-  final home = Platform.environment['HOME'] ??
-      Platform.environment['USERPROFILE'] ??
-      '/tmp';
+  final home = platform.homeDir() ?? '/tmp';
   return '$home/.local/share/geogram';
 }
 
 /// Root storage — everything the geogram launcher persists lives under this.
 /// Non-profile data (profiles.json itself, future cross-profile caches)
 /// is written directly here; everything else flows through
-/// [activeProfileRoot] below.
+/// [activeProfileRoot] below. On web the factory returns an in-memory
+/// store, so the path string is purely cosmetic there.
 ProfileStorage geogramRootStorage() =>
-    FilesystemProfileStorage(_geogramBaseDir());
+    makeFilesystemStorage(_geogramBaseDir());
 
 /// Root storage for the currently-active profile. Returns a scoped
 /// `profiles/<callsign>/` storage when a profile is active, or
@@ -66,7 +65,7 @@ String installedAppsDirPath() => installedAppsStorage().basePath;
 ProfileStorage wappsDataStorage(PreferencesService prefs) {
   final override = prefs.wappDataDir;
   if (override != null && override.isNotEmpty) {
-    return FilesystemProfileStorage(override);
+    return makeFilesystemStorage(override);
   }
   return ScopedProfileStorage(activeProfileRoot(), 'wapps');
 }
@@ -78,4 +77,4 @@ ProfileStorage wappDataStorageFor(PreferencesService prefs, String wappId) =>
 /// Storage rooted at an arbitrary wapp package directory — either a built-in
 /// source dir under `wapps/archive/<name>/` or an installed-apps entry.
 ProfileStorage wappPackageStorage(String wappDir) =>
-    FilesystemProfileStorage(wappDir);
+    makeFilesystemStorage(wappDir);

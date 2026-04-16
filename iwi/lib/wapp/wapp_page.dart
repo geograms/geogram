@@ -1,12 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Directory, File, HttpClient, Platform, Process;
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:http/http.dart' as http;
+
+import '../platform/platform.dart' as platform;
 
 import '../geoui/geoui_ast.dart';
 import '../geoui/geoui_parser.dart';
@@ -46,9 +50,23 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   String _status = 'Loading...';
 
   /// Wapp folder name — used as a stable id for storage, task monitor,
-  /// and lifecycle events.
-  late final String _wappName =
-      _pkg.basePath.split(Platform.pathSeparator).last;
+  /// and lifecycle events. The basePath is a filesystem directory on
+  /// desktop (`…/wapps/archive/app-creator`) and an HTTP URL on web
+  /// (`/wapps/app-creator.wapp`). Both splits go through forward
+  /// slashes because URLs use `/` regardless of the host platform's
+  /// native separator; after the split we strip any trailing `.wapp`
+  /// extension so `_isAppCreator` / matches by wapp name stay
+  /// identical on desktop and in the browser.
+  late final String _wappName = _deriveWappName(_pkg.basePath);
+
+  static String _deriveWappName(String basePath) {
+    final normalized = basePath.replaceAll('\\', '/');
+    var last = normalized.split('/').last;
+    if (last.toLowerCase().endsWith('.wapp')) {
+      last = last.substring(0, last.length - 5);
+    }
+    return last;
+  }
 
   /// Compound id for the per-wapp tick task in [TaskMonitorService].
   late final String _tickTaskId = 'wapp.$_wappName.${_engine.engineId}';
@@ -578,8 +596,11 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     }
 
     // --- Then built-ins, skipping ids already in user installs ---
-    // Same candidate paths as main.dart _scanArchiveBody.
-    final cwd = Directory.current.path;
+    // Same candidate paths as main.dart _scanArchiveBody. On web
+    // `platform.currentDirectory()` returns an empty string, so
+    // neither candidate resolves and the archive scan is a no-op
+    // (web built-ins come from the fetch-based loader instead).
+    final cwd = platform.currentDirectory();
     final archiveCandidates = [
       '$cwd/../wapps/archive',
       '$cwd/../../wapps/archive',
@@ -698,9 +719,16 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   /// The subset of [_screens] shown inside the App Creator editor
   /// view (i.e. everything except Projects). Order is preserved from
   /// home.ui.json so the author controls the tab layout — which must
-  /// be Code, UI, Settings.
+  /// be Code, UI, Translations, Settings.
+  ///
+  /// Filtering by the child group's `$type == "projects"` instead of
+  /// the screen name is deliberate: after the i18n rework the name
+  /// became an `@key` sentinel (e.g. `@screen.projects`) so a plain
+  /// string compare against "projects" stopped matching, which is
+  /// why the Projects tab used to leak into the editor scaffold.
   List<GeoUiBlock> get _editorScreens => _screens
-      .where((s) => (s.name ?? '').toLowerCase() != 'projects')
+      .where((s) => !s.children.any((c) =>
+          c.keyword == 'group' && c.type == 'projects'))
       .toList();
 
   /// The tab labels shown for the editor, matched 1:1 to
@@ -1268,7 +1296,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       if (!absPath.endsWith('/')) absPath += '/';
       absPath += 'index.json';
     }
-    final sep = Platform.pathSeparator;
+    final sep = platform.pathSeparator;
     final slashIdx = absPath.replaceAll(sep, '/').lastIndexOf('/');
     if (slashIdx <= 0) {
       _outputLines.add(_OutputLine('Invalid index path: $absPath', 'err'));
@@ -1319,7 +1347,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   dynamic _enrichCatalogWithSignatures(dynamic catalog, String indexDir) {
     if (catalog is! List) return catalog;
     // Compute the two candidate lookup roots once.
-    final normalized = indexDir.replaceAll(Platform.pathSeparator, '/');
+    final normalized = indexDir.replaceAll(platform.pathSeparator, '/');
     final parent = normalized.contains('/')
         ? normalized.substring(0, normalized.lastIndexOf('/'))
         : normalized;
@@ -1368,7 +1396,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     // Resolve the source dir (may be a .json path or a plain directory).
     var baseDir = source;
     if (baseDir.endsWith('.json')) {
-      final slashIdx = baseDir.replaceAll(Platform.pathSeparator, '/').lastIndexOf('/');
+      final slashIdx = baseDir.replaceAll(platform.pathSeparator, '/').lastIndexOf('/');
       if (slashIdx <= 0) return;
       baseDir = baseDir.substring(0, slashIdx);
     }
@@ -1384,17 +1412,28 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       await _installed.deleteDirectory(name, recursive: true);
       await _installed.createDirectory(name);
 
-      // Extract .wapp (ZIP) into the installed-apps target directory. The
-      // external `unzip` tool needs a real on-disk path — this works today
-      // because installedAppsStorage() is a FilesystemProfileStorage. When
-      // an encrypted/IndexedDB backend is added, this will need to unzip
-      // into a temp dir and then copyFromExternal() each file.
-      final absSrcPath = srcStorage.getAbsolutePath(filePath);
-      final absAppDir = _installed.getAbsolutePath(name);
-      final result =
-          Process.runSync('unzip', ['-o', '-q', absSrcPath, '-d', absAppDir]);
-      if (result.exitCode != 0) {
-        _outputLines.add(_OutputLine('Extract failed: ${result.stderr}', 'err'));
+      // Extract the .wapp (ZIP) via package:archive so the same code
+      // path works on desktop (FilesystemProfileStorage) and web
+      // (MemoryProfileStorage). No Process spawn, no dart:io.
+      final archiveBytes = await srcStorage.readBytes(filePath);
+      if (archiveBytes == null || archiveBytes.isEmpty) {
+        _outputLines.add(
+            _OutputLine('Empty or missing .wapp: $filePath', 'err'));
+        if (mounted) setState(() {});
+        return;
+      }
+      try {
+        final decoded = ZipDecoder().decodeBytes(archiveBytes);
+        for (final entry in decoded) {
+          if (!entry.isFile) continue;
+          final rel = entry.name.replaceAll('\\', '/');
+          if (rel.isEmpty) continue;
+          final content = entry.content as List<int>;
+          await _installed.writeBytes(
+              '$name/$rel', Uint8List.fromList(content));
+        }
+      } catch (e) {
+        _outputLines.add(_OutputLine('Extract failed: $e', 'err'));
         if (mounted) setState(() {});
         return;
       }
@@ -4039,7 +4078,9 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       }
       return null;
     }
-    // Local path. Try <raw>/wapps/index.json then <raw>/index.json.
+    // Local filesystem candidates. Skipped entirely on web — the
+    // browser has no filesystem so a local path here is nonsense.
+    if (kIsWeb) return null;
     final candidates = <String>[];
     if (lowered.endsWith('.json')) {
       candidates.add(raw);
@@ -4051,36 +4092,32 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     }
     for (final candidate in candidates) {
       try {
-        final file = File(candidate);
-        if (await file.exists()) {
-          final contents = await file.readAsString();
-          try {
-            final parsed = jsonDecode(contents);
-            if (parsed is List) return candidate;
-          } catch (_) {}
-        }
+        final bytes = platform.readArbitraryFileBytesSync(candidate);
+        if (bytes == null) continue;
+        final contents = utf8.decode(bytes);
+        try {
+          final parsed = jsonDecode(contents);
+          if (parsed is List) return candidate;
+        } catch (_) {}
       } catch (_) {}
     }
     return null;
   }
 
-  /// Fetch [url] via a short-lived HttpClient and return true if it
-  /// responds 200 with a JSON array body. Used by [_validateSource].
+  /// Fetch [url] and return true if it responds 200 with a JSON array
+  /// body. Uses package:http so the same code runs on desktop (via
+  /// dart:io sockets) and web (via browser fetch). Six-second
+  /// deadline matches the previous HttpClient implementation.
   Future<bool> _probeJsonUrl(String url) async {
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 6);
     try {
-      final uri = Uri.parse(url);
-      final req = await client.getUrl(uri);
-      final resp = await req.close();
+      final resp = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 6));
       if (resp.statusCode < 200 || resp.statusCode >= 300) return false;
-      final body = await resp.transform(const Utf8Decoder()).join();
-      final parsed = jsonDecode(body);
+      final parsed = jsonDecode(resp.body);
       return parsed is List;
     } catch (_) {
       return false;
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -4691,21 +4728,22 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     );
   }
 
-  /// Resolve the absolute path to a wapp's `manifest.icon` sidecar
-  /// SVG for store-card rendering. Matches the priority the
-  /// launcher grid uses in `WappManifest.svgIconPath` so the Install
-  /// wapp shows identically on both surfaces:
+  /// Resolve a wapp's `manifest.icon` sidecar SVG to its raw bytes
+  /// for store-card rendering. Matches the priority the launcher
+  /// grid uses for [WappManifest.svgIconPath]:
   ///
   ///   1. If the named wapp is the currently-running one, read its
-  ///      package (works for the Install/Store wapp itself, which
-  ///      runs from `wapps/archive/install/`).
+  ///      package storage (works for the Install/Store wapp itself).
   ///   2. Otherwise, read from the active profile's installed-apps
   ///      folder. Catalog entries that haven't been installed yet
   ///      return null — the caller falls back to [wappIconFor].
   ///
-  /// Returns null when no `.svg` path is available or the sidecar
-  /// doesn't exist on disk.
-  String? _storeSvgPathFor(String name) {
+  /// Returns null when no `.svg` path is declared or the sidecar
+  /// doesn't exist in the storage. Using `readBytesSync` instead of
+  /// a `File(path).existsSync()` lookup means the web fetch-based
+  /// [MemoryProfileStorage] resolves identically to the desktop
+  /// [FilesystemProfileStorage].
+  Uint8List? _storeSvgBytesFor(String name) {
     ProfileStorage? pkg;
     if (name == _wappName) {
       pkg = _pkg;
@@ -4713,17 +4751,22 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       pkg = ScopedProfileStorage(_installed, name);
     }
     if (pkg == null) return null;
-    final bytes = pkg.readBytesSync('manifest.json');
-    if (bytes == null) return null;
+    final manifestBytes = pkg.readBytesSync('manifest.json');
+    if (manifestBytes == null) return null;
     try {
-      final manifest = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+      final manifest =
+          jsonDecode(utf8.decode(manifestBytes)) as Map<String, dynamic>;
       final icon = manifest['icon'] as String?;
       if (icon == null || icon.isEmpty) return null;
       if (!icon.toLowerCase().endsWith('.svg')) return null;
       if (!icon.contains('/') && !icon.contains('\\')) return null;
-      final abs = '${pkg.basePath}${Platform.pathSeparator}$icon';
-      if (!File(abs).existsSync()) return null;
-      return abs;
+      // Read the sidecar SVG via the storage abstraction so both
+      // native (FilesystemProfileStorage) and web
+      // (MemoryProfileStorage, populated by the fetch-based archive
+      // scan in main.dart) resolve the same way.
+      final svgBytes = pkg.readBytesSync(icon);
+      if (svgBytes == null || svgBytes.isEmpty) return null;
+      return svgBytes;
     } catch (_) {
       return null;
     }
@@ -4738,12 +4781,12 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   /// coloured tile.
   Widget _storeIconWidget(String name, {required double size}) {
     const whiteFilter = ColorFilter.mode(Colors.white, BlendMode.srcIn);
-    final svgPath = _storeSvgPathFor(name);
-    if (svgPath != null) {
+    final svgBytes = _storeSvgBytesFor(name);
+    if (svgBytes != null) {
       return Padding(
         padding: EdgeInsets.all(size * 0.12),
-        child: SvgPicture.file(
-          File(svgPath),
+        child: SvgPicture.memory(
+          svgBytes,
           fit: BoxFit.contain,
           colorFilter: whiteFilter,
           placeholderBuilder: (_) => Icon(
@@ -4903,7 +4946,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   // ── Settings screen ────────────────────────────────────────────────
 
   Widget _buildSettingsScreen(GeoUiBlock screen) {
-    return GeoUiScreenRenderer(
+    final renderer = GeoUiScreenRenderer(
       screen: screen,
       bindings: _WappFieldBindings(_fieldValues, () => setState(() {})),
       i18n: _i18n,
@@ -4929,6 +4972,75 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         }
       },
     );
+
+    // App Creator: wrap with a Save banner so changes to title, name,
+    // icon etc. are persisted without the user having to find the
+    // Install button on the Code tab.
+    if (!_isAppCreator) return renderer;
+
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+          decoration: BoxDecoration(
+            color: cs.primaryContainer.withAlpha(80),
+            border: Border(
+              bottom: BorderSide(color: cs.outlineVariant.withAlpha(100)),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, color: cs.primary, size: 18),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Changes are kept in memory while you edit. '
+                  'Click Save to write them to disk.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: cs.onPrimaryContainer,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: _settingsSaveToDisk,
+                icon: const Icon(Icons.save, size: 16),
+                label: const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: renderer),
+      ],
+    );
+  }
+
+  /// Persist App Creator settings (title, name, id, description, icon,
+  /// UI, translations) to the installed-apps folder. Follows the same
+  /// pattern as [_translationsSaveToDisk] — delegates to
+  /// [_handleInstall] which writes the full wapp package.
+  Future<void> _settingsSaveToDisk() async {
+    final id = (_fieldValues['wapp_id'] as String?) ?? '';
+    if (id.isEmpty) {
+      NotificationService.instance.show(GeogramNotification(
+        level: NotificationLevel.error,
+        title: 'Cannot save',
+        body: 'Open or create a project first (ID is empty).',
+        source: 'host:app-creator',
+      ));
+      return;
+    }
+    await _handleInstall(<String, dynamic>{
+      'id': id,
+      'title': (_fieldValues['wapp_title'] as String?) ?? '',
+      'name': (_fieldValues['wapp_name'] as String?) ?? '',
+      'description':
+          (_fieldValues['wapp_description'] as String?) ?? '',
+      'source_ui': (_fieldValues['source_ui'] as String?) ?? '',
+    });
   }
 
   // ── Map screen ─────────────────────────────────────────────────────
@@ -5259,12 +5371,10 @@ class _SlippyMapState extends State<_SlippyMap> {
         'limit': '8',
         'addressdetails': '1',
       });
-      final client = HttpClient();
-      client.userAgent = 'Geogram/1.0';
-      final req = await client.getUrl(uri);
-      final resp = await req.close();
-      final body = await resp.transform(utf8.decoder).join();
-      client.close();
+      final resp = await http.get(uri, headers: const {
+        'User-Agent': 'Geogram/1.0',
+      }).timeout(const Duration(seconds: 10));
+      final body = resp.body;
 
       final results = (jsonDecode(body) as List).map((r) {
         final lat = double.tryParse(r['lat']?.toString() ?? '') ?? 0;

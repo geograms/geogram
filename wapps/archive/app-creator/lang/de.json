@@ -1,0 +1,38 @@
+{
+  "screen.projects": "Projekte",
+  "screen.projects_tip": "Eine vorhandene Wapp zum Bearbeiten auswählen oder eine neue starten. Beim Auswählen einer Wapp werden Titel, ID, Beschreibung und home.ui.json in die Editor-Tabs geladen.",
+  "screen.code": "Code",
+  "screen.code_tip": "Eine geogram-Wapp in C schreiben. Auf Kompilieren klicken, um sie mit dem mitgelieferten wasm-clang zu bauen, dann Installieren, um sie dem Launcher hinzuzufügen.",
+  "screen.ui": "UI",
+  "screen.ui_tip": "Visueller + Code-Editor für die GeoUI-Screens der Wapp. Zwischen der Palette/Canvas-Ansicht und dem rohen JSON im selben Tab umschalten.",
+  "screen.translations": "Übersetzungen",
+  "screen.translations_tip": "Die lang/<locale>.json-Sidecars der Wapp bearbeiten. Als @key aus der UI referenzierte Schlüssel werden zur Laufzeit entsprechend der aktiven Sprache des Benutzers übersetzt.",
+  "screen.settings": "Einstellungen",
+  "screen.settings_tip": "Metadaten der bearbeiteten Wapp. Der Titel wird im Launcher-Raster angezeigt; der Name ist der Ordner-Slug auf der Festplatte.",
+
+  "group.projects": "Projekte",
+  "group.projects_tip": "Jede Wapp unter ~/.local/share/geogram/apps/. Eingebaute Wapps (tester, tasks, …) sind hier noch nicht bearbeitbar.",
+  "group.ui_editor_tip": "Die an source_ui gebundenen Screens bearbeiten. Install schreibt sie nach screens/home.ui.json.",
+  "group.translations_tip": "Locale wählen, @keys aus dem UI-JSON extrahieren und die Übersetzungen ausfüllen.",
+  "group.identity": "Identität",
+  "group.identity_tip": "Diese Werte landen in der generierten manifest.json, wenn du auf Installieren klickst.",
+
+  "field.source_tip": "Reines C gegen das geogram-HAL (wapps/hal/geogram_wasm_hal.h). Kein libc.",
+  "field.compiler_output": "Compiler-Ausgabe",
+  "field.compiler_output_tip": "Compiler-stdout und -stderr plus Fortschrittsmeldungen vom Host.",
+  "field.title": "Titel",
+  "field.title_tip": "Lesbarer Anzeigename. Das ist, was das Launcher-Raster zeigt.",
+  "field.name": "Name (Ordner-Slug)",
+  "field.name_tip": "Kurzer Slug, der als Ordnername unter ~/.local/share/geogram/apps/ und ~/.local/share/geogram/wapps/ verwendet wird. Kleinbuchstaben, keine Leerzeichen.",
+  "field.id": "ID (reverse domain)",
+  "field.id_tip": "Stabile Kennung, landet in manifest.id. Konvention: reverse-domain.",
+  "field.description": "Beschreibung",
+  "field.description_tip": "Längere Beschreibung. Landet in manifest.summary.",
+  "field.icon": "Symbol",
+  "field.icon_tip": "Ein Emoji / einzelnes Zeichen eingeben oder Choose SVG… klicken, um eine Vektordatei zu wählen. Leer lassen für das Standard-Material-Symbol.",
+
+  "action.compile": "Kompilieren",
+  "action.compile_tip": "Das mitgelieferte wasm-clang über den Code oben laufen lassen. Die Ausgabe erscheint im Log-View unten.",
+  "action.install": "Installieren",
+  "action.install_tip": "Die kompilierte Wapp in den installierten Apps-Ordner des Launchers schreiben. Ohne frische Kompilierung wird das bestehende app.wasm wiederverwendet (nur Metadaten-/UI-Bearbeitung)."
+}

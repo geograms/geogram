@@ -1,21 +1,21 @@
 [
   {
     "$": "screen",
-    "name": "Projects",
-    "tip": "Pick an existing wapp to edit or start a new one. Selecting a wapp loads its title, id, description, and home.ui.json into the editor tabs.",
+    "name": "@screen.projects",
+    "tip": "@screen.projects_tip",
     "children": [
       {
         "$": "group",
-        "name": "Projects",
+        "name": "@group.projects",
         "$type": "projects",
-        "tip": "Every wapp installed under ~/.local/share/geogram/apps/. Built-in wapps (tester, tasks, …) are not editable here yet."
+        "tip": "@group.projects_tip"
       }
     ]
   },
   {
     "$": "screen",
-    "name": "Code",
-    "tip": "Write a geogram wapp in C. Hit Compile to build it against the bundled wasm-clang, then Install to add it to the launcher.",
+    "name": "@screen.code",
+    "tip": "@screen.code_tip",
     "children": [
       {
         "$": "field",
@@ -23,107 +23,107 @@
         "$type": "code",
         "label": "source.c",
         "language": "c",
-        "tip": "Plain C against the geogram HAL (wapps/hal/geogram_wasm_hal.h). No libc.",
+        "tip": "@field.source_tip",
         "default": "#include \"geogram_wasm_hal.h\"\n\nstatic unsigned str_len(const char *s) {\n    unsigned n = 0;\n    while (s[n]) n++;\n    return n;\n}\n\nvoid module_init(void) {\n    const char *msg = \"[my-first] init\";\n    hal_log(1, msg, str_len(msg));\n}\n\nvoid module_tick(void) {\n    const char *msg = \"[my-first] tick\";\n    hal_log(0, msg, str_len(msg));\n}\n\nvoid module_handle_event(void) { }\nvoid module_destroy(void) { }\n\nuint32_t module_tick_interval_ms(void) {\n    return 5000;\n}\n"
       },
       {
         "$": "action",
         "name": "compile",
-        "label": "Compile",
+        "label": "@action.compile",
         "style": "primary",
-        "tip": "Run the bundled wasm-clang over the source above. Output goes to the log view below."
+        "tip": "@action.compile_tip"
       },
       {
         "$": "action",
         "name": "install",
-        "label": "Install",
+        "label": "@action.install",
         "style": "secondary",
-        "tip": "Write the compiled wapp into the launcher's installed-apps folder. If no fresh compile is available this reuses the existing app.wasm (edit metadata / UI only)."
+        "tip": "@action.install_tip"
       },
       {
         "$": "field",
         "name": "output",
         "$type": "log",
-        "label": "Compiler output",
-        "tip": "Compiler stdout and stderr, plus host-side progress messages."
+        "label": "@field.compiler_output",
+        "tip": "@field.compiler_output_tip"
       }
     ]
   },
   {
     "$": "screen",
-    "name": "UI",
-    "tip": "Visual + code editor for the wapp's GeoUI screens. Switch between a drag-free tree view of the blocks and the raw JSON in the same tab.",
+    "name": "@screen.ui",
+    "tip": "@screen.ui_tip",
     "children": [
       {
         "$": "group",
         "name": "ui",
         "$type": "ui-editor",
-        "tip": "Edit the screens bound to `source_ui`. Install writes them to screens/home.ui.json."
+        "tip": "@group.ui_editor_tip"
       }
     ]
   },
   {
     "$": "screen",
-    "name": "Translations",
-    "tip": "Edit the wapp's lang/<locale>.json sidecars. Keys referenced as `@key` from the UI get translated at runtime via the user's active language.",
+    "name": "@screen.translations",
+    "tip": "@screen.translations_tip",
     "children": [
       {
         "$": "group",
         "name": "translations",
         "$type": "translations",
-        "tip": "Pick a locale, extract @keys from the UI JSON, and fill in the translations."
+        "tip": "@group.translations_tip"
       }
     ]
   },
   {
     "$": "screen",
-    "name": "Settings",
-    "tip": "Metadata for the wapp you're editing. Title is what shows on the launcher grid; Name is the folder slug used on disk.",
+    "name": "@screen.settings",
+    "tip": "@screen.settings_tip",
     "children": [
       {
         "$": "group",
-        "name": "Identity",
-        "tip": "These values end up in the generated manifest.json when you click Install.",
+        "name": "@group.identity",
+        "tip": "@group.identity_tip",
         "children": [
           {
             "$": "field",
             "name": "wapp_title",
             "$type": "string",
-            "label": "Title",
+            "label": "@field.title",
             "default": "My first wapp",
-            "tip": "Human-readable display name. This is what the launcher grid shows."
+            "tip": "@field.title_tip"
           },
           {
             "$": "field",
             "name": "wapp_name",
             "$type": "string",
-            "label": "Name (folder slug)",
+            "label": "@field.name",
             "default": "my-first",
-            "tip": "Short slug used as the folder name under ~/.local/share/geogram/apps/ and ~/.local/share/geogram/wapps/. Lowercase, no spaces."
+            "tip": "@field.name_tip"
           },
           {
             "$": "field",
             "name": "wapp_id",
             "$type": "string",
-            "label": "ID (reverse domain)",
+            "label": "@field.id",
             "default": "user.geogram.my-first",
-            "tip": "Stable identifier, goes into manifest.id. Convention: reverse-domain."
+            "tip": "@field.id_tip"
           },
           {
             "$": "field",
             "name": "wapp_description",
             "$type": "string",
-            "label": "Description",
+            "label": "@field.description",
             "default": "A wapp I wrote inside geogram.",
-            "tip": "Longer description. Goes into manifest.summary."
+            "tip": "@field.description_tip"
           },
           {
             "$": "field",
             "name": "wapp_icon",
             "$type": "icon",
-            "label": "Icon",
+            "label": "@field.icon",
             "default": "",
-            "tip": "Type an emoji / single character, or click Choose SVG… to pick a vector icon file. Leave blank for the default Material icon."
+            "tip": "@field.icon_tip"
           }
         ]
       }

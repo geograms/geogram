@@ -16,8 +16,6 @@
  * whichever shape is currently in the binding.
  */
 
-import 'dart:io';
-
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -111,7 +109,10 @@ class _IconFieldState extends State<IconField> {
     final file = await openFile(acceptedTypeGroups: [typeGroup]);
     if (file == null) return;
     try {
-      final content = await File(file.path).readAsString();
+      // XFile.readAsString works on both desktop (dart:io File
+      // under the hood) and web (FileReader via file_selector_web),
+      // so this stays dart:io-free.
+      final content = await file.readAsString();
       if (content.trim().isEmpty) return;
       // Text input is meaningless once an SVG is loaded — clear it
       // so re-entering editor mode later doesn't show a stale char.

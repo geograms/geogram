@@ -45,6 +45,9 @@ dependencies:
   pointycastle: ^3.9.1                   # secp256k1 / BIP-340 Schnorr
   bech32: ^0.2.2                         # npub / nsec encoding
   hex: ^0.2.0                            # hex ↔ bytes
+  http: ^1.2.0                           # Cross-platform HTTP (native + web)
+  archive: ^3.6.1                        # Pure-Dart zip extraction for .wapp bundles
+  web: ^0.5.1                            # window.localStorage for web profile persistence
 
 dev_dependencies:
   flutter_test:

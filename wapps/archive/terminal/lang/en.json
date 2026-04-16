@@ -1,0 +1,41 @@
+{
+  "screen.terminal": "Terminal",
+  "screen.terminal_tip": "Execute commands and view output.",
+  "screen.settings": "Settings",
+  "screen.settings_tip": "Configure terminal appearance and behavior.",
+
+  "group.output": "Output",
+  "group.output_tip": "Command output appears here.",
+  "group.input": "Input",
+  "group.input_tip": "Enter commands here.",
+  "group.appearance": "Appearance",
+  "group.appearance_tip": "Font and display settings.",
+  "group.behavior": "Behavior",
+  "group.behavior_tip": "Terminal output settings.",
+
+  "field.command_label": "Command",
+  "field.command_hint": "ls, cd, cat, ping, curl, help ...",
+  "field.font_size": "Font Size",
+  "field.font_size_tip": "Size of the terminal font in pixels.",
+  "field.font_family": "Font Family",
+  "field.line_height": "Line Height",
+  "field.line_height_tip": "Vertical spacing between lines.",
+  "field.color_scheme": "Color Scheme",
+  "field.show_timestamps": "Show Timestamps",
+  "field.show_timestamps_tip": "Display time next to each output line.",
+  "field.buffer_size": "Buffer Size",
+  "field.buffer_size_tip": "Maximum number of lines kept in the terminal buffer.",
+
+  "option.dark": "Dark",
+  "option.light": "Light",
+  "option.solarized": "Solarized",
+
+  "action.run_label": "Run",
+  "action.run_tip": "Execute the command.",
+  "action.clear_label": "Clear",
+  "action.clear_tip": "Clear the output buffer.",
+  "action.save_settings": "Save Settings",
+  "action.save_settings_tip": "Write settings to persistent storage.",
+  "action.cancel": "Cancel",
+  "action.cancel_tip": "Discard changes."
+}

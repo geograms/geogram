@@ -1,30 +1,30 @@
 [
   {
     "$": "screen",
-    "name": "Settings",
-    "tip": "Configure terminal appearance and behavior.",
+    "name": "@screen.settings",
+    "tip": "@screen.settings_tip",
     "children": [
       {
         "$": "group",
-        "name": "Appearance",
-        "tip": "Font and display settings.",
+        "name": "@group.appearance",
+        "tip": "@group.appearance_tip",
         "children": [
           {
             "$": "field",
             "name": "fontSize",
             "$type": "float",
-            "label": "Font Size",
+            "label": "@field.font_size",
             "default": 16.0,
             "min": 10,
             "max": 32,
             "step": 1,
-            "tip": "Size of the terminal font in pixels."
+            "tip": "@field.font_size_tip"
           },
           {
             "$": "field",
             "name": "fontFamily",
             "$type": "enum",
-            "label": "Font Family",
+            "label": "@field.font_family",
             "default": "RobotoMono",
             "children": [
               { "$": "option", "name": "RobotoMono", "label": "Roboto Mono" },
@@ -36,59 +36,59 @@
             "$": "field",
             "name": "lineHeight",
             "$type": "float",
-            "label": "Line Height",
+            "label": "@field.line_height",
             "default": 1.5,
             "min": 1.0,
             "max": 2.5,
             "step": 0.1,
-            "tip": "Vertical spacing between lines."
+            "tip": "@field.line_height_tip"
           },
           {
             "$": "field",
             "name": "colorScheme",
             "$type": "enum",
-            "label": "Color Scheme",
+            "label": "@field.color_scheme",
             "default": "dark",
             "children": [
-              { "$": "option", "name": "dark", "label": "Dark" },
-              { "$": "option", "name": "light", "label": "Light" },
-              { "$": "option", "name": "solarized", "label": "Solarized" }
+              { "$": "option", "name": "dark", "label": "@option.dark" },
+              { "$": "option", "name": "light", "label": "@option.light" },
+              { "$": "option", "name": "solarized", "label": "@option.solarized" }
             ]
           }
         ]
       },
       {
         "$": "group",
-        "name": "Behavior",
-        "tip": "Terminal output settings.",
+        "name": "@group.behavior",
+        "tip": "@group.behavior_tip",
         "children": [
           {
             "$": "field",
             "name": "showTimestamps",
             "$type": "bool",
-            "label": "Show Timestamps",
+            "label": "@field.show_timestamps",
             "default": false,
-            "tip": "Display time next to each output line."
+            "tip": "@field.show_timestamps_tip"
           },
           {
             "$": "field",
             "name": "maxLines",
             "$type": "int",
-            "label": "Buffer Size",
+            "label": "@field.buffer_size",
             "default": 5000,
             "min": 500,
             "max": 20000,
             "step": 500,
-            "tip": "Maximum number of lines kept in the terminal buffer."
+            "tip": "@field.buffer_size_tip"
           }
         ]
       },
       {
         "$": "action",
         "name": "save",
-        "label": "Save Settings",
+        "label": "@action.save_settings",
         "style": "primary",
-        "tip": "Write settings to persistent storage.",
+        "tip": "@action.save_settings_tip",
         "children": [
           {
             "$": "icon",
@@ -124,9 +124,9 @@
       {
         "$": "action",
         "name": "cancel",
-        "label": "Cancel",
+        "label": "@action.cancel",
         "style": "secondary",
-        "tip": "Discard changes."
+        "tip": "@action.cancel_tip"
       }
     ]
   }

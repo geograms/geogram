@@ -1,8 +1,8 @@
 [
   {
     "$": "screen",
-    "name": "Map",
-    "tip": "Browse satellite imagery. Drag to pan, scroll to zoom.",
+    "name": "@screen.map",
+    "tip": "@screen.map_tip",
     "children": [
       {
         "$": "group",
@@ -17,21 +17,21 @@
       },
       {
         "$": "group",
-        "name": "Controls",
+        "name": "@group.controls",
         "children": [
           {
             "$": "action",
             "name": "zoom-in",
             "label": "+",
             "style": "primary",
-            "tip": "Zoom in"
+            "tip": "@action.zoom_in_tip"
           },
           {
             "$": "action",
             "name": "zoom-out",
             "label": "-",
             "style": "primary",
-            "tip": "Zoom out"
+            "tip": "@action.zoom_out_tip"
           }
         ]
       }
@@ -39,65 +39,65 @@
   },
   {
     "$": "screen",
-    "name": "Settings",
-    "tip": "Map display settings.",
+    "name": "@screen.settings",
+    "tip": "@screen.settings_tip",
     "children": [
       {
         "$": "group",
-        "name": "Tiles",
-        "tip": "Tile server configuration.",
+        "name": "@group.tiles",
+        "tip": "@group.tiles_tip",
         "children": [
           {
             "$": "field",
             "name": "tileServer",
             "$type": "enum",
-            "label": "Tile Source",
+            "label": "@field.tile_source",
             "default": "satellite",
             "children": [
-              { "$": "option", "name": "satellite", "label": "Satellite (ESRI)" },
-              { "$": "option", "name": "osm", "label": "OpenStreetMap" },
-              { "$": "option", "name": "topo", "label": "Topographic (ESRI)" }
+              { "$": "option", "name": "satellite", "label": "@option.satellite" },
+              { "$": "option", "name": "osm", "label": "@option.osm" },
+              { "$": "option", "name": "topo", "label": "@option.topo" }
             ]
           }
         ]
       },
       {
         "$": "group",
-        "name": "Cache",
-        "tip": "Offline tile cache settings.",
+        "name": "@group.cache",
+        "tip": "@group.cache_tip",
         "children": [
           {
             "$": "field",
             "name": "cacheEnabled",
             "$type": "bool",
-            "label": "Enable Cache",
+            "label": "@field.cache_enabled",
             "default": true,
-            "tip": "Cache downloaded tiles for offline use."
+            "tip": "@field.cache_enabled_tip"
           },
           {
             "$": "field",
             "name": "maxCacheMb",
             "$type": "int",
-            "label": "Max Cache Size",
+            "label": "@field.cache_max",
             "default": 200,
             "min": 50,
             "max": 2000,
             "step": 50,
-            "tip": "Maximum tile cache size in megabytes."
+            "tip": "@field.cache_max_tip"
           }
         ]
       },
       {
         "$": "action",
         "name": "save",
-        "label": "Save",
+        "label": "@action.save",
         "style": "primary",
-        "tip": "Apply settings."
+        "tip": "@action.save_tip"
       },
       {
         "$": "action",
         "name": "cancel",
-        "label": "Cancel",
+        "label": "@action.cancel",
         "style": "secondary"
       }
     ]

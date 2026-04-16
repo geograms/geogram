@@ -22,13 +22,13 @@
  */
 
 import 'dart:async';
-import 'dart:io'
-    show Directory, File, Platform, Process, ProcessResult;
 import 'dart:typed_data';
 
 import '../models/monitored_task.dart';
 import 'profile_storage.dart';
 import 'task_monitor_service.dart';
+import 'wapp_compiler_backend_web.dart'
+    if (dart.library.io) 'wapp_compiler_backend_io.dart';
 
 /// Outcome of a single compile run.
 class CompileResult {
@@ -96,165 +96,17 @@ abstract class CompilerBackend {
   });
 }
 
-// ── Phase 2a: native wasi-sdk backend ───────────────────────────────
-//
-// TODO(phase-2b): replace this with `InWasmClangBackend` that reads
-// `media/compilers/cpp.wasm` from [pkg] and runs it under a Dart-side
-// WASI host (`WappWasiHost`). When both backends are present the
-// service should prefer the in-wasm one, keeping native as a dev
-// fallback.
-
-class NativeWasiSdkBackend implements CompilerBackend {
-  const NativeWasiSdkBackend();
-
-  @override
-  String get name => 'native-wasi-sdk';
-
-  /// Path to the clang binary — looks at `$HOME/wasi-sdk/bin/clang`
-  /// and returns null if not present.
-  String? get _clangPath {
-    final home = Platform.environment['HOME'];
-    if (home == null) return null;
-    final clang = '$home/wasi-sdk/bin/clang';
-    if (!File(clang).existsSync()) return null;
-    return clang;
-  }
-
-  @override
-  bool get isAvailable => _clangPath != null;
-
-  @override
-  Future<CompileResult> compile({
-    required String source,
-    required ProfileStorage pkg,
-    required ProfileStorage workStorage,
-  }) async {
-    final clang = _clangPath;
-    if (clang == null) {
-      return CompileResult.failure(
-        'wasi-sdk not installed at \$HOME/wasi-sdk. This is the '
-        'Phase 2a interim compiler; Phase 2b will bundle wasm-clang '
-        'inside the app-creator wapp so this dev-machine dependency '
-        'goes away.',
-      );
-    }
-
-    final halDir = _findHalDir();
-    if (halDir == null) {
-      return CompileResult.failure(
-        'geogram_wasm_hal.h not found — walked up from '
-        '${Directory.current.path} looking for wapps/hal/ and '
-        'nothing matched. Launch geogram from the repo root (or a '
-        'subdirectory of it) so the header is reachable.',
-      );
-    }
-
-    // Write the source into the wapp's work dir under compile-tmp/.
-    // FilesystemProfileStorage backs both writeString and
-    // getAbsolutePath with real on-disk paths, so we can then hand
-    // those paths to Process.run.
-    await workStorage.createDirectory('compile-tmp');
-    await workStorage.writeString('compile-tmp/source.c', source);
-    final srcAbs = workStorage.getAbsolutePath('compile-tmp/source.c');
-    final outAbs = workStorage.getAbsolutePath('compile-tmp/output.wasm');
-
-    final args = <String>[
-      '--target=wasm32-wasi',
-      '-O2',
-      '-flto',
-      '-I$halDir',
-      '-Wall',
-      '-Wextra',
-      '-Werror',
-      '-fno-exceptions',
-      '-DNDEBUG',
-      '-Wl,--no-entry',
-      '-Wl,--export=module_init',
-      '-Wl,--export=module_tick',
-      '-Wl,--export=module_handle_event',
-      '-Wl,--export=module_destroy',
-      '-Wl,--export=module_tick_interval_ms',
-      '-Wl,--strip-all',
-      '-nostartfiles',
-      '-o',
-      outAbs,
-      srcAbs,
-    ];
-
-    final sw = Stopwatch()..start();
-    ProcessResult result;
-    try {
-      result = await Process.run(clang, args);
-    } catch (e) {
-      sw.stop();
-      return CompileResult.failure(
-        'clang invocation threw: $e',
-        durationMs: sw.elapsedMilliseconds,
-      );
-    }
-    sw.stop();
-
-    final stdout = (result.stdout is String) ? result.stdout as String : '';
-    final stderr = (result.stderr is String) ? result.stderr as String : '';
-
-    if (result.exitCode != 0) {
-      return CompileResult(
-        ok: false,
-        stdout: stdout,
-        stderr: stderr,
-        exitCode: result.exitCode,
-        durationMs: sw.elapsedMilliseconds,
-        error: 'clang exited with ${result.exitCode}',
-      );
-    }
-
-    final bytes = await workStorage.readBytes('compile-tmp/output.wasm');
-    if (bytes == null || bytes.isEmpty) {
-      return CompileResult.failure(
-        'clang exited 0 but output.wasm is empty',
-        stdout: stdout,
-        stderr: stderr,
-        durationMs: sw.elapsedMilliseconds,
-      );
-    }
-    return CompileResult(
-      ok: true,
-      wasmBytes: bytes,
-      stdout: stdout,
-      stderr: stderr,
-      exitCode: 0,
-      durationMs: sw.elapsedMilliseconds,
-    );
-  }
-
-  /// Walk upward from the current directory looking for
-  /// `wapps/hal/geogram_wasm_hal.h`. The launcher uses the same
-  /// pattern (main.dart _scanArchiveBody) — this is a known
-  /// geogram convention, not a new one.
-  String? _findHalDir() {
-    final cwd = Directory.current.path;
-    final candidates = [
-      '$cwd/wapps/hal',
-      '$cwd/../wapps/hal',
-      '$cwd/../../wapps/hal',
-      '$cwd/../../../wapps/hal',
-    ];
-    for (final c in candidates) {
-      if (File('$c/geogram_wasm_hal.h').existsSync()) return c;
-    }
-    return null;
-  }
-}
-
 // ── Service singleton ───────────────────────────────────────────────
 
 class WappCompilerService {
   WappCompilerService._();
   static final WappCompilerService instance = WappCompilerService._();
 
-  /// The active compiler backend. For now always native; Phase 2b
-  /// will pick between native and in-wasm based on what's available.
-  final CompilerBackend backend = const NativeWasiSdkBackend();
+  /// The active compiler backend. Resolved via a conditional import
+  /// factory: desktop gets the native wasi-sdk backend, web gets a
+  /// stub that always returns "not supported". A future Phase 2b
+  /// can swap in an in-wasm clang backend here transparently.
+  final CompilerBackend backend = makeCompilerBackend();
 
   /// Run the compiler. Wraps the whole call in a `MonitoredTask` so
   /// it appears in the tasks wapp alongside wapp tick loops. Never

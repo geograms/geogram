@@ -1,6 +1,6 @@
-import 'dart:io' show Platform;
-
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../platform/platform.dart' as platform;
 
 /// Persistent user preferences backed by shared_preferences.
 /// Works on all platforms including web (uses localStorage on web).
@@ -85,17 +85,13 @@ class PreferencesService {
   }
 
   /// The effective active locale. Returns the stored preference
-  /// when set, otherwise the OS locale ([Platform.localeName]), with
-  /// a final fallback to `en` so the rest of the app never sees an
-  /// empty string.
+  /// when set, otherwise the OS locale (via the platform abstraction),
+  /// with a final fallback to `en` so the rest of the app never
+  /// sees an empty string.
   String activeLocale() {
     final stored = localePreference;
     if (stored != null && stored.isNotEmpty) return stored;
-    try {
-      final os = Platform.localeName;
-      if (os.isNotEmpty) return os;
-    } catch (_) {}
-    return 'en';
+    return platform.currentLocale();
   }
 
   /// Language-only portion of [activeLocale] — `pt_PT` → `pt`,

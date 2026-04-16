@@ -1,13 +1,13 @@
 [
   {
     "$": "screen",
-    "name": "About",
-    "tip": "Widget provider demo. This wapp registers as a provider for multiple widget IDs and is invoked headlessly by the host when another wapp sends a widget.request. There is normally nothing to interact with here.",
+    "name": "@screen.about",
+    "tip": "@screen.about_tip",
     "children": [
       {
         "$": "group",
-        "name": "Widgets provided",
-        "tip": "text.greet — returns {greeting} given {name}.\ntext.shout — returns {loud} given {text}.",
+        "name": "@group.provided_name",
+        "tip": "@group.provided_tip",
         "children": []
       }
     ]

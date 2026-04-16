@@ -1,0 +1,6 @@
+{
+  "screen.about": "Sobre",
+  "screen.about_tip": "Demonstração de fornecedor de widgets. Este wapp regista-se como fornecedor para vários IDs de widget e é invocado sem UI pelo anfitrião quando outro wapp envia um widget.request. Normalmente não há nada com que interagir aqui.",
+  "group.provided_name": "Widgets fornecidos",
+  "group.provided_tip": "text.greet — devolve {greeting} a partir de {name}.\ntext.shout — devolve {loud} a partir de {text}."
+}

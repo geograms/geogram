@@ -1,0 +1,38 @@
+{
+  "screen.projects": "Projetos",
+  "screen.projects_tip": "Escolha uma wapp existente para editar ou comece uma nova. Ao selecionar uma wapp, o título, id, descrição e home.ui.json são carregados nos separadores do editor.",
+  "screen.code": "Código",
+  "screen.code_tip": "Escreva uma wapp geogram em C. Clique em Compilar para a construir com o wasm-clang incluído e depois em Instalar para a adicionar ao launcher.",
+  "screen.ui": "UI",
+  "screen.ui_tip": "Editor visual + código para os ecrãs GeoUI da wapp. Alterne entre a paleta/canvas visual e o JSON bruto no mesmo separador.",
+  "screen.translations": "Traduções",
+  "screen.translations_tip": "Edite os ficheiros lang/<locale>.json da wapp. As chaves referenciadas como @chave a partir da UI são traduzidas em tempo de execução de acordo com o idioma ativo do utilizador.",
+  "screen.settings": "Definições",
+  "screen.settings_tip": "Metadados da wapp que está a editar. O Título é o que aparece na grelha do launcher; o Nome é o slug da pasta em disco.",
+
+  "group.projects": "Projetos",
+  "group.projects_tip": "Todas as wapps instaladas em ~/.local/share/geogram/apps/. As wapps incorporadas (tester, tasks, …) ainda não são editáveis aqui.",
+  "group.ui_editor_tip": "Edite os ecrãs ligados a source_ui. A instalação escreve-os em screens/home.ui.json.",
+  "group.translations_tip": "Escolha um locale, extraia @chaves do JSON da UI e preencha as traduções.",
+  "group.identity": "Identidade",
+  "group.identity_tip": "Estes valores acabam no manifest.json gerado quando clica em Instalar.",
+
+  "field.source_tip": "C puro contra o geogram HAL (wapps/hal/geogram_wasm_hal.h). Sem libc.",
+  "field.compiler_output": "Saída do compilador",
+  "field.compiler_output_tip": "Stdout e stderr do compilador, mais mensagens de progresso do anfitrião.",
+  "field.title": "Título",
+  "field.title_tip": "Nome legível mostrado na grelha do launcher.",
+  "field.name": "Nome (slug da pasta)",
+  "field.name_tip": "Slug curto usado como nome de pasta em ~/.local/share/geogram/apps/ e ~/.local/share/geogram/wapps/. Minúsculas, sem espaços.",
+  "field.id": "ID (domínio invertido)",
+  "field.id_tip": "Identificador estável, vai para manifest.id. Convenção: domínio invertido.",
+  "field.description": "Descrição",
+  "field.description_tip": "Descrição mais longa. Vai para manifest.summary.",
+  "field.icon": "Ícone",
+  "field.icon_tip": "Escreva um emoji / caractere único ou clique em Escolher SVG… para selecionar um ficheiro de ícone vetorial. Deixe em branco para o ícone Material por omissão.",
+
+  "action.compile": "Compilar",
+  "action.compile_tip": "Executar o wasm-clang incluído sobre o código acima. A saída vai para a vista de log.",
+  "action.install": "Instalar",
+  "action.install_tip": "Escrever a wapp compilada na pasta de wapps instaladas do launcher. Sem uma compilação fresca reutiliza o app.wasm existente (editar apenas metadados / UI)."
+}

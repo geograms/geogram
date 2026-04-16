@@ -1,14 +1,14 @@
 [
   {
     "$": "screen",
-    "name": "Tasks",
-    "tip": "Live task monitor — pause, resume, or stop background tasks.",
+    "name": "@screen.tasks",
+    "tip": "@screen.tasks_tip",
     "children": [
       {
         "$": "group",
         "name": "task-list",
         "$type": "tasks",
-        "tip": "Every registered MonitoredTask in the geogram host."
+        "tip": "@group.task_list_tip"
       }
     ]
   }
