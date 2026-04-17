@@ -1,0 +1,15 @@
+[
+  {
+    "$": "screen",
+    "name": "@screen.functionalities",
+    "tip": "@screen.functionalities_tip",
+    "children": [
+      {
+        "$": "group",
+        "name": "functionalities",
+        "$type": "functionalities",
+        "tip": "@group.functionalities_tip"
+      }
+    ]
+  }
+]

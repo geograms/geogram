@@ -1,0 +1,49 @@
+{
+  "schema": "geogram.wapp.signature/1",
+  "wapp_id": "tools.geogram.functionalities",
+  "wapp_version": "1.0.0",
+  "signed_at": 1776347849,
+  "publisher_npub": "npub1lut3k0m4mue97yuyj7f50qrnwz06kwgk8x03uta904ujsu4lcehq9u67tm",
+  "publisher_hex": "ff171b3f75df325f13849793478073709fab3916399f1e2fa57d792872bfc66e",
+  "hash_algo": "sha256",
+  "manifest_digest_hex": "01ec91e1a84f6b360ddcc3ec22c79c2cdc8f2e285951a5749b6727a92e9eb327",
+  "hashes": {
+    "screens/home.ui.json": "27a7cd768ab94c12f5285dd139f4ab60bbadc0e1deccad6dd011edf07337cab1",
+    "manifest.json": "c3563e6784c7293fe3689d54b3bbd473c00baf3d0ecf87a18e6218c9ec62c2b0",
+    "media/icons/functionalities.svg": "749b01ecf6e8395b7c2409fece24d4b75532c883f3931b1bec2ca6a684ba58b9",
+    "lang/pt.json": "8b8e5369d0c9f37b396666008992aabe60fe4982abcc3c863f347b1c3fa958e6",
+    "lang/en.json": "48278292fccd0c9f4ce4ef7e5d85f0f7f633c402092ee3ae2940cde558d6c01a",
+    "lang/de.json": "03764674e897a51ec62beb2aeb929adb44f7590278225e5bf0bae076952388d0",
+    "app.wasm": "dd3145a4de0c5eab19938ca3a234a703a04fc9b496b622cbe22a5c4a03779c96"
+  },
+  "event": {
+    "id": "f44f11e6a1f5c7ed3a4f23ba640bf66115090a2e50c9a0f359b1f5b26be4e020",
+    "pubkey": "ff171b3f75df325f13849793478073709fab3916399f1e2fa57d792872bfc66e",
+    "created_at": 1776347849,
+    "kind": 30078,
+    "tags": [
+      [
+        "d",
+        "geogram.wapp:tools.geogram.functionalities"
+      ],
+      [
+        "t",
+        "geogram-wapp-signature"
+      ],
+      [
+        "wapp_id",
+        "tools.geogram.functionalities"
+      ],
+      [
+        "wapp_version",
+        "1.0.0"
+      ],
+      [
+        "manifest_digest",
+        "01ec91e1a84f6b360ddcc3ec22c79c2cdc8f2e285951a5749b6727a92e9eb327"
+      ]
+    ],
+    "content": "01ec91e1a84f6b360ddcc3ec22c79c2cdc8f2e285951a5749b6727a92e9eb327",
+    "sig": "682a37b0d1c6e5d1c4f62ca18d6790620667c5fc1f4df25d2e3f4cd24550afe522e6d872a425b8a4022f2e891d3bfb458c86e2424a8777b0a52c22fea9fdeef2"
+  }
+}

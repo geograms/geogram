@@ -7,6 +7,7 @@ import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 
@@ -16,10 +17,12 @@ import '../geoui/geoui_ast.dart';
 import '../geoui/geoui_parser.dart';
 import '../geoui/geoui_renderer.dart';
 import '../geoui/widgets/code_editor_field.dart';
+import '../models/iwi_profile.dart';
 import '../models/monitored_task.dart';
 import '../services/event_bus.dart';
 import '../services/notification_service.dart';
 import '../services/preferences_service.dart';
+import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/storage_paths.dart';
 import '../services/i18n_context.dart';
@@ -27,7 +30,10 @@ import '../services/task_monitor_service.dart';
 import '../services/wapp_compiler_service.dart';
 import '../services/wapp_installer_service.dart';
 import '../services/wapp_signing_service.dart';
-import '../services/widget_broker.dart';
+import '../services/wapp_social_store.dart';
+import '../main.dart' show WappManifest;
+import '../services/functionality_broker.dart';
+import '../services/functionality_registry.dart';
 import '../util/wapp_icons.dart';
 import 'wapp_engine.dart';
 
@@ -107,6 +113,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   // Terminal output
   final _outputLines = <_OutputLine>[];
   final _cmdController = TextEditingController();
+  final _tickIntervalController = TextEditingController(text: '5000');
   final _scrollController = ScrollController();
 
   // Wapp Store (install wapp) — search query for filtering cards.
@@ -340,11 +347,30 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     final translationsRaw = _fieldValues['translations'];
     final translations = _coerceTranslations(translationsRaw);
 
+    final version =
+        (_fieldValues['wapp_version'] as String?) ?? '1.0.0';
+    final tickInterval =
+        int.tryParse((_fieldValues['wapp_tick_interval'] as String?) ?? '') ??
+            5000;
+    final halRaw = _fieldValues['wapp_hal_requires'];
+    final halRequires = halRaw is List<String>
+        ? halRaw
+        : _splitCsv(halRaw is String ? halRaw : 'log');
+    final provRaw = _fieldValues['wapp_provides_functionalities'];
+    final providesWidgets = provRaw is List<String>
+        ? provRaw
+        : _splitCsv(provRaw is String ? provRaw : '');
+
     final result = await WappInstallerService.instance.installFromCompiled(
       id: id,
       title: title,
       folderName: folderName,
       description: description,
+      version: version,
+      kind: (_fieldValues['wapp_kind'] as String?) ?? 'app',
+      tickIntervalMs: tickInterval,
+      halRequires: halRequires,
+      providesWidgets: providesWidgets,
       wasmBytes: freshBytes,
       homeScreenJson: sourceUi.isEmpty ? null : sourceUi,
       sourceC: sourceC.isEmpty ? null : sourceC,
@@ -478,6 +504,25 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     _fieldValues['wapp_description'] = description;
     _fieldValues['wapp_name'] = entry.folder;
     _fieldValues['wapp_icon'] = iconForField;
+    _fieldValues['wapp_version'] =
+        (manifest['version'] as String?) ?? '1.0.0';
+    _fieldValues['wapp_kind'] =
+        (manifest['kind'] as String?) ?? 'app';
+    final tickVal = '${manifest['tick_interval_ms'] ?? 5000}';
+    _fieldValues['wapp_tick_interval'] = tickVal;
+    _tickIntervalController.text = tickVal;
+    // HAL requires — stored as List<String> for the chip picker.
+    final halList = manifest['requires']?['hal'];
+    _fieldValues['wapp_hal_requires'] = halList is List
+        ? halList.cast<String>().toList()
+        : <String>['log'];
+    // Provides functionalities — stored as List<String> for the chip editor.
+    final providesFns = manifest['provides']?['functionalities']
+        ?? manifest['provides']?['widgets']
+        ?? manifest['provides']?['functions'];
+    _fieldValues['wapp_provides_functionalities'] = providesFns is List
+        ? providesFns.cast<String>().toList()
+        : <String>[];
     _fieldValues['source_ui'] = uiJson;
     _fieldValues['source'] = sourceC;
     _fieldValues['translations'] = translations;
@@ -519,6 +564,11 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       'wapp_id',
       'wapp_description',
       'wapp_icon',
+      'wapp_version',
+      'wapp_kind',
+      'wapp_tick_interval',
+      'wapp_hal_requires',
+      'wapp_provides_functionalities',
       'source',
       'source_ui',
       'source__readonly',
@@ -533,6 +583,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     // Any `*__readonly` flag the previously-loaded project might
     // have set is gone; the Code tab is editable again.
     _fieldValues['source__readonly'] = false;
+    _tickIntervalController.text = '5000';
     _logLine('── new project — fields reset to defaults ──');
     NotificationService.instance.show(GeogramNotification(
       level: NotificationLevel.info,
@@ -816,6 +867,56 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     );
   }
 
+  /// Resolve the actual icon for a project card — reads the wapp's
+  /// manifest.icon, loads the SVG if present, falls back to Material.
+  Widget _projectIcon(_ProjectEntry entry, ColorScheme cs) {
+    final pkg = wappPackageStorage(entry.dirPath);
+    final manifestBytes = pkg.readBytesSync('manifest.json');
+    if (manifestBytes != null) {
+      try {
+        final manifest =
+            jsonDecode(utf8.decode(manifestBytes)) as Map<String, dynamic>;
+        final icon = manifest['icon'] as String?;
+        if (icon != null &&
+            icon.isNotEmpty &&
+            icon.toLowerCase().endsWith('.svg') &&
+            icon.contains('/')) {
+          final svgBytes = pkg.readBytesSync(icon);
+          if (svgBytes != null && svgBytes.isNotEmpty) {
+            return SizedBox(
+              width: 26,
+              height: 26,
+              child: SvgPicture.memory(
+                svgBytes,
+                fit: BoxFit.contain,
+                theme: const SvgTheme(currentColor: Color(0xFF666666)),
+              ),
+            );
+          }
+        }
+        // Text icon (emoji / char)
+        if (icon != null &&
+            icon.isNotEmpty &&
+            !icon.contains('/') &&
+            !icon.contains('\\')) {
+          return SizedBox(
+            width: 26,
+            height: 26,
+            child: FittedBox(
+              child: Text(icon.characters.take(2).toString(),
+                  style: const TextStyle(fontSize: 22)),
+            ),
+          );
+        }
+      } catch (_) {}
+    }
+    return Icon(
+      wappIconFor(entry.id.isNotEmpty ? entry.id : entry.folder),
+      color: cs.primary,
+      size: 26,
+    );
+  }
+
   Widget _buildProjectCard(_ProjectEntry entry, ColorScheme cs) {
     final pathPrefix = entry.isBuiltIn ? 'wapps/archive/' : 'apps/';
     return Card(
@@ -837,7 +938,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.extension, color: cs.primary, size: 26),
+              _projectIcon(entry, cs),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -1252,9 +1353,9 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
           // host-side broker which spins up a headless provider
           // engine and delivers the response back to this engine's
           // inbox on the next tick.
-          unawaited(WidgetBroker.instance.handleRequest(
+          unawaited(FunctionalityBroker.instance.handleRequest(
             callerEngineId: _engine.engineId,
-            widgetId: data['widget'] as String? ?? '',
+            functionalityId: data['widget'] as String? ?? '',
             reqId: data['req_id'] as String? ?? '',
             args: (data['args'] as Map<String, dynamic>?) ?? const {},
           ));
@@ -1634,6 +1735,14 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         c.keyword == 'group' && c.type == 'output');
     if (hasOutputGroup) {
       return _buildOutputScreen();
+    }
+
+    // Functionalities browser — system wapp that lists all registered
+    // functionalities, their providers, and lets the user pick defaults.
+    final hasFunctionalitiesGroup = screen.children.any((c) =>
+        c.keyword == 'group' && c.type == 'functionalities');
+    if (hasFunctionalitiesGroup) {
+      return _buildFunctionalitiesScreen();
     }
 
     // Sources manager — install wapp's Settings tab. Shows the
@@ -4185,6 +4294,11 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       }
     }
 
+    // Enrich catalog entries with NDF store metadata.
+    for (final wapp in wapps) {
+      _enrichCatalogWapp(wapp);
+    }
+
     final cs = Theme.of(context).colorScheme;
     final source = (_fieldValues['source'] as String?) ?? '';
     final query = _storeSearch.toLowerCase();
@@ -4314,10 +4428,18 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         else
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-            sliver: SliverList.separated(
-              itemCount: visibleWapps.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 10),
-              itemBuilder: (_, i) => _buildWappCard(visibleWapps[i], cs),
+            sliver: SliverGrid(
+              gridDelegate:
+                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 220,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                childAspectRatio: 1.45,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (_, i) => _buildWappCard(visibleWapps[i], cs),
+                childCount: visibleWapps.length,
+              ),
             ),
           ),
       ],
@@ -4509,137 +4631,516 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     );
   }
 
+  /// Enrich a catalog wapp with NDF store metadata — reads
+  /// `store/description.json` and `social.sqlite3` from the wapp
+  /// package (installed copy or built-in archive).
+  void _enrichCatalogWapp(_CatalogWapp wapp) {
+    // Resolve the wapp's own package storage — installed copy first,
+    // then built-in archive. Never fall back to the current wapp's
+    // storage (_pkg) since that's the install wapp itself.
+    Uint8List? _readFromWapp(String relativePath) {
+      // 1. Installed copy
+      if (_installed.existsSync('${wapp.name}/manifest.json')) {
+        final bytes = ScopedProfileStorage(_installed, wapp.name)
+            .readBytesSync(relativePath);
+        if (bytes != null) return bytes;
+      }
+      // 2. Built-in archive
+      final archivePkg = wappPackageStorage(
+          '${platform.currentDirectory()}/../wapps/archive/${wapp.name}');
+      return archivePkg.readBytesSync(relativePath);
+    }
+
+    final effectiveBytes = _readFromWapp('store/description.json');
+
+    if (effectiveBytes != null) {
+      try {
+        final desc = jsonDecode(utf8.decode(effectiveBytes))
+            as Map<String, dynamic>;
+        final descriptions =
+            desc['descriptions'] as Map<String, dynamic>? ?? {};
+        // Resolve by active locale, fallback to en.
+        final prefs = PreferencesService.instanceSync;
+        final locale = prefs?.activeLocale() ?? 'en';
+        final langCode = locale.split('_').first;
+        final localeDesc = (descriptions[locale] ??
+                descriptions[langCode] ??
+                descriptions['en']) as Map<String, dynamic>?;
+        if (localeDesc != null) {
+          wapp.storeTitle =
+              (localeDesc['title'] as String?) ?? '';
+          wapp.storeSummary =
+              (localeDesc['summary'] as String?) ?? '';
+          wapp.storeBody =
+              (localeDesc['body'] as String?) ?? '';
+        }
+        wapp.changelog = (desc['changelog'] as String?) ?? '';
+        final shots = desc['screenshots'];
+        if (shots is List) {
+          wapp.screenshotPaths = shots.cast<String>();
+        }
+      } catch (_) {}
+    }
+
+    // Read permissions.json for interaction settings.
+    final permBytes = _readFromWapp('permissions.json');
+    if (permBytes != null) {
+      try {
+        final perm = jsonDecode(utf8.decode(permBytes))
+            as Map<String, dynamic>;
+        final access = perm['access'] as Map<String, dynamic>? ?? {};
+        final commentAccess = access['comment'] as Map<String, dynamic>?;
+        final reactAccess = access['react'] as Map<String, dynamic>?;
+        wapp.permitComments =
+            commentAccess?['type'] != 'none';
+        wapp.permitLikes =
+            reactAccess?['type'] != 'none';
+      } catch (_) {}
+    }
+
+    // If no store description was found, try reading the manifest's
+    // description field as a title fallback.
+    if (wapp.storeTitle.isEmpty) {
+      final manifestBytes = _readFromWapp('manifest.json');
+      if (manifestBytes != null) {
+        try {
+          final m = jsonDecode(utf8.decode(manifestBytes))
+              as Map<String, dynamic>;
+          wapp.storeTitle = (m['description'] as String?) ?? '';
+        } catch (_) {}
+      }
+    }
+
+    // Read social.sqlite3 counts.
+    if (!kIsWeb) {
+      // Find the wapp directory path for the SQLite database.
+      String? wappDir;
+      if (_installed.existsSync('${wapp.name}/manifest.json')) {
+        wappDir = _installed.getAbsolutePath(wapp.name);
+      } else {
+        final archiveDir =
+            '${platform.currentDirectory()}/../wapps/archive/${wapp.name}';
+        wappDir = archiveDir;
+      }
+      wapp.likeCount =
+          WappSocialStore.instance.reactionCount(wappDir);
+      wapp.commentCount =
+          WappSocialStore.instance.commentCount(wappDir);
+    }
+  }
+
   Widget _buildWappCard(_CatalogWapp wapp, ColorScheme cs) {
     final tileColor = _storeCardColor(wapp.name);
+    final profile = ProfileService.instance.activeProfile;
+    final myNpub = profile?.npub ?? '';
+    final liked = myNpub.isNotEmpty && wapp.permitLikes
+        ? _isLiked(wapp)
+        : false;
+    // Title: store description > manifest description > name slug.
+    // Avoid showing the name slug ("install") as title when we have
+    // a proper human-readable name from the store description or
+    // the manifest's description field.
+    final displayTitle = wapp.storeTitle.isNotEmpty
+        ? wapp.storeTitle
+        : (wapp.description.isNotEmpty ? wapp.description : wapp.name);
+    final displayDesc = wapp.storeSummary.isNotEmpty
+        ? wapp.storeSummary
+        : '';
 
-    return Material(
+    return Card(
+      elevation: 1,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.antiAlias,
       color: cs.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: () {},
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: cs.outlineVariant.withAlpha(70)),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: tileColor,
-                  borderRadius: BorderRadius.circular(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Icon + title row ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 0),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: tileColor,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  alignment: Alignment.center,
+                  child: _storeIconWidget(wapp.name, size: 20),
                 ),
-                alignment: Alignment.center,
-                child: _storeIconWidget(wapp.name, size: 30),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        displayTitle,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        'v${wapp.version}',
+                        style: TextStyle(
+                            fontSize: 10, color: cs.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // ── Description ──
+          if (displayDesc.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 6, 10, 0),
+              child: Text(
+                displayDesc,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: cs.onSurfaceVariant,
+                  height: 1.3,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      wapp.name,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
+            ),
+
+          const Spacer(),
+
+          // ── Bottom bar: social + install ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(2, 0, 6, 6),
+            child: Row(
+              children: [
+                // Like
+                if (wapp.permitLikes)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: myNpub.isNotEmpty
+                        ? () => _toggleLike(wapp, myNpub)
+                        : null,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            liked ? Icons.thumb_up : Icons.thumb_up_outlined,
+                            size: 14,
+                            color: liked ? cs.primary : cs.onSurfaceVariant,
+                          ),
+                          if (wapp.likeCount > 0) ...[
+                            const SizedBox(width: 3),
+                            Text(
+                              '${wapp.likeCount}',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: liked
+                                    ? cs.primary
+                                    : cs.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Text(
-                          'v${wapp.version}',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: cs.onSurfaceVariant,
-                          ),
-                        ),
-                        if (wapp.size.isNotEmpty) ...[
-                          Text(' · ',
+                  ),
+                // Comment
+                if (wapp.permitComments)
+                  InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => _showComments(wapp),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.comment_outlined,
+                              size: 14, color: cs.onSurfaceVariant),
+                          if (wapp.commentCount > 0) ...[
+                            const SizedBox(width: 3),
+                            Text(
+                              '${wapp.commentCount}',
                               style: TextStyle(
-                                  fontSize: 11, color: cs.onSurfaceVariant)),
+                                fontSize: 11,
+                                color: cs.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                const Spacer(),
+                // Install / Update
+                SizedBox(
+                  height: 28,
+                  child: _storeActionButton(wapp, cs),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Social actions ──────────────────────────────────────────────
+
+  String _wappDirFor(_CatalogWapp wapp) {
+    if (_installed.existsSync('${wapp.name}/manifest.json')) {
+      return _installed.getAbsolutePath(wapp.name);
+    }
+    return '${platform.currentDirectory()}/../wapps/archive/${wapp.name}';
+  }
+
+  bool _isLiked(_CatalogWapp wapp) {
+    final npub = ProfileService.instance.activeProfile?.npub ?? '';
+    if (npub.isEmpty) return false;
+    return WappSocialStore.instance.hasReacted(_wappDirFor(wapp), npub);
+  }
+
+  void _toggleLike(_CatalogWapp wapp, String npub) {
+    final dir = _wappDirFor(wapp);
+    final store = WappSocialStore.instance;
+    if (store.hasReacted(dir, npub)) {
+      // Find and remove the reaction.
+      final reactions = store.reactions(dir);
+      for (final r in reactions) {
+        if (r['npub'] == npub) {
+          store.removeReaction(dir, r['id'] as String);
+          break;
+        }
+      }
+      wapp.likeCount = (wapp.likeCount - 1).clamp(0, 999999);
+    } else {
+      final id =
+          '${npub.hashCode.abs()}_${DateTime.now().millisecondsSinceEpoch}';
+      store.addReaction(dir, id: id, npub: npub);
+      wapp.likeCount++;
+    }
+    setState(() {});
+  }
+
+  void _showComments(_CatalogWapp wapp) {
+    final dir = _wappDirFor(wapp);
+    final store = WappSocialStore.instance;
+    final comments = store.topLevelComments(dir);
+    final profile = ProfileService.instance.activeProfile;
+    final myNpub = profile?.npub ?? '';
+    final commentController = TextEditingController();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            final currentComments = store.topLevelComments(dir);
+            return DraggableScrollableSheet(
+              initialChildSize: 0.6,
+              minChildSize: 0.3,
+              maxChildSize: 0.9,
+              expand: false,
+              builder: (ctx, scrollController) {
+                final cs = Theme.of(ctx).colorScheme;
+                return Column(
+                  children: [
+                    // Handle
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8, bottom: 4),
+                      child: Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: cs.onSurfaceVariant.withAlpha(80),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                      child: Row(
+                        children: [
                           Text(
-                            wapp.size,
+                            'Comments',
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: cs.onSurface,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${currentComments.length}',
+                            style: TextStyle(
+                              fontSize: 14,
                               color: cs.onSurfaceVariant,
                             ),
                           ),
                         ],
-                        if (wapp.updateAvailable) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: cs.tertiaryContainer,
-                              borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                    // Comment list
+                    Expanded(
+                      child: currentComments.isEmpty
+                          ? Center(
+                              child: Text(
+                                'No comments yet',
+                                style: TextStyle(
+                                    color: cs.onSurfaceVariant),
+                              ),
+                            )
+                          : ListView.builder(
+                              controller: scrollController,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16),
+                              itemCount: currentComments.length,
+                              itemBuilder: (ctx, i) {
+                                final c = currentComments[i];
+                                final author = c['npub'] as String? ?? '';
+                                final short = author.length > 16
+                                    ? '${author.substring(0, 10)}...'
+                                    : author;
+                                final ts = c['created_at'] as int? ?? 0;
+                                final date = DateTime
+                                    .fromMillisecondsSinceEpoch(
+                                        ts * 1000);
+                                return Padding(
+                                  padding:
+                                      const EdgeInsets.only(bottom: 12),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(Icons.person_outline,
+                                              size: 14,
+                                              color:
+                                                  cs.onSurfaceVariant),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            short,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                              color: cs.primary,
+                                              fontFamily: 'monospace',
+                                            ),
+                                          ),
+                                          const Spacer(),
+                                          Text(
+                                            '${date.day}/${date.month}/${date.year}',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              color:
+                                                  cs.onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        c['content'] as String? ?? '',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: cs.onSurface,
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
                             ),
-                            child: Text(
-                              'UPDATE',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                color: cs.onTertiaryContainer,
-                                letterSpacing: 0.6,
+                    ),
+                    // Add comment input
+                    if (myNpub.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 8, 16),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            top: BorderSide(
+                                color: cs.outlineVariant.withAlpha(80)),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: commentController,
+                                style: const TextStyle(fontSize: 13),
+                                decoration: InputDecoration(
+                                  hintText: 'Add a comment...',
+                                  isDense: true,
+                                  contentPadding:
+                                      const EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 10),
+                                  border: OutlineInputBorder(
+                                    borderRadius:
+                                        BorderRadius.circular(20),
+                                  ),
+                                ),
+                                onSubmitted: (text) {
+                                  if (text.trim().isEmpty) return;
+                                  final id =
+                                      '${myNpub.hashCode.abs()}_${DateTime.now().millisecondsSinceEpoch}';
+                                  store.addComment(dir,
+                                      id: id,
+                                      content: text.trim(),
+                                      npub: myNpub);
+                                  commentController.clear();
+                                  wapp.commentCount++;
+                                  setSheetState(() {});
+                                  setState(() {});
+                                },
                               ),
                             ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    if (wapp.description.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        wapp.description,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: cs.onSurfaceVariant,
-                          height: 1.3,
+                            IconButton(
+                              icon: Icon(Icons.send,
+                                  color: cs.primary, size: 20),
+                              onPressed: () {
+                                final text =
+                                    commentController.text.trim();
+                                if (text.isEmpty) return;
+                                final id =
+                                    '${myNpub.hashCode.abs()}_${DateTime.now().millisecondsSinceEpoch}';
+                                store.addComment(dir,
+                                    id: id,
+                                    content: text,
+                                    npub: myNpub);
+                                commentController.clear();
+                                wapp.commentCount++;
+                                setSheetState(() {});
+                                setState(() {});
+                              },
+                            ),
+                          ],
                         ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    ],
-                    if (wapp.sourceHost.isNotEmpty ||
-                        wapp.publisherNpub.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        children: [
-                          if (wapp.sourceHost.isNotEmpty)
-                            _storeMetaChip(
-                              icon: wapp.sourceHost == 'local'
-                                  ? Icons.folder_outlined
-                                  : Icons.cloud_outlined,
-                              label: wapp.sourceHost,
-                              cs: cs,
-                            ),
-                          if (wapp.publisherNpub.isNotEmpty)
-                            _storeMetaChip(
-                              icon: Icons.verified_user_outlined,
-                              label: _formatPublisher(wapp.publisherNpub),
-                              cs: cs,
-                              tooltip: wapp.publisherNpub,
-                            ),
-                        ],
-                      ),
-                    ],
                   ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              _storeActionButton(wapp, cs),
-            ],
-          ),
-        ),
-      ),
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 
@@ -4744,32 +5245,33 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
   /// [MemoryProfileStorage] resolves identically to the desktop
   /// [FilesystemProfileStorage].
   Uint8List? _storeSvgBytesFor(String name) {
-    ProfileStorage? pkg;
-    if (name == _wappName) {
-      pkg = _pkg;
-    } else if (_installed.existsSync('$name/manifest.json')) {
-      pkg = ScopedProfileStorage(_installed, name);
+    // Try multiple sources for the wapp's manifest + icon:
+    // 1. Current running wapp (if name matches)
+    // 2. Installed copy under the profile
+    // 3. Built-in archive
+    final candidates = <ProfileStorage>[
+      if (name == _wappName) _pkg,
+      if (_installed.existsSync('$name/manifest.json'))
+        ScopedProfileStorage(_installed, name),
+      wappPackageStorage(
+          '${platform.currentDirectory()}/../wapps/archive/$name'),
+    ];
+
+    for (final pkg in candidates) {
+      final manifestBytes = pkg.readBytesSync('manifest.json');
+      if (manifestBytes == null) continue;
+      try {
+        final manifest =
+            jsonDecode(utf8.decode(manifestBytes)) as Map<String, dynamic>;
+        final icon = manifest['icon'] as String?;
+        if (icon == null || icon.isEmpty) continue;
+        if (!icon.toLowerCase().endsWith('.svg')) continue;
+        if (!icon.contains('/') && !icon.contains('\\')) continue;
+        final svgBytes = pkg.readBytesSync(icon);
+        if (svgBytes != null && svgBytes.isNotEmpty) return svgBytes;
+      } catch (_) {}
     }
-    if (pkg == null) return null;
-    final manifestBytes = pkg.readBytesSync('manifest.json');
-    if (manifestBytes == null) return null;
-    try {
-      final manifest =
-          jsonDecode(utf8.decode(manifestBytes)) as Map<String, dynamic>;
-      final icon = manifest['icon'] as String?;
-      if (icon == null || icon.isEmpty) return null;
-      if (!icon.toLowerCase().endsWith('.svg')) return null;
-      if (!icon.contains('/') && !icon.contains('\\')) return null;
-      // Read the sidecar SVG via the storage abstraction so both
-      // native (FilesystemProfileStorage) and web
-      // (MemoryProfileStorage, populated by the fetch-based archive
-      // scan in main.dart) resolve the same way.
-      final svgBytes = pkg.readBytesSync(icon);
-      if (svgBytes == null || svgBytes.isEmpty) return null;
-      return svgBytes;
-    } catch (_) {
-      return null;
-    }
+    return null;
   }
 
   /// Build the icon widget that goes inside a store card's coloured
@@ -4788,7 +5290,7 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         child: SvgPicture.memory(
           svgBytes,
           fit: BoxFit.contain,
-          colorFilter: whiteFilter,
+          theme: const SvgTheme(currentColor: Colors.white),
           placeholderBuilder: (_) => Icon(
             wappIconFor(name),
             size: size,
@@ -4943,6 +5445,691 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         _ => const Color(0xFFE6EDF3),
       };
 
+  // ── Functionalities screen ─────────────────────────────────────────
+
+  /// State for the "Try it" results, keyed by endpoint name.
+  final Map<String, String> _tryResults = {};
+  /// Input controllers for endpoint params, keyed by "endpoint.param".
+  final Map<String, TextEditingController> _tryInputs = {};
+
+  Widget _buildFunctionalitiesScreen() {
+    final cs = Theme.of(context).colorScheme;
+    final registry = FunctionalityRegistry.instance;
+    final allIds = registry.allFunctionalityIds.toList()..sort();
+
+    if (allIds.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text(
+            'No functionalities registered.\n\n'
+            'Wapps declare functionalities in their manifest under '
+            '"provides.functionalities". Install a wapp that provides '
+            'one (e.g. Functionality Demo) to see it listed here.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: cs.onSurfaceVariant, height: 1.4),
+          ),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      itemCount: allIds.length,
+      itemBuilder: (context, index) {
+        final funcId = allIds[index];
+        final providers = registry.providersFor(funcId);
+        return _buildFunctionalityCard(funcId, providers, cs);
+      },
+    );
+  }
+
+  Widget _buildFunctionalityCard(
+      String funcId, List<WappManifest> providers, ColorScheme cs) {
+    final def = FunctionalityRegistry.instance.defFor(funcId);
+    final isCore = funcId.startsWith('hal.');
+    return Card(
+      elevation: 0,
+      margin: const EdgeInsets.only(bottom: 14),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: cs.outlineVariant.withAlpha(60)),
+      ),
+      color: cs.surfaceContainerLow,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Header bar ──
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+            decoration: BoxDecoration(
+              color: isCore
+                  ? cs.primaryContainer.withAlpha(50)
+                  : cs.tertiaryContainer.withAlpha(50),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(12)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: isCore ? cs.primary : cs.tertiary,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    isCore ? 'CORE' : 'WAPP',
+                    style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    funcId,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'monospace',
+                      color: cs.onSurface,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // ── Description ──
+          if (def != null && def.description.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                def.description,
+                style: TextStyle(
+                    fontSize: 13, color: cs.onSurface, height: 1.3),
+              ),
+            ),
+          // ── Providers ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+            child: Text('Providers',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurfaceVariant,
+                    letterSpacing: 0.3)),
+          ),
+          for (final provider in providers)
+            _buildProviderRow(funcId, provider, providers, cs),
+          // ── Endpoints ──
+          if (def != null && def.endpoints.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+              child: Text('Endpoints',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurfaceVariant,
+                      letterSpacing: 0.3)),
+            ),
+            for (final ep in def.endpoints)
+              _buildEndpointRow(ep, cs),
+            // Per-functionality JSON spec button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+              child: OutlinedButton.icon(
+                onPressed: () =>
+                    _showFunctionalitySpec(funcId, def, providers),
+                icon: const Icon(Icons.data_object, size: 14),
+                label: const Text('View JSON spec'),
+                style: OutlinedButton.styleFrom(
+                  textStyle: const TextStyle(fontSize: 11),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEndpointRow(EndpointDef ep, ColorScheme cs) {
+    final result = _tryResults[ep.name];
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withAlpha(80),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cs.outlineVariant.withAlpha(50)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Method signature line
+          Row(
+            children: [
+              Expanded(
+                child: RichText(
+                  text: TextSpan(
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontFamily: 'monospace',
+                      color: cs.onSurface,
+                    ),
+                    children: [
+                      TextSpan(
+                        text: ep.name,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      TextSpan(
+                        text: '(',
+                        style: TextStyle(color: cs.onSurfaceVariant),
+                      ),
+                      if (ep.params.isNotEmpty)
+                        TextSpan(
+                          text: ep.params
+                              .map((p) => '${p.type} ${p.name}')
+                              .join(', '),
+                          style: TextStyle(
+                            color: cs.primary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      TextSpan(
+                        text: ')',
+                        style: TextStyle(color: cs.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: cs.tertiaryContainer.withAlpha(120),
+                  borderRadius: BorderRadius.circular(5),
+                ),
+                child: Text(
+                  '→ ${ep.returns.type}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontFamily: 'monospace',
+                    fontWeight: FontWeight.w600,
+                    color: cs.onTertiaryContainer,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          // Description
+          if (ep.description.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                ep.description,
+                style: TextStyle(
+                    fontSize: 11, color: cs.onSurfaceVariant, height: 1.3),
+              ),
+            ),
+          // Parameters — input fields for each
+          if (ep.params.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final p in ep.params)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 90,
+                            child: RichText(
+                              text: TextSpan(
+                                style: TextStyle(
+                                    fontSize: 11, fontFamily: 'monospace'),
+                                children: [
+                                  TextSpan(
+                                    text: p.name,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: cs.onSurface,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: ' ${p.type}',
+                                    style: TextStyle(color: cs.primary),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: SizedBox(
+                              height: 32,
+                              child: TextField(
+                                controller: _tryInputs.putIfAbsent(
+                                  '${ep.name}.${p.name}',
+                                  () => TextEditingController(),
+                                ),
+                                style: const TextStyle(
+                                    fontSize: 12, fontFamily: 'monospace'),
+                                decoration: InputDecoration(
+                                  hintText: p.description.isNotEmpty
+                                      ? p.description
+                                      : p.type,
+                                  hintStyle: TextStyle(
+                                      fontSize: 11,
+                                      color: cs.onSurfaceVariant
+                                          .withAlpha(120)),
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 6),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                ),
+                                keyboardType:
+                                    p.type == 'int' || p.type == 'uint32' || p.type == 'uint64'
+                                        ? TextInputType.number
+                                        : TextInputType.text,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          // Returns
+          if (ep.returns.description.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: RichText(
+                text: TextSpan(
+                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                  children: [
+                    const TextSpan(
+                        text: 'Returns: ',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                    TextSpan(text: ep.returns.description),
+                  ],
+                ),
+              ),
+            ),
+          // Try it button + result
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 32,
+            child: FilledButton.icon(
+              onPressed: () => _tryEndpoint(ep),
+              icon: const Icon(Icons.play_arrow, size: 16),
+              label: const Text('Run'),
+              style: FilledButton.styleFrom(
+                textStyle: const TextStyle(fontSize: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+              ),
+            ),
+          ),
+          if (result != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerLowest,
+                  borderRadius: BorderRadius.circular(6),
+                  border:
+                      Border.all(color: cs.outlineVariant.withAlpha(80)),
+                ),
+                child: SelectableText(
+                  result,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                    color: cs.onSurface,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _showFunctionalitySpec(String funcId, FunctionalityDef def,
+      List<WappManifest> providers) {
+    final spec = <String, dynamic>{
+      'functionality': funcId,
+      'description': def.description,
+      'providers': [
+        for (final p in providers)
+          {'id': p.id, 'name': p.title.isNotEmpty ? p.title : p.name},
+      ],
+      'endpoints': [
+        for (final ep in def.endpoints)
+          <String, dynamic>{
+            'name': ep.name,
+            'description': ep.description,
+            'params': [
+              for (final p in ep.params)
+                <String, dynamic>{
+                  'name': p.name,
+                  'type': p.type,
+                  if (p.description.isNotEmpty) 'description': p.description,
+                },
+            ],
+            'returns': <String, dynamic>{
+              'type': ep.returns.type,
+              if (ep.returns.description.isNotEmpty)
+                'description': ep.returns.description,
+              if (ep.returns.fields.isNotEmpty) 'fields': ep.returns.fields,
+            },
+          },
+      ],
+    };
+    final jsonText = const JsonEncoder.withIndent('  ').convert(spec);
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _ApiJsonExportPage(
+          title: funcId,
+          json: jsonText,
+        ),
+      ),
+    );
+  }
+
+  void _tryEndpoint(EndpointDef ep) {
+    // Collect input values from controllers.
+    final args = <String, String>{};
+    for (final p in ep.params) {
+      final ctrl = _tryInputs['${ep.name}.${p.name}'];
+      args[p.name] = ctrl?.text ?? '';
+    }
+    String result;
+    try {
+      result = _executeHalTest(ep.name, args);
+    } catch (e) {
+      result = 'Error: $e';
+    }
+    setState(() => _tryResults[ep.name] = result);
+  }
+
+  String _executeHalTest(String name, Map<String, String> args) {
+    final now = DateTime.now();
+    switch (name) {
+      // ── Time ──
+      case 'hal_time_ms':
+        return '${now.millisecondsSinceEpoch} ms';
+      case 'hal_time_epoch':
+        return '${now.millisecondsSinceEpoch ~/ 1000} s\n${now.toIso8601String()}';
+
+      // ── Platform / Heap ──
+      case 'hal_platform':
+        return platform.currentDirectory().isNotEmpty
+            ? 'linux-desktop'
+            : 'web';
+      case 'hal_heap_free':
+        return 'N/A on desktop (no heap limit)';
+
+      // ── Log ──
+      case 'hal_log':
+        final level = int.tryParse(args['level'] ?? '') ?? 1;
+        final msg = args['msg'] ?? '(empty)';
+        final labels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+        final label = level >= 0 && level < 4 ? labels[level] : 'L$level';
+        return '[$label] $msg\nLogged at ${now.toIso8601String()}';
+
+      // ── Yield ──
+      case 'hal_yield':
+        return 'OK — no-op on desktop';
+
+      // ── Sensors ──
+      case 'hal_sensor_temperature':
+        return 'INT32_MIN\nNo sensor hardware on this platform.\nOn ESP32: returns centidegrees C (e.g. 2500 = 25.00°C)';
+      case 'hal_sensor_humidity':
+        return 'INT32_MIN\nNo sensor hardware on this platform.\nOn ESP32: returns centipercent (e.g. 6500 = 65.00%)';
+      case 'hal_sensor_battery':
+        return 'INT32_MIN\nNo sensor hardware on this platform.\nOn ESP32: returns millivolts (e.g. 3700 = 3.7V)';
+      case 'hal_sensor_gps_lat':
+        return 'INT32_MIN\nNo GPS on this platform.\nOn device: returns latitude × 1e7';
+      case 'hal_sensor_gps_lon':
+        return 'INT32_MIN\nNo GPS on this platform.\nOn device: returns longitude × 1e7';
+
+      // ── Display ──
+      case 'hal_display_width':
+        return '${MediaQuery.of(context).size.width.toInt()} px';
+      case 'hal_display_height':
+        return '${MediaQuery.of(context).size.height.toInt()} px';
+      case 'hal_display_clear':
+        return 'OK — display cleared (no-op on desktop)';
+      case 'hal_display_text':
+        final x = args['x'] ?? '0';
+        final y = args['y'] ?? '0';
+        final color = args['color'] ?? '1';
+        final text = args['text'] ?? '';
+        return 'Drew "$text" at ($x, $y) color=$color\n(No-op on desktop — renders on ESP32/embedded display)';
+      case 'hal_display_pixel':
+        return 'Drew pixel at (${args['x'] ?? 0}, ${args['y'] ?? 0}) color=${args['color'] ?? 0}\n(No-op on desktop)';
+      case 'hal_display_rect':
+        return 'Drew rect at (${args['x']}, ${args['y']}) ${args['w']}×${args['h']} color=${args['color']}\n(No-op on desktop)';
+      case 'hal_display_flush':
+        return 'OK — buffer flushed (no-op on desktop)';
+
+      // ── GPIO ──
+      case 'hal_gpio_mode':
+        final modes = {0: 'INPUT', 1: 'OUTPUT', 2: 'INPUT_PULLUP'};
+        final mode = int.tryParse(args['mode'] ?? '') ?? 0;
+        return 'Pin ${args['pin'] ?? '?'} set to ${modes[mode] ?? 'UNKNOWN'}\n(No-op on desktop — ESP32 only)';
+      case 'hal_gpio_read':
+        return '0\nPin ${args['pin'] ?? '?'} (stub on desktop — always 0)';
+      case 'hal_gpio_write':
+        return 'OK — pin ${args['pin'] ?? '?'} = ${args['value'] ?? '?'}\n(No-op on desktop)';
+
+      // ── LoRa ──
+      case 'hal_lora_available_hw':
+        return '0\nNo LoRa hardware detected on this platform.';
+      case 'hal_lora_send':
+        final data = args['data'] ?? '';
+        return data.isEmpty
+            ? 'Error: no data provided'
+            : '-1\nNo LoRa hardware. Would send ${data.length} bytes.';
+      case 'hal_lora_available':
+        return '0\nNo LoRa hardware — no data available.';
+      case 'hal_lora_recv':
+        return '0 bytes\nNo LoRa hardware.';
+
+      // ── BLE ──
+      case 'hal_ble_scan_start':
+        return '-1\nBLE not available on desktop.';
+      case 'hal_ble_scan_stop':
+        return 'OK (no-op on desktop)';
+      case 'hal_ble_scan_read':
+        return '[]\nNo BLE scan results.';
+      case 'hal_ble_advertise':
+        return '-1\nBLE not available on desktop.';
+      case 'hal_ble_advertise_stop':
+        return 'OK (no-op on desktop)';
+
+      // ── Messaging ──
+      case 'hal_msg_send':
+        final json = args['json'] ?? '';
+        return json.isEmpty
+            ? 'Error: empty message'
+            : 'Sent ${json.length} bytes to host';
+      case 'hal_msg_available':
+        return '0\nNo pending messages.';
+      case 'hal_msg_recv':
+        return '(empty)\nNo pending messages to receive.';
+
+      // ── KV ──
+      case 'hal_kv_get':
+        final key = args['key'] ?? '';
+        return key.isEmpty
+            ? 'Error: key is empty'
+            : 'Requires wapp context.\nWould look up key "$key" in the module\'s scoped store.';
+      case 'hal_kv_set':
+        final key = args['key'] ?? '';
+        final value = args['value'] ?? '';
+        return key.isEmpty
+            ? 'Error: key is empty'
+            : 'Requires wapp context.\nWould set "$key" = "$value" (${value.length} bytes).';
+      case 'hal_kv_delete':
+        return 'Requires wapp context.\nWould delete key "${args['key'] ?? ''}"';
+      case 'hal_kv_list':
+        return 'Requires wapp context.\nWould list keys matching prefix "${args['prefix'] ?? ''}"';
+      case 'hal_kv_exists':
+        return 'Requires wapp context.\nWould check if key "${args['key'] ?? ''}" exists.';
+      case 'hal_kv_size':
+        return 'Requires wapp context.\nWould return size of key "${args['key'] ?? ''}".';
+
+      // ── i18n ──
+      case 'hal_i18n_get':
+        final key = args['key'] ?? '';
+        if (key.isEmpty) return 'Error: key is empty';
+        final resolved = _i18n.resolve('@$key');
+        return resolved.startsWith('@')
+            ? 'Not found: "$key"\nNo translation in current locale.'
+            : 'Resolved: "$resolved"';
+
+      // ── File ──
+      case 'hal_file_open':
+        return 'Requires wapp context.\nWould open "${args['path'] ?? ''}" mode=${args['mode'] ?? 0}';
+      case 'hal_file_read':
+        return 'Requires wapp context + open handle.';
+      case 'hal_file_write':
+        return 'Requires wapp context + open handle.';
+      case 'hal_file_close':
+        return 'Requires wapp context + open handle.';
+
+      // ── HTTP ──
+      case 'hal_http_request':
+        final methods = {0: 'GET', 1: 'POST', 2: 'PUT', 3: 'DELETE'};
+        final method = int.tryParse(args['method'] ?? '') ?? 0;
+        final url = args['url'] ?? '';
+        return url.isEmpty
+            ? 'Error: URL is empty'
+            : 'Would send ${methods[method] ?? 'GET'} $url\n(Async — poll with hal_http_poll)';
+      case 'hal_http_poll':
+        return 'Requires active request_id from hal_http_request.';
+      case 'hal_http_read_response':
+        return 'Requires completed request_id.';
+      case 'hal_http_status':
+        return 'Requires active request_id.';
+      case 'hal_http_free':
+        return 'Requires active request_id.';
+
+      // ── Events ──
+      case 'hal_event_subscribe':
+        return 'Requires wapp context.\nWould subscribe to topic "${args['topic'] ?? ''}"';
+      case 'hal_event_unsubscribe':
+        return 'Requires wapp context.\nWould unsubscribe from "${args['topic'] ?? ''}"';
+      case 'hal_event_publish':
+        return 'Requires wapp context.\nWould publish to "${args['topic'] ?? ''}" (${(args['data'] ?? '').length} bytes)';
+      case 'hal_event_available':
+        return '0\nNo pending events.';
+      case 'hal_event_recv':
+        return '(empty)\nNo pending events.';
+
+      // ── Lib ──
+      case 'hal_lib_call':
+        return 'Requires wapp context.\nWould call ${args['fn_name'] ?? '?'} on lib ${args['lib_id'] ?? '?'}\nArgs: ${args['args'] ?? '{}'}';
+
+      default:
+        return 'No test handler for $name';
+    }
+  }
+
+  Widget _buildProviderRow(String funcId, WappManifest provider,
+      List<WappManifest> allProviders, ColorScheme cs) {
+    final prefs = PreferencesService.instanceSync;
+    final preferredId = prefs?.getPreferredProvider(funcId);
+    final isDefault = allProviders.length == 1 ||
+        provider.id == preferredId ||
+        (preferredId == null && provider == allProviders.first);
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: allProviders.length > 1
+          ? () async {
+              final p = await PreferencesService.instance();
+              p.setPreferredProvider(funcId, provider.id);
+              if (mounted) setState(() {});
+            }
+          : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+        child: Row(
+          children: [
+            if (allProviders.length > 1)
+              Icon(
+                isDefault
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+                size: 16,
+                color: isDefault ? cs.primary : cs.onSurfaceVariant,
+              )
+            else
+              Icon(Icons.check_circle_outline, size: 16, color: cs.primary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                provider.title.isNotEmpty ? provider.title : provider.name,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isDefault ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ),
+            Text(
+              provider.id,
+              style: TextStyle(
+                fontSize: 10,
+                fontFamily: 'monospace',
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+            if (isDefault) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: cs.primaryContainer,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'DEFAULT',
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: cs.onPrimaryContainer,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   // ── Settings screen ────────────────────────────────────────────────
 
   Widget _buildSettingsScreen(GeoUiBlock screen) {
@@ -4973,14 +6160,56 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
       },
     );
 
-    // App Creator: wrap with a Save banner so changes to title, name,
-    // icon etc. are persisted without the user having to find the
-    // Install button on the Code tab.
+    // App Creator: full custom settings screen with proper dependency
+    // pickers instead of the generic GeoUI renderer.
     if (!_isAppCreator) return renderer;
+    return _buildAppCreatorSettings(renderer);
+  }
 
+  // Available HAL capability groups — derived from geogram_wasm_hal.h.
+  // Each entry maps a manifest requires.hal tag to a human description.
+  static const _halCapabilities = <String, String>{
+    'log': 'Logging',
+    'time': 'Time functions',
+    'kv': 'Key-value storage',
+    'i18n': 'Translations',
+    'file': 'File I/O',
+    'http': 'HTTP requests',
+    'msg': 'Inter-wapp messaging',
+    'event': 'Event pub/sub',
+    'lib': 'Library calls',
+    'lora': 'LoRa radio',
+    'ble': 'Bluetooth LE',
+    'sensor': 'Sensors',
+    'display': 'Display/screen',
+    'gpio': 'GPIO pins',
+  };
+
+  /// Full App Creator Settings screen — identity fields via GeoUI
+  /// renderer, plus custom chip pickers for HAL requires and provides.
+  Widget _buildAppCreatorSettings(Widget identityRenderer) {
     final cs = Theme.of(context).colorScheme;
+    final profile = ProfileService.instance.activeProfile;
+    final npub = profile?.npub ?? '';
+
+    // Ensure list-typed fields exist.
+    _fieldValues.putIfAbsent('wapp_hal_requires', () => <String>['log']);
+    _fieldValues.putIfAbsent('wapp_provides_functionalities', () => <String>[]);
+    _fieldValues.putIfAbsent('wapp_kind', () => 'app');
+    _fieldValues.putIfAbsent('wapp_tick_interval', () => '5000');
+
+    final halRequires = _fieldValues['wapp_hal_requires'];
+    final halList = halRequires is List<String>
+        ? halRequires
+        : <String>['log'];
+    final providesList = _fieldValues['wapp_provides_functionalities'];
+    final provides = providesList is List<String>
+        ? providesList
+        : <String>[];
+
     return Column(
       children: [
+        // ── Save banner ──
         Container(
           padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
           decoration: BoxDecoration(
@@ -5013,9 +6242,421 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
             ],
           ),
         ),
-        Expanded(child: renderer),
+
+        // ── Signing identity ──
+        _buildSigningIdentitySection(cs, profile, npub),
+
+        // ── Scrollable body: GeoUI identity + runtime + deps ──
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
+            children: [
+              // Identity fields via GeoUI renderer (title, name, id,
+              // version, description, icon). SizedBox must be tall
+              // enough to fit all fields without internal scrolling,
+              // otherwise the renderer's SingleChildScrollView
+              // swallows scroll events and prevents the outer
+              // ListView from reaching Category / HAL / Provides.
+              SizedBox(
+                height: 700,
+                child: identityRenderer,
+              ),
+
+              // ── Category ──
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Text(
+                  'Category',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Text(
+                  'Where this wapp appears on the launcher.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: cs.onSurfaceVariant,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: {
+                    'app': 'App (main grid)',
+                    'system': 'System',
+                    'addon': 'Addon',
+                  }.entries.map((e) {
+                    final selected =
+                        (_fieldValues['wapp_kind'] ?? 'app') == e.key;
+                    return ChoiceChip(
+                      label: Text(e.value),
+                      selected: selected,
+                      onSelected: (on) {
+                        if (on) {
+                          setState(() => _fieldValues['wapp_kind'] = e.key);
+                        }
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // ── Tick interval ──
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: TextField(
+                  controller: _tickIntervalController,
+                  decoration: InputDecoration(
+                    labelText: 'Tick interval (ms)',
+                    helperText:
+                        'How often module_tick() runs. 0 to disable.',
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  keyboardType: TextInputType.number,
+                  onChanged: (v) =>
+                      _fieldValues['wapp_tick_interval'] = v,
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // ── HAL requires — chip picker ──
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                child: Text(
+                  'HAL dependencies',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Text(
+                  'Select which HAL capabilities this wapp needs. '
+                  'The launcher checks these at load time.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: cs.onSurfaceVariant,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: _halCapabilities.entries.map((e) {
+                    final selected = halList.contains(e.key);
+                    return FilterChip(
+                      label: Text(e.key),
+                      tooltip: e.value,
+                      selected: selected,
+                      onSelected: (on) {
+                        setState(() {
+                          if (on) {
+                            if (!halList.contains(e.key)) {
+                              halList.add(e.key);
+                            }
+                          } else {
+                            halList.remove(e.key);
+                          }
+                          _fieldValues['wapp_hal_requires'] = halList;
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // ── Provides functionalities — tag editor ──
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                child: Text(
+                  'Provides functionalities',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Text(
+                  'Functionalities this wapp provides for other wapps to use.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: cs.onSurfaceVariant,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    for (final w in provides)
+                      InputChip(
+                        label: Text(w),
+                        onDeleted: () {
+                          setState(() {
+                            provides.remove(w);
+                            _fieldValues['wapp_provides_functionalities'] = provides;
+                          });
+                        },
+                      ),
+                    ActionChip(
+                      avatar: const Icon(Icons.add, size: 16),
+                      label: const Text('Add'),
+                      onPressed: () => _addProvidesFunctionality(provides),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
+  }
+
+  Future<void> _addProvidesFunctionality(List<String> provides) async {
+    final controller = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add functionality'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'e.g. weather_card',
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    if (name != null && name.isNotEmpty && !provides.contains(name)) {
+      setState(() {
+        provides.add(name);
+        _fieldValues['wapp_provides_functionalities'] = provides;
+      });
+    }
+  }
+
+  Widget _buildSigningIdentitySection(
+      ColorScheme cs, IwiProfile? profile, String npub) {
+    final allProfiles = ProfileService.instance.profiles;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.verified_user, color: cs.primary, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                'Signing identity',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurface,
+                ),
+              ),
+              const Spacer(),
+              // Copy npub
+              if (npub.isNotEmpty)
+                IconButton(
+                  icon: const Icon(Icons.copy, size: 16),
+                  tooltip: 'Copy npub',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: npub));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('npub copied'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          // Profile picker dropdown
+          if (allProfiles.length > 1)
+            DropdownButtonFormField<String>(
+              initialValue: profile?.id,
+              isDense: true,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: 'Active profile',
+                isDense: true,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              items: allProfiles.map((p) {
+                final label = p.displayName;
+                final short = p.npub.length > 20
+                    ? '${p.npub.substring(0, 12)}…${p.npub.substring(p.npub.length - 6)}'
+                    : p.npub;
+                return DropdownMenuItem(
+                  value: p.id,
+                  child: Text('$label  ($short)',
+                      overflow: TextOverflow.ellipsis),
+                );
+              }).toList(),
+              onChanged: (id) async {
+                if (id == null) return;
+                await ProfileService.instance.switchTo(id);
+                if (mounted) setState(() {});
+              },
+            )
+          else if (npub.isNotEmpty)
+            Text(
+              npub,
+              style: TextStyle(
+                fontSize: 11,
+                fontFamily: 'monospace',
+                color: cs.onSurfaceVariant,
+              ),
+              overflow: TextOverflow.ellipsis,
+            )
+          else
+            Text(
+              'No profile — wapps will not be signed',
+              style: TextStyle(fontSize: 12, color: cs.error),
+            ),
+          const SizedBox(height: 6),
+          // Action row: generate new / import nsec
+          Row(
+            children: [
+              TextButton.icon(
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('New identity'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(fontSize: 12),
+                ),
+                onPressed: () async {
+                  final preview = ProfileService.instance.generatePreview();
+                  await ProfileService.instance.saveAndActivate(preview);
+                  if (!mounted) return;
+                  setState(() {});
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(
+                        'New identity created: ${preview.callsign}'),
+                    duration: const Duration(seconds: 3),
+                  ));
+                },
+              ),
+              const SizedBox(width: 8),
+              TextButton.icon(
+                icon: const Icon(Icons.key, size: 16),
+                label: const Text('Import nsec'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(fontSize: 12),
+                ),
+                onPressed: () => _importNsec(),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _importNsec() async {
+    final controller = TextEditingController();
+    final nsec = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Import signing key'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Paste your nsec1… private key. This will create a new '
+              'profile and set it as the active signing identity.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              obscureText: true,
+              decoration: const InputDecoration(
+                hintText: 'nsec1…',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
+    if (nsec == null || nsec.isEmpty) return;
+    try {
+      final profile = ProfileService.instance.buildFromNsec(nsec);
+      await ProfileService.instance.saveAndActivate(profile);
+      if (mounted) {
+        setState(() {});
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Imported: ${profile.callsign}'),
+          duration: const Duration(seconds: 3),
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Invalid nsec: $e'),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ));
+      }
+    }
   }
 
   /// Persist App Creator settings (title, name, id, description, icon,
@@ -5043,6 +6684,13 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
     });
   }
 
+  /// Split a comma-separated string into a trimmed, non-empty list.
+  static List<String> _splitCsv(String csv) => csv
+      .split(',')
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .toList();
+
   // ── Map screen ─────────────────────────────────────────────────────
 
   Widget _buildMapScreen(GeoUiBlock screen, GeoUiBlock mapGroup) {
@@ -5066,6 +6714,52 @@ class _WappPageState extends State<WappPage> with TickerProviderStateMixin {
         _engine.handleEvent();
         _drainOutbox();
       },
+    );
+  }
+}
+
+/// Full-screen page showing the complete API definition as copyable
+/// JSON. Opened from the Functionalities screen's "Export API as JSON"
+/// button.
+class _ApiJsonExportPage extends StatelessWidget {
+  final String title;
+  final String json;
+  const _ApiJsonExportPage({required this.title, required this.json});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.copy),
+            tooltip: 'Copy to clipboard',
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: json));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('API JSON copied to clipboard'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: SelectableText(
+          json,
+          style: TextStyle(
+            fontSize: 12,
+            fontFamily: 'monospace',
+            color: cs.onSurface,
+            height: 1.4,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -5254,6 +6948,16 @@ class _CatalogWapp {
   String description = '';
   String sourceHost = '';
   String publisherNpub = '';
+  // NDF store enrichment — populated by _enrichCatalogWapp after parse.
+  String storeTitle = '';
+  String storeSummary = '';
+  String storeBody = '';
+  String changelog = '';
+  List<String> screenshotPaths = const [];
+  int likeCount = 0;
+  int commentCount = 0;
+  bool permitLikes = true;
+  bool permitComments = true;
 
   _CatalogWapp({
     required this.name,

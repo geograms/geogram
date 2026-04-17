@@ -79,6 +79,10 @@ class WappInstallerService {
     required String description,
     Uint8List? wasmBytes,
     String version = '1.0.0',
+    String kind = 'app',
+    int tickIntervalMs = 5000,
+    List<String> halRequires = const ['log'],
+    List<String> providesWidgets = const [],
     String? homeScreenJson,
     String? sourceC,
     String? icon,
@@ -184,24 +188,24 @@ class WappInstallerService {
     final manifest = <String, dynamic>{
       'id': id,
       'version': version,
-      'kind': 'app',
+      'kind': const {'app', 'system', 'addon'}.contains(kind) ? kind : 'app',
       'description': title.isNotEmpty ? title : folder,
       'summary': description,
       'icon': manifestIcon,
       'tags': const ['user'],
       'entry_ui': 'screens/home.ui.json',
-      'tick_interval_ms': 5000,
+      'tick_interval_ms': tickIntervalMs,
       'permissions': const <String>[],
-      'provides': const {
-        'functions': [],
-        'events': [],
-        'variables': [],
+      'provides': {
+        'functionalities': providesWidgets,
+        'events': const <String>[],
+        'variables': const <String>[],
       },
-      'requires': const {
-        'hal': ['log'],
-        'events': [],
-        'libraries': [],
-        'variables': [],
+      'requires': {
+        'hal': halRequires,
+        'events': const <String>[],
+        'libraries': const <String>[],
+        'variables': const <String>[],
       },
     };
 

@@ -1,0 +1,23 @@
+{
+  "schema": "geogram.wapp.store/1",
+  "descriptions": {
+    "en": {
+      "title": "App Creator",
+      "summary": "Write, compile, and install wapps from inside geogram",
+      "body": "Full development environment for geogram wapps. Write C code against the HAL API, compile to WebAssembly with the bundled wasm-clang compiler, design UI screens with the visual editor, manage translations, and install directly to the launcher. No external tools needed."
+    },
+    "pt": {
+      "title": "Criador de Apps",
+      "summary": "Escreva, compile e instale wapps dentro do geogram",
+      "body": "Ambiente de desenvolvimento completo para wapps geogram. Escreva codigo C contra a API HAL, compile para WebAssembly com o compilador wasm-clang incluido, desenhe ecras UI com o editor visual, gira traducoes e instale diretamente no launcher."
+    },
+    "de": {
+      "title": "App Creator",
+      "summary": "Wapps direkt in geogram schreiben, kompilieren und installieren",
+      "body": "Vollstaendige Entwicklungsumgebung fuer geogram-Wapps. C-Code gegen die HAL-API schreiben, mit dem mitgelieferten wasm-clang-Compiler zu WebAssembly kompilieren, UI-Screens mit dem visuellen Editor gestalten, Uebersetzungen verwalten und direkt im Launcher installieren."
+    }
+  },
+  "screenshots": [],
+  "videos": [],
+  "changelog": "## 0.1.0\n- Initial release with C compiler, UI editor, translations tab\n- NOSTR signing integration\n- Project management with fork/edit/delete"
+}

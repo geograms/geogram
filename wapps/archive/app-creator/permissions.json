@@ -1,0 +1,16 @@
+{
+  "schema": "ndf-permissions-1.0",
+  "document_id": "tools.geogram.app-creator",
+  "owners": [],
+  "access": {
+    "view":    {"type": "public"},
+    "comment": {"type": "public"},
+    "react":   {"type": "public"},
+    "edit":    {"type": "owners_only"},
+    "admin":   {"type": "owners_only"}
+  },
+  "restrictions": {
+    "require_signature_for_comments": true,
+    "require_signature_for_reactions": true
+  }
+}

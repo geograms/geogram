@@ -45,6 +45,33 @@ class GeoUiScreenRenderer extends StatefulWidget {
 }
 
 class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
+  /// Cached controllers keyed by field name. Prevents the cursor-reset
+  /// bug caused by creating a new TextEditingController on every build.
+  final Map<String, TextEditingController> _controllers = {};
+
+  TextEditingController _controllerFor(String fieldName, String text) {
+    final existing = _controllers[fieldName];
+    if (existing != null) {
+      // Only update if the text changed externally (e.g. project load),
+      // not from the user typing (which already updated the controller).
+      if (existing.text != text) {
+        existing.text = text;
+      }
+      return existing;
+    }
+    final ctrl = TextEditingController(text: text);
+    _controllers[fieldName] = ctrl;
+    return ctrl;
+  }
+
+  @override
+  void dispose() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   /// Lazy shortcut for [I18nContext.resolve] that also preserves the
   /// "null in → null out" contract of nullable string getters. Every
   /// user-visible string in this renderer goes through here so wapps
@@ -353,7 +380,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
       keyboardType: TextInputType.number,
-      controller: TextEditingController(text: numVal.toString()),
+      controller: _controllerFor('__num_$name', numVal.toString()),
       onChanged: (v) {
         final parsed = isInt ? int.tryParse(v) : double.tryParse(v);
         if (parsed != null) widget.bindings.setValue(name, parsed);
@@ -544,7 +571,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       style: multiline
           ? const TextStyle(fontFamily: 'monospace', fontSize: 13)
           : null,
-      controller: TextEditingController(text: val),
+      controller: _controllerFor(name, val),
       onChanged: (v) => widget.bindings.setValue(name, v),
     );
   }

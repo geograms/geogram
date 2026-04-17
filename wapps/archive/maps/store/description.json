@@ -1,0 +1,23 @@
+{
+  "schema": "geogram.wapp.store/1",
+  "descriptions": {
+    "en": {
+      "title": "Satellite Maps",
+      "summary": "Browse satellite imagery with pan and zoom",
+      "body": "Full offline tile cache with support for multiple tile providers. Pan, zoom, and search for locations by name. Tiles are cached locally so you can browse previously-visited areas without a network connection. Ideal for field work, hiking, and off-grid navigation."
+    },
+    "pt": {
+      "title": "Mapas por Satelite",
+      "summary": "Navegue por imagens de satelite com pan e zoom",
+      "body": "Cache completa de tiles offline com suporte para varios fornecedores de tiles. Navegue, amplie e procure locais por nome. Os tiles sao guardados localmente para que possa consultar areas visitadas anteriormente sem ligacao a rede. Ideal para trabalho de campo, caminhadas e navegacao off-grid."
+    },
+    "de": {
+      "title": "Satellitenkarten",
+      "summary": "Satellitenbilder mit Schwenken und Zoomen durchsuchen",
+      "body": "Vollstaendiger Offline-Tile-Cache mit Unterstuetzung fuer mehrere Tile-Anbieter. Schwenken, Zoomen und Ortssuche nach Name. Tiles werden lokal gespeichert, sodass zuvor besuchte Gebiete ohne Netzwerkverbindung durchsucht werden koennen."
+    }
+  },
+  "screenshots": [],
+  "videos": [],
+  "changelog": "## 1.0.0\n- Initial release with satellite tile cache\n- Search by location name\n- Offline browsing of cached tiles"
+}

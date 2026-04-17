@@ -59,6 +59,9 @@ for wapp_dir in "$ARCHIVE_DIR"/*/; do
         $([ -d screens ] && echo screens) \
         $([ -d media ] && echo media) \
         $([ -d lang ] && echo lang) \
+        $([ -d store ] && echo store) \
+        $([ -f permissions.json ] && echo permissions.json) \
+        $([ -f social.sqlite3 ] && echo social.sqlite3) \
         2>/dev/null) || true
 
     id=$(python3 -c "import json; m=json.load(open('$wapp_dir/manifest.json')); print(m.get('id',''))" 2>/dev/null || echo "$name")

@@ -17,6 +17,10 @@ class PreferencesService {
     return _instance!;
   }
 
+  /// Sync accessor — safe to use after the first `instance()` call
+  /// has completed (which happens during app startup in main.dart).
+  static PreferencesService? get instanceSync => _instance;
+
   // Terminal settings
   double get terminalFontSize => _prefs.getDouble('terminal.fontSize') ?? 16.0;
   set terminalFontSize(double v) => _prefs.setDouble('terminal.fontSize', v);

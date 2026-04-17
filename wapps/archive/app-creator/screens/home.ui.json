@@ -111,6 +111,14 @@
           },
           {
             "$": "field",
+            "name": "wapp_version",
+            "$type": "string",
+            "label": "@field.version",
+            "default": "1.0.0",
+            "tip": "@field.version_tip"
+          },
+          {
+            "$": "field",
             "name": "wapp_description",
             "$type": "string",
             "label": "@field.description",

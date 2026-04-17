@@ -48,6 +48,8 @@ dependencies:
   http: ^1.2.0                           # Cross-platform HTTP (native + web)
   archive: ^3.6.1                        # Pure-Dart zip extraction for .wapp bundles
   web: ^0.5.1                            # window.localStorage for web profile persistence
+  sqlite3: ^2.4.0                        # SQLite for wapp social store (reactions, comments)
+  sqlite3_flutter_libs: ^0.5.24          # Native SQLite libs for Flutter builds
 
 dev_dependencies:
   flutter_test:

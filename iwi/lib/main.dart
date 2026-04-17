@@ -22,7 +22,7 @@ import 'services/profile_storage_factory.dart';
 import 'services/storage_paths.dart';
 import 'services/task_monitor_service.dart';
 import 'services/wapp_signing_service.dart';
-import 'services/widget_registry.dart';
+import 'services/functionality_registry.dart';
 import 'util/wapp_icons.dart';
 import 'wapp/wapp_engine.dart';
 import 'wapp/wapp_page.dart';
@@ -189,10 +189,14 @@ class WappManifest {
   /// during launcher scan via [WappSigningService.readPublisherNpub].
   final String publisherNpub;
 
-  /// Widget IDs this wapp advertises in its `provides.widgets` array.
-  /// Empty list means the wapp is not a widget provider. One wapp
-  /// can provide any number of widgets.
-  final List<String> providedWidgets;
+  /// Functionality IDs this wapp provides. Populated from
+  /// `provides.functionalities` in the manifest — accepts both bare
+  /// strings (`"text.greet"`) and rich objects with API detail.
+  final List<String> providedFunctionalities;
+
+  /// Rich API definitions parsed from manifest objects. Empty when
+  /// the manifest uses bare string declarations.
+  final List<FunctionalityDef> functionalityDefs;
 
   WappManifest({
     required this.id,
@@ -203,7 +207,8 @@ class WappManifest {
     this.icon,
     required this.dirPath,
     this.publisherNpub = '',
-    this.providedWidgets = const [],
+    this.providedFunctionalities = const [],
+    this.functionalityDefs = const [],
   });
 
   factory WappManifest.fromJson(
@@ -216,15 +221,29 @@ class WappManifest {
     final manifestDescription = json['description'] as String? ?? '';
     final manifestSummary = json['summary'] as String? ?? '';
 
-    // Parse provides.widgets — an array of widget IDs this wapp
-    // registers as a provider for. Anything non-string is dropped.
+    // Parse provides.functionalities — accepts both bare strings
+    // ("text.greet") and rich objects with endpoint detail. Bare
+    // strings go into providedFunctionalities; objects go into both
+    // providedFunctionalities (by id) and functionalityDefs.
     final provides = json['provides'];
-    final widgetsList = provides is Map<String, dynamic>
-        ? provides['widgets']
+    final funcList = provides is Map<String, dynamic>
+        ? (provides['functionalities'] ?? provides['widgets'])
         : null;
-    final providedWidgets = widgetsList is List
-        ? widgetsList.whereType<String>().toList()
-        : const <String>[];
+    final funcIds = <String>[];
+    final funcDefs = <FunctionalityDef>[];
+    if (funcList is List) {
+      for (final entry in funcList) {
+        if (entry is String) {
+          funcIds.add(entry);
+        } else if (entry is Map<String, dynamic>) {
+          final def = FunctionalityDef.fromJson(entry);
+          if (def.id.isNotEmpty) {
+            funcIds.add(def.id);
+            funcDefs.add(def);
+          }
+        }
+      }
+    }
 
     return WappManifest(
       id: id,
@@ -237,7 +256,8 @@ class WappManifest {
       icon: json['icon'] as String?,
       dirPath: dirPath,
       publisherNpub: publisherNpub,
-      providedWidgets: providedWidgets,
+      providedFunctionalities: funcIds,
+      functionalityDefs: funcDefs,
     );
   }
 
@@ -392,9 +412,10 @@ class _LauncherPageState extends State<LauncherPage> {
     // Rebuild the widget registry from the fresh scan. Wapps that
     // got uninstalled since last scan stop appearing as providers;
     // newly installed ones immediately become available.
-    WidgetRegistry.instance.clear();
+    FunctionalityRegistry.instance.clear();
+    FunctionalityRegistry.instance.registerCore();
     for (final m in wapps) {
-      WidgetRegistry.instance.register(m);
+      FunctionalityRegistry.instance.register(m);
     }
 
     if (mounted) setState(() => _wapps = wapps);
@@ -483,7 +504,8 @@ class _LauncherPageState extends State<LauncherPage> {
         pkg.basePath,
         publisherNpub: publisher,
       );
-      if (manifest.kind == 'app' && seen.add(manifest.id)) {
+      const validKinds = {'app', 'system', 'addon'};
+      if (validKinds.contains(manifest.kind) && seen.add(manifest.id)) {
         wapps.add(manifest);
       }
     } catch (_) {}
@@ -526,18 +548,35 @@ class _LauncherPageState extends State<LauncherPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
+    // Partition wapps by category.
+    final apps = _wapps!.where((w) => w.kind == 'app').toList();
+    final systemWapps = _wapps!.where((w) => w.kind == 'system').toList();
+    final addonWapps = _wapps!.where((w) => w.kind == 'addon').toList();
+
     final entries = <_LauncherEntry>[
-      for (final wapp in _wapps!)
+      for (final wapp in apps)
         _LauncherEntry(
-          // Prefer the manifest-declared title; fall back to the
-          // folder name so old wapps without a proper description
-          // field still show something.
           name: wapp.title.isNotEmpty ? wapp.title : wapp.name,
           icon: wapp.iconData,
           textIcon: wapp.textIcon,
           svgIconPath: wapp.svgIconPath,
           color: wapp.color,
           onTap: () => _openWapp(wapp),
+        ),
+      // Folder tiles at the end of the grid.
+      if (systemWapps.isNotEmpty)
+        _LauncherEntry(
+          name: 'System',
+          icon: Icons.settings_applications,
+          color: const Color(0xFF37474F),
+          onTap: () => _openFolder('System', systemWapps),
+        ),
+      if (addonWapps.isNotEmpty)
+        _LauncherEntry(
+          name: 'Addons',
+          icon: Icons.extension,
+          color: const Color(0xFF4E342E),
+          onTap: () => _openFolder('Addons', addonWapps),
         ),
     ];
 
@@ -570,6 +609,18 @@ class _LauncherPageState extends State<LauncherPage> {
       ),
     );
   }
+
+  void _openFolder(String title, List<WappManifest> wapps) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _FolderPage(
+          title: title,
+          wapps: wapps,
+          onOpenWapp: _openWapp,
+        ),
+      ),
+    ).then((_) => _scanArchive());
+  }
 }
 
 class _LauncherEntry {
@@ -588,6 +639,49 @@ class _LauncherEntry {
     this.textIcon,
     this.svgIconPath,
   });
+}
+
+/// Sub-page for System / Addons folder tiles. Shows the same grid
+/// layout as the main launcher, filtered to one category.
+class _FolderPage extends StatelessWidget {
+  final String title;
+  final List<WappManifest> wapps;
+  final void Function(WappManifest) onOpenWapp;
+
+  const _FolderPage({
+    required this.title,
+    required this.wapps,
+    required this.onOpenWapp,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: GridView.builder(
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 120,
+            mainAxisSpacing: 20,
+            crossAxisSpacing: 20,
+          ),
+          itemCount: wapps.length,
+          itemBuilder: (context, index) {
+            final wapp = wapps[index];
+            return _AppIcon(
+              name: wapp.title.isNotEmpty ? wapp.title : wapp.name,
+              icon: wapp.iconData,
+              textIcon: wapp.textIcon,
+              svgIconPath: wapp.svgIconPath,
+              color: wapp.color,
+              onTap: () => onOpenWapp(wapp),
+            );
+          },
+        ),
+      ),
+    );
+  }
 }
 
 /// Compact AppBar title showing the active profile's display name
@@ -755,12 +849,15 @@ class _AppIcon extends StatelessWidget {
     }
     Widget inner;
     if (svgBytes != null) {
+      // Render custom SVGs with their original colors so the
+      // author's design stays recognizable. Only the Material icon
+      // fallback gets the white recolour.
       inner = Padding(
         padding: const EdgeInsets.all(8),
         child: SvgPicture.memory(
           svgBytes,
           fit: BoxFit.contain,
-          colorFilter: whiteFilter,
+          theme: const SvgTheme(currentColor: Colors.white),
           placeholderBuilder: (_) => const SizedBox.shrink(),
         ),
       );
