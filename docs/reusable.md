@@ -105,6 +105,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 ### API Handlers (Shared between CLI and Desktop stations)
 - [AppsHandler](#appshandler) - Aggregated app discovery (`GET /api/apps`) — returns availability + counts for blog, chat, events, alerts, shared in a single call
 - [ActivityHandler / StationActivityStore / StationGroupAccessService](#activityhandler--stationactivitystore--stationgroupaccessservice) - Shared station activity feed ingestion, storage, and private-group access filtering
+- [HomepageMixin](#homepagemixin) - Shared station homepage content + per-callsign cache primed from connected devices via the proxy on hello_ack
 
 ### Shared Folder Components
 - [SharedFolder Model](#sharedfolder-model) - Data model for shared folder entries (JSON serialization, visibility)
@@ -9917,6 +9918,24 @@ Reusable bottom-sheet emoji picker using the 11 standard reactions from `Message
 - Chips row: `Wrap` of small containers showing emoji + count, highlighted if current user reacted, tap to toggle
 
 Used in: recording reactions (archive detail page), chat reactions (via `MessageBubbleWidget` internally).
+
+---
+
+## HomepageMixin
+
+**File:** `lib/server/mixins/homepage_mixin.dart`
+
+Generates shared content for the station homepage and owns a per-callsign in-memory cache primed from connected devices. Used by both `PureStationServer` and `StationServer`.
+
+**Why a cache:** the station's home page needs summaries (recent blog posts today; events / chat rooms / places later) from every connected device. Querying live on each request is slow and depends on the device being available right that second. Mirroring would also work but most users haven't set it up. So: when a device finishes its WebSocket handshake (`hello_ack`), the station fires a single proxy request for `/api/blog?limit=N` over the existing `DeviceProxyMixin` channel and stores the parsed result. Cache evicts when the last connection for that callsign disconnects.
+
+**Pattern for adding new per-callsign summary caches** (events, chat rooms, places):
+1. Add `Map<String, List<T>> get homepageXxxCache` abstract getter on the mixin
+2. Add `primeXxxForDevice(client)` and `evictXxxForCallsign(callsign)` methods
+3. Stations expose a `final Map<String, List<T>> _xxxCache = {};` field implementing the getter
+4. Stations call `unawaited(primeXxxForDevice(client));` in their hello_ack path and `evictXxxForCallsign(callsign)` from `_removeClient` (multi-device aware: only when no other connection holds the same callsign)
+
+The mixin's only abstract dependencies on the station are: `homepageDevicesDir`, the cache field getters, `homepageProxyToClient` (forward to `DeviceProxyMixin.proxySingleDevice`), and `homepageLog`.
 
 ---
 

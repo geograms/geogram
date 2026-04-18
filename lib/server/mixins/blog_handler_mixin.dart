@@ -15,6 +15,27 @@ import '../../util/nostr_crypto.dart';
 import '../../util/nostr_key_generator.dart';
 import '../../util/station_html_templates.dart';
 
+/// Lightweight blog post summary for the station homepage feed.
+class RecentBlogEntry {
+  final String callsign;
+  final String postId;
+  final String title;
+  final String author;
+  final String? description;
+  final String displayDate;
+  final DateTime dateTime;
+
+  RecentBlogEntry({
+    required this.callsign,
+    required this.postId,
+    required this.title,
+    required this.author,
+    this.description,
+    required this.displayDate,
+    required this.dateTime,
+  });
+}
+
 /// Connected client interface needed by the blog handler.
 /// Both PureConnectedClient implementations satisfy this.
 abstract class BlogClient {
@@ -270,5 +291,85 @@ mixin BlogHandlerMixin {
     }
 
     return null;
+  }
+
+  /// Scan all devices' blog directories for recent published posts.
+  ///
+  /// This is a static utility so it can be called without mixing in the full
+  /// BlogHandlerMixin (which requires implementing abstract dependencies).
+  static Future<List<RecentBlogEntry>> scanRecentBlogPosts(
+    String devicesDir, {
+    int limit = 10,
+  }) async {
+    final dir = Directory(devicesDir);
+    if (!await dir.exists()) return [];
+
+    final allPosts = <RecentBlogEntry>[];
+
+    // Iterate over callsign directories
+    await for (final callsignEntity in dir.list()) {
+      if (callsignEntity is! Directory) continue;
+      final callsign = callsignEntity.path.split('/').last;
+
+      // Find blog collections inside this callsign directory
+      try {
+        await for (final collectionEntity in callsignEntity.list()) {
+          if (collectionEntity is! Directory) continue;
+
+          // Check if this is a blog collection via app.js
+          final appFile = File('${collectionEntity.path}/app.js');
+          if (await appFile.exists()) {
+            final appContent = await appFile.readAsString();
+            final appData = AppJsUtils.parseAppJsContent(appContent);
+            if (appData == null) continue;
+            final appInfo = appData['app'] as Map<String, dynamic>?;
+            final type = appInfo?['type'] ?? appData['type'];
+            if (type != 'blog') continue;
+          }
+
+          // Scan year directories inside this blog collection
+          try {
+            await for (final yearEntity in collectionEntity.list()) {
+              if (yearEntity is! Directory) continue;
+              final yearName = yearEntity.path.split('/').last;
+              if (!RegExp(r'^\d{4}$').hasMatch(yearName)) continue;
+
+              // Scan post directories inside this year
+              try {
+                await for (final postEntity in yearEntity.list()) {
+                  if (postEntity is! Directory) continue;
+                  final postId = postEntity.path.split('/').last;
+
+                  final postFile = File('${postEntity.path}/post.md');
+                  if (!await postFile.exists()) continue;
+
+                  try {
+                    final content = await postFile.readAsString();
+                    final post = BlogPost.fromText(content, postId);
+                    if (!post.isPublished) continue;
+
+                    allPosts.add(RecentBlogEntry(
+                      callsign: callsign,
+                      postId: postId,
+                      title: post.title,
+                      author: post.author.isNotEmpty ? post.author : callsign,
+                      description: post.description,
+                      displayDate: post.displayDate,
+                      dateTime: post.dateTime,
+                    ));
+                  } catch (_) {
+                    // Skip malformed posts
+                  }
+                }
+              } catch (_) {}
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
+    // Sort by date descending and return top entries
+    allPosts.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+    return allPosts.length > limit ? allPosts.sublist(0, limit) : allPosts;
   }
 }

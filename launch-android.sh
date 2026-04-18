@@ -86,11 +86,14 @@ echo "Restarting ADB server..."
 "$ADB" kill-server 2>/dev/null || true
 sleep 1
 "$ADB" start-server
+# Give adb a moment to enumerate USB devices after daemon start
+sleep 2
 
 # Check device status
 echo ""
 echo "Checking connected devices..."
-DEVICE_LINES=$("$ADB" devices | tail -n +2 | grep -v "^$")
+# `|| true` so grep's empty match (no devices) doesn't trip `set -e`
+DEVICE_LINES=$("$ADB" devices | tail -n +2 | grep -v "^$" || true)
 
 if [ -z "$DEVICE_LINES" ]; then
     echo "No Android device connected!"
@@ -175,17 +178,37 @@ fi
 echo ""
 echo "Installing on all devices..."
 
-# Install on each device
+# Install on each device.
+# `adb install` is unreliable for large debug APKs (~500MB) — it can hang
+# indefinitely with no output. Instead: push the APK to the device first
+# (fast over USB) and then run `pm install` directly. Preserves user data
+# via -r (replace) and -d (allow downgrade).
+APK_SIZE_MB=$(du -m "$APK_PATH" | awk '{print $1}')
+echo "APK size: ${APK_SIZE_MB} MB"
+
 FAILED_DEVICES=()
 for DEVICE_ID in "${DEVICE_IDS[@]}"; do
     echo ""
     echo "Installing on $DEVICE_ID..."
-    if "$ADB" -s "$DEVICE_ID" install -r "$APK_PATH"; then
+    REMOTE_APK="/data/local/tmp/geogram.apk"
+
+    echo "  [1/2] Pushing APK to device..."
+    if ! "$ADB" -s "$DEVICE_ID" push "$APK_PATH" "$REMOTE_APK"; then
+        echo "  Failed to push APK to $DEVICE_ID"
+        FAILED_DEVICES+=("$DEVICE_ID")
+        continue
+    fi
+
+    echo "  [2/2] Running pm install on device..."
+    if "$ADB" -s "$DEVICE_ID" shell "pm install -r -d $REMOTE_APK"; then
         echo "Successfully installed on $DEVICE_ID"
     else
         echo "Failed to install on $DEVICE_ID"
         FAILED_DEVICES+=("$DEVICE_ID")
     fi
+
+    # Clean up tmp APK on device
+    "$ADB" -s "$DEVICE_ID" shell "rm -f $REMOTE_APK" 2>/dev/null || true
 done
 
 echo ""

@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:dart_console/dart_console.dart';
 
 import 'pure_station.dart';
+import '../server/ssl_certificate_manager.dart';
 import 'cli_profile_service.dart';
 import 'cli_location_service.dart';
 import 'cli_station_cache_service.dart';

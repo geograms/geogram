@@ -177,6 +177,7 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
         _content?.addEntry(result.id);
         _hasChanges = true;
       });
+      await _save();
     }
   }
 
@@ -212,6 +213,7 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
         entry.currency = result.currency;
         _hasChanges = true;
       });
+      await _save();
     }
   }
 
@@ -249,6 +251,7 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
       } catch (e) {
         LogService().log('AccountingEditorPage: Error deleting entry file: $e');
       }
+      await _save();
     }
   }
 
@@ -663,6 +666,7 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
         }
         _hasChanges = true;
       });
+      await _save();
     }
   }
 
@@ -710,6 +714,7 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
         _content!.currency = result;
         _hasChanges = true;
       });
+      await _save();
     }
   }
 
@@ -798,6 +803,7 @@ class _AccountingEditorPageState extends State<AccountingEditorPage> {
         );
         _hasChanges = true;
       });
+      await _save();
     }
   }
 

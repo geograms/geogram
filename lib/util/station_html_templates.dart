@@ -2,6 +2,7 @@
 /// Pure Dart - no Flutter dependencies
 /// Used by both Flutter embedded and CLI station servers
 
+import '../server/mixins/blog_handler_mixin.dart';
 import 'html_utils.dart';
 import 'nostr_login_scripts.dart';
 
@@ -1049,6 +1050,27 @@ $nostrScript
 }
 .api-path { font-family: monospace; font-weight: bold; }
 .api-desc { color: var(--accent-alpha-70); margin-left: auto; font-size: 0.9rem; }
+/* Blog Section */
+.blog-section { margin-bottom: 40px; }
+.blog-list { display: flex; flex-direction: column; gap: 8px; }
+.blog-entry {
+  display: block;
+  background: var(--accent-alpha-20);
+  padding: 16px 20px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--color);
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+.blog-entry:hover { background: var(--accent-alpha-70); transform: translateY(-1px); }
+.blog-entry-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; margin-bottom: 4px;
+}
+.blog-entry-title { font-weight: bold; color: var(--accent); }
+.blog-entry-date { font-size: 0.8rem; color: var(--accent-alpha-70); white-space: nowrap; }
+.blog-entry-meta { font-size: 0.8rem; color: var(--accent-alpha-70); margin-bottom: 6px; }
+.blog-entry-desc { font-size: 0.9rem; color: var(--color); opacity: 0.8; }
 /* Search Section */
 .search-section { margin-bottom: 50px; }
 .search-box { display: flex; align-items: stretch; }
@@ -1374,6 +1396,42 @@ $nostrScript
 ''';
   }
 
+  /// Build the recent blog posts HTML section for the station homepage.
+  /// Returns empty string when there are no posts (section is hidden).
+  static String buildRecentBlogPostsHtml(List<RecentBlogEntry> posts) {
+    if (posts.isEmpty) return '';
+
+    final postsHtml = StringBuffer();
+    for (final post in posts) {
+      final desc = post.description != null && post.description!.isNotEmpty
+          ? '<div class="blog-entry-desc">${escapeHtml(post.description!)}</div>'
+          : '';
+      postsHtml.writeln('''
+        <a href="/${escapeHtml(post.callsign)}/blog/${escapeHtml(post.postId)}.html" class="blog-entry">
+          <div class="blog-entry-header">
+            <span class="blog-entry-title">${escapeHtml(post.title)}</span>
+            <span class="blog-entry-date">${escapeHtml(post.displayDate)}</span>
+          </div>
+          <div class="blog-entry-meta">
+            <span class="blog-entry-author">${escapeHtml(post.author)}</span>
+          </div>
+          $desc
+        </a>
+      ''');
+    }
+
+    return '''
+      <section class="blog-section">
+        <div class="section-header">
+          <h2>Recent Blog Posts</h2>
+        </div>
+        <div class="blog-list">
+          ${postsHtml.toString()}
+        </div>
+      </section>
+    ''';
+  }
+
   /// Build complete station homepage HTML
   static String buildStationHomepage({
     required String stationName,
@@ -1387,6 +1445,7 @@ $nostrScript
     required bool hasDevicesWithLocation,
     String globalStyles = '',
     String stationStyles = '',
+    String recentBlogsHtml = '',
   }) {
     final mapDisplay = hasDevicesWithLocation ? 'block' : 'none';
     final devicesDisplay = clientCount > 0 ? 'grid' : 'none';
@@ -1486,6 +1545,8 @@ $extraStyles
           <p class="hint">Devices will appear here when they connect to this station.</p>
         </div>
       </section>
+
+      $recentBlogsHtml
 
       <section class="api-section">
         <div class="section-header">

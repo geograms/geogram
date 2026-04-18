@@ -26,6 +26,7 @@ import '../api/handlers/apps_handler.dart';
 import '../api/handlers/place_handler.dart';
 import '../api/handlers/feedback_handler.dart';
 import '../server/handlers/road_handler.dart';
+import '../server/ssl_certificate_manager.dart';
 import '../api/common/station_info.dart';
 import '../services/nip05_registry_service.dart';
 import '../services/email_relay_service.dart';
@@ -61,9 +62,11 @@ import '../services/station_group_access_service.dart';
 import '../server/mixins/email_handler_mixin.dart';
 import '../server/mixins/console_command_mixin.dart';
 import '../server/mixins/conference_mixin.dart';
+import '../server/mixins/blog_handler_mixin.dart';
 import '../server/mixins/device_proxy_mixin.dart';
 import '../server/mixins/mirror_notify_mixin.dart';
 import '../server/mixins/heartbeat_mixin.dart';
+import '../server/mixins/homepage_mixin.dart';
 import '../server/mixins/karma_mixin.dart';
 import 'themes_embedded.dart';
 import '../server/chat_message_store.dart';
@@ -736,8 +739,8 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin
-    implements StationCommandInterface {
+class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin, HomepageMixin
+    implements StationCommandInterface, AcmeChallengeHandler {
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;
@@ -806,6 +809,19 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
   void heartbeatRemoveClient(String clientId, {String reason = 'disconnected'}) => _removeClient(clientId, reason: reason);
   @override
   void heartbeatCleanup() => _cleanupExpiredBans();
+
+  // HomepageMixin bridge
+  final Map<String, List<RecentBlogEntry>> _blogCache = {};
+  @override
+  String get homepageDevicesDir => PureStorageConfig().devicesDir;
+  @override
+  Map<String, List<RecentBlogEntry>> get homepageBlogCache => _blogCache;
+  @override
+  Future<Map<String, dynamic>?> homepageProxyToClient(
+          DeviceProxyClient client, String method, String path) =>
+      proxySingleDevice(client, method, path, '{}', '');
+  @override
+  void homepageLog(String level, String message) => _log(level, message);
 
   // Shared API handlers
   AlertHandler? _alertApi;
@@ -2394,6 +2410,16 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
     if (disconnectedCallsign != null) {
       notifyMirrorsOfCallsign(disconnectedCallsign);
     }
+
+    // Evict homepage blog cache when last connection for this callsign is gone
+    if (disconnectedCallsign != null) {
+      final lower = disconnectedCallsign.toLowerCase();
+      final stillConnected = _clients.values.any(
+          (c) => c.callsign?.toLowerCase() == lower);
+      if (!stillConnected) {
+        evictBlogCacheForCallsign(disconnectedCallsign);
+      }
+    }
   }
 
   /// Clean up pending proxy requests that were waiting for a disconnected client
@@ -3241,6 +3267,9 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
             if (callsign != null) {
               deliverPendingEmails(client, callsign);
             }
+
+            // Prime homepage blog cache for this device
+            unawaited(primeBlogCacheForDevice(client));
             break;
 
           case 'PING':
@@ -7561,6 +7590,8 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       '{"callsign":"${d['callsign']}","nickname":"${escapeHtml(d['nickname'] as String)}","lat":${d['lat']},"lng":${d['lng']},"icon":"${d['icon']}"}'
     ).join(',');
 
+    final recentBlogsHtml = await buildRecentBlogsSection();
+
     final html = StationHtmlTemplates.buildStationHomepage(
       stationName: stationName,
       callsign: _settings.callsign,
@@ -7573,6 +7604,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       hasDevicesWithLocation: devicesWithLocation.isNotEmpty,
       globalStyles: StationHtmlTemplates.getBaseStyles(),
       stationStyles: '',
+      recentBlogsHtml: recentBlogsHtml,
     );
 
     await _sendCompressedResponse(
@@ -10791,811 +10823,6 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
   }
 }
 
-/// SSL Certificate Manager for Let's Encrypt
-class SslCertificateManager {
-  PureRelaySettings _settings;
-  final String _sslDir;
-
-  /// Update settings reference (called when station settings change)
-  void updateSettings(PureRelaySettings newSettings) {
-    _settings = newSettings;
-  }
-
-  /// Get current settings
-  PureRelaySettings get settings => _settings;
-  Timer? _renewalTimer;
-  final Map<String, String> _challengeResponses = {};
-
-  // Certificate file paths
-  String get accountKeyPath => '$_sslDir/account.key';
-  String get domainKeyPath => '$_sslDir/domain.key';
-  String get certPath => '$_sslDir/certificate.crt';
-  String get chainPath => '$_sslDir/certificate-chain.crt';
-  String get fullChainPath => '$_sslDir/fullchain.pem';
-
-  // Let's Encrypt ACME endpoints
-  static const String productionAcme = 'https://acme-v02.api.letsencrypt.org/directory';
-  static const String stagingAcme = 'https://acme-staging-v02.api.letsencrypt.org/directory';
-
-  SslCertificateManager(PureRelaySettings settings, String dataDir)
-      : _settings = settings,
-        _sslDir = '$dataDir/ssl';
-
-  /// Initialize SSL directory
-  Future<void> initialize() async {
-    await Directory(_sslDir).create(recursive: true);
-  }
-
-  /// Start auto-renewal timer (check every 12 hours)
-  void startAutoRenewal() {
-    if (!settings.sslAutoRenew) return;
-
-    _renewalTimer?.cancel();
-    _renewalTimer = Timer.periodic(const Duration(hours: 12), (_) async {
-      await checkAndRenew();
-    });
-  }
-
-  /// Stop auto-renewal timer
-  void stop() {
-    _renewalTimer?.cancel();
-    _renewalTimer = null;
-  }
-
-  /// Check if certificate exists and is valid
-  bool hasCertificate() {
-    final certFile = File(certPath);
-    return certFile.existsSync();
-  }
-
-  /// Get certificate info
-  Future<Map<String, dynamic>> getStatus() async {
-    final status = <String, dynamic>{
-      'domain': settings.sslDomain ?? '(not set)',
-      'email': settings.sslEmail ?? '(not set)',
-      'enabled': settings.enableSsl,
-      'autoRenew': settings.sslAutoRenew,
-      'hasCertificate': hasCertificate(),
-    };
-
-    if (hasCertificate()) {
-      final certInfo = await _getCertificateInfo();
-      status.addAll(certInfo);
-    }
-
-    return status;
-  }
-
-  /// Get certificate expiration info
-  Future<Map<String, dynamic>> _getCertificateInfo() async {
-    try {
-      // Read certificate and parse expiration
-      final certFile = File(certPath);
-      if (!await certFile.exists()) {
-        return {'error': 'Certificate file not found'};
-      }
-
-      final certPem = await certFile.readAsString();
-
-      // Parse the certificate to extract expiration date
-      // This is a simplified check - in production you'd use proper X509 parsing
-      final expiry = _parseCertificateExpiry(certPem);
-
-      if (expiry != null) {
-        final now = DateTime.now();
-        final daysUntilExpiry = expiry.difference(now).inDays;
-
-        return {
-          'expiresAt': expiry.toIso8601String(),
-          'daysUntilExpiry': daysUntilExpiry,
-          'isValid': daysUntilExpiry > 0,
-          'certPath': certPath,
-        };
-      }
-
-      return {
-        'certPath': certPath,
-        'status': 'Certificate exists but could not parse expiry',
-      };
-    } catch (e) {
-      return {'error': e.toString()};
-    }
-  }
-
-  /// Parse certificate expiry from PEM (simplified)
-  DateTime? _parseCertificateExpiry(String pemCert) {
-    // This would need proper X509 parsing in production
-    // For now, return null and rely on file existence
-    return null;
-  }
-
-  /// Check and renew if needed (30 days before expiry)
-  Future<bool> checkAndRenew() async {
-    if (!hasCertificate()) return false;
-
-    final info = await _getCertificateInfo();
-    final daysUntilExpiry = info['daysUntilExpiry'] as int?;
-
-    if (daysUntilExpiry != null && daysUntilExpiry <= 30) {
-      return await renewCertificate(staging: false);
-    }
-
-    return true;
-  }
-
-  /// Request new certificate
-  Future<bool> requestCertificate({bool staging = false}) async {
-    if (settings.sslDomain == null || settings.sslDomain!.isEmpty) {
-      throw Exception('Domain not configured. Use: ssl domain <domain>');
-    }
-
-    if (settings.sslEmail == null || settings.sslEmail!.isEmpty) {
-      throw Exception('Email not configured. Use: ssl email <email>');
-    }
-
-    final acmeUrl = staging ? stagingAcme : productionAcme;
-
-    try {
-      // Step 1: Generate account key if not exists
-      if (!File(accountKeyPath).existsSync()) {
-        await _generateKey(accountKeyPath);
-      }
-
-      // Step 2: Generate domain key if not exists
-      if (!File(domainKeyPath).existsSync()) {
-        await _generateKey(domainKeyPath);
-      }
-
-      // Step 3: Request certificate using ACME protocol
-      // Note: This is a simplified implementation
-      // In production, you'd use a proper ACME client library
-
-      final result = await _requestWithAcme(
-        acmeUrl: acmeUrl,
-        domain: settings.sslDomain!,
-        email: settings.sslEmail!,
-        staging: staging,
-      );
-
-      return result;
-    } catch (e) {
-      rethrow;
-    }
-  }
-
-  /// Renew existing certificate
-  Future<bool> renewCertificate({bool staging = false}) async {
-    return await requestCertificate(staging: staging);
-  }
-
-  /// Generate RSA key using openssl
-  Future<void> _generateKey(String keyPath) async {
-    final result = await Process.run('openssl', [
-      'genrsa',
-      '-out', keyPath,
-      '4096',
-    ]);
-
-    if (result.exitCode != 0) {
-      throw Exception('Failed to generate key: ${result.stderr}');
-    }
-  }
-
-  // Reference to station server for challenge handling
-  PureStationServer? _stationServer;
-
-  /// Set station server reference for ACME challenge handling
-  void setStationServer(PureStationServer server) {
-    _stationServer = server;
-  }
-
-  /// Request certificate using native ACME protocol implementation
-  /// Works on all platforms (Linux, Windows, macOS, Android)
-  Future<bool> _requestWithAcme({
-    required String acmeUrl,
-    required String domain,
-    required String email,
-    required bool staging,
-  }) async {
-    stdout.writeln('Starting ACME certificate request...');
-    stdout.writeln('Domain: $domain');
-    stdout.writeln('Email: $email');
-    stdout.writeln('Environment: ${staging ? "staging" : "production"}');
-    stdout.writeln('');
-
-    try {
-      // Step 1: Get ACME directory
-      stdout.writeln('[1/7] Fetching ACME directory...');
-      final directory = await _fetchAcmeDirectory(acmeUrl);
-
-      // Step 2: Generate or load account key
-      stdout.writeln('[2/7] Loading/generating account key...');
-      final accountKey = await _loadOrGenerateAccountKey();
-
-      // Step 3: Create/fetch ACME account
-      stdout.writeln('[3/7] Creating ACME account...');
-      final accountUrl = await _createAcmeAccount(
-        directory: directory,
-        accountKey: accountKey,
-        email: email,
-      );
-
-      // Step 4: Create new order
-      stdout.writeln('[4/7] Creating certificate order...');
-      final order = await _createOrder(
-        directory: directory,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        domain: domain,
-      );
-
-      // Step 5: Complete HTTP-01 challenges
-      stdout.writeln('[5/7] Completing HTTP-01 challenge...');
-      await _completeHttpChallenge(
-        directory: directory,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        order: order,
-        domain: domain,
-      );
-
-      // Step 6: Finalize order with CSR
-      stdout.writeln('[6/7] Finalizing order...');
-      await _finalizeOrder(
-        directory: directory,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        order: order,
-        domain: domain,
-      );
-
-      // Step 7: Download certificate
-      stdout.writeln('[7/7] Downloading certificate...');
-      await _downloadCertificate(
-        directory: directory,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        order: order,
-      );
-
-      stdout.writeln('');
-      stdout.writeln('Certificate successfully obtained!');
-      return true;
-    } catch (e) {
-      stdout.writeln('ACME request failed: $e');
-      rethrow;
-    }
-  }
-
-  /// Fetch ACME directory
-  Future<Map<String, dynamic>> _fetchAcmeDirectory(String url) async {
-    final response = await http.get(Uri.parse(url));
-    if (response.statusCode != 200) {
-      throw Exception('Failed to fetch ACME directory: ${response.statusCode}');
-    }
-    return jsonDecode(response.body) as Map<String, dynamic>;
-  }
-
-  /// Load existing account key or generate new one
-  Future<Map<String, dynamic>> _loadOrGenerateAccountKey() async {
-    final keyFile = File(accountKeyPath);
-
-    if (await keyFile.exists()) {
-      // Parse existing PEM key
-      final pem = await keyFile.readAsString();
-      return _parsePrivateKeyPem(pem);
-    }
-
-    // Generate new key using openssl (more reliable cross-platform)
-    await _generateKey(accountKeyPath);
-    final pem = await keyFile.readAsString();
-    return _parsePrivateKeyPem(pem);
-  }
-
-  /// Parse PEM private key and extract components for JWK
-  Map<String, dynamic> _parsePrivateKeyPem(String pem) {
-    // For ACME, we need the key in a format we can use for JWS signing
-    // We'll use openssl to extract the public key components
-    return {
-      'pem': pem,
-      'path': accountKeyPath,
-    };
-  }
-
-  /// Create ACME account
-  Future<String> _createAcmeAccount({
-    required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
-    required String email,
-  }) async {
-    final newAccountUrl = directory['newAccount'] as String;
-    final newNonceUrl = directory['newNonce'] as String;
-
-    // Get initial nonce
-    final nonceResponse = await http.head(Uri.parse(newNonceUrl));
-    var nonce = nonceResponse.headers['replay-nonce'] ?? '';
-
-    // Create account request
-    final payload = {
-      'termsOfServiceAgreed': true,
-      'contact': ['mailto:$email'],
-    };
-
-    final response = await _signedAcmeRequest(
-      url: newAccountUrl,
-      payload: payload,
-      accountKey: accountKey,
-      nonce: nonce,
-      useJwk: true,
-    );
-
-    if (response.statusCode != 200 && response.statusCode != 201) {
-      throw Exception('Failed to create ACME account: ${response.statusCode} ${response.body}');
-    }
-
-    // Account URL is in Location header
-    final accountUrl = response.headers['location'];
-    if (accountUrl == null) {
-      throw Exception('No account URL in response');
-    }
-
-    return accountUrl;
-  }
-
-  /// Create new certificate order
-  Future<Map<String, dynamic>> _createOrder({
-    required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
-    required String accountUrl,
-    required String domain,
-  }) async {
-    final newOrderUrl = directory['newOrder'] as String;
-    final newNonceUrl = directory['newNonce'] as String;
-
-    final nonceResponse = await http.head(Uri.parse(newNonceUrl));
-    var nonce = nonceResponse.headers['replay-nonce'] ?? '';
-
-    final payload = {
-      'identifiers': [
-        {'type': 'dns', 'value': domain}
-      ],
-    };
-
-    final response = await _signedAcmeRequest(
-      url: newOrderUrl,
-      payload: payload,
-      accountKey: accountKey,
-      accountUrl: accountUrl,
-      nonce: nonce,
-    );
-
-    if (response.statusCode != 201) {
-      throw Exception('Failed to create order: ${response.statusCode} ${response.body}');
-    }
-
-    final order = jsonDecode(response.body) as Map<String, dynamic>;
-    order['url'] = response.headers['location'];
-    return order;
-  }
-
-  /// Complete HTTP-01 challenge
-  Future<void> _completeHttpChallenge({
-    required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
-    required String accountUrl,
-    required Map<String, dynamic> order,
-    required String domain,
-  }) async {
-    final authorizations = order['authorizations'] as List;
-    final newNonceUrl = directory['newNonce'] as String;
-
-    for (final authzUrl in authorizations) {
-      // Fetch authorization
-      var nonceResponse = await http.head(Uri.parse(newNonceUrl));
-      var nonce = nonceResponse.headers['replay-nonce'] ?? '';
-
-      final authzResponse = await _signedAcmeRequest(
-        url: authzUrl as String,
-        payload: null, // POST-as-GET
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        nonce: nonce,
-      );
-
-      final authz = jsonDecode(authzResponse.body) as Map<String, dynamic>;
-      final challenges = authz['challenges'] as List;
-
-      // Find HTTP-01 challenge
-      final http01 = challenges.firstWhere(
-        (c) => c['type'] == 'http-01',
-        orElse: () => null,
-      );
-
-      if (http01 == null) {
-        throw Exception('No HTTP-01 challenge available');
-      }
-
-      final token = http01['token'] as String;
-      final challengeUrl = http01['url'] as String;
-
-      // Compute key authorization
-      final keyAuthz = await _computeKeyAuthorization(token, accountKey);
-
-      // Set challenge response on station server
-      if (_stationServer != null) {
-        _stationServer!.setAcmeChallenge(token, keyAuthz);
-        stdout.writeln('  Challenge token set: $token');
-      } else {
-        throw Exception('Station server not available for challenge');
-      }
-
-      // Tell ACME server to verify
-      nonceResponse = await http.head(Uri.parse(newNonceUrl));
-      nonce = nonceResponse.headers['replay-nonce'] ?? '';
-
-      final challengeResponse = await _signedAcmeRequest(
-        url: challengeUrl,
-        payload: {},
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        nonce: nonce,
-      );
-
-      if (challengeResponse.statusCode != 200) {
-        throw Exception('Challenge request failed: ${challengeResponse.statusCode}');
-      }
-
-      // Poll for completion
-      stdout.writeln('  Waiting for challenge verification...');
-      for (var i = 0; i < 30; i++) {
-        await Future.delayed(const Duration(seconds: 2));
-
-        nonceResponse = await http.head(Uri.parse(newNonceUrl));
-        nonce = nonceResponse.headers['replay-nonce'] ?? '';
-
-        final statusResponse = await _signedAcmeRequest(
-          url: authzUrl as String,
-          payload: null,
-          accountKey: accountKey,
-          accountUrl: accountUrl,
-          nonce: nonce,
-        );
-
-        final status = jsonDecode(statusResponse.body) as Map<String, dynamic>;
-        final authzStatus = status['status'] as String?;
-
-        if (authzStatus == 'valid') {
-          stdout.writeln('  Challenge verified!');
-          break;
-        } else if (authzStatus == 'invalid') {
-          throw Exception('Challenge validation failed: ${status['challenges']}');
-        }
-        stdout.write('.');
-      }
-
-      // Cleanup challenge
-      _stationServer?.clearAcmeChallenge(token);
-    }
-  }
-
-  /// Compute key authorization for challenge
-  Future<String> _computeKeyAuthorization(String token, Map<String, dynamic> accountKey) async {
-    // Key authorization = token.thumbprint
-    // For now, use a simplified approach with openssl
-    final thumbprint = await _computeJwkThumbprint(accountKey);
-    return '$token.$thumbprint';
-  }
-
-  /// Compute JWK thumbprint (SHA-256 of canonical JWK)
-  Future<String> _computeJwkThumbprint(Map<String, dynamic> accountKey) async {
-    // Extract public key components using openssl
-    final keyPath = accountKey['path'] as String;
-
-    // Get modulus (n) and exponent (e)
-    final nResult = await Process.run('openssl', [
-      'rsa', '-in', keyPath, '-noout', '-modulus'
-    ]);
-    final eResult = await Process.run('openssl', [
-      'rsa', '-in', keyPath, '-noout', '-text'
-    ]);
-
-    if (nResult.exitCode != 0) {
-      throw Exception('Failed to extract key modulus');
-    }
-
-    // Parse modulus
-    final modulusHex = (nResult.stdout as String).split('=')[1].trim();
-    final modulusBytes = _hexToBytes(modulusHex);
-    final n = base64Url.encode(modulusBytes).replaceAll('=', '');
-
-    // Public exponent is typically 65537 (0x010001)
-    final e = base64Url.encode([1, 0, 1]).replaceAll('=', '');
-
-    // Canonical JWK for thumbprint
-    final jwk = '{"e":"$e","kty":"RSA","n":"$n"}';
-
-    // SHA-256 hash
-    final hashResult = await Process.run('sh', ['-c', 'echo -n \'$jwk\' | openssl dgst -sha256 -binary | base64 | tr -d "=" | tr "/+" "_-"']);
-
-    return (hashResult.stdout as String).trim();
-  }
-
-  List<int> _hexToBytes(String hex) {
-    final result = <int>[];
-    for (var i = 0; i < hex.length; i += 2) {
-      result.add(int.parse(hex.substring(i, i + 2), radix: 16));
-    }
-    return result;
-  }
-
-  /// Finalize order with CSR
-  Future<void> _finalizeOrder({
-    required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
-    required String accountUrl,
-    required Map<String, dynamic> order,
-    required String domain,
-  }) async {
-    final finalizeUrl = order['finalize'] as String;
-    final newNonceUrl = directory['newNonce'] as String;
-
-    // Generate domain key if needed
-    if (!File(domainKeyPath).existsSync()) {
-      await _generateKey(domainKeyPath);
-    }
-
-    // Generate CSR in DER format directly
-    final csrDerPath = '$_sslDir/domain.csr.der';
-    final csrResult = await Process.run('openssl', [
-      'req', '-new',
-      '-key', domainKeyPath,
-      '-outform', 'DER',
-      '-out', csrDerPath,
-      '-subj', '/CN=$domain',
-    ]);
-
-    if (csrResult.exitCode != 0) {
-      throw Exception('Failed to generate CSR: ${csrResult.stderr}');
-    }
-
-    // Read CSR binary file and encode as base64url
-    final csrDer = await File(csrDerPath).readAsBytes();
-    final csrB64 = base64Url.encode(csrDer).replaceAll('=', '');
-
-    // Finalize
-    final nonceResponse = await http.head(Uri.parse(newNonceUrl));
-    final nonce = nonceResponse.headers['replay-nonce'] ?? '';
-
-    final response = await _signedAcmeRequest(
-      url: finalizeUrl,
-      payload: {'csr': csrB64},
-      accountKey: accountKey,
-      accountUrl: accountUrl,
-      nonce: nonce,
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('Failed to finalize order: ${response.statusCode} ${response.body}');
-    }
-
-    // Update order with response
-    final updatedOrder = jsonDecode(response.body) as Map<String, dynamic>;
-    order.addAll(updatedOrder);
-
-    // Poll for ready status
-    stdout.writeln('  Waiting for certificate issuance...');
-    final orderUrl = order['url'] as String;
-
-    for (var i = 0; i < 30; i++) {
-      await Future.delayed(const Duration(seconds: 2));
-
-      final checkNonceResponse = await http.head(Uri.parse(newNonceUrl));
-      final checkNonce = checkNonceResponse.headers['replay-nonce'] ?? '';
-
-      final statusResponse = await _signedAcmeRequest(
-        url: orderUrl,
-        payload: null,
-        accountKey: accountKey,
-        accountUrl: accountUrl,
-        nonce: checkNonce,
-      );
-
-      final status = jsonDecode(statusResponse.body) as Map<String, dynamic>;
-      final orderStatus = status['status'] as String?;
-
-      if (orderStatus == 'valid') {
-        order['certificate'] = status['certificate'];
-        stdout.writeln('  Certificate ready!');
-        return;
-      } else if (orderStatus == 'invalid') {
-        throw Exception('Order became invalid');
-      }
-    }
-
-    throw Exception('Timeout waiting for certificate');
-  }
-
-  /// Download certificate
-  Future<void> _downloadCertificate({
-    required Map<String, dynamic> directory,
-    required Map<String, dynamic> accountKey,
-    required String accountUrl,
-    required Map<String, dynamic> order,
-  }) async {
-    final certUrl = order['certificate'] as String?;
-    if (certUrl == null) {
-      throw Exception('No certificate URL in order');
-    }
-
-    final newNonceUrl = directory['newNonce'] as String;
-    final nonceResponse = await http.head(Uri.parse(newNonceUrl));
-    final nonce = nonceResponse.headers['replay-nonce'] ?? '';
-
-    final response = await _signedAcmeRequest(
-      url: certUrl,
-      payload: null,
-      accountKey: accountKey,
-      accountUrl: accountUrl,
-      nonce: nonce,
-      accept: 'application/pem-certificate-chain',
-    );
-
-    if (response.statusCode != 200) {
-      throw Exception('Failed to download certificate: ${response.statusCode}');
-    }
-
-    // Save certificate chain
-    final certChain = response.body;
-    await File(fullChainPath).writeAsString(certChain);
-    await File(certPath).writeAsString(certChain);
-
-    stdout.writeln('  Certificate saved to: $fullChainPath');
-  }
-
-  /// Make signed ACME request using external openssl
-  Future<http.Response> _signedAcmeRequest({
-    required String url,
-    required dynamic payload,
-    required Map<String, dynamic> accountKey,
-    required String nonce,
-    String? accountUrl,
-    bool useJwk = false,
-    String accept = 'application/json',
-  }) async {
-    final keyPath = accountKey['path'] as String;
-
-    // Create protected header
-    final protected = <String, dynamic>{
-      'alg': 'RS256',
-      'nonce': nonce,
-      'url': url,
-    };
-
-    if (useJwk) {
-      // For new account, include JWK
-      protected['jwk'] = await _getJwk(keyPath);
-    } else {
-      // For other requests, use kid
-      protected['kid'] = accountUrl;
-    }
-
-    final protectedB64 = base64Url.encode(utf8.encode(jsonEncode(protected))).replaceAll('=', '');
-
-    // Encode payload
-    String payloadB64;
-    if (payload == null) {
-      payloadB64 = ''; // POST-as-GET
-    } else {
-      payloadB64 = base64Url.encode(utf8.encode(jsonEncode(payload))).replaceAll('=', '');
-    }
-
-    // Sign with openssl
-    final signingInput = '$protectedB64.$payloadB64';
-    final signResult = await Process.run('sh', [
-      '-c',
-      'echo -n "$signingInput" | openssl dgst -sha256 -sign "$keyPath" | base64 | tr -d "\\n" | tr "/+" "_-" | tr -d "="'
-    ]);
-
-    if (signResult.exitCode != 0) {
-      throw Exception('Failed to sign request: ${signResult.stderr}');
-    }
-
-    final signature = (signResult.stdout as String).trim();
-
-    final body = jsonEncode({
-      'protected': protectedB64,
-      'payload': payloadB64,
-      'signature': signature,
-    });
-
-    return await http.post(
-      Uri.parse(url),
-      headers: {
-        'Content-Type': 'application/jose+json',
-        'Accept': accept,
-      },
-      body: body,
-    );
-  }
-
-  /// Get JWK from key file
-  Future<Map<String, dynamic>> _getJwk(String keyPath) async {
-    // Extract public key components
-    final nResult = await Process.run('openssl', [
-      'rsa', '-in', keyPath, '-noout', '-modulus'
-    ]);
-
-    if (nResult.exitCode != 0) {
-      throw Exception('Failed to extract modulus');
-    }
-
-    final modulusHex = (nResult.stdout as String).split('=')[1].trim();
-    final modulusBytes = _hexToBytes(modulusHex);
-    final n = base64Url.encode(modulusBytes).replaceAll('=', '');
-
-    // Public exponent (65537)
-    final e = base64Url.encode([1, 0, 1]).replaceAll('=', '');
-
-    return {
-      'kty': 'RSA',
-      'n': n,
-      'e': e,
-    };
-  }
-
-  /// Get challenge response for ACME HTTP-01 validation
-  String? getChallengeResponse(String token) {
-    return _challengeResponses[token];
-  }
-
-  /// Set challenge response for ACME HTTP-01 validation
-  void setChallengeResponse(String token, String response) {
-    _challengeResponses[token] = response;
-  }
-
-  /// Clear challenge response
-  void clearChallengeResponse(String token) {
-    _challengeResponses.remove(token);
-  }
-
-  /// Generate self-signed certificate for testing
-  Future<bool> generateSelfSigned(String domain) async {
-    try {
-      // Generate private key
-      var result = await Process.run('openssl', [
-        'genrsa',
-        '-out', domainKeyPath,
-        '2048',
-      ]);
-
-      if (result.exitCode != 0) {
-        throw Exception('Failed to generate key: ${result.stderr}');
-      }
-
-      // Generate self-signed certificate
-      result = await Process.run('openssl', [
-        'req',
-        '-new',
-        '-x509',
-        '-key', domainKeyPath,
-        '-out', certPath,
-        '-days', '365',
-        '-subj', '/CN=$domain/O=Geogram/C=XX',
-      ]);
-
-      if (result.exitCode != 0) {
-        throw Exception('Failed to generate certificate: ${result.stderr}');
-      }
-
-      // Copy to fullchain
-      await File(certPath).copy(fullChainPath);
-
-      return true;
-    } catch (e) {
-      rethrow;
-    }
-  }
-}
 
 class _UploadPayload {
   final Uint8List bytes;

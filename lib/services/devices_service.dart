@@ -1165,6 +1165,7 @@ class DevicesService {
         _devices[callsign] = RemoteDevice(
           callsign: callsign,
           name:
+              statusCache?['name'] as String? ??
               statusCache?['nickname'] as String? ??
               matchingRelay?.name ??
               callsign,
@@ -2576,6 +2577,10 @@ class DevicesService {
         device.latitude = latitude;
         device.longitude = longitude;
         device.lastSeen = DateTime.now();
+        // Update name from station if device name is still the callsign
+        if (device.name == normalizedCallsign && stationName != normalizedCallsign) {
+          device.name = stationName;
+        }
         // Ensure 'internet' tag is present
         if (!device.connectionMethods.contains('internet')) {
           device.connectionMethods = [...device.connectionMethods, 'internet'];
@@ -2602,6 +2607,11 @@ class DevicesService {
         LogService().log(
           'DevicesService: Added station as device: $normalizedCallsign',
         );
+      }
+
+      // Cache station device status to disk
+      if (_devices.containsKey(normalizedCallsign)) {
+        await _saveDeviceStatusCache(_devices[normalizedCallsign]!);
       }
 
       syncDeviceToConnectionManager(normalizedCallsign);
@@ -3091,6 +3101,7 @@ class DevicesService {
       final statusFile = File('${cacheDir.path}/status.json');
       final data = {
         'callsign': device.callsign,
+        'name': device.name,
         'nickname': device.nickname,
         'description': device.description,
         'color': device.preferredColor,
