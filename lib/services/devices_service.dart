@@ -217,15 +217,23 @@ class DevicesService {
   void _ingestMirrorDevices(List<MirrorDevice> mirrors) {
     if (mirrors.isEmpty) return;
     final myDeviceId = ConfigService().deviceId;
+    final myInstallId = myDeviceId;
     var changed = false;
     for (final m in mirrors) {
-      if (m.connectionType == 'station') continue;
-      if (m.deviceId.isEmpty || m.deviceId == myDeviceId) continue;
+      // Skip self. Station-relayed mirrors carry our per-install UUID in
+      // installId; LAN/DHT mirrors carry it in deviceId. Either match is us.
+      if (m.installId == myInstallId) continue;
+      if (m.deviceId == myDeviceId) continue;
+
+      final mirrorKey = (m.installId != null && m.installId!.isNotEmpty)
+          ? m.installId!
+          : m.deviceId;
+      if (mirrorKey.isEmpty) continue;
 
       final callsign = m.callsign.toUpperCase();
       if (_isDeviceRemoved(callsign)) continue;
 
-      final key = '$callsign:${m.deviceId}';
+      final key = '$callsign:$mirrorKey';
       final existing = _devices[key];
       final connectionMethod = m.connectionType == 'lan' ? 'lan' : m.connectionType;
       final url = m.directAddress ?? m.stationRelayUrl;
@@ -256,7 +264,9 @@ class DevicesService {
           changed = true;
         }
         existing.platform ??= m.platform;
-        existing.deviceId = m.deviceId;
+        // Persist the per-install UUID so the UI filter can distinguish
+        // this physical install from peer installs sharing the callsign.
+        existing.deviceId = mirrorKey;
         existing.isOnline = true;
         existing.lastSeen = DateTime.now();
       } else {
@@ -272,7 +282,7 @@ class DevicesService {
           connectionMethods: [connectionMethod],
           source: DeviceSourceType.local,
           platform: m.platform,
-          deviceId: m.deviceId,
+          deviceId: mirrorKey,
           lastSeen: DateTime.now(),
         );
         changed = true;
