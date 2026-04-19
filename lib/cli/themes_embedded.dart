@@ -1241,6 +1241,14 @@ class ThemesEmbedded {
       return base + '/files/' + encodeURIComponent(filename);
     }
 
+    function thumbUrl(filename) {
+      // Use ?thumb=1 so the desktop returns a small (~480px) JPEG instead of
+      // the full original. Used by the gallery grid; the lightbox keeps
+      // calling fileUrl() so the user gets the high-resolution image when
+      // they actually open one.
+      return fileUrl(filename) + '?thumb=1';
+    }
+
     // === Build page ===
     var html = '';
 
@@ -1320,7 +1328,7 @@ class ThemesEmbedded {
       html += '<div class="event-gallery">';
       ev.flyers.forEach(function(f, i) {
         html += '<div class="event-gallery-item" onclick="openLightbox(' + i + ')">' +
-          '<img src="' + fileUrl(f) + '" alt="Event flyer" loading="lazy">' +
+          '<img src="' + thumbUrl(f) + '" alt="Event flyer" loading="lazy">' +
         '</div>';
       });
       html += '</div>';

@@ -152,6 +152,8 @@ import '../util/nostr_login_scripts.dart';
 import '../work/models/ndf_document.dart';
 import '../work/models/ndf_interaction_settings.dart';
 import 'package:archive/archive.dart';
+import 'file_browser_cache_service.dart';
+import '../util/video_metadata_extractor.dart';
 
 class _MeetSessionSnapshot {
   final String state;
@@ -1631,7 +1633,8 @@ class LogApiService with ChatModificationMixin {
       // Resolve slug to real event ID for file serving
       final realId = await _resolveEventId(eventId, dataDir);
       if (realId == null) return null;
-      return _handleEventsGetFile(realId, filePath, dataDir, headers);
+      return _handleEventsGetFile(realId, filePath, dataDir, headers,
+          request: request);
     }
 
     // /events/{eventId}
@@ -8177,7 +8180,8 @@ class LogApiService with ChatModificationMixin {
         // GET /api/events/{eventId}/files/{path} - Get event file
         final eventId = pathParts[0];
         final filePath = pathParts.sublist(2).join('/');
-        return await _handleEventsGetFile(eventId, filePath, dataDir, headers);
+        return await _handleEventsGetFile(eventId, filePath, dataDir, headers,
+            request: request);
       }
 
       return shelf.Response.notFound(
@@ -8352,8 +8356,9 @@ class LogApiService with ChatModificationMixin {
     String eventId,
     String filePath,
     String dataDir,
-    Map<String, String> headers,
-  ) async {
+    Map<String, String> headers, {
+    shelf.Request? request,
+  }) async {
     final eventService = EventService();
 
     // Get the event directory path
@@ -8383,8 +8388,35 @@ class LogApiService with ChatModificationMixin {
       );
     }
 
-    // Determine MIME type
     final ext = path.extension(filePath).toLowerCase();
+    final wantsThumb =
+        request?.url.queryParameters['thumb'] == '1';
+
+    // Thumbnail mode: hand back a small JPEG so the gallery grid loads fast
+    // instead of forcing every browser to download every full-resolution
+    // photo / video. Cached through FileBrowserCacheService so the desktop
+    // file browser sees the same thumbnails on first hover and we don't
+    // regenerate them per request.
+    if (wantsThumb && _isGalleryMediaExt(ext)) {
+      final thumb = await _eventThumbnailBytes(file, ext);
+      if (thumb != null) {
+        return shelf.Response.ok(
+          thumb.bytes,
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Content-Type': thumb.contentType,
+            'Content-Length': thumb.bytes.length.toString(),
+            // Long cache — bytes are content-addressed by source mtime in the
+            // service-level cache so a fresh upload invalidates naturally.
+            'Cache-Control': 'public, max-age=604800',
+          },
+        );
+      }
+      // Fall through to full file when thumbnail generation fails.
+    }
+
+    // Determine MIME type
     String contentType = 'application/octet-stream';
 
     final mimeTypes = {
@@ -8427,6 +8459,103 @@ class LogApiService with ChatModificationMixin {
         'Cache-Control': 'public, max-age=86400', // Cache for 1 day
       },
     );
+  }
+
+  static const _galleryImageExts = {
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
+  };
+  static const _galleryVideoExts = {
+    '.mp4', '.mov', '.webm', '.mkv', '.avi', '.wmv', '.flv',
+  };
+
+  bool _isGalleryMediaExt(String ext) =>
+      _galleryImageExts.contains(ext) || _galleryVideoExts.contains(ext);
+
+  /// Small thumbnail (~480px wide JPEG) for an event flyer, cached through
+  /// FileBrowserCacheService so a later browse / re-load of the gallery
+  /// reuses the same bytes.
+  Future<_EventThumb?> _eventThumbnailBytes(io.File source, String ext) async {
+    try {
+      final stat = await source.stat();
+      final cache = FileBrowserCacheService();
+      await cache.initialize();
+
+      // Cache hit?
+      if (await cache.hasThumbnail(source.path, stat.modified)) {
+        final cachedPath =
+            await cache.getThumbnailTempPath(source.path);
+        if (cachedPath != null) {
+          final cachedFile = io.File(cachedPath);
+          if (await cachedFile.exists()) {
+            final bytes = await cachedFile.readAsBytes();
+            // Cached files keep their original extension; treat png as png,
+            // everything else as jpeg.
+            final ct = cachedPath.toLowerCase().endsWith('.png')
+                ? 'image/png'
+                : 'image/jpeg';
+            return _EventThumb(bytes, ct);
+          }
+        }
+      }
+
+      Uint8List? bytes;
+      String cacheExt = 'jpg';
+      String contentType = 'image/jpeg';
+
+      if (_galleryImageExts.contains(ext)) {
+        // Decode + downscale + re-encode as JPEG so the grid loads quickly.
+        final original = await source.readAsBytes();
+        final decoded = img.decodeImage(original);
+        if (decoded == null) return null;
+        final resized = decoded.width > 480
+            ? img.copyResize(
+                decoded,
+                width: 480,
+                interpolation: img.Interpolation.average,
+              )
+            : decoded;
+        bytes = Uint8List.fromList(img.encodeJpg(resized, quality: 75));
+      } else if (_galleryVideoExts.contains(ext)) {
+        // Reuse the same media_kit-based extractor as the file browser, so a
+        // video that has already been thumbnailed there hits the cache here
+        // (and vice versa).
+        final tempDir = io.Directory.systemTemp;
+        final outPath =
+            '${tempDir.path}/event_thumb_${source.path.hashCode}.png';
+        final thumbPath = await VideoMetadataExtractor.generateThumbnail(
+          source.path,
+          outPath,
+          atSeconds: 1,
+        );
+        if (thumbPath == null) return null;
+        bytes = await io.File(thumbPath).readAsBytes();
+        cacheExt = 'png';
+        contentType = 'image/png';
+        try {
+          await io.File(thumbPath).delete();
+        } catch (_) {}
+      }
+
+      if (bytes == null) return null;
+
+      // Persist into the shared file-browser cache so the same thumbnail is
+      // served on next request and the file browser picks it up too.
+      try {
+        await cache.saveThumbnail(
+          source.path,
+          bytes,
+          stat.modified,
+          extension: cacheExt,
+        );
+      } catch (_) {
+        // Cache failures are non-fatal; the thumbnail still gets served.
+      }
+
+      return _EventThumb(bytes, contentType);
+    } catch (e) {
+      LogService().log('Event thumbnail generation failed: $e');
+      return null;
+    }
   }
 
   /// POST /api/events/{eventId}/like - Toggle like via signed NOSTR event
@@ -23298,4 +23427,11 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       );
     }
   }
+}
+
+/// Thumbnail bytes + content type returned by [_eventThumbnailBytes].
+class _EventThumb {
+  final Uint8List bytes;
+  final String contentType;
+  const _EventThumb(this.bytes, this.contentType);
 }
