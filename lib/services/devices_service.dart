@@ -235,7 +235,15 @@ class DevicesService {
 
       final key = '$callsign:$mirrorKey';
       final existing = _devices[key];
-      final connectionMethod = m.connectionType == 'lan' ? 'lan' : m.connectionType;
+      // Map mirror discovery type to a transport label. Station-relayed
+      // mirrors are reached over the internet via the relay — labelling
+      // them "station" is misleading because that suggests the peer itself
+      // is a station, which it isn't (only X3 callsigns are stations).
+      final connectionMethod = switch (m.connectionType) {
+        'lan' => 'lan',
+        'station' || 'dht' => 'internet',
+        _ => m.connectionType,
+      };
       final url = m.directAddress ?? m.stationRelayUrl;
       // Use MirrorDevice.displayName as the device-list label — it composes
       // profile nickname, callsign and per-device name into one string so
