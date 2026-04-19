@@ -169,6 +169,17 @@ fi
 echo -e "${GREEN}Updating pubspec.yaml...${NC}"
 sed -i "s/^version: .*/version: $VERSION+1/" pubspec.yaml
 
+# Step 1a: Sync lib/version.dart (CI does this on its own checkout, but the
+# in-tree file should match what's in pubspec so source builds aren't stale).
+if command -v dart >/dev/null 2>&1; then
+    echo -e "${GREEN}Regenerating lib/version.dart...${NC}"
+    dart run tool/update_version.dart >/dev/null
+elif command -v flutter >/dev/null 2>&1; then
+    echo -e "${GREEN}Regenerating lib/version.dart...${NC}"
+    flutter pub run tool/update_version.dart >/dev/null 2>&1 || \
+        "$HOME/flutter/bin/dart" run tool/update_version.dart >/dev/null
+fi
+
 # Step 1b: Calculate versionCode (commit count after this release)
 # We add 1 because the release commit will increase the count
 COMMIT_COUNT=$(($(git rev-list --count HEAD) + 1))
@@ -280,7 +291,13 @@ echo "Monitor progress at: https://github.com/$REPO_URL/actions"
 echo ""
 echo "Release page: https://github.com/$REPO_URL/releases/tag/v$VERSION"
 echo ""
-echo -e "${CYAN}F-Droid:${NC}"
-echo "  - Metadata updated in fdroid/dev.geogram.yml"
-echo "  - Changelog created in fastlane/metadata/android/en-US/changelogs/"
-echo "  - F-Droid will pick up the new version automatically from the tag"
+if [ "$IS_PRERELEASE" -eq 1 ]; then
+    echo -e "${YELLOW}This is a pre-release ($LABEL.$LABEL_NUM):${NC}"
+    echo "  - GitHub release marked as pre-release (if gh CLI was available)"
+    echo "  - F-Droid + fastlane changelog were intentionally skipped"
+else
+    echo -e "${CYAN}F-Droid:${NC}"
+    echo "  - Metadata updated in fdroid/dev.geogram.yml"
+    echo "  - Changelog created in fastlane/metadata/android/en-US/changelogs/"
+    echo "  - F-Droid will pick up the new version automatically from the tag"
+fi
