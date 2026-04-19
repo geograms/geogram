@@ -235,13 +235,21 @@ class DevicesService {
 
       final key = '$callsign:$mirrorKey';
       final existing = _devices[key];
-      // Map mirror discovery type to a transport label. Station-relayed
-      // mirrors are reached over the internet via the relay — labelling
-      // them "station" is misleading because that suggests the peer itself
-      // is a station, which it isn't (only X3 callsigns are stations).
+      // Map mirror discovery type to a transport label.
+      //   lan     — peer was found by direct LAN scan, reachable directly
+      //   station — peer is only reachable through the relay (Android
+      //             clients typically can't accept inbound connections,
+      //             so even peers on the same LAN end up here)
+      //   dht     — peer is reachable via P2P DHT
+      // Labelling station-relayed peers "station" was misleading because
+      // it suggested the peer itself was a station (only X3 callsigns
+      // are). "internet" was inaccurate when both peers sit on the same
+      // LAN. "relay" describes what actually happens: traffic hops
+      // through the relay station regardless of where the peer sits.
       final connectionMethod = switch (m.connectionType) {
         'lan' => 'lan',
-        'station' || 'dht' => 'internet',
+        'station' => 'relay',
+        'dht' => 'dht',
         _ => m.connectionType,
       };
       final url = m.directAddress ?? m.stationRelayUrl;
@@ -3713,6 +3721,10 @@ class RemoteDevice {
       case 'usb':
       case 'usb_aoa':
         return 'USB';
+      case 'relay':
+        return 'Relay';
+      case 'dht':
+        return 'DHT';
       default:
         return method;
     }
