@@ -1324,7 +1324,9 @@ class _NewEventPageState extends State<NewEventPage>
     // Use FileFolderPicker on every platform so encrypted profile folders are
     // browsable — the native image_picker can't see inside ProfileStorage.
     // The combined extensions set lets the user pick photos and short video
-    // clips from the same picker.
+    // clips from the same picker. Default to grid view and start at the
+    // platform's user-facing media folder so thumbnails are immediately
+    // visible without the user having to navigate to Pictures / Recent.
     final paths = await FileFolderPicker.show(
       context,
       title: _i18n.t('select_photos'),
@@ -1334,6 +1336,8 @@ class _NewEventPageState extends State<NewEventPage>
         ...FileFolderPicker.videoExtensions,
       },
       profileStorage: AppService().profileStorage,
+      initialGridView: true,
+      initialDirectory: FileFolderPicker.defaultMediaDirectory(),
     );
     final filePaths = paths ?? [];
 

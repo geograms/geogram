@@ -86,6 +86,32 @@ class FileFolderPicker extends StatefulWidget {
   /// Common video file extensions.
   static const videoExtensions = {'mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm'};
 
+  /// Best-effort starting directory for picking photos / video clips.
+  ///
+  /// Resolves to the platform's user-facing media folder so the picker
+  /// lands where the user expects:
+  ///   - Android   → `virtual://recent` (the Recent virtual folder backed by
+  ///                 MediaStore — same as the storage shortcut).
+  ///   - Linux     → `$HOME/Pictures` if it exists, else $HOME.
+  ///   - Windows   → `%USERPROFILE%\\Pictures` if it exists, else %USERPROFILE%.
+  ///   - macOS     → `$HOME/Pictures` if it exists, else $HOME.
+  ///   - elsewhere → null (the picker falls back to its own default).
+  ///
+  /// Synchronous so it can be passed straight into [FileFolderPicker.show];
+  /// it only checks `Directory.existsSync()` on a single path which is cheap.
+  static String? defaultMediaDirectory() {
+    if (Platform.isAndroid) {
+      return 'virtual://recent';
+    }
+    final home = Platform.isWindows
+        ? Platform.environment['USERPROFILE']
+        : Platform.environment['HOME'];
+    if (home == null || home.isEmpty) return null;
+    final pictures = '$home${Platform.pathSeparator}Pictures';
+    if (Directory(pictures).existsSync()) return pictures;
+    return home;
+  }
+
   final String? initialDirectory;
   final String title;
   final bool allowMultiSelect;
