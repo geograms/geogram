@@ -217,12 +217,13 @@ class DevicesService {
   void _ingestMirrorDevices(List<MirrorDevice> mirrors) {
     if (mirrors.isEmpty) return;
     final myDeviceId = ConfigService().deviceId;
-    final myInstallId = myDeviceId;
     var changed = false;
+    var sawNewEntry = false;
+    final touchedCallsigns = <String>{};
     for (final m in mirrors) {
       // Skip self. Station-relayed mirrors carry our per-install UUID in
       // installId; LAN/DHT mirrors carry it in deviceId. Either match is us.
-      if (m.installId == myInstallId) continue;
+      if (m.installId == myDeviceId) continue;
       if (m.deviceId == myDeviceId) continue;
 
       final mirrorKey = (m.installId != null && m.installId!.isNotEmpty)
@@ -235,40 +236,29 @@ class DevicesService {
 
       final key = '$callsign:$mirrorKey';
       final existing = _devices[key];
-      // Map mirror discovery type to a transport label.
-      //   lan     — peer was found by direct LAN scan, reachable directly
-      //   station — peer is only reachable through the relay (Android
-      //             clients typically can't accept inbound connections,
-      //             so even peers on the same LAN end up here)
-      //   dht     — peer is reachable via P2P DHT
-      // Labelling station-relayed peers "station" was misleading because
-      // it suggested the peer itself was a station (only X3 callsigns
-      // are). "internet" was inaccurate when both peers sit on the same
-      // LAN. "relay" describes what actually happens: traffic hops
-      // through the relay station regardless of where the peer sits.
-      final connectionMethod = switch (m.connectionType) {
-        'lan' => 'lan',
-        'station' => 'relay',
-        'dht' => 'dht',
-        _ => m.connectionType,
-      };
-      final url = m.directAddress ?? m.stationRelayUrl;
-      // Use MirrorDevice.displayName as the device-list label — it composes
-      // profile nickname, callsign and per-device name into one string so
-      // peers sharing a callsign stay distinguishable in the UI.
+      // Composed display label — keeps peers sharing a callsign distinguishable
+      // by surfacing the per-device name.
       final composedNickname = m.displayName;
       final deviceLabel = m.deviceName ?? m.platform;
+      // Only LAN / DHT mirrors carry a directly reachable address. Station-
+      // relayed mirrors do not — leave url/connectionMethods empty for those
+      // and let the actual transports prove reachability through the periodic
+      // / triggered LAN scan path. ConnectionManager.send() picks the best
+      // available transport at send time regardless of what we record here.
+      final hasDirect =
+          m.directAddress != null && m.directAddress!.isNotEmpty;
 
       if (existing != null) {
-        if (!existing.connectionMethods.contains(connectionMethod)) {
-          existing.connectionMethods = [
-            ...existing.connectionMethods,
-            connectionMethod,
-          ];
+        if (hasDirect && existing.url != m.directAddress) {
+          existing.url = m.directAddress;
           changed = true;
         }
-        if (url != null && url.isNotEmpty && existing.url != url) {
-          existing.url = url;
+        if (hasDirect &&
+            !existing.connectionMethods.contains('wifi_local')) {
+          existing.connectionMethods = [
+            ...existing.connectionMethods,
+            'wifi_local',
+          ];
           changed = true;
         }
         if (existing.nickname != composedNickname) {
@@ -284,8 +274,6 @@ class DevicesService {
           changed = true;
         }
         existing.platform ??= m.platform;
-        // Persist the per-install UUID so the UI filter can distinguish
-        // this physical install from peer installs sharing the callsign.
         existing.deviceId = mirrorKey;
         existing.isOnline = true;
         existing.lastSeen = DateTime.now();
@@ -294,23 +282,43 @@ class DevicesService {
           callsign: callsign,
           name: deviceLabel,
           nickname: composedNickname,
-          url: url,
+          url: hasDirect ? m.directAddress : null,
           npub: m.npub,
           isOnline: true,
           hasCachedData: false,
           apps: [],
-          connectionMethods: [connectionMethod],
+          connectionMethods: hasDirect ? const ['wifi_local'] : const [],
           source: DeviceSourceType.local,
           platform: m.platform,
           deviceId: mirrorKey,
           lastSeen: DateTime.now(),
         );
         changed = true;
+        sawNewEntry = true;
       }
+      touchedCallsigns.add(callsign);
     }
 
     if (changed) {
       _devicesController.add(getAllDevices());
+    }
+
+    // Keep the connection-manager registration honest for any callsign we
+    // touched — picks up freshly-added direct URLs.
+    for (final callsign in touchedCallsigns) {
+      syncDeviceToConnectionManager(callsign);
+    }
+
+    // A brand-new mirror entry means we just learned about a peer we'd never
+    // seen before. Kick a directed LAN scan so the desktop can find the peer's
+    // local address within seconds rather than waiting for the next periodic
+    // scan (5 min). _discoverLocalDevices throttles itself via
+    // `_isLocalDiscoveryRunning`, so concurrent calls are safe.
+    if (sawNewEntry && !_skipNonBleLocal) {
+      // Fire-and-forget — the scan runs asynchronously and pushes its own
+      // updates through the same listeners.
+      // ignore: discarded_futures
+      _discoverLocalDevices(force: true);
     }
   }
 
@@ -2798,8 +2806,9 @@ class DevicesService {
   Future<void> _performFullLocalScan() async {
     LogService().log('DevicesService: Scanning local network for devices...');
 
-    // Use quick scan (500ms timeout) for faster discovery
-    final results = await _discoveryService.scanWithProgress(timeoutMs: 500);
+    // 1.5s per-host probe — handsets on battery / Doze can take well over 500
+    // ms to answer the first request and were silently missed at 500 ms.
+    final results = await _discoveryService.scanWithProgress(timeoutMs: 1500);
 
     LogService().log(
       'DevicesService: Found ${results.length} devices on local network',
@@ -3279,6 +3288,7 @@ class DevicesService {
     String? name,
     String? url,
     bool isOnline = false,
+    String? deviceId,
   }) async {
     final normalizedCallsign = callsign.toUpperCase();
 
@@ -3293,9 +3303,16 @@ class DevicesService {
       }
     }
 
-    if (!_devices.containsKey(normalizedCallsign)) {
+    // Key by CALLSIGN:deviceId when we know the per-install UUID, so multiple
+    // physical devices sharing a callsign coexist and merge with entries
+    // discovered through other paths (e.g. station-relayed mirrors).
+    final mapKey = (deviceId != null && deviceId.isNotEmpty)
+        ? '$normalizedCallsign:$deviceId'
+        : normalizedCallsign;
+
+    if (!_devices.containsKey(mapKey)) {
       if (_isDeviceRemoved(normalizedCallsign)) return;
-      _devices[normalizedCallsign] = RemoteDevice(
+      _devices[mapKey] = RemoteDevice(
         callsign: normalizedCallsign,
         name: name ?? normalizedCallsign,
         nickname: name,
@@ -3304,11 +3321,12 @@ class DevicesService {
         hasCachedData: false,
         apps: [],
         connectionMethods: connectionMethod != null ? [connectionMethod] : [],
+        deviceId: deviceId,
       );
       _notifyListeners();
     } else {
       // Device exists, update it
-      final device = _devices[normalizedCallsign]!;
+      final device = _devices[mapKey]!;
       if (url != null) device.url = url;
       if (name != null) {
         device.name = name;
@@ -3317,6 +3335,9 @@ class DevicesService {
       if (isOnline) {
         device.isOnline = true;
         device.lastSeen = DateTime.now();
+      }
+      if (deviceId != null && deviceId.isNotEmpty) {
+        device.deviceId = deviceId;
       }
       // Add connection method if not already present
       if (connectionMethod != null &&
@@ -3721,10 +3742,6 @@ class RemoteDevice {
       case 'usb':
       case 'usb_aoa':
         return 'USB';
-      case 'relay':
-        return 'Relay';
-      case 'dht':
-        return 'DHT';
       default:
         return method;
     }

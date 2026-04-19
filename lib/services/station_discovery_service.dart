@@ -932,12 +932,15 @@ class StationDiscoveryService {
               '✓ Found desktop client at $ip:$port - callsign: $callsign',
             );
 
-            // Add to devices service for DM functionality (sets isOnline: true)
+            // Add to devices service for DM functionality (sets isOnline: true).
+            // Pass deviceId so the entry merges with the station-relayed mirror
+            // entry under the same `CALLSIGN:installId` key.
             await DevicesService().addDevice(
               callsign,
               name: name,
               url: deviceUrl,
               isOnline: true,
+              deviceId: data['device_id'] as String?,
             );
 
             // Collect for mirror discovery
