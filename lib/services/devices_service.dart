@@ -17,6 +17,7 @@ import '../models/station.dart';
 import 'station_cache_service.dart';
 import 'station_service.dart';
 import 'station_discovery_service.dart';
+import 'mirror_discovery_service.dart';
 import 'direct_message_service.dart';
 import 'dm_queue_service.dart';
 import 'log_service.dart';
@@ -79,6 +80,11 @@ class DevicesService {
   EventSubscription<ConnectionStateChangedEvent>?
   _stationConnectionSubscription;
   EventSubscription<ProfileChangedEvent>? _profileChangedSubscription;
+
+  /// Listener for MirrorDiscoveryService — pulls same-callsign LAN/DHT peers
+  /// into the regular devices list so multiple devices sharing the active
+  /// callsign are visible to the user.
+  VoidCallback? _mirrorDiscoveryListener;
 
   /// Timer for periodic cleanup of inactive discovered devices
   MonitoredAsyncPeriodicTimer? _cleanupTimer;
@@ -155,6 +161,7 @@ class DevicesService {
     _subscribeToDebugActions();
     _subscribeToStationConnection();
     _subscribeToProfileChanges();
+    _subscribeToMirrorDiscovery();
     SecurityService().settingsNotifier.addListener(_securitySettingsListener);
 
     _isInitialized = true;
@@ -189,6 +196,92 @@ class DevicesService {
         }
       },
     );
+  }
+
+  /// Mirror same-callsign LAN/DHT peers (tracked by MirrorDiscoveryService)
+  /// into the regular devices map so they show up in the UI device list.
+  /// The Sync page already uses MirrorDiscoveryService directly — this just
+  /// makes the same data visible on the main devices browser.
+  void _subscribeToMirrorDiscovery() {
+    final mirrorService = MirrorDiscoveryService();
+    if (_mirrorDiscoveryListener != null) {
+      mirrorService.mirrors.removeListener(_mirrorDiscoveryListener!);
+    }
+    _mirrorDiscoveryListener = () => _ingestMirrorDevices(
+          mirrorService.mirrors.value,
+        );
+    mirrorService.mirrors.addListener(_mirrorDiscoveryListener!);
+    _ingestMirrorDevices(mirrorService.mirrors.value);
+  }
+
+  void _ingestMirrorDevices(List<MirrorDevice> mirrors) {
+    if (mirrors.isEmpty) return;
+    final myDeviceId = ConfigService().deviceId;
+    var changed = false;
+    for (final m in mirrors) {
+      if (m.connectionType == 'station') continue;
+      if (m.deviceId.isEmpty || m.deviceId == myDeviceId) continue;
+
+      final callsign = m.callsign.toUpperCase();
+      if (_isDeviceRemoved(callsign)) continue;
+
+      final key = '$callsign:${m.deviceId}';
+      final existing = _devices[key];
+      final connectionMethod = m.connectionType == 'lan' ? 'lan' : m.connectionType;
+      final url = m.directAddress ?? m.stationRelayUrl;
+
+      if (existing != null) {
+        if (!existing.connectionMethods.contains(connectionMethod)) {
+          existing.connectionMethods = [
+            ...existing.connectionMethods,
+            connectionMethod,
+          ];
+          changed = true;
+        }
+        if (url != null && url.isNotEmpty && existing.url != url) {
+          existing.url = url;
+          changed = true;
+        }
+        if (m.nickname != null && m.nickname!.isNotEmpty &&
+            existing.nickname != m.nickname) {
+          existing.nickname = m.nickname;
+          changed = true;
+        } else if ((existing.nickname == null || existing.nickname!.isEmpty) &&
+            m.deviceName != null && m.deviceName!.isNotEmpty) {
+          existing.nickname = m.deviceName;
+          changed = true;
+        }
+        if (m.npub != null && m.npub!.isNotEmpty && existing.npub != m.npub) {
+          existing.npub = m.npub;
+          changed = true;
+        }
+        existing.platform ??= m.platform;
+        existing.deviceId = m.deviceId;
+        existing.isOnline = true;
+        existing.lastSeen = DateTime.now();
+      } else {
+        _devices[key] = RemoteDevice(
+          callsign: callsign,
+          name: m.deviceName ?? m.nickname ?? callsign,
+          nickname: m.nickname ?? m.deviceName,
+          url: url,
+          npub: m.npub,
+          isOnline: true,
+          hasCachedData: false,
+          apps: [],
+          connectionMethods: [connectionMethod],
+          source: DeviceSourceType.local,
+          platform: m.platform,
+          deviceId: m.deviceId,
+          lastSeen: DateTime.now(),
+        );
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      _devicesController.add(getAllDevices());
+    }
   }
 
   /// Subscribe to profile identity changes so BLE uses the latest callsign/keys
@@ -1247,6 +1340,7 @@ class DevicesService {
     final pinnedCallsigns = _getPinnedDevices();
     final folderAssignments = _getDeviceFolderAssignments();
     final ownCallsign = ProfileService().getProfile().callsign.toUpperCase();
+    final ownDeviceId = ConfigService().deviceId;
 
     // Update isPinned and folderId flags for each device
     for (final device in _devices.values) {
@@ -1255,9 +1349,15 @@ class DevicesService {
     }
 
     return _devices.values
-        .where(
-          (d) => d.callsign.toUpperCase() != ownCallsign,
-        ) // Exclude own device
+        .where((d) {
+          // Exclude only this physical install. Other installs running the
+          // same callsign (mirror peers) must remain in the list so the UI
+          // can show them alongside other devices.
+          if (d.callsign.toUpperCase() != ownCallsign) return true;
+          return d.deviceId != null &&
+              d.deviceId!.isNotEmpty &&
+              d.deviceId != ownDeviceId;
+        })
         .toList()
       ..sort((a, b) {
         // Pinned devices first
@@ -3459,6 +3559,12 @@ class DevicesService {
     _debugSubscription?.cancel();
     _stationConnectionSubscription?.cancel();
     _profileChangedSubscription?.cancel();
+    if (_mirrorDiscoveryListener != null) {
+      MirrorDiscoveryService().mirrors.removeListener(
+        _mirrorDiscoveryListener!,
+      );
+      _mirrorDiscoveryListener = null;
+    }
     _bleService?.dispose();
     _bleMessageService?.dispose();
     _devicesController.close();

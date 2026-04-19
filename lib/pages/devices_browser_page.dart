@@ -9,6 +9,7 @@ import 'dart:math' show pow;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/device_source.dart';
+import '../services/config_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -66,6 +67,7 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
 
   List<RemoteDevice> _devices = [];
   String _myCallsign = '';
+  String _myDeviceId = '';
   RemoteDevice? _selectedDevice;
   List<RemoteApp> _remoteApps = [];
   bool _isLoading = true;
@@ -414,8 +416,11 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     setState(() => _isLoading = true);
 
     try {
-      // Get current device's callsign to filter it out
+      // Get current device's callsign and per-install device id so we can
+      // filter out only this physical device — peers running the same
+      // callsign on other installs must remain visible in the list.
       _myCallsign = _profileService.getProfile().callsign;
+      _myDeviceId = ConfigService().deviceId;
 
       await _devicesService.initialize();
       await _cacheService.initialize();
@@ -460,12 +465,19 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     super.dispose();
   }
 
-  /// Filter out the current device from the list
+  /// Filter out only this physical device from the list. Other installs that
+  /// share the active callsign (e.g. the same profile running on a phone on
+  /// the LAN) must remain visible — they are distinguished by deviceId.
   List<RemoteDevice> _filterRemoteDevices(List<RemoteDevice> devices) {
+    final myCallsign = _myCallsign.toUpperCase();
     return _normalizeDevicesForDisplay(
-      devices
-          .where((d) => d.callsign.toUpperCase() != _myCallsign.toUpperCase())
-          .toList(),
+      devices.where((d) {
+        if (d.callsign.toUpperCase() != myCallsign) return true;
+        // Same callsign as us: keep only when it's clearly a different install.
+        return d.deviceId != null &&
+            d.deviceId!.isNotEmpty &&
+            d.deviceId != _myDeviceId;
+      }).toList(),
     );
   }
 
