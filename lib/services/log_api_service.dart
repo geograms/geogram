@@ -1879,10 +1879,19 @@ class LogApiService with ChatModificationMixin {
       }
     }
 
-    // Load feedback likes for the like button
+    // Load feedback likes for the like button. Reads the canonical
+    // FeedbackFolderUtils path ("feedback/likes.txt") so the count and
+    // liked-by list stay in sync with the Flutter EventLikeButton, which
+    // writes through that same helper. Falls back to the legacy
+    // ".feedback/likes.txt" so existing likes from before the convergence
+    // still show up until the next write moves them across.
     final eventPath = await EventService().getEventPath(event.id, dataDir);
     if (eventPath != null) {
-      final likesFile = io.File('$eventPath/.feedback/likes.txt');
+      var likesFile = io.File('$eventPath/feedback/likes.txt');
+      if (!await likesFile.exists()) {
+        final legacy = io.File('$eventPath/.feedback/likes.txt');
+        if (await legacy.exists()) likesFile = legacy;
+      }
       if (await likesFile.exists()) {
         final content = await likesFile.readAsString();
         final feedbackLikes = content
@@ -8840,8 +8849,13 @@ class LogApiService with ChatModificationMixin {
         );
       }
 
-      // Read current likes
-      final likesFile = io.File('$eventPath/.feedback/likes.txt');
+      // Read current likes. Use the canonical FeedbackFolderUtils path
+      // ("feedback/likes.txt") so likes added through the web Like button
+      // show up in the Flutter EventLikeButton — which reads through the
+      // same helper — and vice versa. Seeds the new file from the legacy
+      // ".feedback/likes.txt" location once so existing likes survive
+      // the convergence; subsequent toggles always write the new path.
+      final likesFile = io.File('$eventPath/feedback/likes.txt');
       List<String> likes = [];
       if (await likesFile.exists()) {
         final content = await likesFile.readAsString();
@@ -8850,6 +8864,16 @@ class LogApiService with ChatModificationMixin {
             .map((l) => l.trim())
             .where((l) => l.isNotEmpty)
             .toList();
+      } else {
+        final legacy = io.File('$eventPath/.feedback/likes.txt');
+        if (await legacy.exists()) {
+          final content = await legacy.readAsString();
+          likes = content
+              .split('\n')
+              .map((l) => l.trim())
+              .where((l) => l.isNotEmpty)
+              .toList();
+        }
       }
 
       // Toggle
