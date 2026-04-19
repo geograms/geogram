@@ -8348,8 +8348,12 @@ class LogApiService with ChatModificationMixin {
         return await _handleEventsListEvents(request, dataDir, headers);
       }
 
-      // Parse the sub-path to determine the operation
-      final pathParts = subPath.split('/');
+      // Parse the sub-path to determine the operation. shelf's request.url.path
+      // keeps percent-encoding (so "Return%20home" doesn't decode to a space)
+      // — every consumer here looks up events by id, so decode each segment
+      // before passing it on, otherwise the lookup never matches.
+      final pathParts =
+          subPath.split('/').map(Uri.decodeComponent).toList();
 
       if (pathParts.length >= 2 && pathParts[1] == 'media') {
         return await _handleEventMediaRequest(
