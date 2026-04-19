@@ -1344,6 +1344,15 @@ class ThemesEmbedded {
       if (goingCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + goingCount + '</span> going</span>');
       if (interestedCount > 0) statsItems.push('<span class="event-stat"><span class="event-stat-num">' + interestedCount + '</span> interested</span>');
     }
+    var viewCount = (ev.view_count != null) ? ev.view_count : 0;
+    // Always render the view stat with a stable id so the self-post can
+    // increment it in place when the visitor's view is recorded.
+    statsItems.push(
+      '<span id="event-view-stat" class="event-stat"' +
+      (viewCount > 0 ? '' : ' style="display:none"') + '>' +
+      '<span class="event-stat-num">' + viewCount + '</span> view' +
+      (viewCount === 1 ? '' : 's') + '</span>'
+    );
 
     if (statsItems.length > 0) {
       html += '<div class="event-stats-bar">' + statsItems.join('<span class="event-stat-sep">&middot;</span>') + '</div>';
@@ -1553,6 +1562,57 @@ class ThemesEmbedded {
     });
     if (window.GeogramNostr && window.GeogramNostr.connected && window.GeogramNostr.pubkey) {
       onNostrConnected(window.GeogramNostr.pubkey);
+    }
+
+    // ── Page-view counter ─────────────────────────────────────────────
+    // Sign and POST a NOSTR view event once the visitor has an identity.
+    // The shared nostr_login_scripts auto-bootstraps an identity (extension
+    // → stored privkey → freshly-generated keypair) so this fires for
+    // every visitor without requiring a manual click.
+    var viewRecorded = false;
+    async function recordEventView() {
+      if (viewRecorded) return;
+      if (!window.nostr || typeof window.nostr.signEvent !== 'function') return;
+      var nostr = window.GeogramNostr || {};
+      if (!nostr.connected || !nostr.pubkey) return;
+      viewRecorded = true;
+      try {
+        var signed = await window.nostr.signEvent({
+          kind: 1,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [
+            ['t', 'event-view'],
+            ['e_id', ev.id],
+            ['callsign', nostr.callsign || ''],
+          ],
+          content: '',
+        });
+        if (!signed || !signed.sig) return;
+        var resp = await fetch(
+          '../api/feedback/event/' + encodeURIComponent(ev.id) + '/view',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(signed),
+          }
+        );
+        if (!resp.ok) return;
+        var result = await resp.json();
+        var total = result.total_views;
+        if (typeof total !== 'number') return;
+        var node = document.getElementById('event-view-stat');
+        if (!node) return;
+        node.style.display = '';
+        node.innerHTML =
+          '<span class="event-stat-num">' + total + '</span> view' +
+          (total === 1 ? '' : 's');
+      } catch (e) {
+        console.error('Event view record failed:', e);
+      }
+    }
+    document.addEventListener('nostr-connected', recordEventView);
+    if (window.GeogramNostr && window.GeogramNostr.connected) {
+      recordEventView();
     }
   })();
 </script>

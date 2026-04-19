@@ -1896,6 +1896,33 @@ class LogApiService with ChatModificationMixin {
       }
       data['feedback_liked_hex_pubkeys'] = hexPubkeys;
     }
+    // Surface signed-view stats so the page can render the count and the
+    // browser-side JS can compare its post-record response.
+    try {
+      final ownerCallsign = event.author.isNotEmpty
+          ? event.author
+          : ProfileService().getProfile().callsign;
+      if (ownerCallsign.isNotEmpty && event.id.length >= 4) {
+        // Event ids start with the year (YYYY-MM-DD_…); _resolveEventPath in
+        // feedback_handler relies on the same convention.
+        final year = event.id.substring(0, 4);
+        if (int.tryParse(year) != null) {
+          final storage = FilesystemProfileStorage(
+            '$dataDir/devices/$ownerCallsign',
+          );
+          final stats = await FeedbackFolderUtils.getViewStats(
+            'events/$year/${event.id}',
+            storage: storage,
+          );
+          data['view_count'] = stats['total_views'] ?? 0;
+          data['unique_viewers'] = stats['unique_viewers'] ?? 0;
+        }
+      }
+    } catch (e) {
+      LogService().log('EventDetail: getViewStats failed: $e');
+      data['view_count'] = 0;
+      data['unique_viewers'] = 0;
+    }
     data['authenticated'] = userNpub != null;
 
     // 5. Render

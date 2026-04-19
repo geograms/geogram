@@ -1023,8 +1023,21 @@ String getNostrLoginScripts() {
         if (savedPrivkey) {
           // Auto-connect with stored local keys
           connectViaLocalKeys(savedPrivkey);
+        } else {
+          // Auto-bootstrap a fresh keypair so anonymous visitors silently
+          // gain a NOSTR identity. This makes page-view counters and other
+          // signature-gated actions work without requiring the visitor to
+          // click "Connect with Nostr" — the privkey stays in localStorage
+          // and never leaves the browser unless the user signs an event.
+          var keys = generateKeypair();
+          if (keys) {
+            try {
+              localStorage.setItem('geogram_nostr_privkey', keys.privkey);
+            } catch(e) {}
+            installPolyfill(keys.pubkey, keys.privkey);
+            finishConnect(keys.pubkey);
+          }
         }
-        // Otherwise button is visible, click will generate new keypair
       }
     });
   });
