@@ -17,6 +17,7 @@ import 'dart:typed_data';
 
 import 'package:maxminddb/maxminddb.dart';
 
+import '../util/network_utils.dart';
 import 'log_service.dart';
 
 /// Result of IP geolocation lookup
@@ -166,39 +167,7 @@ class GeoIpService {
     }
   }
 
-  /// Check if an IP address is private/local
-  bool _isPrivateIP(String ip) {
-    try {
-      final addr = InternetAddress(ip);
-      if (addr.type == InternetAddressType.IPv4) {
-        final parts = ip.split('.');
-        if (parts.length != 4) return false;
-        final first = int.parse(parts[0]);
-        final second = int.parse(parts[1]);
-
-        // 10.x.x.x
-        if (first == 10) return true;
-        // 172.16.x.x - 172.31.x.x
-        if (first == 172 && second >= 16 && second <= 31) return true;
-        // 192.168.x.x
-        if (first == 192 && second == 168) return true;
-        // 127.x.x.x (localhost)
-        if (first == 127) return true;
-        // 169.254.x.x (link-local)
-        if (first == 169 && second == 254) return true;
-      } else if (addr.type == InternetAddressType.IPv6) {
-        // ::1 (localhost)
-        if (ip == '::1') return true;
-        // fe80:: (link-local)
-        if (ip.toLowerCase().startsWith('fe80:')) return true;
-        // fc00:: / fd00:: (unique local)
-        if (ip.toLowerCase().startsWith('fc') || ip.toLowerCase().startsWith('fd')) return true;
-      }
-      return false;
-    } catch (e) {
-      return false;
-    }
-  }
+  bool _isPrivateIP(String ip) => isPrivateIp(ip);
 
   /// Reset the service (for testing)
   void reset() {

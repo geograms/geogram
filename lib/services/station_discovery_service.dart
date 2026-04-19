@@ -7,6 +7,7 @@ import '../models/station.dart';
 import '../services/station_service.dart';
 import '../services/log_service.dart';
 import '../util/managed_http_client.dart';
+import '../util/network_utils.dart';
 import '../services/app_args.dart';
 import '../services/devices_service.dart';
 import '../services/mirror_discovery_service.dart';
@@ -231,48 +232,52 @@ class StationDiscoveryService {
     }
 
     try {
-      // Get local network interfaces
-      final interfaces = await NetworkInterface.list(
-        includeLoopback: false,
-        type: InternetAddressType.IPv4,
-      );
-
-      // Collect network ranges to scan
+      // Collect network ranges to scan.
+      //
+      // The kernel's source-address selection for the default-gateway route
+      // tells us which interface actually carries traffic to the world; that
+      // is the only LAN worth probing. Enumerating every IPv4 interface and
+      // sweeping each one wastes minutes per scan on subnets that have no
+      // hosts (virtual bridges, VPN tunnels, link-local, etc.).
       final ranges = <String>{};
-      for (var interface in interfaces) {
-        LogService().log('ScanWithProgress: Interface: ${interface.name}');
-        for (var addr in interface.addresses) {
-          LogService().log('ScanWithProgress:   Address: ${addr.address}');
-          final subnet = _getSubnet(addr.address);
-          if (subnet != null) {
-            ranges.add(subnet);
+
+      onProgress?.call('Detecting network...', 0, 0, results);
+      final routedSubnet = await _detectSubnetFromConnectivity();
+      if (routedSubnet != null) {
+        ranges.add(routedSubnet);
+        LogService().log(
+          'ScanWithProgress: scanning $routedSubnet (gateway-routed)',
+        );
+      } else {
+        // Fallback path: gateway probe failed (offline / no default route).
+        // Enumerate interfaces and accept private subnets only.
+        LogService().log(
+          'ScanWithProgress: no gateway-routed subnet, enumerating interfaces',
+        );
+        final interfaces = await NetworkInterface.list(
+          includeLoopback: false,
+          type: InternetAddressType.IPv4,
+        );
+        for (var interface in interfaces) {
+          LogService().log('ScanWithProgress: Interface: ${interface.name}');
+          for (var addr in interface.addresses) {
+            LogService().log('ScanWithProgress:   Address: ${addr.address}');
+            if (!isPrivateIp(addr.address)) continue;
+            final subnet = _getSubnet(addr.address);
+            if (subnet != null) ranges.add(subnet);
           }
         }
       }
 
-      // Fallback: if no interfaces detected (common on Android), try to detect subnet
+      // Final fallback: nothing usable from either probe or interfaces.
       if (ranges.isEmpty) {
+        ranges.add('192.168.1');
+        ranges.add('192.168.0');
+        ranges.add('192.168.178'); // Common Fritz!Box range
+        ranges.add('10.0.0');
         LogService().log(
-          'ScanWithProgress: No network interfaces detected, trying fallback detection',
+          'ScanWithProgress: Using common fallback ranges: ${ranges.join(", ")}',
         );
-        onProgress?.call('Detecting network...', 0, 0, results);
-
-        final fallbackSubnet = await _detectSubnetFromConnectivity();
-        if (fallbackSubnet != null) {
-          ranges.add(fallbackSubnet);
-          LogService().log(
-            'ScanWithProgress: Detected subnet from connectivity: $fallbackSubnet',
-          );
-        } else {
-          // Add common home network ranges as last resort
-          ranges.add('192.168.1');
-          ranges.add('192.168.0');
-          ranges.add('192.168.178'); // Common Fritz!Box range
-          ranges.add('10.0.0');
-          LogService().log(
-            'ScanWithProgress: Using common fallback ranges: ${ranges.join(", ")}',
-          );
-        }
       }
 
       // Calculate total hosts for progress

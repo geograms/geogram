@@ -18,6 +18,7 @@ import 'models/report.dart';
 import 'services/event_service.dart';
 import 'util/app_constants.dart';
 import 'util/managed_http_client.dart';
+import 'util/network_utils.dart';
 import 'services/profile_storage.dart';
 import 'api/handlers/alert_handler.dart';
 import 'api/handlers/place_handler.dart';
@@ -2267,7 +2268,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   /// Scan network for devices
   Future<List<Map<String, dynamic>>> scanNetwork({int timeout = 2000}) async {
     final results = <Map<String, dynamic>>[];
-    final localIps = await _getLocalIPs();
+    final localIps = await getLocalIPv4Addresses();
 
     for (final localIp in localIps) {
       final prefix = localIp.substring(0, localIp.lastIndexOf('.'));
@@ -2285,15 +2286,6 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     }
 
     return results;
-  }
-
-  Future<List<String>> _getLocalIPs() async {
-    final interfaces = await NetworkInterface.list();
-    return interfaces
-        .expand((i) => i.addresses)
-        .where((a) => a.type == InternetAddressType.IPv4 && !a.isLoopback)
-        .map((a) => a.address)
-        .toList();
   }
 
   Future<Map<String, dynamic>?> _pingDevice(String ip, int port, int timeout) async {

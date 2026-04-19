@@ -6,11 +6,15 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
+import '../models/monitored_task.dart';
+import '../util/task_monitor_helpers.dart';
 import 'log_service.dart';
+import 'task_monitor_service.dart';
 
 // ============================================================================
 // Linux USB AOA Host Implementation using libc and usbdevfs
@@ -236,6 +240,19 @@ class UsbAoaLinux {
 
   // Read thread control
   bool _isReading = false;
+
+  // Read loop runs in a worker isolate so the blocking USB ioctl never
+  // stalls the main UI thread.
+  Isolate? _readIsolate;
+  ReceivePort? _readPort;
+  StreamSubscription<dynamic>? _readSub;
+  // Control channel back into the worker (pause/resume/stop). Worker sends
+  // its SendPort as the first message after spawn.
+  SendPort? _readControlPort;
+  // Task monitor handle so the read loop is visible / pauseable in the UI.
+  MonitoredIsolateHandle? _readMonitor;
+  StreamSubscription<TaskStateChangedEvent>? _monitorSub;
+  static const String _readMonitorId = 'usb_aoa.read_loop';
 
   // Poll timeout counter for periodic logging
   int _pollTimeoutCount = 0;
@@ -699,7 +716,7 @@ class UsbAoaLinux {
       LogService().log(
         'UsbAoaLinux: Starting read loop (waiting for actual data)',
       );
-      _startReadLoop();
+      await _startReadLoop();
 
       return true;
     } finally {
@@ -778,131 +795,127 @@ class UsbAoaLinux {
     return (epIn, epOut);
   }
 
-  /// Start the read loop
-  void _startReadLoop() {
+  /// Start the read loop in a worker isolate so the blocking USBDEVFS_BULK
+  /// ioctl never stalls the main isolate's event loop.
+  Future<void> _startReadLoop() async {
     if (_isReading) return;
+    if (_fd == null || _epIn == null) {
+      LogService().log('UsbAoaLinux: _startReadLoop called without fd/epIn');
+      return;
+    }
     _isReading = true;
+    _pollTimeoutCount = 0;
 
-    // Run read loop in a separate isolate/thread would be better,
-    // but for simplicity we use Timer.periodic
-    _readLoopAsync();
-  }
-
-  /// Async read loop
-  Future<void> _readLoopAsync() async {
-    LogService().log(
-      'UsbAoaLinux: _readLoopAsync() ENTERED, _isReading=$_isReading, _isConnected=$_isConnected, _fd=$_fd',
+    // Register with the task monitor so this background loop is visible
+    // (and pauseable) from Settings → Tasks.
+    _readMonitor = MonitoredIsolateHandle(
+      id: _readMonitorId,
+      name: 'USB AOA read loop',
+      description: 'Reads bulk USB transfers from the connected Android accessory',
+      serviceName: 'UsbAoaLinux',
+      priority: TaskPriority.normal,
     );
 
-    const bufferSize = 16384;
-    final buffer = calloc<Uint8>(bufferSize);
-    final bulk = calloc<UsbBulkTransfer>();
-
-    // Clear any stall condition on the IN endpoint before starting
-    // This can help recover from previous failed transfers
-    if (_fd != null && _epIn != null) {
-      final epInPtr = calloc<Uint32>();
-      epInPtr.value = _epIn!;
-      final clearResult = _ioctlPtr(_fd!, USBDEVFS_CLEAR_HALT, epInPtr.cast());
-      if (clearResult < 0) {
-        final err = _errno;
-        LogService().log(
-          'UsbAoaLinux: Clear halt on IN endpoint returned errno=$err (may be ok)',
-        );
-      } else {
-        LogService().log('UsbAoaLinux: Cleared halt on IN endpoint');
+    // Forward pause/resume from the monitor into the worker via control port.
+    _monitorSub = TaskMonitorService().stateChanges.listen((event) {
+      if (event.taskId != _readMonitorId) return;
+      final cp = _readControlPort;
+      if (cp == null) return;
+      switch (event.newStatus) {
+        case TaskStatus.paused:
+          cp.send({'type': 'pause'});
+          break;
+        case TaskStatus.running:
+        case TaskStatus.idle:
+          if (event.oldStatus == TaskStatus.paused) {
+            cp.send({'type': 'resume'});
+          }
+          break;
+        default:
+          break;
       }
-      calloc.free(epInPtr);
-    }
+    });
 
-    int consecutiveErrors = 0;
-    int interruptedCount = 0;
-    const maxConsecutiveErrors = 20;
-    bool androidConnected = false;
-    _pollTimeoutCount = 0;
-    int readAttemptCounter = 0;
-
-    LogService().log('UsbAoaLinux: Read loop starting main loop');
+    final port = ReceivePort();
+    _readPort = port;
+    _readSub = port.listen(_handleReadIsolateMessage);
 
     try {
-      while (_isReading && _isConnected && _fd != null) {
-        readAttemptCounter++;
-        await Future.delayed(Duration.zero);
-
-        bulk.ref.ep = _epIn!;
-        bulk.ref.len = bufferSize;
-        bulk.ref.timeout = 250;
-        bulk.ref.data = buffer.cast();
-
-        final bytesRead = _ioctlPtr(_fd!, USBDEVFS_BULK, bulk.cast());
-
-        if (bytesRead > 0) {
-          LogService().log('UsbAoaLinux: Received $bytesRead bytes from USB');
-          final data = Uint8List(bytesRead);
-          for (var i = 0; i < bytesRead; i++) {
-            data[i] = buffer[i];
-          }
-          _dataController.add(data);
-          if (!androidConnected) {
-            androidConnected = true;
-            _pollTimeoutCount = 0;
-            _channelReadyController.add(null);
-            LogService().log('UsbAoaLinux: Channel ready (data received)');
-          }
-          consecutiveErrors = 0;
-          interruptedCount = 0;
-          continue;
-        }
-
-        final err = _errno;
-        if (bytesRead == 0 || err == 110 || err == 11 || err == 16) {
-          _pollTimeoutCount++;
-          consecutiveErrors = 0;
-          if (_pollTimeoutCount % 20 == 0) {
-            LogService().log(
-              'UsbAoaLinux: Still waiting for USB data ($_pollTimeoutCount timeouts, androidConnected=$androidConnected)',
-            );
-          }
-          continue;
-        }
-
-        if (err == 4) {
-          interruptedCount++;
-          if (interruptedCount == 1 || interruptedCount % 100 == 0) {
-            LogService().log(
-              'UsbAoaLinux: Bulk read interrupted (#$interruptedCount)',
-            );
-          }
-          continue;
-        }
-
-        consecutiveErrors++;
-        if (consecutiveErrors == 1 || consecutiveErrors % 5 == 0) {
-          LogService().log(
-            'UsbAoaLinux: Bulk read error, errno=$err (error #$consecutiveErrors, androidConnected=$androidConnected)',
-          );
-        }
-        if (consecutiveErrors >= maxConsecutiveErrors) {
-          LogService().log(
-            'UsbAoaLinux: Too many consecutive bulk read errors ($consecutiveErrors), exiting',
-          );
-          break;
-        }
-      }
-
-      // Log why the loop exited
-      LogService().log(
-        'UsbAoaLinux: Read loop exited: _isReading=$_isReading, _isConnected=$_isConnected, fd=${_fd != null}, iterations=$readAttemptCounter',
+      _readIsolate = await Isolate.spawn(
+        _usbReadLoopEntry,
+        _UsbReadLoopArgs(
+          sendPort: port.sendPort,
+          fd: _fd!,
+          epIn: _epIn!,
+        ),
+        debugName: 'usb-aoa-read-loop',
       );
-    } finally {
-      calloc.free(buffer);
-      calloc.free(bulk);
+      LogService().log('UsbAoaLinux: Read isolate spawned');
+      _readMonitor?.markRunning();
+    } catch (e) {
+      LogService().log('UsbAoaLinux: Failed to spawn read isolate: $e');
+      _isReading = false;
+      _readMonitor?.markError(e);
+      await _readSub?.cancel();
+      _readPort?.close();
+      await _monitorSub?.cancel();
+      _readMonitor?.dispose();
+      _readSub = null;
+      _readPort = null;
+      _monitorSub = null;
+      _readMonitor = null;
     }
+  }
 
+  void _handleReadIsolateMessage(dynamic msg) {
+    if (msg is SendPort) {
+      _readControlPort = msg;
+      return;
+    }
+    if (msg is Uint8List) {
+      _dataController.add(msg);
+      return;
+    }
+    if (msg is Map) {
+      final type = msg['type'] as String?;
+      switch (type) {
+        case 'channel_ready':
+          LogService().log('UsbAoaLinux: Channel ready (data received)');
+          _channelReadyController.add(null);
+          break;
+        case 'log':
+          LogService().log(msg['message'] as String? ?? '');
+          break;
+        case 'timeout_count':
+          _pollTimeoutCount = (msg['count'] as num?)?.toInt() ?? _pollTimeoutCount;
+          break;
+        case 'exited':
+          final reason = msg['reason'] as String? ?? 'unknown';
+          LogService().log('UsbAoaLinux: Read isolate exited: $reason');
+          _readMonitor?.markIdle();
+          _stopReadIsolate(callDisconnect: _isConnected);
+          break;
+      }
+    }
+  }
+
+  Future<void> _stopReadIsolate({bool callDisconnect = false}) async {
+    final wasReading = _isReading;
     _isReading = false;
-
-    // If we exited unexpectedly while connected, handle disconnect
-    if (_isConnected) {
+    try {
+      _readIsolate?.kill(priority: Isolate.immediate);
+    } catch (_) {}
+    _readIsolate = null;
+    _readControlPort = null;
+    await _readSub?.cancel();
+    _readPort?.close();
+    await _monitorSub?.cancel();
+    _readMonitor?.dispose();
+    _readSub = null;
+    _readPort = null;
+    _monitorSub = null;
+    _readMonitor = null;
+    if (wasReading && callDisconnect && _isConnected) {
       await disconnect();
     }
   }
@@ -963,8 +976,11 @@ class UsbAoaLinux {
 
     LogService().log('UsbAoaLinux: Disconnecting...');
 
-    _isReading = false;
     _isConnected = false;
+
+    // Tear down the read isolate first so it can't issue another ioctl on
+    // the FD we are about to close.
+    await _stopReadIsolate();
 
     final device = _connectedDevice;
 
@@ -1015,4 +1031,162 @@ class UsbAoaConnectionEvent {
 
   factory UsbAoaConnectionEvent.disconnected(UsbDeviceInfo device) =>
       UsbAoaConnectionEvent._(connected: false, device: device);
+}
+
+// ----------------------------------------------------------------------------
+// USB read loop — worker isolate
+// ----------------------------------------------------------------------------
+//
+// The blocking USBDEVFS_BULK ioctl can stall the calling thread for the full
+// timeout (250 ms) when no data is available. Running it on the main isolate
+// means dropped frames and a sluggish UI. The read loop therefore lives in
+// its own isolate. The main isolate keeps ownership of the FD for writes
+// (file descriptors are process-scoped on Linux, so both isolates can use
+// the same FD safely).
+
+class _UsbReadLoopArgs {
+  final SendPort sendPort;
+  final int fd;
+  final int epIn;
+
+  const _UsbReadLoopArgs({
+    required this.sendPort,
+    required this.fd,
+    required this.epIn,
+  });
+}
+
+void _usbReadLoopEntry(_UsbReadLoopArgs args) async {
+  // Re-resolve libc bindings inside this isolate (FFI lookups are per-isolate).
+  DynamicLibrary lib;
+  try {
+    lib = DynamicLibrary.open('libc.so.6');
+  } catch (_) {
+    lib = DynamicLibrary.open('libc.so');
+  }
+  final ioctlPtr =
+      lib.lookupFunction<IoctlPtrNative, IoctlPtrDart>('ioctl');
+  final errnoLoc =
+      lib.lookupFunction<ErrnoLocNative, ErrnoLocDart>('__errno_location');
+  int errno() => errnoLoc().value;
+
+  void send(Object msg) => args.sendPort.send(msg);
+  void log(String m) => send({'type': 'log', 'message': m});
+
+  // Control channel from main isolate: pause / resume / stop.
+  bool paused = false;
+  bool stopped = false;
+  final controlPort = ReceivePort();
+  controlPort.listen((msg) {
+    if (msg is! Map) return;
+    switch (msg['type'] as String?) {
+      case 'pause':
+        paused = true;
+        break;
+      case 'resume':
+        paused = false;
+        break;
+      case 'stop':
+        stopped = true;
+        break;
+    }
+  });
+  send(controlPort.sendPort);
+
+  // Clear any stall on IN endpoint before starting (matches old behaviour).
+  final epInPtr = calloc<Uint32>();
+  epInPtr.value = args.epIn;
+  final clear = ioctlPtr(args.fd, USBDEVFS_CLEAR_HALT, epInPtr.cast());
+  if (clear < 0) {
+    log('UsbAoaLinux: Clear halt on IN endpoint returned errno=${errno()} (may be ok)');
+  } else {
+    log('UsbAoaLinux: Cleared halt on IN endpoint');
+  }
+  calloc.free(epInPtr);
+
+  const bufferSize = 16384;
+  final buffer = calloc<Uint8>(bufferSize);
+  final bulk = calloc<UsbBulkTransfer>();
+
+  int consecutiveErrors = 0;
+  int interruptedCount = 0;
+  int timeoutCount = 0;
+  bool channelReadyFired = false;
+  const maxConsecutiveErrors = 20;
+  String exitReason = 'normal';
+
+  log('UsbAoaLinux: Read loop starting (isolate)');
+
+  try {
+    while (!stopped) {
+      // Yield to the isolate's event loop so control-port messages can land.
+      await Future<void>.delayed(Duration.zero);
+
+      if (paused) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        continue;
+      }
+
+      bulk.ref.ep = args.epIn;
+      bulk.ref.len = bufferSize;
+      bulk.ref.timeout = 250;
+      bulk.ref.data = buffer.cast();
+
+      final bytesRead = ioctlPtr(args.fd, USBDEVFS_BULK, bulk.cast());
+
+      if (bytesRead > 0) {
+        log('UsbAoaLinux: Received $bytesRead bytes from USB');
+        final data = Uint8List(bytesRead);
+        for (var i = 0; i < bytesRead; i++) {
+          data[i] = buffer[i];
+        }
+        send(data);
+        if (!channelReadyFired) {
+          channelReadyFired = true;
+          send({'type': 'channel_ready'});
+          timeoutCount = 0;
+          send({'type': 'timeout_count', 'count': timeoutCount});
+        }
+        consecutiveErrors = 0;
+        interruptedCount = 0;
+        continue;
+      }
+
+      final err = errno();
+      // Empty result, ETIMEDOUT, EAGAIN, EBUSY → just a poll timeout.
+      if (bytesRead == 0 || err == 110 || err == 11 || err == 16) {
+        timeoutCount++;
+        consecutiveErrors = 0;
+        if (timeoutCount % 20 == 0) {
+          log('UsbAoaLinux: Still waiting for USB data ($timeoutCount timeouts, channelReady=$channelReadyFired)');
+          send({'type': 'timeout_count', 'count': timeoutCount});
+        }
+        continue;
+      }
+
+      // EINTR → just retry.
+      if (err == 4) {
+        interruptedCount++;
+        if (interruptedCount == 1 || interruptedCount % 100 == 0) {
+          log('UsbAoaLinux: Bulk read interrupted (#$interruptedCount)');
+        }
+        continue;
+      }
+
+      consecutiveErrors++;
+      if (consecutiveErrors == 1 || consecutiveErrors % 5 == 0) {
+        log('UsbAoaLinux: Bulk read error, errno=$err (error #$consecutiveErrors, channelReady=$channelReadyFired)');
+      }
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        log('UsbAoaLinux: Too many consecutive bulk read errors ($consecutiveErrors), exiting');
+        exitReason = 'too_many_errors';
+        break;
+      }
+    }
+  } finally {
+    calloc.free(buffer);
+    calloc.free(bulk);
+  }
+
+  send({'type': 'exited', 'reason': exitReason});
 }

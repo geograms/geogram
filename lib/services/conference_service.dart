@@ -20,6 +20,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../util/callsign_url.dart';
 import '../util/event_bus.dart';
+import '../util/network_utils.dart';
 import '../models/chat_message.dart';
 import '../models/conference_archive_entry.dart';
 import '../models/conference_schedule_entry.dart';
@@ -411,7 +412,7 @@ class ConferenceService {
     if (_signalingServer == null || !_signalingServer!.isRunning) return [];
     final port = AppArgs().port;
     final code = roomCode ?? '';
-    final ips = await _getLocalIPs();
+    final ips = await getLocalIPv4Addresses();
     return ips.map((ip) => 'http://$ip:$port/meet/$code').toList();
   }
 
@@ -2897,12 +2898,4 @@ class ConferenceService {
     );
   }
 
-  Future<List<String>> _getLocalIPs() async {
-    final interfaces = await NetworkInterface.list();
-    return interfaces
-        .expand((i) => i.addresses)
-        .where((a) => a.type == InternetAddressType.IPv4 && !a.isLoopback)
-        .map((a) => a.address)
-        .toList();
-  }
 }
