@@ -154,6 +154,7 @@ import '../work/models/ndf_interaction_settings.dart';
 import 'package:archive/archive.dart';
 import 'file_browser_cache_service.dart';
 import '../util/video_metadata_extractor.dart';
+import '../api/handlers/feedback_handler.dart';
 
 class _MeetSessionSnapshot {
   final String state;
@@ -703,6 +704,14 @@ class LogApiService with ChatModificationMixin {
     // Events API endpoints (public read-only access to events)
     if (urlPath == 'api/events' || urlPath == 'api/events/' || urlPath.startsWith('api/events/')) {
       return await _handleEventsRequest(request, urlPath, headers);
+    }
+
+    // Feedback API endpoints (signed views, likes, comments, …). The station
+    // implementations duplicate this routing in three places already; mirror
+    // it here too rather than risk diverging behaviours, but call into the
+    // same shared FeedbackHandler so the actual logic stays single-sourced.
+    if (urlPath.startsWith('api/feedback/')) {
+      return await _handleFeedbackRequest(request, urlPath, headers);
     }
 
     // Alerts API endpoints (public read-only access to alerts)
@@ -8114,6 +8123,181 @@ class LogApiService with ChatModificationMixin {
           'error': 'Internal server error',
           'timestamp': DateTime.now().millisecondsSinceEpoch ~/ 1000,
         }),
+        headers: headers,
+      );
+    }
+  }
+
+  // Feedback API Endpoints (signed events: views, likes, comments, …)
+  // ============================================================
+
+  FeedbackHandler? _feedbackApi;
+
+  FeedbackHandler _getFeedbackApi() {
+    if (_feedbackApi != null) return _feedbackApi!;
+    final profile = ProfileService().getProfile();
+    final dataDir = StorageConfig().baseDir;
+    _feedbackApi = FeedbackHandler(
+      storage: FilesystemProfileStorage(
+        '$dataDir/devices/${profile.callsign}',
+      ),
+      log: (level, message) =>
+          LogService().log('FeedbackHandler: [$level] $message'),
+    );
+    return _feedbackApi!;
+  }
+
+  /// Routes /api/feedback/{contentType}/{contentId}/[action] to the shared
+  /// FeedbackHandler. Same wire format as the station implementations
+  /// (lib/station.dart, lib/cli/pure_station.dart,
+  /// lib/services/station_server_service.dart) — each one duplicates this
+  /// dispatch table because they all consume different request types
+  /// (HttpRequest vs shelf.Request).
+  Future<shelf.Response> _handleFeedbackRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final segments = urlPath.split('/');
+      // segments[0] == 'api', segments[1] == 'feedback'
+      if (segments.length < 4) {
+        return shelf.Response(400,
+            body: jsonEncode({'error': 'Invalid feedback path'}),
+            headers: headers);
+      }
+      final contentType = segments[2];
+      final contentId = Uri.decodeComponent(segments[3]);
+      final callsign = request.url.queryParameters['callsign'];
+
+      final feedbackApi = _getFeedbackApi();
+      Map<String, dynamic> result;
+
+      if (request.method == 'GET') {
+        if (segments.length == 4) {
+          final params = request.url.queryParameters;
+          final includeComments = params['include_comments'] == 'true';
+          final commentLimit =
+              int.tryParse(params['comment_limit'] ?? '') ?? 20;
+          final commentOffset =
+              int.tryParse(params['comment_offset'] ?? '') ?? 0;
+          result = await feedbackApi.getFeedback(
+            contentType: contentType,
+            contentId: contentId,
+            npub: params['npub'],
+            callsign: callsign,
+            includeComments: includeComments,
+            commentLimit: commentLimit,
+            commentOffset: commentOffset,
+          );
+        } else if (segments.length == 5 && segments[4] == 'stats') {
+          result = await feedbackApi.getStats(
+            contentType: contentType,
+            contentId: contentId,
+            callsign: callsign,
+          );
+        } else {
+          return shelf.Response(400,
+              body: jsonEncode({'error': 'Invalid feedback path'}),
+              headers: headers);
+        }
+      } else if (request.method == 'POST') {
+        if (segments.length < 5) {
+          return shelf.Response(400,
+              body: jsonEncode({'error': 'Missing feedback action'}),
+              headers: headers);
+        }
+        final action = segments[4];
+        final body = await request.readAsString();
+        Map<String, dynamic> jsonBody = <String, dynamic>{};
+        if (body.isNotEmpty) {
+          try {
+            jsonBody = jsonDecode(body) as Map<String, dynamic>;
+          } catch (_) {
+            return shelf.Response(400,
+                body: jsonEncode({'error': 'Invalid JSON body'}),
+                headers: headers);
+          }
+        }
+        switch (action) {
+          case 'like':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypeLikes,
+              actionName: 'like',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'point':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypePoints,
+              actionName: 'point',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'dislike':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypeDislikes,
+              actionName: 'dislike',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'subscribe':
+            result = await feedbackApi.toggleFeedback(
+              contentType: contentType,
+              contentId: contentId,
+              feedbackType: FeedbackFolderUtils.feedbackTypeSubscribe,
+              actionName: 'subscribe',
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'verify':
+            result = await feedbackApi.verifyContent(
+              contentType: contentType,
+              contentId: contentId,
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          case 'view':
+            result = await feedbackApi.recordView(
+              contentType: contentType,
+              contentId: contentId,
+              eventJson: jsonBody,
+              callsign: callsign,
+            );
+            break;
+          default:
+            return shelf.Response(400,
+                body: jsonEncode({'error': 'Unknown feedback action: $action'}),
+                headers: headers);
+        }
+      } else {
+        return shelf.Response(405,
+            body: jsonEncode({'error': 'Method not allowed'}),
+            headers: headers);
+      }
+
+      final status = (result['http_status'] as int?) ?? 200;
+      result.remove('http_status');
+      return shelf.Response(
+        status,
+        body: jsonEncode(result),
+        headers: headers,
+      );
+    } catch (e) {
+      LogService().log('LogApiService: Feedback handler error: $e');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': e.toString()}),
         headers: headers,
       );
     }
