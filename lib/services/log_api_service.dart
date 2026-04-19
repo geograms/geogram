@@ -408,6 +408,9 @@ class LogApiService with ChatModificationMixin {
       if (urlPath == 'events/styles.css') {
         return await _handleThemeStylesRequest(headers, appType: 'events');
       }
+      if (urlPath == 'blog/styles.css') {
+        return await _handleThemeStylesRequest(headers, appType: 'blog');
+      }
       if (urlPath == 'events' || urlPath.startsWith('events/')) {
         final response = await _handleEventsRoute(request, urlPath, headers);
         if (response != null) {

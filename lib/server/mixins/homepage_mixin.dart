@@ -6,7 +6,8 @@
 // keyed by callsign. The homepage merges this in-memory cache with anything
 // already on disk (mirrored devices), so blog posts appear even when no
 // mirror is configured. Cache evicts when the last connection for a callsign
-// goes away.
+// goes away. A periodic refresh re-primes every connected device hourly so
+// counts (likes, etc.) don't get frozen for long-lived connections.
 
 import 'dart:async';
 import 'dart:convert';
@@ -30,6 +31,42 @@ mixin HomepageMixin {
 
   /// Log helper.
   void homepageLog(String level, String message);
+
+  /// All currently-connected proxy clients. Used by the periodic refresh to
+  /// iterate every device. Stations expose their own clients map.
+  Iterable<DeviceProxyClient> get homepageConnectedClients;
+
+  // Periodic re-prime so cached likes/counters don't go stale on long
+  // connections. One hour is the agreed cadence — fast enough that user-
+  // visible counts stay reasonable, slow enough to be a non-event load-wise.
+  Timer? _blogCacheRefreshTimer;
+  static const Duration _blogCacheRefreshInterval = Duration(hours: 1);
+
+  /// Start the periodic blog cache refresh. Idempotent — safe to call again.
+  void startHomepageRefresh() {
+    _blogCacheRefreshTimer?.cancel();
+    _blogCacheRefreshTimer =
+        Timer.periodic(_blogCacheRefreshInterval, (_) => _refreshAllCaches());
+  }
+
+  /// Stop the periodic refresh. Call from station shutdown.
+  void stopHomepageRefresh() {
+    _blogCacheRefreshTimer?.cancel();
+    _blogCacheRefreshTimer = null;
+  }
+
+  Future<void> _refreshAllCaches() async {
+    final clients = homepageConnectedClients
+        .where((c) => c.callsign != null)
+        .toList(growable: false);
+    if (clients.isEmpty) return;
+    homepageLog('INFO', 'Refreshing blog cache for ${clients.length} device(s)');
+    for (final client in clients) {
+      // Sequential — avoids hammering devices and our own proxy queue all
+      // at once. Per-device proxy already has a 30s timeout.
+      await primeBlogCacheForDevice(client);
+    }
+  }
 
   /// Fire-and-forget: ask a freshly-connected device for its recent posts and
   /// cache them. Called from the station after hello_ack succeeds.
@@ -97,6 +134,7 @@ mixin HomepageMixin {
     }
     final author = (p['author'] as String?)?.trim();
     final description = p['description'] as String?;
+    final likes = (p['likes_count'] as num?)?.toInt() ?? 0;
     final displayDate =
         '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
     return RecentBlogEntry(
@@ -107,6 +145,7 @@ mixin HomepageMixin {
       description: (description != null && description.isNotEmpty) ? description : null,
       displayDate: displayDate,
       dateTime: dt,
+      likesCount: likes,
     );
   }
 }

@@ -1069,7 +1069,15 @@ $nostrScript
 }
 .blog-entry-title { font-weight: bold; color: var(--accent); }
 .blog-entry-date { font-size: 0.8rem; color: var(--accent-alpha-70); white-space: nowrap; }
-.blog-entry-meta { font-size: 0.8rem; color: var(--accent-alpha-70); margin-bottom: 6px; }
+.blog-entry-meta {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px;
+  font-size: 0.8rem; color: var(--accent-alpha-70); margin-bottom: 6px;
+}
+.blog-entry-likes {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--accent);
+}
 .blog-entry-desc { font-size: 0.9rem; color: var(--color); opacity: 0.8; }
 /* Search Section */
 .search-section { margin-bottom: 50px; }
@@ -1406,6 +1414,9 @@ $nostrScript
       final desc = post.description != null && post.description!.isNotEmpty
           ? '<div class="blog-entry-desc">${escapeHtml(post.description!)}</div>'
           : '';
+      final likes = post.likesCount > 0
+          ? '<span class="blog-entry-likes" title="Likes">&#9829; ${post.likesCount}</span>'
+          : '';
       postsHtml.writeln('''
         <a href="/${escapeHtml(post.callsign)}/blog/${escapeHtml(post.postId)}.html" class="blog-entry">
           <div class="blog-entry-header">
@@ -1414,6 +1425,7 @@ $nostrScript
           </div>
           <div class="blog-entry-meta">
             <span class="blog-entry-author">${escapeHtml(post.author)}</span>
+            $likes
           </div>
           $desc
         </a>

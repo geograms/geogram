@@ -688,6 +688,15 @@ class BlogHandler {
           final postPath = 'blog/$yearName/$postId';
           final comments = await BlogFolderUtils.loadComments(postPath, storage: storage);
 
+          // Feedback counts (likes/dislikes/points)
+          final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(
+            postPath,
+            storage: storage,
+          );
+          final likes = feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0;
+          final dislikes = feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0;
+          final points = feedbackCounts[FeedbackFolderUtils.feedbackTypePoints] ?? 0;
+
           posts.add({
             'id': post.id,
             'title': post.title,
@@ -699,6 +708,9 @@ class BlogHandler {
             'status': post.status.name,
             'tags': post.tags,
             'comment_count': comments.length,
+            'likes_count': likes,
+            'dislikes_count': dislikes,
+            'points_count': points,
             'has_file': post.hasFile,
             'has_image': post.hasImage,
             'has_location': post.hasLocation,

@@ -720,6 +720,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       proxySingleDevice(client, method, path, '{}', '');
   @override
   void homepageLog(String level, String message) => _log(level, message);
+  @override
+  Iterable<DeviceProxyClient> get homepageConnectedClients => _clients.values;
 
   // Shared alert API handlers
   AlertHandler? _alertApi;
@@ -1800,6 +1802,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       // Start health watchdog for auto-recovery
       startHealthWatchdog();
 
+      // Periodic refresh of cached blog summaries (likes, etc.) — hourly
+      startHomepageRefresh();
+
       // Download console VM files in background (desktop/server only)
       if (!Platform.isAndroid && !Platform.isIOS) {
         downloadAllConsoleVmFiles();
@@ -2018,6 +2023,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
     // Stop health watchdog
     stopHealthWatchdog();
+
+    // Stop hourly blog cache refresh
+    stopHomepageRefresh();
 
     // Stop karma service
     stopKarmaService();

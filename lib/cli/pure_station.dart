@@ -822,6 +822,8 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       proxySingleDevice(client, method, path, '{}', '');
   @override
   void homepageLog(String level, String message) => _log(level, message);
+  @override
+  Iterable<DeviceProxyClient> get homepageConnectedClients => _clients.values;
 
   // Shared API handlers
   AlertHandler? _alertApi;
@@ -1898,6 +1900,9 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       // Start health watchdog for auto-recovery
       _startHealthWatchdog();
 
+      // Periodic refresh of cached blog summaries (likes, etc.) — hourly
+      startHomepageRefresh();
+
       // Download console VM files in background
       downloadAllConsoleVmFiles();
 
@@ -2114,6 +2119,9 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
     // Stop health watchdog
     _stopHealthWatchdog();
+
+    // Stop hourly blog cache refresh
+    stopHomepageRefresh();
 
     // Close all client connections
     for (final client in _clients.values) {

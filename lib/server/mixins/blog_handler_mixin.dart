@@ -24,6 +24,7 @@ class RecentBlogEntry {
   final String? description;
   final String displayDate;
   final DateTime dateTime;
+  final int likesCount;
 
   RecentBlogEntry({
     required this.callsign,
@@ -33,6 +34,7 @@ class RecentBlogEntry {
     this.description,
     required this.displayDate,
     required this.dateTime,
+    this.likesCount = 0,
   });
 }
 
@@ -348,6 +350,20 @@ mixin BlogHandlerMixin {
                     final post = BlogPost.fromText(content, postId);
                     if (!post.isPublished) continue;
 
+                    // Read likes count from per-callsign feedback storage
+                    int likes = 0;
+                    try {
+                      final blogPath =
+                          '${collectionEntity.path.split('/').last}/$yearName/$postId';
+                      final feedbackStorage =
+                          FilesystemProfileStorage(callsignEntity.path);
+                      final counts = await FeedbackFolderUtils.getAllFeedbackCounts(
+                        blogPath,
+                        storage: feedbackStorage,
+                      );
+                      likes = counts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0;
+                    } catch (_) {}
+
                     allPosts.add(RecentBlogEntry(
                       callsign: callsign,
                       postId: postId,
@@ -356,6 +372,7 @@ mixin BlogHandlerMixin {
                       description: post.description,
                       displayDate: post.displayDate,
                       dateTime: post.dateTime,
+                      likesCount: likes,
                     ));
                   } catch (_) {
                     // Skip malformed posts
