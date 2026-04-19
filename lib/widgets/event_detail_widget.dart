@@ -316,6 +316,12 @@ class EventDetailWidget extends StatelessWidget {
 
   Widget _buildEventUrl(
       BuildContext context, ThemeData theme, I18nService i18n) {
+    // Private and group-restricted events aren't reachable through the
+    // station's public /events/ path, so the URL would 404 for anyone the
+    // user shared it with — hiding it (and the open / copy actions) avoids
+    // leading the author into sharing a dead link.
+    if (event.visibility != 'public') return const SizedBox.shrink();
+
     final stationUrl = StationService().getPreferredStation()?.url;
     if (stationUrl == null) return const SizedBox.shrink();
 
