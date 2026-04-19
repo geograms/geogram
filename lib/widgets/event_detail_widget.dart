@@ -325,11 +325,24 @@ class EventDetailWidget extends StatelessWidget {
     final stationUrl = StationService().getPreferredStation()?.url;
     if (stationUrl == null) return const SizedBox.shrink();
 
+    // Stations route per-callsign apps under /{callsign}/..., so the public
+    // event URL must include the owner's callsign. Without it, p2p.radio
+    // 404s and the file URLs the page emits would resolve to the wrong
+    // namespace. event.author may be empty for events the local user owns;
+    // fall back to currentCallsign in that case.
+    final ownerCallsign = event.author.isNotEmpty
+        ? event.author
+        : (currentCallsign ?? '');
+    if (ownerCallsign.isEmpty) return const SizedBox.shrink();
+
     final httpUrl = stationUrl
         .replaceFirst('wss://', 'https://')
         .replaceFirst('ws://', 'http://');
     final eventPath = event.slug ?? event.id;
-    final url = '$httpUrl/events/$eventPath';
+    // Encode the callsign and the event id (which can contain spaces, e.g.
+    // "2026-04-11_Return home") so the resulting URL is shareable as-is.
+    final url =
+        '$httpUrl/${Uri.encodeComponent(ownerCallsign)}/events/${Uri.encodeComponent(eventPath)}';
 
     return Padding(
       padding: const EdgeInsets.only(top: 12),

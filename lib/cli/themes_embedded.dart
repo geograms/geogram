@@ -1233,7 +1233,12 @@ class ThemesEmbedded {
     }
 
     function fileUrl(filename) {
-      return '/events/' + encodeURIComponent(ev.id) + '/files/' + encodeURIComponent(filename);
+      // Build a path relative to the current page so the station's per-
+      // callsign prefix (/{callsign}/events/{id}) is preserved. Hard-coding
+      // "/events/..." would 404 on a station that mounts each device under
+      // its own callsign namespace.
+      var base = window.location.pathname.replace(/\/$/, '');
+      return base + '/files/' + encodeURIComponent(filename);
     }
 
     // === Build page ===
