@@ -805,11 +805,17 @@ class _EventEngagementStatsRow extends StatefulWidget {
 class _EventEngagementStatsRowState
     extends State<_EventEngagementStatsRow> {
   int? _viewCount;
+  // event.likeCount comes from the in-memory Event object whose `likes` list
+  // is loaded from event.txt — that file is never updated by the web Like
+  // button, which writes directly to feedback/likes.txt. Read the canonical
+  // feedback file here so a like toggled on the public web page shows up
+  // in the desktop/Android UI without waiting for a full event reparse.
+  int? _likeCount;
 
   @override
   void initState() {
     super.initState();
-    _loadViewCount();
+    _loadCounts();
   }
 
   @override
@@ -817,26 +823,37 @@ class _EventEngagementStatsRowState
     super.didUpdateWidget(oldWidget);
     if (oldWidget.event.id != widget.event.id ||
         oldWidget.appPath != widget.appPath) {
-      _loadViewCount();
+      _loadCounts();
     }
   }
 
-  Future<void> _loadViewCount() async {
+  Future<void> _loadCounts() async {
     final appPath = widget.appPath;
     if (appPath.isEmpty || widget.event.id.length < 4) return;
     final storage = AppService().profileStorage;
     if (storage == null) return;
+    final year = widget.event.id.substring(0, 4);
+    final contentPath = '$appPath/$year/${widget.event.id}';
     try {
-      final year = widget.event.id.substring(0, 4);
-      final contentPath = '$appPath/$year/${widget.event.id}';
-      final count = await FeedbackFolderUtils.getViewCount(
+      final views = await FeedbackFolderUtils.getViewCount(
         contentPath,
         storage: storage,
       );
       if (!mounted) return;
-      setState(() => _viewCount = count);
+      setState(() => _viewCount = views);
     } catch (e) {
       LogService().log('EventDetail: view count load failed: $e');
+    }
+    try {
+      final likes = await FeedbackFolderUtils.getFeedbackCount(
+        contentPath,
+        FeedbackFolderUtils.feedbackTypeLikes,
+        storage: storage,
+      );
+      if (!mounted) return;
+      setState(() => _likeCount = likes);
+    } catch (e) {
+      LogService().log('EventDetail: like count load failed: $e');
     }
   }
 
@@ -855,7 +872,11 @@ class _EventEngagementStatsRowState
             Icon(Icons.favorite, size: 20, color: theme.colorScheme.error),
             const SizedBox(width: 6),
             Text(
-              '${widget.event.likeCount} ${i18n.t('likes')}',
+              // Prefer the live count from feedback/likes.txt so likes
+              // toggled on the public web page show up immediately. Falls
+              // back to the in-memory event.likeCount until the async load
+              // resolves so we don't flicker from "X" → "0" → "X".
+              '${_likeCount ?? widget.event.likeCount} ${i18n.t('likes')}',
               style: theme.textTheme.bodyMedium,
             ),
           ],
