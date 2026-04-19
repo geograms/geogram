@@ -39,23 +39,37 @@ class MirrorDevice {
     DateTime? lastSeen,
   }) : lastSeen = lastSeen ?? DateTime.now();
 
-  /// Short display name: nickname > deviceName > platform, with install suffix.
+  /// Composed display name: "{profile_nickname} ({callsign}, {device_name})".
+  ///
+  /// `nickname` is the user's profile nickname (e.g. "brito"), shared across
+  /// all of their devices. `deviceName` is the per-device label (e.g.
+  /// "motorola", "Linux Desktop"). Both are needed to disambiguate multiple
+  /// devices belonging to the same profile, so the format keeps them
+  /// distinct rather than treating them as interchangeable.
   String get displayName {
-    final name = (nickname != null && nickname!.isNotEmpty)
-        ? nickname!
-        : (deviceName != null && deviceName!.isNotEmpty)
-            ? deviceName!
-            : null;
-    if (name != null) {
-      if (installId != null && installId!.length >= 4) {
-        return '$name (${installId!.substring(0, 4)})';
-      }
-      return name;
+    final profile = nickname?.trim();
+    final device = deviceName?.trim();
+    final hasProfile = profile != null &&
+        profile.isNotEmpty &&
+        profile.toUpperCase() != callsign.toUpperCase();
+    final hasDevice = device != null &&
+        device.isNotEmpty &&
+        device.toUpperCase() != callsign.toUpperCase() &&
+        device != profile;
+
+    if (hasProfile && hasDevice) {
+      return '$profile ($callsign, $device)';
+    }
+    if (hasProfile) {
+      return '$profile ($callsign)';
+    }
+    if (hasDevice) {
+      return '$device ($callsign)';
     }
     if (installId != null && installId!.length >= 4) {
-      return '$platform (${installId!.substring(0, 4)})';
+      return '$callsign (${installId!.substring(0, 4)})';
     }
-    return platform;
+    return callsign;
   }
 
   @override

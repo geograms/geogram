@@ -237,6 +237,11 @@ class DevicesService {
       final existing = _devices[key];
       final connectionMethod = m.connectionType == 'lan' ? 'lan' : m.connectionType;
       final url = m.directAddress ?? m.stationRelayUrl;
+      // Use MirrorDevice.displayName as the device-list label — it composes
+      // profile nickname, callsign and per-device name into one string so
+      // peers sharing a callsign stay distinguishable in the UI.
+      final composedNickname = m.displayName;
+      final deviceLabel = m.deviceName ?? m.platform;
 
       if (existing != null) {
         if (!existing.connectionMethods.contains(connectionMethod)) {
@@ -250,13 +255,12 @@ class DevicesService {
           existing.url = url;
           changed = true;
         }
-        if (m.nickname != null && m.nickname!.isNotEmpty &&
-            existing.nickname != m.nickname) {
-          existing.nickname = m.nickname;
+        if (existing.nickname != composedNickname) {
+          existing.nickname = composedNickname;
           changed = true;
-        } else if ((existing.nickname == null || existing.nickname!.isEmpty) &&
-            m.deviceName != null && m.deviceName!.isNotEmpty) {
-          existing.nickname = m.deviceName;
+        }
+        if (existing.name != deviceLabel) {
+          existing.name = deviceLabel;
           changed = true;
         }
         if (m.npub != null && m.npub!.isNotEmpty && existing.npub != m.npub) {
@@ -272,8 +276,8 @@ class DevicesService {
       } else {
         _devices[key] = RemoteDevice(
           callsign: callsign,
-          name: m.deviceName ?? m.nickname ?? callsign,
-          nickname: m.nickname ?? m.deviceName,
+          name: deviceLabel,
+          nickname: composedNickname,
           url: url,
           npub: m.npub,
           isOnline: true,
