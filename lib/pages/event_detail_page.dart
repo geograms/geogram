@@ -6,9 +6,7 @@
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
 
 import '../dialogs/new_update_dialog.dart';
@@ -55,12 +53,9 @@ class EventDetailPage extends StatefulWidget {
 }
 
 class _EventDetailPageState extends State<EventDetailPage> {
-  final ImagePicker _imagePicker = ImagePicker();
   late Event _event;
   bool _hasChanges = false;
   int _filesRefreshKey = 0;
-
-  bool get _isMobile => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
 
   @override
   void initState() {
@@ -161,23 +156,17 @@ class _EventDetailPageState extends State<EventDetailPage> {
   Future<void> _uploadFiles() async {
     if (widget.readOnly || widget.appPath.isEmpty) return;
     try {
-      List<String> paths;
-
-      if (_isMobile) {
-        final images = await _imagePicker.pickMultiImage(
-          imageQuality: 85,
-          maxWidth: 1920,
-          maxHeight: 1920,
-        );
-        paths = images.map((f) => f.path).toList();
-      } else {
-        paths = await FileFolderPicker.show(
-          context,
-          title: widget.i18n.t('select_files_to_add'),
-          allowMultiSelect: true,
-          profileStorage: AppService().profileStorage,
-        ) ?? [];
-      }
+      // Use FileFolderPicker on every platform so encrypted profile folders
+      // are browsable — the native image_picker cannot see inside
+      // ProfileStorage. No allowedExtensions filter so PDFs, docs, and other
+      // attachments still work; the rename logic below treats images and
+      // video clips as gallery entries (flyer.* / photo-N.*).
+      final paths = await FileFolderPicker.show(
+        context,
+        title: widget.i18n.t('select_files_to_add'),
+        allowMultiSelect: true,
+        profileStorage: AppService().profileStorage,
+      ) ?? [];
 
       if (paths.isNotEmpty && mounted) {
         final year = _event.id.substring(0, 4);
@@ -191,11 +180,17 @@ class _EventDetailPageState extends State<EventDetailPage> {
           final fileName = path.basename(filePath);
           final sourceFile = File(filePath);
           final ext = path.extension(fileName).replaceFirst('.', '').toLowerCase();
-          final isImage = const ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']
-              .contains(ext);
+          // Photos and short video clips both belong in the event's media
+          // gallery; everything else (PDFs, docs, etc.) keeps its original
+          // filename so it shows up under the generic file list.
+          const galleryExtensions = {
+            'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg',
+            'mp4', 'mov', 'webm', 'mkv', 'avi', 'wmv', 'flv',
+          };
+          final isGalleryMedia = galleryExtensions.contains(ext);
 
           String targetName;
-          if (isImage) {
+          if (isGalleryMedia) {
             targetName = EventService.nextFlyerName(existingFlyers, ext);
             existingFlyers.add(targetName);
           } else {

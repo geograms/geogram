@@ -660,10 +660,21 @@ class EventService {
     try {
       final entries = await _storage.listDirectory(eventRelativePath);
       final flyers = <String>[];
-      final imagePattern = RegExp(r'\.(jpg|jpeg|png|gif|webp)$', caseSensitive: false);
+      // Photos AND short video clips both belong to the event's media gallery.
+      // The trailer keeps its own slot (matched by the literal filename
+      // "trailer.*"); a "photo-N.mp4" or "flyer.mp4" is just another item in
+      // the gallery the user added through the same picker.
+      final mediaPattern = RegExp(
+        r'\.(jpg|jpeg|png|gif|webp|mp4|mov|webm|mkv|avi|wmv|flv)$',
+        caseSensitive: false,
+      );
+      final trailerPattern =
+          RegExp(r'^trailer\.', caseSensitive: false);
 
       for (var entry in entries) {
-        if (!entry.isDirectory && imagePattern.hasMatch(entry.name)) {
+        if (entry.isDirectory) continue;
+        if (trailerPattern.hasMatch(entry.name)) continue;
+        if (mediaPattern.hasMatch(entry.name)) {
           flyers.add(entry.name);
         }
       }

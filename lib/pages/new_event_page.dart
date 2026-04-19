@@ -1321,25 +1321,21 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectPhotos() async {
-    List<String> filePaths;
-
-    if (_isMobile) {
-      final images = await _imagePicker.pickMultiImage(
-        imageQuality: 85,
-        maxWidth: 1920,
-        maxHeight: 1920,
-      );
-      filePaths = images.map((f) => f.path).toList();
-    } else {
-      final paths = await FileFolderPicker.show(
-        context,
-        title: _i18n.t('select_photos'),
-        allowMultiSelect: true,
-        allowedExtensions: FileFolderPicker.imageExtensions,
-        profileStorage: AppService().profileStorage,
-      );
-      filePaths = paths ?? [];
-    }
+    // Use FileFolderPicker on every platform so encrypted profile folders are
+    // browsable — the native image_picker can't see inside ProfileStorage.
+    // The combined extensions set lets the user pick photos and short video
+    // clips from the same picker.
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('select_photos'),
+      allowMultiSelect: true,
+      allowedExtensions: {
+        ...FileFolderPicker.imageExtensions,
+        ...FileFolderPicker.videoExtensions,
+      },
+      profileStorage: AppService().profileStorage,
+    );
+    final filePaths = paths ?? [];
 
     if (filePaths.isEmpty) return;
 
