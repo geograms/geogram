@@ -19,6 +19,7 @@ import '../services/app_service.dart';
 import '../services/event_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
 import 'event_feedback_section.dart';
 import 'event_community_media_section.dart';
@@ -72,6 +73,11 @@ class EventDetailWidget extends StatelessWidget {
           // Event metadata (author, date, location, visibility)
           _buildMetadata(theme, i18n),
           _buildEventUrl(context, theme, i18n),
+          const SizedBox(height: 12),
+          // Engagement summary (likes / comments / views) — surfaced at the
+          // top so the visitor sees activity at a glance instead of having
+          // to scroll past the description, registration list and files.
+          _buildEngagementStats(theme, i18n),
           const SizedBox(height: 16),
 
           // Flyer display
@@ -158,10 +164,6 @@ class EventDetailWidget extends StatelessWidget {
             appPath: appPath,
             onFeedbackUpdated: onFeedbackUpdated,
           ),
-          const SizedBox(height: 24),
-
-          // Engagement stats
-          _buildEngagementStats(theme, i18n),
             ],
           ),
         ),
@@ -805,12 +807,14 @@ class _EventEngagementStatsRow extends StatefulWidget {
 class _EventEngagementStatsRowState
     extends State<_EventEngagementStatsRow> {
   int? _viewCount;
-  // event.likeCount comes from the in-memory Event object whose `likes` list
-  // is loaded from event.txt — that file is never updated by the web Like
-  // button, which writes directly to feedback/likes.txt. Read the canonical
-  // feedback file here so a like toggled on the public web page shows up
-  // in the desktop/Android UI without waiting for a full event reparse.
+  // event.likeCount and event.commentCount come from the in-memory Event
+  // whose lists are loaded from event.txt — that file is never updated by
+  // the web Like / comment flows, which write directly to
+  // feedback/likes.txt and feedback/comments/. Read the canonical feedback
+  // files here so activity from the public web page shows up in the
+  // desktop/Android UI without waiting for a full event reparse.
   int? _likeCount;
+  int? _commentCount;
 
   @override
   void initState() {
@@ -855,6 +859,16 @@ class _EventEngagementStatsRowState
     } catch (e) {
       LogService().log('EventDetail: like count load failed: $e');
     }
+    try {
+      final comments = await FeedbackCommentUtils.getCommentCount(
+        contentPath,
+        storage: storage,
+      );
+      if (!mounted) return;
+      setState(() => _commentCount = comments);
+    } catch (e) {
+      LogService().log('EventDetail: comment count load failed: $e');
+    }
   }
 
   @override
@@ -887,7 +901,9 @@ class _EventEngagementStatsRowState
             const Icon(Icons.comment_outlined, size: 20),
             const SizedBox(width: 6),
             Text(
-              '${widget.event.commentCount} ${i18n.t('comments_plural')}',
+              // Live count from feedback/comments/ — same fall-back rule
+              // as likes so we don't flicker through 0.
+              '${_commentCount ?? widget.event.commentCount} ${i18n.t('comments_plural')}',
               style: theme.textTheme.bodyMedium,
             ),
           ],
