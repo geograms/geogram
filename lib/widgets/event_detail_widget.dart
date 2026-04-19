@@ -15,8 +15,11 @@ import '../services/station_service.dart';
 import '../models/event_link.dart';
 import '../models/event_update.dart';
 import '../models/event_registration.dart';
+import '../services/app_service.dart';
 import '../services/event_service.dart';
 import '../services/i18n_service.dart';
+import '../services/log_service.dart';
+import '../util/feedback_folder_utils.dart';
 import 'event_feedback_section.dart';
 import 'event_community_media_section.dart';
 import '../pages/photo_viewer_page.dart';
@@ -767,25 +770,126 @@ class EventDetailWidget extends StatelessWidget {
   }
 
   Widget _buildEngagementStats(ThemeData theme, I18nService i18n) {
-    return Row(
-      children: [
-        Icon(Icons.favorite, size: 20, color: theme.colorScheme.error),
-        const SizedBox(width: 6),
-        Text(
-          '${event.likeCount} ${i18n.t('likes')}',
-          style: theme.textTheme.bodyMedium,
-        ),
-        const SizedBox(width: 20),
-        Icon(Icons.comment_outlined, size: 20),
-        const SizedBox(width: 6),
-        Text(
-          '${event.commentCount} ${i18n.t('comments_plural')}',
-          style: theme.textTheme.bodyMedium,
-        ),
-      ],
+    return _EventEngagementStatsRow(
+      event: event,
+      appPath: appPath,
+      i18n: i18n,
     );
   }
 
+}
+
+/// Engagement stats (likes / comments / views) for the detail page.
+///
+/// Likes and comments come from the in-memory [Event] object; the view
+/// count is the line-count of the per-event NOSTR-signed views file
+/// (`{eventPath}/feedback/views.txt`) so it stays in sync with what the
+/// public web page shows. Loaded asynchronously so the rest of the
+/// detail page renders immediately.
+class _EventEngagementStatsRow extends StatefulWidget {
+  final Event event;
+  final String appPath;
+  final I18nService i18n;
+
+  const _EventEngagementStatsRow({
+    required this.event,
+    required this.appPath,
+    required this.i18n,
+  });
+
+  @override
+  State<_EventEngagementStatsRow> createState() =>
+      _EventEngagementStatsRowState();
+}
+
+class _EventEngagementStatsRowState
+    extends State<_EventEngagementStatsRow> {
+  int? _viewCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadViewCount();
+  }
+
+  @override
+  void didUpdateWidget(covariant _EventEngagementStatsRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.event.id != widget.event.id ||
+        oldWidget.appPath != widget.appPath) {
+      _loadViewCount();
+    }
+  }
+
+  Future<void> _loadViewCount() async {
+    final appPath = widget.appPath;
+    if (appPath.isEmpty || widget.event.id.length < 4) return;
+    final storage = AppService().profileStorage;
+    if (storage == null) return;
+    try {
+      final year = widget.event.id.substring(0, 4);
+      final contentPath = '$appPath/$year/${widget.event.id}';
+      final count = await FeedbackFolderUtils.getViewCount(
+        contentPath,
+        storage: storage,
+      );
+      if (!mounted) return;
+      setState(() => _viewCount = count);
+    } catch (e) {
+      LogService().log('EventDetail: view count load failed: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final i18n = widget.i18n;
+    return Wrap(
+      spacing: 20,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.favorite, size: 20, color: theme.colorScheme.error),
+            const SizedBox(width: 6),
+            Text(
+              '${widget.event.likeCount} ${i18n.t('likes')}',
+              style: theme.textTheme.bodyMedium,
+            ),
+          ],
+        ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.comment_outlined, size: 20),
+            const SizedBox(width: 6),
+            Text(
+              '${widget.event.commentCount} ${i18n.t('comments_plural')}',
+              style: theme.textTheme.bodyMedium,
+            ),
+          ],
+        ),
+        if (_viewCount != null && _viewCount! > 0)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.visibility_outlined,
+                size: 20,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '$_viewCount ${_viewCount == 1 ? 'view' : 'views'}',
+                style: theme.textTheme.bodyMedium,
+              ),
+            ],
+          ),
+      ],
+    );
+  }
 }
 
 class EventRegistrationSection extends StatefulWidget {
