@@ -156,6 +156,7 @@ import 'file_browser_cache_service.dart';
 import '../util/video_metadata_extractor.dart';
 import '../api/handlers/feedback_handler.dart';
 import 'contact_service.dart';
+import '../models/contact.dart';
 
 class _MeetSessionSnapshot {
   final String state;
@@ -1789,6 +1790,62 @@ class LogApiService with ChatModificationMixin {
       }
     } catch (_) {}
     return null;
+  }
+
+  /// Upserts a contact for an access requester. If a contact with this
+  /// callsign or npub already exists, leaves it alone; otherwise creates
+  /// one under the contacts app so the picker shows
+  /// "displayName (callsign)" instead of an opaque "X1HFG3" later.
+  ///
+  /// Best-effort: any failure (no contacts app, ContactService not
+  /// initialised in this isolate, duplicate detection, ...) is logged
+  /// and ignored — the caller's main job is recording the request.
+  Future<void> _upsertRequesterContact({
+    required String callsign,
+    required String npub,
+    required String nickname,
+  }) async {
+    try {
+      final contactsApp = AppService().getAppByType('contacts');
+      final storagePath = contactsApp?.storagePath;
+      if (storagePath == null || storagePath.isEmpty) {
+        return;
+      }
+      final svc = ContactService();
+      svc.setStorage(FilesystemProfileStorage(storagePath));
+      await svc.initializeApp(storagePath);
+
+      // Skip if anything already represents this person.
+      final existing = await svc.loadContacts();
+      for (final c in existing) {
+        if (c.callsign.toUpperCase() == callsign.toUpperCase()) return;
+        if (c.npub != null && c.npub == npub) return;
+      }
+
+      final now = DateTime.now().toUtc();
+      final ts =
+          '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}_${now.second.toString().padLeft(2, '0')}';
+      final displayName = nickname.isNotEmpty ? nickname : callsign;
+      final contact = Contact(
+        callsign: callsign,
+        displayName: displayName,
+        npub: npub,
+        created: ts,
+        firstSeen: ts,
+        tags: const ['from-event-access-request'],
+      );
+      final err = await svc.saveContact(contact);
+      if (err != null) {
+        LogService().log('access-request: contact upsert skipped: $err');
+      } else {
+        LogService().log(
+          'access-request: contact upserted $callsign'
+          '${nickname.isNotEmpty ? " ($nickname)" : ""}',
+        );
+      }
+    } catch (e) {
+      LogService().log('access-request: contact upsert failed: $e');
+    }
   }
 
   /// True when the viewer (npub) is a member of any group listed on the
@@ -9171,6 +9228,7 @@ class LogApiService with ChatModificationMixin {
             headers: headers);
       }
       final callsign = (json['callsign'] as String?)?.trim() ?? '';
+      final nickname = (json['nickname'] as String?)?.trim() ?? '';
       final message = (json['message'] as String?)?.trim() ?? '';
 
       final event = await EventService().findEventByIdGlobal(eventId, dataDir);
@@ -9236,6 +9294,9 @@ class LogApiService with ChatModificationMixin {
         prior['callsign'] = callsign.isNotEmpty
             ? callsign
             : prior['callsign'] ?? '';
+        prior['nickname'] = nickname.isNotEmpty
+            ? nickname
+            : prior['nickname'] ?? '';
         prior['message'] = message.isNotEmpty
             ? message
             : prior['message'] ?? '';
@@ -9244,6 +9305,7 @@ class LogApiService with ChatModificationMixin {
         existing.add({
           'npub': npub,
           'callsign': callsign,
+          'nickname': nickname,
           'message': message,
           'requested_at': DateTime.now().toUtc().toIso8601String(),
           'status': 'pending',
@@ -9261,12 +9323,18 @@ class LogApiService with ChatModificationMixin {
       // notifications.
       if (firedNotification) {
         try {
+          // Compose the requester label so the Now panel shows
+          // "Nickname (X1HFG3)" when we have a profile name, falling
+          // back to just the callsign (or npub stub).
+          final requesterLabel = nickname.isNotEmpty && callsign.isNotEmpty
+              ? '$nickname ($callsign)'
+              : (callsign.isNotEmpty ? callsign : npub.substring(0, 12));
           EventBus().fire(NowItemEvent(
             id: 'access-request:${event.id}:$npub',
             appType: 'event_access_request',
             sourceId: event.id,
             sourceName: event.title,
-            callsign: callsign.isNotEmpty ? callsign : npub.substring(0, 12),
+            callsign: requesterLabel,
             summary: message.isNotEmpty
                 ? '"$message"'
                 : 'Wants access to "${event.title}"',
@@ -9274,6 +9342,19 @@ class LogApiService with ChatModificationMixin {
           ));
         } catch (e) {
           LogService().log('Now event fire failed: $e');
+        }
+        // Upsert a Contact for this requester so the owner sees their
+        // profile nickname (if they shared one in their kind-0 metadata)
+        // alongside the callsign in the Allowed-callsigns picker — and
+        // anywhere else the contact is later looked up. Best-effort:
+        // failures are non-fatal, the pending entry is the source of
+        // truth either way.
+        if (callsign.isNotEmpty) {
+          await _upsertRequesterContact(
+            callsign: callsign,
+            npub: npub,
+            nickname: nickname,
+          );
         }
       }
 

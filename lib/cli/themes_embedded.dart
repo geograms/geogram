@@ -1687,6 +1687,10 @@ class ThemesEmbedded {
             body: JSON.stringify({
               npub: npub,
               callsign: nostr.callsign || '',
+              // Profile nickname (from kind-0 metadata) — server upserts
+              // a Contact so the callsign-only "X1HFG3" turns into a
+              // recognisable "Joe (X1HFG3)" in the access-control picker.
+              nickname: nostr.nickname || '',
               message: note,
             }),
           }

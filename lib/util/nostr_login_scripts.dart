@@ -379,6 +379,18 @@ String getNostrLoginScripts() {
               try {
                 var meta = JSON.parse(ev.content);
                 var displayName = meta.display_name || meta.name || null;
+                // Cache the visitor's own nickname on GeogramNostr so any
+                // page that POSTs an action (e.g. the events request-access
+                // flow) can ship a human-friendly label alongside the
+                // auto-generated callsign — the receiver upserts a Contact
+                // so the owner sees a name instead of just an opaque key.
+                if (displayName &&
+                    window.GeogramNostr.pubkey &&
+                    ev.pubkey === window.GeogramNostr.pubkey &&
+                    (!window.GeogramNostr.nickname ||
+                     window.GeogramNostr.nickname === window.GeogramNostr.callsign)) {
+                  window.GeogramNostr.nickname = displayName;
+                }
                 if (displayName && window.GeogramNostr._onKind0) {
                   window.GeogramNostr._onKind0(ev.pubkey, displayName);
                 }
@@ -774,6 +786,19 @@ String getNostrLoginScripts() {
     updateHeaderUI();
     // Connect relay WebSocket for kind 0 metadata
     connectRelay();
+    // Try to fetch the visitor's own kind-0 metadata once the relay
+    // socket is open so window.GeogramNostr.nickname is filled in.
+    // Relay may take a moment to connect — retry a few times before
+    // giving up; the cached nickname is best-effort.
+    (function tryQueryOwnMetadata(attempts) {
+      var ws = window.GeogramNostr.relayWs;
+      if (ws && ws.readyState === 1) {
+        try { queryKind0(pubkey); } catch (_) {}
+        return;
+      }
+      if (attempts <= 0) return;
+      setTimeout(function() { tryQueryOwnMetadata(attempts - 1); }, 300);
+    })(8);
     document.dispatchEvent(new CustomEvent('nostr-connected', { detail: { pubkey: pubkey, callsign: callsign } }));
   }
 

@@ -2185,7 +2185,11 @@ class _NewEventPageState extends State<NewEventPage>
               final status = (entry['status'] as String?) ?? 'pending';
               final cs = ((entry['callsign'] as String?) ?? '').trim();
               final npub = ((entry['npub'] as String?) ?? '').trim();
+              final nick = ((entry['nickname'] as String?) ?? '').trim();
               final msg = ((entry['message'] as String?) ?? '').trim();
+              final personLabel = nick.isNotEmpty && cs.isNotEmpty
+                  ? '$nick ($cs)'
+                  : cs;
               final color = status == 'approved'
                   ? Colors.green
                   : status == 'denied'
@@ -2205,8 +2209,8 @@ class _NewEventPageState extends State<NewEventPage>
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
-                              cs.isNotEmpty
-                                  ? '$cs  ·  ${npub.length > 20 ? '${npub.substring(0, 16)}…' : npub}'
+                              personLabel.isNotEmpty
+                                  ? '$personLabel  ·  ${npub.length > 20 ? '${npub.substring(0, 16)}…' : npub}'
                                   : npub,
                               style: theme.textTheme.bodyMedium,
                               overflow: TextOverflow.ellipsis,

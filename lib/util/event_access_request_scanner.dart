@@ -69,15 +69,19 @@ class EventAccessRequestScanner {
               final npub = (raw['npub'] as String?) ?? '';
               if (npub.isEmpty) continue;
               final callsign = (raw['callsign'] as String?) ?? '';
+              final nickname = (raw['nickname'] as String?) ?? '';
               final message = (raw['message'] as String?) ?? '';
+              final label = nickname.isNotEmpty && callsign.isNotEmpty
+                  ? '$nickname ($callsign)'
+                  : (callsign.isNotEmpty
+                      ? callsign
+                      : npub.substring(0, 12));
               EventBus().fire(NowItemEvent(
                 id: 'access-request:$eventId:$npub',
                 appType: 'event_access_request',
                 sourceId: eventId,
                 sourceName: title,
-                callsign: callsign.isNotEmpty
-                    ? callsign
-                    : npub.substring(0, 12),
+                callsign: label,
                 summary: message.isNotEmpty
                     ? '"$message"'
                     : 'Wants access to "$title"',
