@@ -13,11 +13,10 @@ import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
+import '../services/remote_blog_actions.dart';
 import '../services/station_service.dart';
 import '../services/storage_config.dart';
 import '../util/feedback_folder_utils.dart';
-import '../util/nostr_crypto.dart';
-import '../util/nostr_event.dart';
 import '../widgets/blog_post_detail_widget.dart';
 
 /// Page for browsing blog posts from a remote device
@@ -583,148 +582,67 @@ class _RemoteBlogPostDetailPageState extends State<_RemoteBlogPostDetailPage> {
     return true;
   }
 
-  /// Sign a kind-7 reaction event and POST it to the remote device's
-  /// /api/blog/{postId}/{action} (or /react/{emoji}) endpoint. Same
-  /// shape the local BlogService produces, so the server-side
-  /// verification is identical.
+  /// Sign + post a feedback event through the shared
+  /// [RemoteBlogActions] helper — same code the debug API exercises,
+  /// so unit/integration tests that drive those endpoints prove this
+  /// button works end-to-end.
   Future<void> _signAndPostFeedback(String feedbackType, String actionName) async {
     if (_posting || !_requireNostrKeys()) return;
-    final profile = _profileService.getProfile();
-    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
-    final authorNpub = _post.metadata['npub'] ?? '';
-    final event = NostrEvent(
-      pubkey: pubkeyHex,
-      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      kind: NostrEventKind.reaction,
-      tags: [
-        ['p', authorNpub],
-        ['e', _post.id],
-        ['type', feedbackType],
-      ],
-      content: actionName,
-    );
-    event.calculateId();
-    event.signWithNsec(profile.nsec);
-
-    final subPath = actionName == 'reaction'
-        ? 'react/$feedbackType'
-        : actionName;
     setState(() => _posting = true);
     try {
-      final resp = await _devicesService.makeDeviceApiRequest(
-        callsign: widget.device.callsign,
-        method: 'POST',
-        path: '/api/blog/${_post.id}/$subPath',
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(event.toJson()),
+      final r = await RemoteBlogActions.sendFeedback(
+        remoteCallsign: widget.device.callsign,
+        postId: _post.id,
+        feedbackType: feedbackType,
+        actionName: actionName,
+        authorNpub: _post.metadata['npub'],
       );
-      if (resp == null) {
-        _toast('Network error');
-      } else if (resp.statusCode != 200) {
-        _toast('Server refused the action (HTTP ${resp.statusCode})');
+      if (!r.success) {
+        _toast(r.error ?? 'Action failed');
       } else {
         await _refreshPost();
       }
-    } catch (e) {
-      LogService().log('RemoteBlogDetail: feedback $actionName failed: $e');
-      _toast('Action failed: $e');
     } finally {
       if (mounted) setState(() => _posting = false);
     }
   }
 
-  /// Sign a kind-1 comment event and POST it to
-  /// /api/blog/{postId}/comment with `{author, content, npub, signature}`.
+  /// Sign + post a comment via [RemoteBlogActions].
   Future<void> _postComment() async {
     final text = _commentController.text.trim();
     if (text.isEmpty || _posting || !_requireNostrKeys()) return;
-    final profile = _profileService.getProfile();
-    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
-    final event = NostrEvent(
-      pubkey: pubkeyHex,
-      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      kind: 1,
-      tags: [
-        ['e', _post.id],
-        ['t', 'blog-comment'],
-        ['callsign', profile.callsign],
-      ],
-      content: text,
-    );
-    event.calculateId();
-    event.signWithNsec(profile.nsec);
-
     setState(() => _posting = true);
     try {
-      final resp = await _devicesService.makeDeviceApiRequest(
-        callsign: widget.device.callsign,
-        method: 'POST',
-        path: '/api/blog/${_post.id}/comment',
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'author': profile.callsign,
-          'content': text,
-          'npub': profile.npub,
-          'signature': event.sig,
-        }),
+      final r = await RemoteBlogActions.sendComment(
+        remoteCallsign: widget.device.callsign,
+        postId: _post.id,
+        content: text,
       );
-      if (resp == null) {
-        _toast('Network error');
-      } else if (resp.statusCode != 200) {
-        _toast('Comment rejected (HTTP ${resp.statusCode})');
+      if (!r.success) {
+        _toast(r.error ?? 'Comment rejected');
       } else {
         _commentController.clear();
         await _refreshPost();
       }
-    } catch (e) {
-      LogService().log('RemoteBlogDetail: addComment failed: $e');
-      _toast('Comment failed: $e');
     } finally {
       if (mounted) setState(() => _posting = false);
     }
   }
 
-  /// Record a signed view event so the author sees traffic — mirrors
-  /// the events-page view flow. Fails silently (no-op) if the user
+  /// Record a signed view event. Fails silently (no-op) if the user
   /// has no NOSTR keys; the view simply isn't counted.
   Future<void> _recordView() async {
     if (_viewRecorded) return;
     _viewRecorded = true;
-    final profile = _profileService.getProfile();
-    if (profile.npub.isEmpty || profile.nsec.isEmpty) return;
-    try {
-      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
-      final event = NostrEvent(
-        pubkey: pubkeyHex,
-        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        kind: 1,
-        tags: [
-          ['t', 'blog-view'],
-          ['e', _post.id],
-          ['callsign', profile.callsign],
-        ],
-        content: '',
-      );
-      event.calculateId();
-      event.signWithNsec(profile.nsec);
-      final resp = await _devicesService.makeDeviceApiRequest(
-        callsign: widget.device.callsign,
-        method: 'POST',
-        path: '/api/feedback/blog/${_post.id}/view',
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(event.toJson()),
-      );
-      if (resp != null && resp.statusCode == 200) {
-        try {
-          final data = json.decode(resp.body) as Map<String, dynamic>;
-          final total = data['total_views'];
-          if (total is num && mounted) {
-            setState(() => _viewCount = total.toInt());
-          }
-        } catch (_) {}
+    final r = await RemoteBlogActions.recordView(
+      remoteCallsign: widget.device.callsign,
+      postId: _post.id,
+    );
+    if (r.success && mounted) {
+      final total = r.body?['total_views'];
+      if (total is num) {
+        setState(() => _viewCount = total.toInt());
       }
-    } catch (e) {
-      LogService().log('RemoteBlogDetail: record view failed: $e');
     }
   }
 

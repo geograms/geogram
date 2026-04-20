@@ -4308,6 +4308,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
             case 'comment':
               final author = eventJson['author'] as String?;
               final content = eventJson['content'] as String?;
+              final createdAtRaw = eventJson['created_at'];
+              final createdAt =
+                  createdAtRaw is num ? createdAtRaw.toInt() : null;
               if (author == null || author.isEmpty) {
                 statusOverride = 400;
                 result = {'error': 'Missing required field: author'};
@@ -4319,6 +4322,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
                   postId, author, content,
                   npub: eventJson['npub'] as String?,
                   signature: eventJson['signature'] as String?,
+                  createdAt: createdAt,
                 );
               }
               break;

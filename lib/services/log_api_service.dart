@@ -38,6 +38,7 @@ import 'conference_schedule_service.dart';
 import 'conference_web_page_service.dart';
 import 'event_web_page_service.dart';
 import 'device_apps_service.dart';
+import 'remote_blog_actions.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../connection/connection_manager.dart';
@@ -3025,8 +3026,11 @@ class LogApiService with ChatModificationMixin {
         return _handlePowerModeAction(params, headers);
       }
 
-      // Handle device actions separately (they are async)
-      if (action.toLowerCase().startsWith('device_')) {
+      // Handle device actions separately (they are async). `remote_`
+      // actions share the same handler — they simulate what a remote-
+      // device panel does from the UI (sign locally, POST remotely).
+      if (action.toLowerCase().startsWith('device_') ||
+          action.toLowerCase().startsWith('remote_')) {
         return await _handleDeviceAction(action.toLowerCase(), params, headers);
       }
 
@@ -12349,12 +12353,38 @@ class LogApiService with ChatModificationMixin {
             headers: headers,
           );
 
+        case 'remote_blog_fetch':
+        case 'remote_blog_like':
+        case 'remote_blog_dislike':
+        case 'remote_blog_point':
+        case 'remote_blog_subscribe':
+        case 'remote_blog_react':
+        case 'remote_blog_comment':
+        case 'remote_blog_view':
+          return await _handleRemoteBlogAction(action, params, headers);
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
               'success': false,
               'error': 'Unknown device action: $action',
-              'available': ['device_browse_apps', 'device_open_detail', 'device_test_remote_chat', 'device_send_remote_chat', 'device_api_request', 'device_ping', 'device_send_dm'],
+              'available': [
+                'device_browse_apps',
+                'device_open_detail',
+                'device_test_remote_chat',
+                'device_send_remote_chat',
+                'device_api_request',
+                'device_ping',
+                'device_send_dm',
+                'remote_blog_fetch',
+                'remote_blog_like',
+                'remote_blog_dislike',
+                'remote_blog_point',
+                'remote_blog_subscribe',
+                'remote_blog_react',
+                'remote_blog_comment',
+                'remote_blog_view',
+              ],
             }),
             headers: headers,
           );
@@ -12370,6 +12400,149 @@ class LogApiService with ChatModificationMixin {
         headers: headers,
       );
     }
+  }
+
+  /// Simulates the remote-blog UI panel actions via debug API.
+  /// Exercises the exact same code path the GUI takes — signs NOSTR
+  /// events locally, POSTs through DevicesService (ConnectionManager),
+  /// and returns the server's reply plus a re-fetched post snapshot
+  /// so tests can verify the new counts.
+  Future<shelf.Response> _handleRemoteBlogAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final callsign = (params['callsign'] as String?)?.trim();
+    final postId = (params['postId'] as String?)?.trim();
+    if (callsign == null || callsign.isEmpty ||
+        postId == null || postId.isEmpty) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({
+          'success': false,
+          'error': 'callsign and postId are required',
+        }),
+        headers: headers,
+      );
+    }
+
+    RemoteBlogActionResult result;
+    switch (action) {
+      case 'remote_blog_fetch':
+        result = await RemoteBlogActions.fetchDetail(
+          remoteCallsign: callsign, postId: postId);
+        break;
+      case 'remote_blog_like':
+        result = await RemoteBlogActions.sendFeedback(
+          remoteCallsign: callsign,
+          postId: postId,
+          feedbackType: FeedbackFolderUtils.feedbackTypeLikes,
+          actionName: 'like',
+          authorNpub: params['authorNpub'] as String?,
+        );
+        break;
+      case 'remote_blog_dislike':
+        result = await RemoteBlogActions.sendFeedback(
+          remoteCallsign: callsign,
+          postId: postId,
+          feedbackType: FeedbackFolderUtils.feedbackTypeDislikes,
+          actionName: 'dislike',
+          authorNpub: params['authorNpub'] as String?,
+        );
+        break;
+      case 'remote_blog_point':
+        result = await RemoteBlogActions.sendFeedback(
+          remoteCallsign: callsign,
+          postId: postId,
+          feedbackType: FeedbackFolderUtils.feedbackTypePoints,
+          actionName: 'point',
+          authorNpub: params['authorNpub'] as String?,
+        );
+        break;
+      case 'remote_blog_subscribe':
+        result = await RemoteBlogActions.sendFeedback(
+          remoteCallsign: callsign,
+          postId: postId,
+          feedbackType: FeedbackFolderUtils.feedbackTypeSubscribe,
+          actionName: 'subscribe',
+          authorNpub: params['authorNpub'] as String?,
+        );
+        break;
+      case 'remote_blog_react':
+        final emoji = (params['emoji'] as String?)?.trim();
+        if (emoji == null || emoji.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'emoji is required for remote_blog_react',
+            }),
+            headers: headers,
+          );
+        }
+        result = await RemoteBlogActions.sendFeedback(
+          remoteCallsign: callsign,
+          postId: postId,
+          feedbackType: emoji,
+          actionName: 'reaction',
+          authorNpub: params['authorNpub'] as String?,
+        );
+        break;
+      case 'remote_blog_comment':
+        final content = (params['content'] as String?)?.trim();
+        if (content == null || content.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'content is required for remote_blog_comment',
+            }),
+            headers: headers,
+          );
+        }
+        result = await RemoteBlogActions.sendComment(
+          remoteCallsign: callsign,
+          postId: postId,
+          content: content,
+        );
+        break;
+      case 'remote_blog_view':
+        result = await RemoteBlogActions.recordView(
+          remoteCallsign: callsign, postId: postId);
+        break;
+      default:
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Unsupported action: $action',
+          }),
+          headers: headers,
+        );
+    }
+
+    // Re-fetch the post so the caller sees the new counts without
+    // another round-trip — this is what the UI does after every
+    // write. Skip when the action itself was a fetch.
+    Map<String, dynamic>? after;
+    if (action != 'remote_blog_fetch') {
+      final refresh = await RemoteBlogActions.fetchDetail(
+        remoteCallsign: callsign, postId: postId);
+      if (refresh.success && refresh.body != null) {
+        after = {
+          'likes_count': refresh.body!['likes_count'],
+          'dislikes_count': refresh.body!['dislikes_count'],
+          'points_count': refresh.body!['points_count'],
+          'subscribe_count': refresh.body!['subscribe_count'],
+          'view_count': refresh.body!['view_count'],
+          'comment_count': refresh.body!['comment_count'],
+        };
+      }
+    }
+
+    return shelf.Response.ok(
+      jsonEncode({
+        ...result.toJson(),
+        if (after != null) 'post_snapshot': after,
+      }),
+      headers: headers,
+    );
   }
 
   // ============================================================
@@ -15022,6 +15195,10 @@ class LogApiService with ChatModificationMixin {
       final content = json['content'] as String?;
       final npub = json['npub'] as String?;
       final signature = json['signature'] as String?;
+      // `created_at` is the timestamp the client used when signing.
+      // The server must reuse it to reconstruct the same event id.
+      final createdAtRaw = json['created_at'];
+      final createdAt = createdAtRaw is num ? createdAtRaw.toInt() : null;
 
       if (author == null || author.isEmpty) {
         return shelf.Response(
@@ -15045,6 +15222,7 @@ class LogApiService with ChatModificationMixin {
         content,
         npub: npub,
         signature: signature,
+        createdAt: createdAt,
       );
 
       if (result['success'] == true) {
