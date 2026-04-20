@@ -250,6 +250,50 @@ class _NewEventPageState extends State<NewEventPage>
     }
   }
 
+  /// Number of access requests still waiting on the owner's decision.
+  int get _pendingAccessRequestCount => _accessRequests
+      .where((e) => ((e['status'] as String?) ?? 'pending') == 'pending')
+      .length;
+
+  /// Builds the "Access control" tab label. When there are pending
+  /// requests on the event, a red badge with the count is anchored next
+  /// to the label so the owner sees that this tab needs their attention
+  /// without having to open it. Wrapping the whole label in a Tooltip
+  /// surfaces a one-line hint pointing them straight at the action.
+  Widget _buildAccessControlTabLabel() {
+    final pending = _pendingAccessRequestCount;
+    final theme = Theme.of(context);
+    final label = Text(_i18n.t('access_control'));
+    if (pending == 0) return label;
+    return Tooltip(
+      message: pending == 1
+          ? '1 access request needs your decision'
+          : '$pending access requests need your decision',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          label,
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.error,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '$pending',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onError,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _populateFromEvent(Event event) {
     _titleController.text = event.title;
     _contentController.text = event.content;
@@ -955,7 +999,7 @@ class _NewEventPageState extends State<NewEventPage>
             Tab(text: _i18n.t('media')),
             Tab(text: _i18n.t('links')),
             Tab(text: _i18n.t('updates_agenda')),
-            Tab(text: _i18n.t('access_control')),
+            Tab(child: _buildAccessControlTabLabel()),
           ],
         ),
       ),
@@ -1891,9 +1935,43 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Widget _buildAccessTab(ThemeData theme) {
+    final pending = _pendingAccessRequestCount;
     return ListView(
       padding: const EdgeInsets.all(24),
       children: [
+        if (pending > 0) ...[
+          // Top-of-tab banner so the owner doesn't have to scroll to find
+          // why the tab title was glowing red. Tapped once they're here
+          // anyway, so this is the natural place to point them at the
+          // pending list further down the page.
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.errorContainer,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: theme.colorScheme.error, width: 1),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.notifications_active,
+                    color: theme.colorScheme.error),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    pending == 1
+                        ? '1 pending access request — scroll down to approve or deny.'
+                        : '$pending pending access requests — scroll down to approve or deny.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onErrorContainer,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
         Text(
           _i18n.t('access_control'),
           style: theme.textTheme.titleLarge?.copyWith(
