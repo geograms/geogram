@@ -38,6 +38,7 @@ import 'services/chat_notification_service.dart';
 import 'services/station_content_notification_service.dart';
 import 'services/now_service.dart';
 import 'models/now_item.dart';
+import 'util/event_access_request_scanner.dart';
 import 'services/now_notification_bridge.dart';
 import 'services/event_service.dart';
 import 'services/station_activity_publisher_service.dart';
@@ -2981,6 +2982,20 @@ class _AppsPageState extends State<AppsPage> {
       final types = apps.map((c) => c.type).toList();
       LogService().log('AppsPage: Loaded ${apps.length} apps: $types');
       _loadKarmaMissions();
+
+      // Repopulate Now feed with any pending event-access requests still
+      // on disk so the apps-grid Events tile + Now drawer light up at
+      // app start, not only after the user opens the events page.
+      String? eventsPath;
+      for (final a in apps) {
+        if (a.type == 'events') {
+          eventsPath = a.storagePath;
+          break;
+        }
+      }
+      if (eventsPath != null && eventsPath.isNotEmpty) {
+        await EventAccessRequestScanner.republishPending(eventsPath);
+      }
     } catch (e) {
       LogService().log('Error loading apps: $e');
       if (mounted) setState(() => _isLoading = false);
