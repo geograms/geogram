@@ -17,7 +17,7 @@ import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
-import '../util/event_access_request_scanner.dart';
+import '../util/event_activity_notifier.dart';
 import '../widgets/event_tile_widget.dart';
 import '../widgets/event_detail_widget.dart';
 import '../widgets/file_folder_picker.dart';
@@ -257,12 +257,13 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       });
     }
 
-    // Re-emit NowItemEvents for any pending access requests still on disk
-    // — NowService is in-memory, so a desktop restart loses the entries.
-    // Loading the events browser is a natural moment to repopulate them
-    // even though the apps-page also kicks the same scan at startup.
+    // Re-emit NowItemEvents for any unseen event activity (access
+    // requests, comments, likes…) still on disk. NowService is in-
+    // memory, so a desktop restart loses the entries. Loading the
+    // events browser is a natural moment to repopulate them even
+    // though the apps-page also kicks the same scan at startup.
     if (!widget.isRemoteDevice && widget.appPath != null) {
-      EventAccessRequestScanner.republishPending(widget.appPath!);
+      EventActivityNotifier.scanAll(widget.appPath!);
     }
   }
 

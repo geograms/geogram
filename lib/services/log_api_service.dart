@@ -130,6 +130,7 @@ import '../transfer/services/transfer_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
 import '../pages/transfer_send_page.dart';
 import '../util/event_bus.dart';
+import '../util/event_activity_notifier.dart';
 import '../util/station_html_templates.dart';
 import '../server/mixins/chat_modification_mixin.dart';
 import '../models/shared_folder.dart';
@@ -8586,6 +8587,14 @@ class LogApiService with ChatModificationMixin {
                 body: jsonEncode({'error': 'Unknown feedback action: $action'}),
                 headers: headers);
         }
+        // Fire the shared notifier for events whose author should see
+        // the new activity. Limited to event content for now (the only
+        // place where the local user is "the author" in this shape).
+        if (result['success'] == true &&
+            (action == 'comment' || action == 'like') &&
+            (contentType == 'event' || contentType == 'events')) {
+          unawaited(_notifyEventActivity(contentId));
+        }
       } else if (request.method == 'DELETE') {
         // /api/feedback/{contentType}/{contentId}/comment/{commentId}
         if (segments.length != 6 || segments[4] != 'comment') {
@@ -8628,6 +8637,28 @@ class LogApiService with ChatModificationMixin {
         body: jsonEncode({'error': e.toString()}),
         headers: headers,
       );
+    }
+  }
+
+  /// Resolve an event's on-disk path and trigger the shared notifier so
+  /// the owner gets a Now-panel entry + badge for the new activity.
+  /// Best-effort — failures are swallowed so a notifier hiccup never
+  /// breaks the underlying write.
+  Future<void> _notifyEventActivity(String eventId) async {
+    try {
+      final dataDir = StorageConfig().baseDir;
+      final ev =
+          await EventService().findEventByIdGlobal(eventId, dataDir);
+      if (ev == null) return;
+      final path = await EventService().getEventPath(ev.id, dataDir);
+      if (path == null) return;
+      await EventActivityNotifier.scanEvent(
+        eventPath: path,
+        eventId: ev.id,
+        eventTitle: ev.title,
+      );
+    } catch (e) {
+      LogService().log('Notify event activity failed: $e');
     }
   }
 
@@ -9526,30 +9557,18 @@ class LogApiService with ChatModificationMixin {
       await requestsFile.parent.create(recursive: true);
       await requestsFile.writeAsString(jsonEncode(existing));
 
-      // Surface a "now" entry for the desktop UI so the owner sees the
-      // pending request show up in the Now panel + drawer badge. Only
-      // fire on a brand-new pending entry — subsequent reloads from the
-      // same requester refresh metadata in place and shouldn't pile up
-      // notifications.
+      // Surface a "now" entry via the shared notifier so the owner sees
+      // the pending request show up in the Now panel + drawer badge.
+      // The notifier handles dedup/labelling for every event-activity
+      // type (access-requests / comments / likes / future) so we don't
+      // grow per-type emit code at every write site.
       if (firedNotification) {
         try {
-          // Compose the requester label so the Now panel shows
-          // "Nickname (X1HFG3)" when we have a profile name, falling
-          // back to just the callsign (or npub stub).
-          final requesterLabel = nickname.isNotEmpty && callsign.isNotEmpty
-              ? '$nickname ($callsign)'
-              : (callsign.isNotEmpty ? callsign : npub.substring(0, 12));
-          EventBus().fire(NowItemEvent(
-            id: 'access-request:${event.id}:$npub',
-            appType: 'event_access_request',
-            sourceId: event.id,
-            sourceName: event.title,
-            callsign: requesterLabel,
-            summary: message.isNotEmpty
-                ? '"$message"'
-                : 'Wants access to "${event.title}"',
-            priority: NowPriority.directMessage,
-          ));
+          await EventActivityNotifier.scanEvent(
+            eventPath: eventPath,
+            eventId: event.id,
+            eventTitle: event.title,
+          );
         } catch (e) {
           LogService().log('Now event fire failed: $e');
         }

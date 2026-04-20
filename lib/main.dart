@@ -38,7 +38,7 @@ import 'services/chat_notification_service.dart';
 import 'services/station_content_notification_service.dart';
 import 'services/now_service.dart';
 import 'models/now_item.dart';
-import 'util/event_access_request_scanner.dart';
+import 'util/event_activity_notifier.dart';
 import 'services/now_notification_bridge.dart';
 import 'services/event_service.dart';
 import 'services/station_activity_publisher_service.dart';
@@ -2899,7 +2899,9 @@ class _AppsPageState extends State<AppsPage> {
   }
 
   int _countEventActionItems(List<NowItem> items) {
-    return items.where((i) => i.appType == 'event_access_request').length;
+    return items
+        .where((i) => EventActivityNotifier.ownedAppTypes.contains(i.appType))
+        .length;
   }
 
   Future<void> _loadKarmaMissions() async {
@@ -2994,7 +2996,14 @@ class _AppsPageState extends State<AppsPage> {
         }
       }
       if (eventsPath != null && eventsPath.isNotEmpty) {
-        await EventAccessRequestScanner.republishPending(eventsPath);
+        // Set the owner npub once so the notifier can skip the
+        // author's own comments/likes (otherwise the user would get
+        // pinged for their own actions on their own events).
+        try {
+          EventActivityNotifier.ownerNpub =
+              _profileService.getProfile().npub;
+        } catch (_) {}
+        await EventActivityNotifier.scanAll(eventsPath);
       }
     } catch (e) {
       LogService().log('Error loading apps: $e');

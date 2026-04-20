@@ -4,12 +4,12 @@
  */
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../models/event.dart';
 import '../services/i18n_service.dart';
+import '../util/event_activity_notifier.dart';
 
 /// Widget for displaying an event in the list
 class EventTileWidget extends StatefulWidget {
@@ -35,17 +35,17 @@ class EventTileWidget extends StatefulWidget {
 }
 
 class _EventTileWidgetState extends State<EventTileWidget> {
-  // Number of pending access requests on this event. Loaded async from
-  // {event}/feedback/access_requests.json — only meaningful for events
-  // whose visibility is `request_access`. The tile renders a small
-  // attention badge whenever > 0 so the owner knows at a glance which
-  // events need their action.
-  int _pendingAccessRequests = 0;
+  // Total unseen activity items on this event — pending access
+  // requests + new comments + new likes — surfaced via the shared
+  // [EventActivityNotifier]. The tile renders a small attention badge
+  // whenever > 0 so the owner knows at a glance which events need
+  // their attention.
+  int _unseenActivity = 0;
 
   @override
   void initState() {
     super.initState();
-    _loadPendingAccessRequests();
+    _loadUnseenActivity();
   }
 
   @override
@@ -54,37 +54,23 @@ class _EventTileWidgetState extends State<EventTileWidget> {
     if (oldWidget.event.id != widget.event.id ||
         oldWidget.event.visibility != widget.event.visibility ||
         oldWidget.appPath != widget.appPath) {
-      _loadPendingAccessRequests();
+      _loadUnseenActivity();
     }
   }
 
-  Future<void> _loadPendingAccessRequests() async {
+  Future<void> _loadUnseenActivity() async {
     if (kIsWeb) return;
     final appPath = widget.appPath;
     if (appPath == null || appPath.isEmpty) return;
-    if (widget.event.visibility != 'request_access') {
-      if (_pendingAccessRequests != 0 && mounted) {
-        setState(() => _pendingAccessRequests = 0);
-      }
-      return;
-    }
     if (widget.event.id.length < 4) return;
     try {
       final year = widget.event.id.substring(0, 4);
-      final file = File(
-        '$appPath/$year/${widget.event.id}/feedback/access_requests.json',
-      );
-      if (!await file.exists()) return;
-      final content = await file.readAsString();
-      if (content.trim().isEmpty) return;
-      final list = jsonDecode(content) as List<dynamic>;
-      final pending = list
-          .whereType<Map<String, dynamic>>()
-          .where((e) => (e['status'] as String?) == 'pending' || e['status'] == null)
-          .length;
+      final eventPath = '$appPath/$year/${widget.event.id}';
+      final count =
+          await EventActivityNotifier.countUnseenForEvent(eventPath);
       if (!mounted) return;
-      if (pending != _pendingAccessRequests) {
-        setState(() => _pendingAccessRequests = pending);
+      if (count != _unseenActivity) {
+        setState(() => _unseenActivity = count);
       }
     } catch (_) {
       // Corrupted / unreadable file — silently leave the badge off.
@@ -171,7 +157,7 @@ class _EventTileWidgetState extends State<EventTileWidget> {
                         // Pending access requests badge — owner-only
                         // attention marker that the event has at least
                         // one undecided request.
-                        if (_pendingAccessRequests > 0) ...[
+                        if (_unseenActivity > 0) ...[
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 6,
@@ -191,7 +177,7 @@ class _EventTileWidgetState extends State<EventTileWidget> {
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
-                                  '$_pendingAccessRequests',
+                                  '$_unseenActivity',
                                   style: theme.textTheme.labelSmall?.copyWith(
                                     color: theme.colorScheme.onError,
                                     fontSize: 10,

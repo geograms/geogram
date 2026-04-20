@@ -624,9 +624,13 @@ class _NowPageState extends State<NowPage> {
         }
         break;
       case 'event_access_request':
-        // sourceId is the local event id; jump straight into the event
-        // editor on the Access control tab so the owner sees the
-        // pending requests inbox + can approve/deny inline.
+      case 'event_new_comment':
+      case 'event_new_like':
+        // All event-activity types share the same destination: the
+        // event editor's Access tab, where the access-requests inbox
+        // and the comments admin section both live. Adding a new
+        // event-activity appType only needs the EventActivityNotifier
+        // ownedAppTypes set and a case here.
         () async {
           try {
             final eventsApp = AppService().getAppByType('events');

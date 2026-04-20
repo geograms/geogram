@@ -26,6 +26,7 @@ import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/log_api_service.dart';
+import '../util/event_activity_notifier.dart';
 import '../services/location_service.dart';
 import '../widgets/file_folder_picker.dart';
 import '../widgets/transcribe_button_widget.dart';
@@ -139,6 +140,10 @@ class _NewEventPageState extends State<NewEventPage>
   // entry: {npub, callsign, message, requested_at, status, decided_at?}.
   // Loaded from {event}/feedback/access_requests.json on init.
   final List<Map<String, dynamic>> _accessRequests = [];
+  // NOSTR-signed comments persisted in {event}/feedback/comments/*.txt.
+  // Each entry: {id, author, timestamp, content, npub?}. Loaded on init
+  // when in edit mode so the author can review and delete inline.
+  final List<Map<String, dynamic>> _comments = [];
   // Whether visitors can post NOSTR-signed comments on the public event
   // page. Default true so the toggle starts in the "permissive" position.
   bool _commentsEnabled = true;
@@ -171,7 +176,122 @@ class _NewEventPageState extends State<NewEventPage>
     if (widget.isEditMode) {
       _populateFromEvent(widget.event!);
       _loadAccessRequests();
+      _loadComments();
+      // Once the owner has the editor open they're aware of any new
+      // comments + likes — flush the unseen markers so the tile + apps
+      // grid badge reflect that. Access requests are unaffected
+      // (they're acknowledged by approve/deny, not by mere viewing).
+      _markEventActivitySeen();
     }
+  }
+
+  /// Read NOSTR-signed comments from disk so the Access tab can list
+  /// them with delete buttons. Mirrors [_loadAccessRequests] in shape.
+  Future<void> _loadComments() async {
+    final event = widget.event;
+    final appPath = widget.appPath;
+    if (event == null || appPath == null || appPath.isEmpty) return;
+    if (event.id.length < 4) return;
+    try {
+      final year = event.id.substring(0, 4);
+      final dir = Directory('$appPath/$year/${event.id}/feedback/comments');
+      if (!await dir.exists()) return;
+      final entries = <Map<String, dynamic>>[];
+      await for (final f in dir.list()) {
+        if (f is! File || !f.path.endsWith('.txt')) continue;
+        final id = f.path.split(Platform.pathSeparator).last
+            .replaceAll('.txt', '');
+        try {
+          final raw = await f.readAsString();
+          String author = '';
+          String created = '';
+          String? npub;
+          final bodyLines = <String>[];
+          var inMeta = true;
+          for (final line in raw.split('\n')) {
+            if (inMeta && line.startsWith('AUTHOR: ')) {
+              author = line.substring(8).trim();
+            } else if (inMeta && line.startsWith('CREATED: ')) {
+              created = line.substring(9).trim();
+            } else if (line.startsWith('--> npub: ')) {
+              npub = line.substring(10).trim();
+            } else if (line.startsWith('--> signature: ')) {
+              // skip
+            } else if (line.trim().isEmpty && inMeta) {
+              inMeta = false;
+            } else if (!inMeta) {
+              bodyLines.add(line);
+            }
+          }
+          entries.add({
+            'id': id,
+            'author': author,
+            'timestamp': created,
+            'content': bodyLines.join('\n').trim(),
+            if (npub != null) 'npub': npub,
+          });
+        } catch (_) {}
+      }
+      // Newest first so the latest activity is on top.
+      entries.sort((a, b) =>
+          (b['timestamp'] as String).compareTo(a['timestamp'] as String));
+      if (!mounted) return;
+      setState(() {
+        _comments
+          ..clear()
+          ..addAll(entries);
+      });
+    } catch (_) {}
+  }
+
+  /// Delete a comment via the shared DELETE endpoint. Authorisation is
+  /// "comment author or event owner" — the editor only ever runs in the
+  /// author's seat, so the owner's npub is what we send.
+  Future<void> _deleteComment(String commentId) async {
+    final event = widget.event;
+    if (event == null) return;
+    final ownerNpub = ProfileService().getProfile().npub;
+    if (ownerNpub.isEmpty) return;
+    try {
+      final port = LogApiService().port;
+      final uri = Uri.parse(
+        'http://127.0.0.1:$port/api/feedback/event/'
+        '${Uri.encodeComponent(event.id)}'
+        '/comment/${Uri.encodeComponent(commentId)}',
+      );
+      final req = await HttpClient().deleteUrl(uri);
+      req.headers.set('X-Npub', ownerNpub);
+      final resp = await req.close();
+      if (resp.statusCode >= 200 && resp.statusCode < 300 && mounted) {
+        setState(() {
+          _comments.removeWhere((c) => c['id'] == commentId);
+        });
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Delete failed (HTTP ${resp.statusCode})')),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to delete comment')),
+      );
+    }
+  }
+
+  /// Mark every unseen comment + like on this event as seen so the
+  /// tile/app-grid badges clear. Best-effort.
+  Future<void> _markEventActivitySeen() async {
+    final event = widget.event;
+    final appPath = widget.appPath;
+    if (event == null || appPath == null || appPath.isEmpty) return;
+    if (event.id.length < 4) return;
+    try {
+      final year = event.id.substring(0, 4);
+      await EventActivityNotifier.markAllSeen(
+        eventPath: '$appPath/$year/${event.id}',
+      );
+    } catch (_) {}
   }
 
   /// Loads pending / decided access requests from the event's feedback
@@ -2187,6 +2307,107 @@ class _NewEventPageState extends State<NewEventPage>
               secondary: const Icon(Icons.chat_bubble_outline),
             ),
           ),
+          if (widget.isEditMode && _comments.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            Text(
+              'Comments (${_comments.length})',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              'NOSTR-signed comments left by visitors. Tap the bin to remove one.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ..._comments.map((c) {
+              final id = (c['id'] as String?) ?? '';
+              final author = ((c['author'] as String?) ?? '').trim();
+              final ts = ((c['timestamp'] as String?) ?? '').trim();
+              final body = ((c['content'] as String?) ?? '').trim();
+              final npub = ((c['npub'] as String?) ?? '').trim();
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.chat_bubble_outline,
+                              size: 18,
+                              color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              author.isNotEmpty
+                                  ? (npub.isNotEmpty
+                                      ? '$author  ·  ${npub.length > 16 ? '${npub.substring(0, 16)}…' : npub}'
+                                      : author)
+                                  : (npub.isNotEmpty
+                                      ? npub
+                                      : 'unknown'),
+                              style: theme.textTheme.bodyMedium,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (ts.isNotEmpty)
+                            Text(
+                              ts,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          IconButton(
+                            tooltip: 'Delete comment',
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            color: theme.colorScheme.error,
+                            onPressed: id.isEmpty
+                                ? null
+                                : () async {
+                                    final ok = await showDialog<bool>(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            title:
+                                                const Text('Delete comment?'),
+                                            content: Text(
+                                              body.length > 200
+                                                  ? '${body.substring(0, 200)}…'
+                                                  : body,
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx, false),
+                                                child: const Text('Cancel'),
+                                              ),
+                                              FilledButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx, true),
+                                                child: const Text('Delete'),
+                                              ),
+                                            ],
+                                          ),
+                                        ) ??
+                                        false;
+                                    if (ok) await _deleteComment(id);
+                                  },
+                          ),
+                        ],
+                      ),
+                      if (body.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(body, style: theme.textTheme.bodySmall),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ],
           if (_visibility == 'request_access' &&
               widget.isEditMode &&
               _accessRequests.isNotEmpty) ...[
