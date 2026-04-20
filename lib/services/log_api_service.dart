@@ -11592,6 +11592,64 @@ class LogApiService with ChatModificationMixin {
             headers: headers,
           );
 
+        case 'blog_local_view':
+          // Read a post via the same code path the local
+          // BlogBrowserPage uses (BlogService.loadFullPostWithFeedback).
+          // Reports the counts and comment list as the UI would see
+          // them — used to validate that engagement coming in through
+          // remote endpoints is visible to the author's own GUI.
+          final postId = params['postId'] as String?;
+          final appName = params['app_name'] as String? ?? 'blog';
+          if (postId == null || postId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'postId is required',
+              }),
+              headers: headers,
+            );
+          }
+          final service = BlogService();
+          final appPath = '$dataDir/devices/$callsign/$appName';
+          configureBlogStorage(service, appPath);
+          await service.initializeApp(appPath);
+          final profile = ProfileService().getProfile();
+          final post = await service.loadFullPostWithFeedback(
+            postId,
+            userNpub: profile.npub.isEmpty ? null : profile.npub,
+          );
+          if (post == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Post not found'}),
+              headers: headers,
+            );
+          }
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'post': {
+                'id': post.id,
+                'title': post.title,
+                'likes_count': post.likesCount,
+                'dislikes_count': post.dislikesCount,
+                'points_count': post.pointsCount,
+                'subscribe_count': post.subscribeCount,
+                'has_liked': post.hasLiked,
+                'has_disliked': post.hasDisliked,
+                'comment_count': post.comments.length,
+                'comments': post.comments
+                    .map((c) => {
+                          'author': c.author,
+                          'timestamp': c.timestamp,
+                          'content': c.content,
+                          'npub': c.npub,
+                        })
+                    .toList(),
+              },
+            }),
+            headers: headers,
+          );
+
         case 'blog_get_url':
           // Get the public URL for a blog post
           final blogId = params['blog_id'] as String?;

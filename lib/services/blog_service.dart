@@ -236,7 +236,11 @@ class BlogService {
     // Extract year from postId (format: YYYY-MM-DD_title)
     final year = postId.substring(0, 4);
     final postRelativePath = '$year/$postId';
-    final postFolderPath = '$_appPath/$year/$postId';
+    // Relative to the blog app's storage scope — BlogFolderUtils /
+    // FeedbackFolderUtils only feed this path back into the same
+    // ProfileStorage instance so an absolute path would double-prefix
+    // inside ScopedProfileStorage and the reads would return null.
+    final postFolderPath = '$year/$postId';
 
     try {
       final content = await _storage.readString('$postRelativePath/post.md');
@@ -635,7 +639,11 @@ class BlogService {
       event.signWithNsec(nsec);
 
       final year = post.year;
-      final postFolderPath = '$_appPath/$year/$postId';
+      // Relative to the blog app's storage scope — BlogFolderUtils /
+    // FeedbackFolderUtils only feed this path back into the same
+    // ProfileStorage instance so an absolute path would double-prefix
+    // inside ScopedProfileStorage and the reads would return null.
+    final postFolderPath = '$year/$postId';
 
       // Write comment to separate file with signature
       final commentId = await BlogFolderUtils.writeComment(
@@ -670,7 +678,11 @@ class BlogService {
     if (post == null) return false;
 
     final year = post.year;
-    final postFolderPath = '$_appPath/$year/$postId';
+    // Relative to the blog app's storage scope — BlogFolderUtils /
+    // FeedbackFolderUtils only feed this path back into the same
+    // ProfileStorage instance so an absolute path would double-prefix
+    // inside ScopedProfileStorage and the reads would return null.
+    final postFolderPath = '$year/$postId';
 
     // Load the comment to check permissions
     final comment = await BlogFolderUtils.getComment(postFolderPath, commentId, storage: _storage);
@@ -989,10 +1001,13 @@ class BlogService {
   /// Get the collection path (for API use)
   String? get appPath => _appPath;
 
-  /// Get the post folder path for a given postId
+  /// Post folder path relative to the blog's ProfileStorage scope.
+  /// All the feedback/comment helpers accept this relative form —
+  /// an absolute path would fight the scoped storage and silently
+  /// miss reads.
   String? getPostFolderPath(String postId) {
     if (_appPath == null) return null;
     final year = postId.substring(0, 4);
-    return '$_appPath/$year/$postId';
+    return '$year/$postId';
   }
 }
