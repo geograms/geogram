@@ -123,12 +123,18 @@ class EventActivityNotifier {
 
   /// Mark every comment + like activity on an event as seen. Called when
   /// the owner opens the editor's activity tab — once they've laid eyes
-  /// on the items, future scans should not re-fire them.
+  /// on the items, future scans should not re-fire them, and the
+  /// in-memory NowService entries are removed so the apps-grid badge
+  /// + Now-panel cards reflect the cleared state immediately.
   ///
   /// Access requests aren't touched here; they're acknowledged by the
   /// owner deciding (approve/deny) which flips their status field.
+  ///
+  /// [eventId] is required so the matching NowItems can be evicted from
+  /// NowService — they're keyed by `(appType, sourceId=eventId)`.
   static Future<void> markAllSeen({
     required String eventPath,
+    required String eventId,
   }) async {
     try {
       final seen = await _loadSeen(eventPath);
@@ -157,6 +163,19 @@ class EventActivityNotifier {
       }
 
       await _saveSeen(eventPath, seen);
+
+      // Drop the matching NowItems so the apps-grid + per-event-tile
+      // badges + the Now-panel cards reflect "seen" without waiting
+      // for a restart. Keep the access-request group alone — those
+      // clear separately when the owner approves/denies.
+      EventBus().fire(NowGroupRemoveEvent(
+        appType: 'event_new_comment',
+        sourceId: eventId,
+      ));
+      EventBus().fire(NowGroupRemoveEvent(
+        appType: 'event_new_like',
+        sourceId: eventId,
+      ));
     } catch (e) {
       LogService().log('EventActivityNotifier: markAllSeen failed: $e');
     }

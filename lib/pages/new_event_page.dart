@@ -294,6 +294,7 @@ class _NewEventPageState extends State<NewEventPage>
       final year = event.id.substring(0, 4);
       await EventActivityNotifier.markAllSeen(
         eventPath: '$appPath/$year/${event.id}',
+        eventId: event.id,
       );
     } catch (_) {}
   }
