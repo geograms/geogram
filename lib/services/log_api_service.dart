@@ -1861,6 +1861,31 @@ class LogApiService with ChatModificationMixin {
     }
   }
 
+  /// True when the event's per-event access_requests.json carries an
+  /// 'approved' entry for this npub. The visibility filter consults
+  /// this so a past approval grants the viewer access even when no
+  /// Contact links the npub to a callsign locally — the access_requests
+  /// file is the authoritative record of decided requests.
+  Future<bool> _hasApprovedAccessRequest(Event event, String npub) async {
+    try {
+      final dataDir = StorageConfig().baseDir;
+      final eventPath = await EventService().getEventPath(event.id, dataDir);
+      if (eventPath == null) return false;
+      final file = io.File('$eventPath/feedback/access_requests.json');
+      if (!await file.exists()) return false;
+      final content = await file.readAsString();
+      if (content.trim().isEmpty) return false;
+      final list = jsonDecode(content) as List<dynamic>;
+      for (final raw in list.whereType<Map<String, dynamic>>()) {
+        if (raw['npub'] == npub &&
+            ((raw['status'] as String?) ?? 'pending') == 'approved') {
+          return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
   /// True when the viewer (npub) is a member of any group listed on the
   /// event's groupAccess list.
   Future<bool> _eventViewerInGroup(Event event, String npub) async {
@@ -1951,7 +1976,17 @@ class LogApiService with ChatModificationMixin {
         event.accessCallsigns
             .map((c) => c.toUpperCase())
             .contains(viewerCallsign.toUpperCase());
-    final allowed = isOwnerOrAdmin || hasGroupGrant || hasCallsignGrant;
+    // Final fallback: an approved entry in the event's own
+    // access_requests.json. Catches viewers whose request was approved
+    // before the contact-upsert flow existed, or anyone whose npub
+    // doesn't have a local Contact mapping yet.
+    final hasApprovedRequest = userNpub == null
+        ? false
+        : await _hasApprovedAccessRequest(event, userNpub);
+    final allowed = isOwnerOrAdmin ||
+        hasGroupGrant ||
+        hasCallsignGrant ||
+        hasApprovedRequest;
 
     if (vis == 'unlisted') {
       final providedKey =
