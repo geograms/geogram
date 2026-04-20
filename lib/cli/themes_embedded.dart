@@ -1467,9 +1467,13 @@ class ThemesEmbedded {
         html += '<div class="event-comments-disabled" id="event-comments-empty">No comments yet — be the first.</div>';
       } else {
         commentsList.forEach(function(c) {
-          html += '<div class="event-comment-card">' +
+          // data-* attrs let the post-render JS show a tiny delete chip on
+          // cards the visitor is allowed to remove (own comment, or the
+          // event author deleting any).
+          html += '<div class="event-comment-card" data-comment-id="' + esc(c.id || '') + '" data-comment-npub="' + esc(c.npub || '') + '">' +
             '<div class="event-comment-author">' + esc(c.author) +
               '<span class="event-comment-time">' + formatShortDate(c.timestamp) + '</span>' +
+              '<button class="event-comment-delete" style="display:none" title="Delete">&times;</button>' +
             '</div>' +
             '<div class="event-comment-text">' + esc(c.content) + '</div>' +
           '</div>';
@@ -1829,12 +1833,16 @@ class ThemesEmbedded {
         if (listEl) {
           var card = document.createElement('div');
           card.className = 'event-comment-card';
+          if (ack.comment_id) card.setAttribute('data-comment-id', ack.comment_id);
+          card.setAttribute('data-comment-npub', npub || '');
           card.innerHTML =
             '<div class="event-comment-author">' + esc(nostr.nickname || nostr.callsign || 'You') +
               '<span class="event-comment-time">just now</span>' +
+              '<button class="event-comment-delete" style="display:none" title="Delete">&times;</button>' +
             '</div>' +
             '<div class="event-comment-text">' + esc(body) + '</div>';
           listEl.appendChild(card);
+          applyCommentDeleteChips();
         }
         var countEl = document.getElementById('event-comment-count');
         if (countEl) countEl.textContent = (parseInt(countEl.textContent, 10) || 0) + 1;
@@ -1850,6 +1858,93 @@ class ThemesEmbedded {
     document.addEventListener('nostr-connected', enableCommentForm);
     if (window.GeogramNostr && window.GeogramNostr.connected) {
       enableCommentForm();
+    }
+
+    // ── Comment delete ────────────────────────────────────────────────
+    // Show the × chip on every card the visitor is allowed to remove:
+    // their own comment, or any comment when the visitor is the event
+    // author. DELETE /api/feedback/event/{id}/comment/{commentId} is
+    // shared between the two stations via FeedbackDeleteHelper.
+    function visitorBech32Npub() {
+      var nostr = window.GeogramNostr || {};
+      if (!nostr.pubkey) return null;
+      try {
+        if (window.NostrTools && window.NostrTools.nip19 &&
+            window.NostrTools.nip19.npubEncode) {
+          return window.NostrTools.nip19.npubEncode(nostr.pubkey);
+        }
+      } catch (e) {}
+      return null;
+    }
+    function applyCommentDeleteChips() {
+      var nostr = window.GeogramNostr || {};
+      if (!nostr.connected || !nostr.pubkey) return;
+      var visitorNpub = visitorBech32Npub();
+      var ownerHex = ev.author_pubkey_hex || '';
+      var isOwner = ownerHex && ownerHex === nostr.pubkey;
+      var cards = document.querySelectorAll('.event-comment-card');
+      cards.forEach(function(card) {
+        var cnpub = card.getAttribute('data-comment-npub') || '';
+        var canDelete = isOwner || (visitorNpub && cnpub === visitorNpub);
+        if (!canDelete) return;
+        var btn = card.querySelector('.event-comment-delete');
+        if (!btn) return;
+        btn.style.display = '';
+        btn.onclick = function() { deleteEventComment(card); };
+      });
+    }
+    async function deleteEventComment(card) {
+      if (!card) return;
+      var commentId = card.getAttribute('data-comment-id') || '';
+      if (!commentId) return;
+      if (!confirm('Delete this comment?')) return;
+      var visitorNpub = visitorBech32Npub();
+      if (!visitorNpub) {
+        alert('Could not derive your npub for the delete request.');
+        return;
+      }
+      try {
+        var resp = await fetch(
+          '../api/feedback/event/' + encodeURIComponent(ev.id) +
+            '/comment/' + encodeURIComponent(commentId),
+          {
+            method: 'DELETE',
+            headers: { 'X-Npub': visitorNpub },
+          }
+        );
+        if (!resp.ok) {
+          var msg = 'Delete failed (HTTP ' + resp.status + ')';
+          try {
+            var err = await resp.json();
+            if (err && err.error) msg += ': ' + err.error;
+          } catch (e) {}
+          alert(msg);
+          return;
+        }
+        card.remove();
+        var countEl = document.getElementById('event-comment-count');
+        if (countEl) {
+          var n = (parseInt(countEl.textContent, 10) || 1) - 1;
+          countEl.textContent = n < 0 ? 0 : n;
+        }
+        // If the list is now empty, surface the "be the first" hint.
+        var listEl = document.getElementById('event-comments-list');
+        if (listEl && listEl.querySelectorAll('.event-comment-card').length === 0 &&
+            !document.getElementById('event-comments-empty')) {
+          var empty = document.createElement('div');
+          empty.id = 'event-comments-empty';
+          empty.className = 'event-comments-disabled';
+          empty.textContent = 'No comments yet — be the first.';
+          listEl.appendChild(empty);
+        }
+      } catch (e) {
+        console.error('Comment delete failed:', e);
+        alert('Delete failed.');
+      }
+    }
+    document.addEventListener('nostr-connected', applyCommentDeleteChips);
+    if (window.GeogramNostr && window.GeogramNostr.connected) {
+      applyCommentDeleteChips();
     }
   })();
 </script>
@@ -2873,6 +2968,23 @@ class ThemesEmbedded {
   font-size: 0.9rem;
   opacity: 0.5;
   font-style: italic;
+}
+
+.event-comment-delete {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  color: var(--color);
+  opacity: 0.4;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.event-comment-delete:hover {
+  opacity: 1;
+  color: #e25555;
 }
 
 /* Contacts badges */

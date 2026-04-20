@@ -23,6 +23,7 @@ import 'services/profile_storage.dart';
 import 'api/handlers/alert_handler.dart';
 import 'api/handlers/place_handler.dart';
 import 'api/handlers/feedback_handler.dart';
+import 'api/handlers/feedback_delete_helper.dart';
 import 'services/nip05_registry_service.dart';
 import 'services/email_relay_service.dart';
 import 'services/smtp_server.dart';
@@ -5605,6 +5606,24 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         if (result['success'] == true) {
           recordFeedbackKarma(action, contentType, contentId, jsonBody, callsign);
         }
+      } else if (request.method == 'DELETE') {
+        // /api/feedback/{contentType}/{contentId}/comment/{commentId}
+        if (segments.length != 6 || segments[4] != 'comment') {
+          request.response.statusCode = 400;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(
+              jsonEncode({'error': 'DELETE only supported on /comment/{id}'}));
+          return;
+        }
+        result = await FeedbackDeleteHelper.deleteComment(
+          feedbackApi: feedbackApi,
+          contentType: contentType,
+          contentId: contentId,
+          commentId: segments[5],
+          requesterNpub: request.headers.value('x-npub') ?? '',
+          dataDir: _dataDir,
+          callsign: callsign,
+        );
       } else {
         request.response.statusCode = 405;
         request.response.headers.contentType = ContentType.json;

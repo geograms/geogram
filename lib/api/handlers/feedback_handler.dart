@@ -435,6 +435,74 @@ class FeedbackHandler {
     }
   }
 
+  /// Delete a NOSTR-signed comment.
+  ///
+  /// Authorisation: the requester (`requesterNpub`) must either be the
+  /// original comment author OR the owner of the parent content (matched
+  /// against `ownerNpub` if supplied — typically the event/blog author's
+  /// npub from the parent file). When `ownerNpub` is empty/null only the
+  /// comment author can delete.
+  Future<Map<String, dynamic>> deleteComment({
+    required String contentType,
+    required String contentId,
+    required String commentId,
+    required String requesterNpub,
+    String? ownerNpub,
+    String? callsign,
+  }) async {
+    try {
+      if (requesterNpub.isEmpty) {
+        return {'error': 'Missing requester npub', 'http_status': 401};
+      }
+
+      final location = await _resolveContentPath(
+        contentType: contentType,
+        contentId: contentId,
+        callsign: callsign,
+      );
+      if (location == null) {
+        return {'error': 'Content not found', 'http_status': 404};
+      }
+
+      final comment = await FeedbackCommentUtils.getComment(
+        location.contentPath,
+        commentId,
+        storage: storage,
+      );
+      if (comment == null) {
+        return {'error': 'Comment not found', 'http_status': 404};
+      }
+
+      final isCommentAuthor =
+          comment.npub != null && comment.npub == requesterNpub;
+      final isOwner =
+          ownerNpub != null && ownerNpub.isNotEmpty && ownerNpub == requesterNpub;
+      if (!isCommentAuthor && !isOwner) {
+        _log('WARN',
+            'deleteComment unauthorized: requester=$requesterNpub comment=${comment.npub} owner=$ownerNpub');
+        return {'error': 'Unauthorized', 'http_status': 403};
+      }
+
+      final deleted = await FeedbackCommentUtils.deleteComment(
+        location.contentPath,
+        commentId,
+        storage: storage,
+      );
+      if (!deleted) {
+        return {'error': 'Failed to delete comment', 'http_status': 500};
+      }
+
+      return {'success': true, 'deleted': true};
+    } catch (e) {
+      _log('ERROR', 'deleteComment error: $e');
+      return {
+        'error': 'Internal server error',
+        'message': e.toString(),
+        'http_status': 500,
+      };
+    }
+  }
+
   String _actionFlagKey(String actionName) {
     switch (actionName) {
       case 'like':

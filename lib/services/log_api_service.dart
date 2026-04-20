@@ -155,6 +155,7 @@ import 'package:archive/archive.dart';
 import 'file_browser_cache_service.dart';
 import '../util/video_metadata_extractor.dart';
 import '../api/handlers/feedback_handler.dart';
+import '../api/handlers/feedback_delete_helper.dart';
 import 'contact_service.dart';
 import '../models/contact.dart';
 
@@ -2174,6 +2175,16 @@ class LogApiService with ChatModificationMixin {
       }
     } catch (e) {
       LogService().log('EventDetail: loadComments failed: $e');
+    }
+
+    // Expose the event author's pubkey in hex too so the page JS can
+    // compare it against window.GeogramNostr.pubkey (also hex) and show
+    // the comment-delete chip on every card when the visitor is the
+    // author. The bech32 npub is already in `data['npub']`.
+    if (event.npub != null && event.npub!.isNotEmpty) {
+      try {
+        data['author_pubkey_hex'] = NostrCrypto.decodeNpub(event.npub!);
+      } catch (_) {}
     }
     data['authenticated'] = userNpub != null;
 
@@ -8551,11 +8562,53 @@ class LogApiService with ChatModificationMixin {
               callsign: callsign,
             );
             break;
+          case 'comment':
+            final author = jsonBody['author'] as String?;
+            final content = jsonBody['content'] as String?;
+            if (author == null || author.isEmpty ||
+                content == null || content.isEmpty) {
+              return shelf.Response(400,
+                  body: jsonEncode({'error': 'Missing author or content'}),
+                  headers: headers);
+            }
+            result = await feedbackApi.addComment(
+              contentType: contentType,
+              contentId: contentId,
+              author: author,
+              content: content,
+              npub: jsonBody['npub'] as String?,
+              signature: jsonBody['signature'] as String?,
+              callsign: callsign,
+            );
+            break;
           default:
             return shelf.Response(400,
                 body: jsonEncode({'error': 'Unknown feedback action: $action'}),
                 headers: headers);
         }
+      } else if (request.method == 'DELETE') {
+        // /api/feedback/{contentType}/{contentId}/comment/{commentId}
+        if (segments.length != 6 || segments[4] != 'comment') {
+          return shelf.Response(400,
+              body: jsonEncode(
+                  {'error': 'DELETE only supported on /comment/{id}'}),
+              headers: headers);
+        }
+        String? dataDir;
+        try {
+          dataDir = StorageConfig().baseDir;
+        } catch (_) {}
+        result = await FeedbackDeleteHelper.deleteComment(
+          feedbackApi: feedbackApi,
+          contentType: contentType,
+          contentId: contentId,
+          commentId: Uri.decodeComponent(segments[5]),
+          requesterNpub: request.headers['x-npub'] ??
+              request.headers['X-Npub'] ??
+              '',
+          dataDir: dataDir,
+          callsign: callsign,
+        );
       } else {
         return shelf.Response(405,
             body: jsonEncode({'error': 'Method not allowed'}),
