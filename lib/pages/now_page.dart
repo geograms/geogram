@@ -16,6 +16,8 @@ import '../services/direct_message_service.dart';
 import '../teleport/irc/irc_service.dart';
 import '../teleport/telegram/telegram_service.dart';
 import 'events_browser_page.dart';
+import 'new_event_page.dart';
+import '../services/event_service.dart';
 import 'remote_blog_browser_page.dart';
 import 'remote_chat_browser_page.dart';
 import 'remote_chat_room_page.dart';
@@ -620,6 +622,27 @@ class _NowPageState extends State<NowPage> {
             ),
           ));
         }
+        break;
+      case 'event_access_request':
+        // sourceId is the local event id; jump straight into the event
+        // editor on the Access control tab so the owner sees the
+        // pending requests inbox + can approve/deny inline.
+        () async {
+          try {
+            final eventsApp = AppService().getAppByType('events');
+            final appPath = eventsApp?.storagePath;
+            if (appPath == null || appPath.isEmpty) return;
+            final event = await EventService().loadEvent(item.sourceId);
+            if (event == null || !mounted) return;
+            Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => NewEventPage(
+                event: event,
+                appPath: appPath,
+                initialTab: 4, // 0=basic 1=media 2=links 3=updates 4=access
+              ),
+            ));
+          } catch (_) {}
+        }();
         break;
       case 'places':
         final station = StationService().getPreferredStation();

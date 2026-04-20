@@ -41,10 +41,16 @@ class NewEventPage extends StatefulWidget {
   /// Required when editing an event
   final String? appPath;
 
+  /// Initial tab index to show. Defaults to 0 (Basic info). Used by deep
+  /// links (e.g. tapping an access-request notification in the Now panel
+  /// jumps straight to the Access control tab).
+  final int initialTab;
+
   const NewEventPage({
     Key? key,
     this.event,
     this.appPath,
+    this.initialTab = 0,
   }) : super(key: key);
 
   /// Whether this page is in edit mode
@@ -151,7 +157,11 @@ class _NewEventPageState extends State<NewEventPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 5, vsync: this);
+    _tabController = TabController(
+      length: 5,
+      vsync: this,
+      initialIndex: widget.initialTab.clamp(0, 4),
+    );
     _loadGroups();
 
     // Populate fields from event when in edit mode
