@@ -348,6 +348,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         accessCallsigns:
             (result['accessCallsigns'] as List<dynamic>?)?.cast<String>(),
         accessRequestPrompt: result['accessRequestPrompt'] as String?,
+        commentsEnabled: (result['commentsEnabled'] as bool?) ?? true,
         contacts: (result['contacts'] as List<dynamic>?)?.cast<String>(),
         npub: profile.npub,
         metadata: metadata,
@@ -546,6 +547,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         accessCallsigns:
             (result['accessCallsigns'] as List<dynamic>?)?.cast<String>(),
         accessRequestPrompt: result['accessRequestPrompt'] as String?,
+        commentsEnabled: result['commentsEnabled'] as bool?,
         eventDateTime: result['eventDateTime'] as DateTime?,
         startDate: result['startDate'] as String?,
         endDate: result['endDate'] as String?,
@@ -606,6 +608,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         accessCallsigns:
             (result['accessCallsigns'] as List<dynamic>?)?.cast<String>(),
         accessRequestPrompt: result['accessRequestPrompt'] as String?,
+        commentsEnabled: result['commentsEnabled'] as bool?,
         eventDateTime: result['eventDateTime'] as DateTime?,
         startDate: result['startDate'] as String?,
         endDate: result['endDate'] as String?,

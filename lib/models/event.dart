@@ -44,6 +44,10 @@ class Event {
   /// shown to blocked viewers above the request form so they know what
   /// to put in the note. Empty / null → no prompt rendered.
   final String? accessRequestPrompt;
+  /// Whether visitors can post NOSTR-signed comments on the public event
+  /// page. Defaults to true — the event.txt only persists the field when
+  /// the author has *disabled* it, so older event files keep working.
+  final bool commentsEnabled;
   final List<String> likes; // List of npubs (feedback)
   final List<EventComment> comments;
   final Map<String, String> metadata;
@@ -75,6 +79,7 @@ class Event {
     this.unlistedKey,
     this.accessCallsigns = const [],
     this.accessRequestPrompt,
+    this.commentsEnabled = true,
     this.likes = const [],
     this.comments = const [],
     this.metadata = const {},
@@ -192,6 +197,9 @@ class Event {
               [],
       accessRequestPrompt: json['access_request_prompt'] as String? ??
           json['accessRequestPrompt'] as String?,
+      commentsEnabled: (json['comments_enabled'] as bool?) ??
+          (json['commentsEnabled'] as bool?) ??
+          true,
       likes: (json['likes'] as List<dynamic>?)?.cast<String>() ?? [],
       comments: comments,
       flyers: (json['flyers'] as List<dynamic>?)?.cast<String>() ?? [],
@@ -409,6 +417,12 @@ class Event {
       buffer.writeln('ACCESS_REQUEST_PROMPT: ${accessRequestPrompt!.trim()}');
     }
 
+    // Persist comments-enabled only when the author has explicitly turned
+    // it off — keeps older event.txt files compatible (default is true).
+    if (!commentsEnabled) {
+      buffer.writeln('COMMENTS_ENABLED: false');
+    }
+
     // Contacts (optional)
     if (contacts.isNotEmpty) {
       buffer.writeln('CONTACTS: ${contacts.join(', ')}');
@@ -488,6 +502,7 @@ class Event {
     String? unlistedKey;
     List<String> accessCallsigns = [];
     String? accessRequestPrompt;
+    bool commentsEnabled = true;
 
     int currentLine = 3;
 
@@ -531,6 +546,9 @@ class Event {
             .toList();
       } else if (line.startsWith('ACCESS_REQUEST_PROMPT: ')) {
         accessRequestPrompt = line.substring(23).trim();
+      } else if (line.startsWith('COMMENTS_ENABLED: ')) {
+        final v = line.substring(18).trim().toLowerCase();
+        commentsEnabled = !(v == 'false' || v == '0' || v == 'no');
       } else if (line.startsWith('CONTACTS: ')) {
         final contactsStr = line.substring(10).trim();
         contacts = contactsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
@@ -598,6 +616,7 @@ class Event {
       unlistedKey: unlistedKey,
       accessCallsigns: accessCallsigns,
       accessRequestPrompt: accessRequestPrompt,
+      commentsEnabled: commentsEnabled,
       contacts: contacts,
       slug: slug,
       metadata: metadata,
@@ -657,6 +676,7 @@ class Event {
     String? unlistedKey,
     List<String>? accessCallsigns,
     String? accessRequestPrompt,
+    bool? commentsEnabled,
     List<String>? likes,
     List<EventComment>? comments,
     Map<String, String>? metadata,
@@ -686,6 +706,7 @@ class Event {
       unlistedKey: unlistedKey ?? this.unlistedKey,
       accessCallsigns: accessCallsigns ?? this.accessCallsigns,
       accessRequestPrompt: accessRequestPrompt ?? this.accessRequestPrompt,
+      commentsEnabled: commentsEnabled ?? this.commentsEnabled,
       likes: likes ?? this.likes,
       comments: comments ?? this.comments,
       metadata: metadata ?? this.metadata,
@@ -752,6 +773,7 @@ class Event {
         'access_callsigns': accessCallsigns,
         if (accessRequestPrompt != null && accessRequestPrompt!.isNotEmpty)
           'access_request_prompt': accessRequestPrompt,
+        'comments_enabled': commentsEnabled,
         'likes': likes,
         'comments': comments.map((c) => {
           'author': c.author,

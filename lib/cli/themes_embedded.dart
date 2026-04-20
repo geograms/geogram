@@ -1453,16 +1453,41 @@ class ThemesEmbedded {
     }
 
     // --- Comments ---
-    if (ev.comments && ev.comments.length > 0) {
-      html += '<div class="event-section"><h2>Comments (' + ev.comments.length + ')</h2>';
-      ev.comments.forEach(function(c) {
-        html += '<div class="event-comment-card">' +
-          '<div class="event-comment-author">' + esc(c.author) +
-            '<span class="event-comment-time">' + formatShortDate(c.timestamp) + '</span>' +
+    // Render the section whenever there's something to show OR the author
+    // has explicitly allowed visitors to add new ones. The compose form
+    // appears at the bottom (or "comments disabled" line if the author
+    // turned it off).
+    var commentsAllowed = ev.comments_enabled !== false;
+    var commentsList = (ev.comments && ev.comments.length) ? ev.comments : [];
+    if (commentsList.length > 0 || commentsAllowed) {
+      html += '<div class="event-section" id="event-comments-section">';
+      html += '<h2>Comments (<span id="event-comment-count">' + commentsList.length + '</span>)</h2>';
+      html += '<div id="event-comments-list">';
+      if (commentsList.length === 0) {
+        html += '<div class="event-comments-disabled" id="event-comments-empty">No comments yet — be the first.</div>';
+      } else {
+        commentsList.forEach(function(c) {
+          html += '<div class="event-comment-card">' +
+            '<div class="event-comment-author">' + esc(c.author) +
+              '<span class="event-comment-time">' + formatShortDate(c.timestamp) + '</span>' +
+            '</div>' +
+            '<div class="event-comment-text">' + esc(c.content) + '</div>' +
+          '</div>';
+        });
+      }
+      html += '</div>';
+
+      if (commentsAllowed) {
+        html += '<div class="event-comment-compose" id="event-comment-compose">' +
+          '<textarea id="event-comment-text" placeholder="Write a comment…"></textarea>' +
+          '<div class="event-comment-compose-row">' +
+            '<span class="event-comment-compose-hint" id="event-comment-hint">Connect with NOSTR to comment.</span>' +
+            '<button id="event-comment-submit" disabled>Post comment</button>' +
           '</div>' +
-          '<div class="event-comment-text">' + esc(c.content).replace(/\n/g, '<br>') + '</div>' +
         '</div>';
-      });
+      } else {
+        html += '<div class="event-comments-disabled">Comments are disabled by the author.</div>';
+      }
       html += '</div>';
     }
 
@@ -1719,6 +1744,112 @@ class ThemesEmbedded {
     document.addEventListener('nostr-connected', enableRequestButton);
     if (window.GeogramNostr && window.GeogramNostr.connected) {
       enableRequestButton();
+    }
+
+    // ── Comment compose ───────────────────────────────────────────────
+    // Sign a kind-1 NOSTR event with the textarea body and POST it to the
+    // existing /api/feedback/event/{id}/comment endpoint. The freshly
+    // posted comment is prepended to the local list so the visitor sees
+    // their own contribution land without a reload.
+    function enableCommentForm() {
+      var btn = document.getElementById('event-comment-submit');
+      var hint = document.getElementById('event-comment-hint');
+      if (!btn) return;
+      btn.disabled = false;
+      if (hint) {
+        var nostr = window.GeogramNostr || {};
+        var who = nostr.nickname || nostr.callsign || 'connected';
+        hint.textContent = 'Posting as ' + who;
+      }
+      btn.onclick = postEventComment;
+    }
+    async function postEventComment() {
+      var btn = document.getElementById('event-comment-submit');
+      var ta = document.getElementById('event-comment-text');
+      var hint = document.getElementById('event-comment-hint');
+      if (!btn || !ta) return;
+      var body = (ta.value || '').trim();
+      if (!body) {
+        if (hint) hint.textContent = 'Type something first.';
+        return;
+      }
+      var nostr = window.GeogramNostr || {};
+      if (!window.nostr || typeof window.nostr.signEvent !== 'function' ||
+          !nostr.connected || !nostr.pubkey) {
+        if (hint) hint.textContent = 'Connect with NOSTR to comment.';
+        return;
+      }
+      btn.disabled = true;
+      if (hint) hint.textContent = 'Signing…';
+      try {
+        var signed = await window.nostr.signEvent({
+          kind: 1,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [
+            ['t', 'event-comment'],
+            ['e_id', ev.id],
+          ],
+          content: body,
+        });
+        if (!signed || !signed.sig) {
+          if (hint) hint.textContent = 'Signing failed.';
+          btn.disabled = false;
+          return;
+        }
+        var npub = (window.NostrTools &&
+                    window.NostrTools.nip19 &&
+                    window.NostrTools.nip19.npubEncode)
+          ? window.NostrTools.nip19.npubEncode(nostr.pubkey)
+          : null;
+        var resp = await fetch(
+          '../api/feedback/event/' + encodeURIComponent(ev.id) + '/comment',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              author: nostr.nickname || nostr.callsign || (npub ? npub.slice(0, 12) : 'anon'),
+              content: body,
+              npub: npub,
+              signature: signed.sig,
+            }),
+          }
+        );
+        if (!resp.ok) {
+          if (hint) hint.textContent = 'Failed to post (HTTP ' + resp.status + ').';
+          btn.disabled = false;
+          return;
+        }
+        // Optimistic insert. Server returns {success, comment_id, timestamp}.
+        var ack = {};
+        try { ack = await resp.json(); } catch (e) {}
+        var ts = ack.timestamp || new Date().toISOString();
+        var listEl = document.getElementById('event-comments-list');
+        var emptyEl = document.getElementById('event-comments-empty');
+        if (emptyEl) emptyEl.remove();
+        if (listEl) {
+          var card = document.createElement('div');
+          card.className = 'event-comment-card';
+          card.innerHTML =
+            '<div class="event-comment-author">' + esc(nostr.nickname || nostr.callsign || 'You') +
+              '<span class="event-comment-time">just now</span>' +
+            '</div>' +
+            '<div class="event-comment-text">' + esc(body) + '</div>';
+          listEl.appendChild(card);
+        }
+        var countEl = document.getElementById('event-comment-count');
+        if (countEl) countEl.textContent = (parseInt(countEl.textContent, 10) || 0) + 1;
+        ta.value = '';
+        if (hint) hint.textContent = 'Posted. Thanks for commenting!';
+        btn.disabled = false;
+      } catch (e) {
+        console.error('Comment post failed:', e);
+        if (hint) hint.textContent = 'Failed to post.';
+        btn.disabled = false;
+      }
+    }
+    document.addEventListener('nostr-connected', enableCommentForm);
+    if (window.GeogramNostr && window.GeogramNostr.connected) {
+      enableCommentForm();
     }
   })();
 </script>
@@ -2680,6 +2811,68 @@ class ThemesEmbedded {
   color: var(--color);
   opacity: 0.85;
   line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+/* Comment compose form (NOSTR-signed) */
+.event-comment-compose {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--accent-alpha-10, rgba(255,255,255,0.03));
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.event-comment-compose textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 10px;
+  background: var(--background);
+  color: var(--color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.event-comment-compose-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.event-comment-compose-hint {
+  font-size: 0.85rem;
+  opacity: 0.6;
+  color: var(--color);
+}
+
+.event-comment-compose button {
+  padding: 8px 18px;
+  background: var(--accent);
+  color: var(--background);
+  border: 0;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.event-comment-compose button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.event-comments-disabled {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  opacity: 0.5;
+  font-style: italic;
 }
 
 /* Contacts badges */

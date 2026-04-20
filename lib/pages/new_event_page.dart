@@ -139,6 +139,9 @@ class _NewEventPageState extends State<NewEventPage>
   // entry: {npub, callsign, message, requested_at, status, decided_at?}.
   // Loaded from {event}/feedback/access_requests.json on init.
   final List<Map<String, dynamic>> _accessRequests = [];
+  // Whether visitors can post NOSTR-signed comments on the public event
+  // page. Default true so the toggle starts in the "permissive" position.
+  bool _commentsEnabled = true;
   bool _registrationEnabled = false;
 
   final Map<String, TextEditingController> _agendaByDate = {};
@@ -349,6 +352,7 @@ class _NewEventPageState extends State<NewEventPage>
     if (event.accessRequestPrompt != null) {
       _accessRequestPromptController.text = event.accessRequestPrompt!;
     }
+    _commentsEnabled = event.commentsEnabled;
     // Note: registrationEnabled not yet stored in Event model
 
     // Links
@@ -967,6 +971,7 @@ class _NewEventPageState extends State<NewEventPage>
       'accessRequestPrompt': _accessRequestPromptController.text.trim().isEmpty
           ? null
           : _accessRequestPromptController.text.trim(),
+      'commentsEnabled': _commentsEnabled,
       'links': _links,
       'updates': _updates.map((update) => update.toMap()).toList(),
       'flyers': _flyers.map((file) => file.toMap()).toList(),
@@ -2164,6 +2169,24 @@ class _NewEventPageState extends State<NewEventPage>
               ),
             ),
           ],
+          const SizedBox(height: 16),
+          // Author-controlled toggle for visitor comments on the public
+          // event page. NOSTR-signed comments land in feedback/comments/
+          // and are read back by the web template's compose/view section.
+          // Hidden inside a card so it visually groups with the rest of
+          // the per-event access controls.
+          Card(
+            margin: EdgeInsets.zero,
+            child: SwitchListTile(
+              value: _commentsEnabled,
+              onChanged: (v) => setState(() => _commentsEnabled = v),
+              title: const Text('Allow comments'),
+              subtitle: const Text(
+                'Visitors can leave NOSTR-signed comments on the event page.',
+              ),
+              secondary: const Icon(Icons.chat_bubble_outline),
+            ),
+          ),
           if (_visibility == 'request_access' &&
               widget.isEditMode &&
               _accessRequests.isNotEmpty) ...[

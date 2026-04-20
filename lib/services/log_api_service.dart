@@ -2142,6 +2142,39 @@ class LogApiService with ChatModificationMixin {
       data['view_count'] = 0;
       data['unique_viewers'] = 0;
     }
+
+    // Load NOSTR-signed comments from feedback/comments/ so the web template
+    // can render them. The Event model's `comments` field is a legacy
+    // in-memory bucket; the canonical store is the feedback folder, same
+    // place feedback_handler writes through.
+    try {
+      final ownerCs = event.author.isNotEmpty
+          ? event.author
+          : ProfileService().getProfile().callsign;
+      if (ownerCs.isNotEmpty && event.id.length >= 4) {
+        final year = event.id.substring(0, 4);
+        if (int.tryParse(year) != null) {
+          final cstorage = FilesystemProfileStorage(
+            '$dataDir/devices/$ownerCs',
+          );
+          final fbComments = await FeedbackCommentUtils.loadComments(
+            'events/$year/${event.id}',
+            storage: cstorage,
+          );
+          data['comments'] = fbComments
+              .map((c) => {
+                    'id': c.id,
+                    'author': c.author,
+                    'timestamp': c.created,
+                    'content': c.content,
+                    if (c.npub != null && c.npub!.isNotEmpty) 'npub': c.npub,
+                  })
+              .toList();
+        }
+      }
+    } catch (e) {
+      LogService().log('EventDetail: loadComments failed: $e');
+    }
     data['authenticated'] = userNpub != null;
 
     // 5. Render
