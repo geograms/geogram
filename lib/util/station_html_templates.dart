@@ -1422,12 +1422,23 @@ $nostrScript
           ? '<span class="blog-entry-author">${escapeHtml(ev.location!)}</span>'
           : '';
       // request_access events get a tiny chip so visitors know access
-      // isn't immediate. public events render the same as blog entries.
-      final chip = ev.visibility == 'request_access'
-          ? '<span class="blog-entry-likes" title="Access on request">&#128274; access on request</span>'
+      // isn't immediate. The chip's class + the tile's data-* attrs
+      // are picked up by the homepage JS — once NOSTR auto-bootstraps
+      // it asks the owning device for the visitor's status and replaces
+      // the chip with "access granted / pending / denied". Cached in
+      // localStorage to avoid pinging the device on every page load.
+      final isRequestAccess = ev.visibility == 'request_access';
+      final tileClass = isRequestAccess
+          ? 'blog-entry event-access-request-tile'
+          : 'blog-entry';
+      final tileAttrs = isRequestAccess
+          ? 'data-callsign="${escapeHtml(ev.callsign)}" data-event-id="${escapeHtml(ev.eventId)}"'
+          : '';
+      final chip = isRequestAccess
+          ? '<span class="blog-entry-likes event-access-chip" title="Access on request">&#128274; access on request</span>'
           : '';
       entriesHtml.writeln('''
-        <a href="/${escapeHtml(ev.callsign)}/events/${escapeHtml(Uri.encodeComponent(pathSegment))}" class="blog-entry">
+        <a href="/${escapeHtml(ev.callsign)}/events/${escapeHtml(Uri.encodeComponent(pathSegment))}" class="$tileClass" $tileAttrs>
           <div class="blog-entry-header">
             <span class="blog-entry-title">${escapeHtml(ev.title)}</span>
             <span class="blog-entry-date">${escapeHtml(ev.displayDate)}</span>
@@ -1517,6 +1528,10 @@ $nostrScript
       noDevicesDisplay: noDevicesDisplay,
     );
 
+    final nostrStyles = getNostrLoginStyles();
+    final nostrHeader = getNostrLoginHeaderHtml();
+    final nostrScripts = getNostrLoginScripts();
+
     return '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1526,6 +1541,7 @@ $nostrScript
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+  $nostrStyles
   <style>
 $globalStyles
 $stationStyles
@@ -1541,6 +1557,7 @@ $extraStyles
             <div class="logo">${escapeHtml(stationName)}</div>
           </a>
         </div>
+        $nostrHeader
       </div>
       <nav class="menu">
         <ul class="menu__inner">
@@ -1652,10 +1669,109 @@ $extraStyles
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
   <script>
+$nostrScripts
 ${getStationHomepageScript(devicesJson)}
+${_recentEventsAccessProbeJs()}
   </script>
 </body>
 </html>''';
+  }
+
+  /// JS that runs on the station homepage AFTER NOSTR auto-bootstraps.
+  /// Walks every "recent events" tile that's marked as request_access
+  /// (data-access="request") and asks the owning device for the
+  /// visitor's current access status. Cached in localStorage so the
+  /// homepage doesn't hit the relay on every visit.
+  ///
+  /// The cache key is `event-access:{callsign}:{eventId}:{npub}` so a
+  /// different identity logged in on the same browser gets its own
+  /// answer; entries are stamped with status + timestamp and refreshed
+  /// after 24 hours.
+  static String _recentEventsAccessProbeJs() {
+    return r'''
+(function() {
+  var TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+  function cacheKey(callsign, eventId, npub) {
+    return 'event-access:' + callsign + ':' + eventId + ':' + npub;
+  }
+  function readCache(key) {
+    try {
+      var raw = localStorage.getItem(key);
+      if (!raw) return null;
+      var parsed = JSON.parse(raw);
+      if (!parsed || !parsed.status || !parsed.t) return null;
+      if (Date.now() - parsed.t > TTL_MS) return null;
+      return parsed;
+    } catch (e) { return null; }
+  }
+  function writeCache(key, status) {
+    try {
+      localStorage.setItem(key, JSON.stringify({status: status, t: Date.now()}));
+    } catch (e) {}
+  }
+  function applyStatus(tile, status) {
+    var chip = tile.querySelector('.event-access-chip');
+    if (!chip) return;
+    if (status === 'granted') {
+      chip.innerHTML = '&#10003; access granted';
+      chip.style.color = '#37c172';
+    } else if (status === 'pending') {
+      chip.innerHTML = '&#9203; request pending';
+      chip.style.color = 'var(--accent-alpha-70)';
+    } else if (status === 'denied') {
+      chip.innerHTML = '&#10005; request denied';
+      chip.style.color = '#d05a5a';
+    }
+    // 'none' or anything else → leave the default "access on request"
+    // chip in place so the visitor still sees it.
+  }
+  async function fetchStatus(callsign, eventId, npub) {
+    try {
+      var url = '/' + encodeURIComponent(callsign) + '/api/events/' +
+                encodeURIComponent(eventId) + '/access-status?npub=' +
+                encodeURIComponent(npub);
+      var resp = await fetch(url, {method: 'GET'});
+      if (!resp.ok) return null;
+      var json = await resp.json();
+      return (json && json.status) ? json.status : null;
+    } catch (e) { return null; }
+  }
+  function getNpub() {
+    var nostr = window.GeogramNostr;
+    if (!nostr || !nostr.pubkey) return null;
+    var NT = window.NostrTools;
+    if (NT && NT.nip19 && NT.nip19.npubEncode) {
+      try { return NT.nip19.npubEncode(nostr.pubkey); } catch (e) {}
+    }
+    return null;
+  }
+  async function probeAll() {
+    var npub = getNpub();
+    if (!npub) return;
+    var tiles = document.querySelectorAll(
+        '.event-access-request-tile');
+    for (var i = 0; i < tiles.length; i++) {
+      var tile = tiles[i];
+      var callsign = tile.getAttribute('data-callsign');
+      var eventId = tile.getAttribute('data-event-id');
+      if (!callsign || !eventId) continue;
+      var key = cacheKey(callsign, eventId, npub);
+      var cached = readCache(key);
+      if (cached) {
+        applyStatus(tile, cached.status);
+        continue;
+      }
+      var status = await fetchStatus(callsign, eventId, npub);
+      if (status) {
+        writeCache(key, status);
+        applyStatus(tile, status);
+      }
+    }
+  }
+  document.addEventListener('nostr-connected', function() { probeAll(); });
+  if (window.GeogramNostr && window.GeogramNostr.connected) probeAll();
+})();
+''';
   }
 
 }

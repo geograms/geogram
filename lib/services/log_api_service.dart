@@ -1777,6 +1777,11 @@ class LogApiService with ChatModificationMixin {
   /// Map a NOSTR npub back to a callsign by checking the local profile and
   /// any known contacts. Returns null when no match is found — callsign
   /// grants then simply don't apply for that viewer.
+  ///
+  /// ContactService is a singleton and may not have been initialized in
+  /// this isolate by the time the HTTP API needs it (the contacts page is
+  /// usually what initializes it). Resolve through the AppService so the
+  /// lookup works whether the contacts page has been opened or not.
   Future<String?> _resolveViewerCallsign(String? npub) async {
     if (npub == null || npub.isEmpty) return null;
     try {
@@ -1784,12 +1789,26 @@ class LogApiService with ChatModificationMixin {
       if (ownProfile.npub == npub) return ownProfile.callsign;
     } catch (_) {}
     try {
-      final contacts = await ContactService().loadContacts();
+      final svc = await _ensureContactServiceReady();
+      if (svc == null) return null;
+      final contacts = await svc.loadContacts();
       for (final c in contacts) {
         if (c.npub == npub) return c.callsign;
       }
     } catch (_) {}
     return null;
+  }
+
+  /// Initialize the contact service singleton against the user's contacts
+  /// app, returning null when there's no contacts app installed yet.
+  Future<ContactService?> _ensureContactServiceReady() async {
+    final contactsApp = AppService().getAppByType('contacts');
+    final storagePath = contactsApp?.storagePath;
+    if (storagePath == null || storagePath.isEmpty) return null;
+    final svc = ContactService();
+    svc.setStorage(FilesystemProfileStorage(storagePath));
+    await svc.initializeApp(storagePath);
+    return svc;
   }
 
   /// Upserts a contact for an access requester. If a contact with this
@@ -1806,14 +1825,8 @@ class LogApiService with ChatModificationMixin {
     required String nickname,
   }) async {
     try {
-      final contactsApp = AppService().getAppByType('contacts');
-      final storagePath = contactsApp?.storagePath;
-      if (storagePath == null || storagePath.isEmpty) {
-        return;
-      }
-      final svc = ContactService();
-      svc.setStorage(FilesystemProfileStorage(storagePath));
-      await svc.initializeApp(storagePath);
+      final svc = await _ensureContactServiceReady();
+      if (svc == null) return;
 
       // Skip if anything already represents this person.
       final existing = await svc.loadContacts();
@@ -8590,6 +8603,18 @@ class LogApiService with ChatModificationMixin {
           pathParts[0], dataDir, headers,
         );
       }
+      // GET /api/events/{eventId}/access-status?npub=NPUB
+      //   → {status: 'granted' | 'pending' | 'denied' | 'none'}
+      // Used by the station homepage so each "Recent Events" tile
+      // shows whether the logged-in NOSTR identity already has
+      // access. Public endpoint; the npub is the only input.
+      if (pathParts.length == 2 &&
+          pathParts[1] == 'access-status' &&
+          request.method == 'GET') {
+        return await _handleEventAccessStatus(
+          request, pathParts[0], dataDir, headers,
+        );
+      }
       if (pathParts.length == 4 &&
           pathParts[1] == 'access-requests' &&
           (pathParts[3] == 'approve' || pathParts[3] == 'deny') &&
@@ -9426,6 +9451,102 @@ class LogApiService with ChatModificationMixin {
     } catch (e) {
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': 'Failed to list access requests: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// GET /api/events/{eventId}/access-status?npub=NPUB
+  ///
+  /// Public probe used by the station homepage so each "Recent Events"
+  /// tile can paint a real status (granted / pending / denied / none)
+  /// without leaking content. Resolves the npub against the event's
+  /// access_requests.json AND the event's accessCallsigns list (mapped
+  /// via Contacts), so a callsign added directly by the owner — no
+  /// request needed — still shows as granted.
+  Future<shelf.Response> _handleEventAccessStatus(
+    shelf.Request request,
+    String eventId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    final npub = request.url.queryParameters['npub']?.trim() ?? '';
+    if (npub.isEmpty || !npub.startsWith('npub1')) {
+      return shelf.Response.ok(
+        jsonEncode({'status': 'none'}),
+        headers: headers,
+      );
+    }
+    try {
+      final event = await EventService().findEventByIdGlobal(eventId, dataDir);
+      if (event == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'status': 'none'}),
+          headers: headers,
+        );
+      }
+      // Owner / admin / explicit grants check.
+      final isOwnerOrAdmin =
+          event.npub == npub || event.isAdmin(npub);
+      if (isOwnerOrAdmin) {
+        return shelf.Response.ok(
+          jsonEncode({'status': 'granted'}),
+          headers: headers,
+        );
+      }
+      // Map npub → callsign via local contacts; if that callsign is in
+      // accessCallsigns, the visibility filter would let them through.
+      final viewerCallsign = await _resolveViewerCallsign(npub);
+      if (viewerCallsign != null &&
+          event.accessCallsigns
+              .map((c) => c.toUpperCase())
+              .contains(viewerCallsign.toUpperCase())) {
+        return shelf.Response.ok(
+          jsonEncode({'status': 'granted'}),
+          headers: headers,
+        );
+      }
+      // Group membership — same lookup the detail handler uses.
+      if (await _eventViewerInGroup(event, npub)) {
+        return shelf.Response.ok(
+          jsonEncode({'status': 'granted'}),
+          headers: headers,
+        );
+      }
+      // Otherwise consult access_requests.json for a pending / denied
+      // entry from this npub.
+      final eventPath = await EventService().getEventPath(event.id, dataDir);
+      if (eventPath != null) {
+        final file = io.File('$eventPath/feedback/access_requests.json');
+        if (await file.exists()) {
+          try {
+            final content = await file.readAsString();
+            if (content.trim().isNotEmpty) {
+              final list = jsonDecode(content) as List<dynamic>;
+              for (final raw in list.whereType<Map<String, dynamic>>()) {
+                if (raw['npub'] == npub) {
+                  final s = (raw['status'] as String?) ?? 'pending';
+                  // Normalise the status taxonomy used by the homepage JS
+                  // (granted | pending | denied | none). 'approved' on the
+                  // request inbox = 'granted' here.
+                  final normalized = s == 'approved' ? 'granted' : s;
+                  return shelf.Response.ok(
+                    jsonEncode({'status': normalized}),
+                    headers: headers,
+                  );
+                }
+              }
+            }
+          } catch (_) {}
+        }
+      }
+      return shelf.Response.ok(
+        jsonEncode({'status': 'none'}),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'status': 'none', 'error': e.toString()}),
         headers: headers,
       );
     }
