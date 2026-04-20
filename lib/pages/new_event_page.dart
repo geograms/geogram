@@ -3,6 +3,7 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -24,6 +25,7 @@ import '../services/groups_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
+import '../services/log_api_service.dart';
 import '../services/location_service.dart';
 import '../widgets/file_folder_picker.dart';
 import '../widgets/transcribe_button_widget.dart';
@@ -118,10 +120,14 @@ class _NewEventPageState extends State<NewEventPage>
   String _visibility = 'private';
   String? _unlistedKey;
   // Per-callsign access grants — applies to private / group / request_access
-  // events alongside the existing group selector. Stored as a comma-list in
-  // event.txt under ACCESS_CALLSIGNS:.
-  final TextEditingController _accessCallsignsController =
-      TextEditingController();
+  // events alongside the existing group selector. Picker-driven (no manual
+  // text input) so the author selects entries from their existing contacts;
+  // persisted as the ACCESS_CALLSIGNS: comma-list in event.txt.
+  final Map<String, ContactPickerResult> _accessCallsigns = {};
+  // Pending / decided access requests (request_access events only). Each
+  // entry: {npub, callsign, message, requested_at, status, decided_at?}.
+  // Loaded from {event}/feedback/access_requests.json on init.
+  final List<Map<String, dynamic>> _accessRequests = [];
   bool _registrationEnabled = false;
 
   final Map<String, TextEditingController> _agendaByDate = {};
@@ -146,6 +152,86 @@ class _NewEventPageState extends State<NewEventPage>
     // Populate fields from event when in edit mode
     if (widget.isEditMode) {
       _populateFromEvent(widget.event!);
+      _loadAccessRequests();
+    }
+  }
+
+  /// Loads pending / decided access requests from the event's feedback
+  /// folder. Only meaningful for `request_access` events but reading is
+  /// cheap so we always try — non-existent file just leaves the list empty.
+  Future<void> _loadAccessRequests() async {
+    final event = widget.event;
+    final appPath = widget.appPath;
+    if (event == null || appPath == null || appPath.isEmpty) return;
+    if (event.id.length < 4) return;
+    try {
+      final year = event.id.substring(0, 4);
+      final file = File('$appPath/$year/${event.id}/feedback/access_requests.json');
+      if (!await file.exists()) return;
+      final content = await file.readAsString();
+      if (content.trim().isEmpty) return;
+      final list = jsonDecode(content) as List<dynamic>;
+      if (!mounted) return;
+      setState(() {
+        _accessRequests
+          ..clear()
+          ..addAll(list.whereType<Map<String, dynamic>>());
+      });
+    } catch (e) {
+      // Corrupted or unreadable file — leave the list empty so the UI
+      // simply doesn't show the inbox section.
+    }
+  }
+
+  /// Approve or deny an access request. Hits the same /api/events endpoint
+  /// the desktop server exposes so the side effects (writing the decision
+  /// + appending the callsign to ACCESS_CALLSIGNS on approve) live in one
+  /// place. After the response, refreshes the local list and adds the
+  /// approved callsign to the chip set so the editor reflects the change.
+  Future<void> _decideAccessRequest(
+      Map<String, dynamic> entry, String action) async {
+    final event = widget.event;
+    if (event == null) return;
+    final npub = (entry['npub'] as String?)?.trim() ?? '';
+    if (npub.isEmpty) return;
+    try {
+      final port = LogApiService().port;
+      final uri = Uri.parse(
+        'http://127.0.0.1:$port/api/events/'
+        '${Uri.encodeComponent(event.id)}'
+        '/access-requests/${Uri.encodeComponent(npub)}/$action',
+      );
+      final resp = await HttpClient().postUrl(uri).then((req) async {
+        req.headers.set('Content-Type', 'application/json');
+        req.write('{}');
+        return req.close();
+      });
+      if (resp.statusCode >= 200 && resp.statusCode < 300 && mounted) {
+        setState(() {
+          entry['status'] = action == 'approve' ? 'approved' : 'denied';
+          entry['decided_at'] = DateTime.now().toUtc().toIso8601String();
+          if (action == 'approve') {
+            final cs = ((entry['callsign'] as String?) ?? '').trim().toUpperCase();
+            if (cs.isNotEmpty && !_accessCallsigns.containsKey(cs)) {
+              _accessCallsigns[cs] = ContactPickerResult(
+                contact: Contact(
+                  callsign: cs,
+                  displayName: cs,
+                  created: '',
+                  firstSeen: '',
+                ),
+              );
+            }
+          }
+        });
+      }
+    } catch (_) {
+      // Surface failure with a snackbar — but keep the existing entry as
+      // pending so the owner can retry.
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to update access request')),
+      );
     }
   }
 
@@ -187,8 +273,19 @@ class _NewEventPageState extends State<NewEventPage>
     _visibility = event.visibility;
     _unlistedKey = event.unlistedKey;
     _selectedGroups.addAll(event.groupAccess);
-    if (event.accessCallsigns.isNotEmpty) {
-      _accessCallsignsController.text = event.accessCallsigns.join(', ');
+    // Seed the access-callsign chip set with placeholder ContactPickerResult
+    // entries for each persisted callsign — same trick the contacts loader
+    // uses below so the chips render even when the contact isn't in the
+    // local address book yet (e.g. someone who'd previously requested access).
+    for (final callsign in event.accessCallsigns) {
+      _accessCallsigns[callsign] = ContactPickerResult(
+        contact: Contact(
+          callsign: callsign,
+          displayName: callsign,
+          created: '',
+          firstSeen: '',
+        ),
+      );
     }
     // Note: registrationEnabled not yet stored in Event model
 
@@ -256,7 +353,6 @@ class _NewEventPageState extends State<NewEventPage>
     _locationNameController.dispose();
     _contentController.dispose();
     _agendaController.dispose();
-    _accessCallsignsController.dispose();
     for (final controller in _agendaByDate.values) {
       controller.dispose();
     }
@@ -691,6 +787,31 @@ class _NewEventPageState extends State<NewEventPage>
     }
   }
 
+  /// Opens the same multi-select contact picker used for event contacts so
+  /// the author chooses access-grant callsigns from their address book
+  /// instead of typing them. Returned set replaces the current selection.
+  Future<void> _openAccessCallsignPicker() async {
+    final results = await Navigator.push<List<ContactPickerResult>>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ContactPickerPage(
+          i18n: _i18n,
+          multiSelect: true,
+          initialSelection: _accessCallsigns.keys.toSet(),
+          sortByEvents: true,
+        ),
+      ),
+    );
+    if (results != null && mounted) {
+      setState(() {
+        _accessCallsigns.clear();
+        for (final r in results) {
+          _accessCallsigns[r.contact.callsign] = r;
+        }
+      });
+    }
+  }
+
   String _groupLabel(_GroupOption option) {
     if (option.group.title.isNotEmpty) {
       return option.group.title;
@@ -779,11 +900,7 @@ class _NewEventPageState extends State<NewEventPage>
       'visibility': _visibility,
       'groupAccess': _selectedGroups.toList(),
       'unlistedKey': _visibility == 'unlisted' ? _unlistedKey : null,
-      'accessCallsigns': _accessCallsignsController.text
-          .split(',')
-          .map((s) => s.trim().toUpperCase())
-          .where((s) => s.isNotEmpty)
-          .toList(),
+      'accessCallsigns': _accessCallsigns.keys.toList(),
       'links': _links,
       'updates': _updates.map((update) => update.toMap()).toList(),
       'flyers': _flyers.map((file) => file.toMap()).toList(),
@@ -1872,19 +1989,159 @@ class _NewEventPageState extends State<NewEventPage>
         if (_visibility == 'private' ||
             _visibility == 'group' ||
             _visibility == 'request_access') ...[
-          const SizedBox(height: 12),
-          // Per-callsign grants. Comma-separated list. Used by the server
-          // visibility check alongside the existing group selector.
-          TextFormField(
-            controller: _accessCallsignsController,
-            decoration: const InputDecoration(
-              labelText: 'Allowed callsigns',
-              helperText:
-                  'Comma-separated. These callsigns can access in addition to any selected groups.',
-              prefixIcon: Icon(Icons.person_pin, size: 18),
-              border: OutlineInputBorder(),
+          const SizedBox(height: 16),
+          Text(
+            'Allowed callsigns',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
             ),
           ),
+          Text(
+            'These callsigns can access the event in addition to any selected groups.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (_accessCallsigns.isNotEmpty) ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: _accessCallsigns.values.map((result) {
+                final label = result.contact.displayName.isNotEmpty &&
+                        result.contact.displayName !=
+                            result.contact.callsign
+                    ? '${result.contact.displayName} (${result.contact.callsign})'
+                    : result.contact.callsign;
+                return Chip(
+                  avatar: CircleAvatar(
+                    backgroundColor: theme.colorScheme.primaryContainer,
+                    child: Text(
+                      result.contact.callsign.isNotEmpty
+                          ? result.contact.callsign[0].toUpperCase()
+                          : '?',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: theme.colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+                  label: Text(label),
+                  deleteIcon: const Icon(Icons.close, size: 18),
+                  onDeleted: () {
+                    setState(() {
+                      _accessCallsigns.remove(result.contact.callsign);
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+          ],
+          OutlinedButton.icon(
+            onPressed: _openAccessCallsignPicker,
+            icon: const Icon(Icons.person_add_outlined, size: 18),
+            label: Text(_accessCallsigns.isEmpty
+                ? 'Add callsigns'
+                : 'Add more callsigns'),
+          ),
+          if (_visibility == 'request_access' &&
+              widget.isEditMode &&
+              _accessRequests.isNotEmpty) ...[
+            const SizedBox(height: 24),
+            Text(
+              'Access requests',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              'Approve to grant access; deny is remembered so the requester can\'t spam the inbox.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            ..._accessRequests.map((entry) {
+              final status = (entry['status'] as String?) ?? 'pending';
+              final cs = ((entry['callsign'] as String?) ?? '').trim();
+              final npub = ((entry['npub'] as String?) ?? '').trim();
+              final msg = ((entry['message'] as String?) ?? '').trim();
+              final color = status == 'approved'
+                  ? Colors.green
+                  : status == 'denied'
+                      ? Colors.red
+                      : theme.colorScheme.onSurfaceVariant;
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.person_outline,
+                              size: 18, color: color),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              cs.isNotEmpty
+                                  ? '$cs  ·  ${npub.length > 20 ? '${npub.substring(0, 16)}…' : npub}'
+                                  : npub,
+                              style: theme.textTheme.bodyMedium,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              status,
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: color),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (msg.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(msg, style: theme.textTheme.bodySmall),
+                      ],
+                      if (status == 'pending') ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () =>
+                                  _decideAccessRequest(entry, 'deny'),
+                              icon: const Icon(Icons.close, size: 18),
+                              label: const Text('Deny'),
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.red,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            FilledButton.icon(
+                              onPressed: () =>
+                                  _decideAccessRequest(entry, 'approve'),
+                              icon: const Icon(Icons.check, size: 18),
+                              label: const Text('Approve'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ],
         ],
         if (_visibility == 'group') ...[
           const SizedBox(height: 16),

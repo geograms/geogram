@@ -1850,7 +1850,7 @@ class LogApiService with ChatModificationMixin {
       final htmlHeaders = Map<String, String>.from(headers);
       htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
       return shelf.Response.notFound(
-        _eventNotFoundHtml(eventId),
+        await _eventNotFoundHtml(eventId),
         headers: htmlHeaders,
       );
     }
@@ -1894,7 +1894,7 @@ class LogApiService with ChatModificationMixin {
         final htmlHeaders = Map<String, String>.from(headers);
         htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
         return shelf.Response.notFound(
-          _eventNotFoundHtml(eventId),
+          await _eventNotFoundHtml(eventId),
           headers: htmlHeaders,
         );
       }
@@ -1903,7 +1903,7 @@ class LogApiService with ChatModificationMixin {
         final htmlHeaders = Map<String, String>.from(headers);
         htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
         return shelf.Response.notFound(
-          _eventNotFoundHtml(eventId),
+          await _eventNotFoundHtml(eventId),
           headers: htmlHeaders,
         );
       }
@@ -2052,30 +2052,62 @@ class LogApiService with ChatModificationMixin {
     return shelf.Response.ok(assets.html, headers: htmlHeaders);
   }
 
-  String _eventNotFoundHtml(String eventId) {
+  /// Themed "Event not found" page. Re-uses the same global stylesheet
+  /// the events listing/detail pages render with, so the 404 sits inside
+  /// the same look-and-feel instead of dropping the visitor into an
+  /// orphaned dark-blue card. CSS variables (--accent, --background,
+  /// --color, --border-color) come from WebThemeService.getGlobalStyles().
+  Future<String> _eventNotFoundHtml(String eventId) async {
+    String globalStyles = '';
+    try {
+      final theme = WebThemeService();
+      await theme.init();
+      globalStyles = await theme.getGlobalStyles() ?? '';
+    } catch (_) {
+      // Fall through with empty styles — the page still renders, just
+      // without theme variables.
+    }
     return '''<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Event Not Found</title>
+  <style>$globalStyles</style>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-           display: flex; justify-content: center; align-items: center; min-height: 100vh;
-           margin: 0; background: #1a1a2e; color: #eee; }
-    .card { background: #16213e; border-radius: 16px; padding: 40px; max-width: 420px;
-            text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
-    h1 { margin: 0 0 8px; font-size: 24px; }
-    .subtitle { color: #a0a0b0; }
-    .back { display: inline-block; margin-top: 16px; color: #7c83ff; text-decoration: none; }
-    .back:hover { text-decoration: underline; }
+    body {
+      display: flex; justify-content: center; align-items: center;
+      min-height: 100vh; margin: 0;
+    }
+    .card {
+      background: var(--background);
+      color: var(--color);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 32px 40px;
+      max-width: 480px;
+      text-align: center;
+      box-shadow: var(--shadow);
+    }
+    .card h1 {
+      color: var(--accent);
+      margin: 0 0 12px;
+      font-size: 1.4rem;
+    }
+    .card p { opacity: 0.85; margin: 0 0 18px; }
+    .card a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px dashed var(--accent-alpha-70);
+    }
+    .card a:hover { border-bottom-style: solid; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>Event Not Found</h1>
-    <p class="subtitle">The event could not be found or you don't have access.</p>
-    <a class="back" href="/events/">Browse events</a>
+    <h1>Event not found</h1>
+    <p>The event could not be found, or you don't have access.</p>
+    <a href="/events/">Browse events</a>
   </div>
 </body>
 </html>''';
@@ -8488,6 +8520,28 @@ class LogApiService with ChatModificationMixin {
         );
       }
 
+      // GET /api/events/{eventId}/access-requests
+      //   → JSON list of pending + decided requests (owner-only).
+      // POST /api/events/{eventId}/access-requests/{npub}/{action}
+      //   action ∈ {approve, deny}. Approving adds the requester's
+      //   callsign to ACCESS_CALLSIGNS:; denying remembers the answer
+      //   so future POSTs from the same npub no-op.
+      if (pathParts.length == 2 &&
+          pathParts[1] == 'access-requests' &&
+          request.method == 'GET') {
+        return await _handleEventAccessRequestsList(
+          pathParts[0], dataDir, headers,
+        );
+      }
+      if (pathParts.length == 4 &&
+          pathParts[1] == 'access-requests' &&
+          (pathParts[3] == 'approve' || pathParts[3] == 'deny') &&
+          request.method == 'POST') {
+        return await _handleEventAccessRequestDecision(
+          pathParts[0], pathParts[2], pathParts[3], dataDir, headers,
+        );
+      }
+
       if (request.method != 'GET') {
         return shelf.Response(
           405,
@@ -9154,20 +9208,46 @@ class LogApiService with ChatModificationMixin {
         } catch (_) {}
       }
 
-      // Replace any earlier pending entry from the same npub so we don't
-      // pile up duplicates each time the visitor reloads.
-      existing.removeWhere((e) =>
-          e is Map<String, dynamic> &&
-          e['npub'] == npub &&
-          (e['status'] ?? 'pending') == 'pending');
-
-      existing.add({
-        'npub': npub,
-        'callsign': callsign,
-        'message': message,
-        'requested_at': DateTime.now().toUtc().toIso8601String(),
-        'status': 'pending',
-      });
+      // If the owner already decided on this requester, remember the
+      // answer instead of generating a fresh pending entry. The page
+      // shows whatever final status we already have so the requester
+      // doesn't get to spam the inbox with the same request.
+      final prior = existing.firstWhere(
+        (e) => e is Map<String, dynamic> && e['npub'] == npub,
+        orElse: () => null,
+      );
+      if (prior is Map<String, dynamic>) {
+        final priorStatus = (prior['status'] as String?) ?? 'pending';
+        if (priorStatus == 'approved' || priorStatus == 'denied') {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'status': priorStatus,
+              'message': priorStatus == 'approved'
+                  ? 'Access already granted'
+                  : 'Request previously denied',
+            }),
+            headers: headers,
+          );
+        }
+        // Refresh the pending entry's metadata in place rather than
+        // appending a duplicate.
+        prior['callsign'] = callsign.isNotEmpty
+            ? callsign
+            : prior['callsign'] ?? '';
+        prior['message'] = message.isNotEmpty
+            ? message
+            : prior['message'] ?? '';
+        prior['requested_at'] = DateTime.now().toUtc().toIso8601String();
+      } else {
+        existing.add({
+          'npub': npub,
+          'callsign': callsign,
+          'message': message,
+          'requested_at': DateTime.now().toUtc().toIso8601String(),
+          'status': 'pending',
+        });
+      }
 
       await requestsFile.parent.create(recursive: true);
       await requestsFile.writeAsString(jsonEncode(existing));
@@ -9175,6 +9255,7 @@ class LogApiService with ChatModificationMixin {
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
+          'status': 'pending',
           'pending': existing
               .where((e) =>
                   e is Map<String, dynamic> &&
@@ -9186,6 +9267,152 @@ class LogApiService with ChatModificationMixin {
     } catch (e) {
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': 'Failed to record access request: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// GET /api/events/{eventId}/access-requests — owner-only.
+  /// Returns the JSON list as-is (pending + approved + denied entries) so
+  /// the desktop UI can render an inbox.
+  Future<shelf.Response> _handleEventAccessRequestsList(
+    String eventId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final event = await EventService().findEventByIdGlobal(eventId, dataDir);
+      if (event == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found'}),
+          headers: headers,
+        );
+      }
+      final eventPath = await EventService().getEventPath(event.id, dataDir);
+      if (eventPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event path not found'}),
+          headers: headers,
+        );
+      }
+      final file = io.File('$eventPath/feedback/access_requests.json');
+      if (!await file.exists()) {
+        return shelf.Response.ok(
+          jsonEncode({'requests': const []}),
+          headers: headers,
+        );
+      }
+      try {
+        final content = await file.readAsString();
+        final list = content.trim().isEmpty
+            ? const []
+            : jsonDecode(content) as List<dynamic>;
+        return shelf.Response.ok(
+          jsonEncode({'requests': list}),
+          headers: headers,
+        );
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'error': 'Corrupted requests file: $e'}),
+          headers: headers,
+        );
+      }
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Failed to list access requests: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/events/{eventId}/access-requests/{npub}/{action}
+  ///
+  /// Updates an entry's status. Approving also appends the requester's
+  /// callsign to ACCESS_CALLSIGNS: on event.txt so the visibility filter
+  /// honours the grant on the next request. Denying flips status to
+  /// 'denied' so future POSTs to /request-access from the same npub no-op.
+  Future<shelf.Response> _handleEventAccessRequestDecision(
+    String eventId,
+    String npub,
+    String action,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final event = await EventService().findEventByIdGlobal(eventId, dataDir);
+      if (event == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found'}),
+          headers: headers,
+        );
+      }
+      final eventPath = await EventService().getEventPath(event.id, dataDir);
+      if (eventPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event path not found'}),
+          headers: headers,
+        );
+      }
+      final file = io.File('$eventPath/feedback/access_requests.json');
+      if (!await file.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'No requests recorded'}),
+          headers: headers,
+        );
+      }
+      final content = await file.readAsString();
+      final list = (content.trim().isEmpty
+          ? <dynamic>[]
+          : jsonDecode(content) as List<dynamic>);
+      final entryIdx = list.indexWhere(
+        (e) => e is Map<String, dynamic> && e['npub'] == npub,
+      );
+      if (entryIdx < 0) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Request not found for npub'}),
+          headers: headers,
+        );
+      }
+      final entry = list[entryIdx] as Map<String, dynamic>;
+      final newStatus = action == 'approve' ? 'approved' : 'denied';
+      entry['status'] = newStatus;
+      entry['decided_at'] = DateTime.now().toUtc().toIso8601String();
+      list[entryIdx] = entry;
+      await file.writeAsString(jsonEncode(list));
+
+      // On approve, persist the callsign on the event so the visibility
+      // filter lets the requester through next time. EventService's
+      // updateEvent depends on its _appPath being initialised which isn't
+      // guaranteed in the HTTP context, so we re-serialise event.txt
+      // directly via the same exportAsText round-trip.
+      if (newStatus == 'approved') {
+        final csRaw = (entry['callsign'] as String?)?.trim() ?? '';
+        final cs = csRaw.toUpperCase();
+        if (cs.isNotEmpty &&
+            !event.accessCallsigns
+                .map((c) => c.toUpperCase())
+                .contains(cs)) {
+          try {
+            final eventFile = io.File('$eventPath/event.txt');
+            if (await eventFile.exists()) {
+              final updated = event.copyWith(
+                accessCallsigns: [...event.accessCallsigns, cs],
+              );
+              await eventFile.writeAsString(updated.exportAsText());
+            }
+          } catch (e) {
+            LogService().log('access-request approve: persist failed: $e');
+          }
+        }
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({'success': true, 'status': newStatus}),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Failed to update access request: $e'}),
         headers: headers,
       );
     }
