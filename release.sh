@@ -171,13 +171,19 @@ sed -i "s/^version: .*/version: $VERSION+1/" pubspec.yaml
 
 # Step 1a: Sync lib/version.dart (CI does this on its own checkout, but the
 # in-tree file should match what's in pubspec so source builds aren't stale).
+# CLAUDE.md notes that on this machine dart/flutter live under ~/flutter/bin
+# and aren't on PATH, so probe that location explicitly before giving up.
+DART_BIN=""
 if command -v dart >/dev/null 2>&1; then
+    DART_BIN="dart"
+elif [ -x "$HOME/flutter/bin/dart" ]; then
+    DART_BIN="$HOME/flutter/bin/dart"
+fi
+if [ -n "$DART_BIN" ]; then
     echo -e "${GREEN}Regenerating lib/version.dart...${NC}"
-    dart run tool/update_version.dart >/dev/null
-elif command -v flutter >/dev/null 2>&1; then
-    echo -e "${GREEN}Regenerating lib/version.dart...${NC}"
-    flutter pub run tool/update_version.dart >/dev/null 2>&1 || \
-        "$HOME/flutter/bin/dart" run tool/update_version.dart >/dev/null
+    "$DART_BIN" run tool/update_version.dart >/dev/null
+else
+    echo -e "${YELLOW}dart not found — lib/version.dart will be stale until next CI build${NC}"
 fi
 
 # Step 1b: Calculate versionCode (commit count after this release)
