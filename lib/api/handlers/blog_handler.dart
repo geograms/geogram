@@ -143,7 +143,20 @@ class BlogHandler {
         }
       }
 
-      _log('INFO', 'Post details: found ${comments.length} comments, ${files.length} files');
+      // Engagement counts — pulled from the same feedback folder the
+      // list endpoint uses so the UI can show "X likes · Y views" on
+      // the post-detail page without round-tripping again.
+      final feedbackCounts = await FeedbackFolderUtils.getAllFeedbackCounts(
+        postPath,
+        storage: storage,
+      );
+      final likes = feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0;
+      final dislikes = feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0;
+      final points = feedbackCounts[FeedbackFolderUtils.feedbackTypePoints] ?? 0;
+      final subs = feedbackCounts[FeedbackFolderUtils.feedbackTypeSubscribe] ?? 0;
+      final views = feedbackCounts[FeedbackFolderUtils.feedbackTypeViews] ?? 0;
+
+      _log('INFO', 'Post details: found ${comments.length} comments, ${files.length} files, $likes likes, $views views');
 
       return {
         'success': true,
@@ -160,6 +173,11 @@ class BlogHandler {
         'files': files,
         'comments': commentsList,
         'comment_count': comments.length,
+        'likes_count': likes,
+        'dislikes_count': dislikes,
+        'points_count': points,
+        'subscribe_count': subs,
+        'view_count': views,
         if (post?.npub != null) 'npub': post!.npub,
         if (post?.signature != null) 'signature': post!.signature,
       };
@@ -696,6 +714,7 @@ class BlogHandler {
           final likes = feedbackCounts[FeedbackFolderUtils.feedbackTypeLikes] ?? 0;
           final dislikes = feedbackCounts[FeedbackFolderUtils.feedbackTypeDislikes] ?? 0;
           final points = feedbackCounts[FeedbackFolderUtils.feedbackTypePoints] ?? 0;
+          final views = feedbackCounts[FeedbackFolderUtils.feedbackTypeViews] ?? 0;
 
           posts.add({
             'id': post.id,
@@ -711,6 +730,7 @@ class BlogHandler {
             'likes_count': likes,
             'dislikes_count': dislikes,
             'points_count': points,
+            'view_count': views,
             'has_file': post.hasFile,
             'has_image': post.hasImage,
             'has_location': post.hasLocation,

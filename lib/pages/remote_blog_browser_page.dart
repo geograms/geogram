@@ -12,8 +12,12 @@ import '../models/blog_comment.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/profile_service.dart';
 import '../services/station_service.dart';
 import '../services/storage_config.dart';
+import '../util/feedback_folder_utils.dart';
+import '../util/nostr_crypto.dart';
+import '../util/nostr_event.dart';
 import '../widgets/blog_post_detail_widget.dart';
 
 /// Page for browsing blog posts from a remote device
@@ -250,6 +254,15 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
         if (data['npub'] != null) postMetadata['npub'] = data['npub'] as String;
         if (data['signature'] != null) postMetadata['signature'] = data['signature'] as String;
 
+        // Engagement counts from the server's /api/blog/{postId} —
+        // this lets the detail page show likes / views / comments
+        // without a second round-trip.
+        int asInt(dynamic v) {
+          if (v is int) return v;
+          if (v is num) return v.toInt();
+          return 0;
+        }
+
         return models.BlogPost(
           id: data['id'] as String? ?? postId,
           author: data['author'] as String? ?? 'Unknown',
@@ -263,6 +276,10 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
           content: data['content'] as String? ?? '',
           comments: commentsList,
           metadata: postMetadata,
+          likesCount: asInt(data['likes_count']),
+          dislikesCount: asInt(data['dislikes_count']),
+          pointsCount: asInt(data['points_count']),
+          subscribeCount: asInt(data['subscribe_count']),
         );
       }
 
@@ -457,8 +474,12 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
   }
 }
 
-/// Detail page for viewing a remote blog post
-class _RemoteBlogPostDetailPage extends StatelessWidget {
+/// Detail page for viewing a remote blog post. Full engagement is
+/// enabled — Like / Dislike / Point / Subscribe / Reactions all sign
+/// a NOSTR event with the visitor's own keys and POST it to the
+/// selected device via the shared ConnectionManager. Comments are
+/// signed and posted the same way.
+class _RemoteBlogPostDetailPage extends StatefulWidget {
   final models.BlogPost post;
   final RemoteDevice device;
 
@@ -468,12 +489,260 @@ class _RemoteBlogPostDetailPage extends StatelessWidget {
   });
 
   @override
+  State<_RemoteBlogPostDetailPage> createState() =>
+      _RemoteBlogPostDetailPageState();
+}
+
+class _RemoteBlogPostDetailPageState extends State<_RemoteBlogPostDetailPage> {
+  final DevicesService _devicesService = DevicesService();
+  final ProfileService _profileService = ProfileService();
+  final TextEditingController _commentController = TextEditingController();
+
+  late models.BlogPost _post;
+  int _viewCount = 0;
+  bool _posting = false;
+  bool _viewRecorded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _post = widget.post;
+    // Always refresh on entry so counts reflect the latest state and
+    // so view tracking hits an up-to-date server.
+    _refreshPost();
+    _recordView();
+  }
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  // ───────────────── Remote fetch / refresh ─────────────────
+
+  Future<void> _refreshPost() async {
+    try {
+      final resp = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'GET',
+        path: '/api/blog/${widget.post.id}',
+      );
+      if (resp == null || resp.statusCode != 200) return;
+      final data = json.decode(resp.body) as Map<String, dynamic>;
+      if (data['success'] != true) return;
+
+      int asInt(dynamic v) {
+        if (v is int) return v;
+        if (v is num) return v.toInt();
+        return 0;
+      }
+
+      final commentsList = <BlogComment>[];
+      for (final c in (data['comments'] as List? ?? [])) {
+        final cm = c as Map<String, dynamic>;
+        final meta = <String, String>{};
+        if (cm['npub'] != null) meta['npub'] = cm['npub'] as String;
+        if (cm['signature'] != null) meta['signature'] = cm['signature'] as String;
+        commentsList.add(BlogComment(
+          id: cm['id'] as String?,
+          author: cm['author'] as String? ?? 'Unknown',
+          timestamp: cm['timestamp'] as String? ?? '',
+          content: cm['content'] as String? ?? '',
+          metadata: meta,
+        ));
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _post = _post.copyWith(
+          comments: commentsList,
+          likesCount: asInt(data['likes_count']),
+          dislikesCount: asInt(data['dislikes_count']),
+          pointsCount: asInt(data['points_count']),
+          subscribeCount: asInt(data['subscribe_count']),
+        );
+        _viewCount = asInt(data['view_count']);
+      });
+    } catch (e) {
+      LogService().log('RemoteBlogDetail: refresh failed: $e');
+    }
+  }
+
+  // ───────────────── Local signing helpers ──────────────────
+
+  /// Checks the user has NOSTR keys; surfaces a snackbar if not.
+  bool _requireNostrKeys() {
+    final profile = _profileService.getProfile();
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NOSTR key required for this action')),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /// Sign a kind-7 reaction event and POST it to the remote device's
+  /// /api/blog/{postId}/{action} (or /react/{emoji}) endpoint. Same
+  /// shape the local BlogService produces, so the server-side
+  /// verification is identical.
+  Future<void> _signAndPostFeedback(String feedbackType, String actionName) async {
+    if (_posting || !_requireNostrKeys()) return;
+    final profile = _profileService.getProfile();
+    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+    final authorNpub = _post.metadata['npub'] ?? '';
+    final event = NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: NostrEventKind.reaction,
+      tags: [
+        ['p', authorNpub],
+        ['e', _post.id],
+        ['type', feedbackType],
+      ],
+      content: actionName,
+    );
+    event.calculateId();
+    event.signWithNsec(profile.nsec);
+
+    final subPath = actionName == 'reaction'
+        ? 'react/$feedbackType'
+        : actionName;
+    setState(() => _posting = true);
+    try {
+      final resp = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'POST',
+        path: '/api/blog/${_post.id}/$subPath',
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(event.toJson()),
+      );
+      if (resp == null) {
+        _toast('Network error');
+      } else if (resp.statusCode != 200) {
+        _toast('Server refused the action (HTTP ${resp.statusCode})');
+      } else {
+        await _refreshPost();
+      }
+    } catch (e) {
+      LogService().log('RemoteBlogDetail: feedback $actionName failed: $e');
+      _toast('Action failed: $e');
+    } finally {
+      if (mounted) setState(() => _posting = false);
+    }
+  }
+
+  /// Sign a kind-1 comment event and POST it to
+  /// /api/blog/{postId}/comment with `{author, content, npub, signature}`.
+  Future<void> _postComment() async {
+    final text = _commentController.text.trim();
+    if (text.isEmpty || _posting || !_requireNostrKeys()) return;
+    final profile = _profileService.getProfile();
+    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+    final event = NostrEvent(
+      pubkey: pubkeyHex,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: 1,
+      tags: [
+        ['e', _post.id],
+        ['t', 'blog-comment'],
+        ['callsign', profile.callsign],
+      ],
+      content: text,
+    );
+    event.calculateId();
+    event.signWithNsec(profile.nsec);
+
+    setState(() => _posting = true);
+    try {
+      final resp = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'POST',
+        path: '/api/blog/${_post.id}/comment',
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'author': profile.callsign,
+          'content': text,
+          'npub': profile.npub,
+          'signature': event.sig,
+        }),
+      );
+      if (resp == null) {
+        _toast('Network error');
+      } else if (resp.statusCode != 200) {
+        _toast('Comment rejected (HTTP ${resp.statusCode})');
+      } else {
+        _commentController.clear();
+        await _refreshPost();
+      }
+    } catch (e) {
+      LogService().log('RemoteBlogDetail: addComment failed: $e');
+      _toast('Comment failed: $e');
+    } finally {
+      if (mounted) setState(() => _posting = false);
+    }
+  }
+
+  /// Record a signed view event so the author sees traffic — mirrors
+  /// the events-page view flow. Fails silently (no-op) if the user
+  /// has no NOSTR keys; the view simply isn't counted.
+  Future<void> _recordView() async {
+    if (_viewRecorded) return;
+    _viewRecorded = true;
+    final profile = _profileService.getProfile();
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) return;
+    try {
+      final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+      final event = NostrEvent(
+        pubkey: pubkeyHex,
+        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        kind: 1,
+        tags: [
+          ['t', 'blog-view'],
+          ['e', _post.id],
+          ['callsign', profile.callsign],
+        ],
+        content: '',
+      );
+      event.calculateId();
+      event.signWithNsec(profile.nsec);
+      final resp = await _devicesService.makeDeviceApiRequest(
+        callsign: widget.device.callsign,
+        method: 'POST',
+        path: '/api/feedback/blog/${_post.id}/view',
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(event.toJson()),
+      );
+      if (resp != null && resp.statusCode == 200) {
+        try {
+          final data = json.decode(resp.body) as Map<String, dynamic>;
+          final total = data['total_views'];
+          if (total is num && mounted) {
+            setState(() => _viewCount = total.toInt());
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      LogService().log('RemoteBlogDetail: record view failed: $e');
+    }
+  }
+
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+    );
+  }
+
+  // ───────────────── UI ─────────────────
+
+  @override
   Widget build(BuildContext context) {
     final i18n = I18nService();
     final theme = Theme.of(context);
 
-    // Get station URL for shareable link
-    String? stationUrl = device.url;
+    String? stationUrl = widget.device.url;
     if (stationUrl == null || stationUrl.isEmpty) {
       final preferredStation = StationService().getPreferredStation();
       stationUrl = preferredStation?.url;
@@ -482,90 +751,199 @@ class _RemoteBlogPostDetailPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(i18n.t('blog_post')),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: i18n.t('refresh'),
+            onPressed: _refreshPost,
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           BlogPostDetailWidget(
-            post: post,
-            appPath: '', // Not used for remote posts
-            canEdit: false, // Read-only for remote posts
+            post: _post,
+            appPath: '',
+            canEdit: false,
             stationUrl: stationUrl,
-            profileIdentifier: device.callsign,
+            profileIdentifier: widget.device.callsign,
+            onLike: _posting
+                ? null
+                : () => _signAndPostFeedback(
+                      FeedbackFolderUtils.feedbackTypeLikes, 'like'),
+            onPoint: _posting
+                ? null
+                : () => _signAndPostFeedback(
+                      FeedbackFolderUtils.feedbackTypePoints, 'point'),
+            onDislike: _posting
+                ? null
+                : () => _signAndPostFeedback(
+                      FeedbackFolderUtils.feedbackTypeDislikes, 'dislike'),
+            onSubscribe: _posting
+                ? null
+                : () => _signAndPostFeedback(
+                      FeedbackFolderUtils.feedbackTypeSubscribe, 'subscribe'),
+            onReaction: _posting
+                ? null
+                : (emoji) => _signAndPostFeedback(emoji, 'reaction'),
           ),
-          const SizedBox(height: 24),
-          // Show comments section (read-only)
-          if (post.comments.isNotEmpty) ...[
-            const Divider(),
-            const SizedBox(height: 16),
-            Text(
-              '${i18n.t('comments')} (${post.comments.length})',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
+          const SizedBox(height: 12),
+          // Engagement summary — views / likes / comments at a glance.
+          _buildEngagementSummary(theme),
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 16),
+          Text(
+            '${i18n.t('comments')} (${_post.comments.length})',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
             ),
-            const SizedBox(height: 16),
-            ...post.comments.map((comment) {
-              return Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.person,
-                            size: 16,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            comment.author,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Icon(
-                            Icons.schedule,
-                            size: 16,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            comment.timestamp,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        comment.content,
-                        style: theme.textTheme.bodyMedium,
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            }),
-          ] else ...[
-            const Divider(),
-            const SizedBox(height: 16),
+          ),
+          const SizedBox(height: 12),
+          _buildCommentCompose(theme, i18n),
+          const SizedBox(height: 16),
+          if (_post.comments.isEmpty)
             Text(
               i18n.t('no_comments_yet'),
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
+                fontStyle: FontStyle.italic,
               ),
               textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-          ],
+            )
+          else
+            ..._post.comments.map((c) => _buildCommentCard(theme, c)),
         ],
+      ),
+    );
+  }
+
+  Widget _buildEngagementSummary(ThemeData theme) {
+    final stats = <Widget>[];
+    Widget chip(IconData icon, int count, String label) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 4),
+          Text(
+            '$count $label${count == 1 ? '' : 's'}',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      );
+    }
+
+    stats.add(chip(Icons.visibility, _viewCount, 'view'));
+    stats.add(chip(Icons.thumb_up_outlined, _post.likesCount, 'like'));
+    stats.add(chip(Icons.chat_bubble_outline, _post.comments.length, 'comment'));
+
+    return Wrap(
+      spacing: 16,
+      runSpacing: 8,
+      children: stats,
+    );
+  }
+
+  Widget _buildCommentCompose(ThemeData theme, I18nService i18n) {
+    final profile = _profileService.getProfile();
+    final hasKeys = profile.npub.isNotEmpty && profile.nsec.isNotEmpty;
+    if (!hasKeys) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.key_off,
+                size: 18, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'NOSTR key required to comment',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _commentController,
+            enabled: !_posting,
+            minLines: 1,
+            maxLines: 4,
+            decoration: InputDecoration(
+              hintText: i18n.t('write_a_comment'),
+              border: const OutlineInputBorder(),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+            onSubmitted: (_) => _postComment(),
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          icon: _posting
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.send),
+          onPressed: _posting ? null : _postComment,
+          tooltip: i18n.t('post_comment'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCommentCard(ThemeData theme, BlogComment comment) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.person,
+                    size: 16, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 4),
+                Text(
+                  comment.author,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Icon(Icons.schedule,
+                    size: 16, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 4),
+                Text(
+                  comment.timestamp,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(comment.content, style: theme.textTheme.bodyMedium),
+          ],
+        ),
       ),
     );
   }

@@ -632,6 +632,8 @@
   "posts": "posts",
   "select_post_to_view": "Select a post to view",
   "no_comments_yet": "No comments yet",
+  "write_a_comment": "Write a comment…",
+  "post_comment": "Post comment",
   "be_first_to_comment": "Be the first to comment!",
   "comments_when_published": "Comments will appear when published",
   "comments": "Comments",
