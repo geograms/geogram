@@ -9,8 +9,21 @@ import '../services/log_service.dart';
 import '../services/devices_service.dart';
 import '../services/storage_config.dart';
 
-/// All app types discovered on remote devices
-const List<String> _allAppTypes = ['blog', 'chat', 'events', 'alerts', 'shared'];
+/// App types the legacy fallback path knows how to probe individually.
+/// The fast `/api/apps` path iterates whatever keys the remote device
+/// returns, so a new server-side provider shows up in the device
+/// detail UI without touching this list.
+const List<String> _fallbackAppTypes = ['blog', 'chat', 'events', 'alerts', 'shared'];
+
+/// Display titles used when the remote doesn't supply one (fallback
+/// path, older peers). Keys not here fall back to the raw appType.
+const Map<String, String> _defaultTitles = {
+  'blog': 'Blog',
+  'chat': 'Chat',
+  'events': 'Events',
+  'alerts': 'Reports',
+  'shared': 'Shared',
+};
 
 /// Service for discovering what apps are available on a remote device
 class DeviceAppsService {
@@ -80,19 +93,27 @@ class DeviceAppsService {
             'DeviceAppsService: Loaded apps_meta.json for $callsign',
           );
 
-          for (final appType in _allAppTypes) {
-            if (meta.containsKey(appType)) {
-              final appMeta = meta[appType] as Map<String, dynamic>;
-              apps[appType] = DeviceAppInfo(
-                type: appType,
-                isAvailable: appMeta['isAvailable'] as bool? ?? false,
-                itemCount: appMeta['itemCount'] as int? ?? 0,
-              );
-            } else {
-              apps[appType] = DeviceAppInfo(type: appType, isAvailable: false);
-            }
+          // Keep every appType the cache knew about so a new app type
+          // surfaced last refresh still shows up on the next boot even
+          // before the background refresh finishes.
+          for (final entry in meta.entries) {
+            final appMeta = entry.value;
+            if (appMeta is! Map<String, dynamic>) continue;
+            apps[entry.key] = DeviceAppInfo(
+              type: entry.key,
+              title: appMeta['title'] as String?,
+              isAvailable: appMeta['isAvailable'] as bool? ?? false,
+              itemCount: appMeta['itemCount'] as int? ?? 0,
+            );
           }
-
+          // Ensure the well-known types are always present (hidden
+          // tiles are fine; missing keys trip the UI).
+          for (final appType in _fallbackAppTypes) {
+            apps.putIfAbsent(
+              appType,
+              () => DeviceAppInfo(type: appType, isAvailable: false),
+            );
+          }
           return apps;
         } catch (e) {
           LogService().log(
@@ -138,10 +159,14 @@ class DeviceAppsService {
         apps['chat'] = DeviceAppInfo(type: 'chat', isAvailable: false);
       }
 
-      // Events, alerts, and shared not commonly cached yet
-      apps['events'] = DeviceAppInfo(type: 'events', isAvailable: false);
-      apps['alerts'] = DeviceAppInfo(type: 'alerts', isAvailable: false);
-      apps['shared'] = DeviceAppInfo(type: 'shared', isAvailable: false);
+      // Events, alerts, and shared not commonly cached on disk yet —
+      // they'll get populated once /api/apps returns real counts.
+      apps.putIfAbsent(
+          'events', () => DeviceAppInfo(type: 'events', isAvailable: false));
+      apps.putIfAbsent(
+          'alerts', () => DeviceAppInfo(type: 'alerts', isAvailable: false));
+      apps.putIfAbsent(
+          'shared', () => DeviceAppInfo(type: 'shared', isAvailable: false));
     } catch (e) {
       LogService().log(
         'DeviceAppsService: Error loading cache for $callsign: $e',
@@ -171,6 +196,7 @@ class DeviceAppsService {
         meta[entry.key] = {
           'isAvailable': entry.value.isAvailable,
           'itemCount': entry.value.itemCount,
+          if (entry.value.title != null) 'title': entry.value.title,
           'cachedAt': DateTime.now().toIso8601String(),
         };
       }
@@ -211,11 +237,8 @@ class DeviceAppsService {
     ]);
 
     final apps = <String, DeviceAppInfo>{
-      'blog': results[0],
-      'chat': results[1],
-      'events': results[2],
-      'alerts': results[3],
-      // Shared not available via individual legacy calls
+      for (final info in results) info.type: info,
+      // Shared not available via individual legacy calls.
       'shared': DeviceAppInfo(type: 'shared', isAvailable: false),
     };
 
@@ -249,18 +272,28 @@ class DeviceAppsService {
         final appsData = data['apps'] as Map<String, dynamic>?;
         if (appsData == null) return null;
 
+        // Iterate whatever keys the remote device sent — a new app
+        // type registered there automatically surfaces on the
+        // device-detail page without any client-side change.
         final apps = <String, DeviceAppInfo>{};
-        for (final appType in _allAppTypes) {
-          if (appsData.containsKey(appType)) {
-            final appInfo = appsData[appType] as Map<String, dynamic>;
-            apps[appType] = DeviceAppInfo(
-              type: appType,
-              isAvailable: appInfo['available'] as bool? ?? false,
-              itemCount: appInfo['count'] as int? ?? 0,
-            );
-          } else {
-            apps[appType] = DeviceAppInfo(type: appType, isAvailable: false);
-          }
+        for (final entry in appsData.entries) {
+          final appInfo = entry.value;
+          if (appInfo is! Map<String, dynamic>) continue;
+          apps[entry.key] = DeviceAppInfo(
+            type: entry.key,
+            title: appInfo['title'] as String?,
+            isAvailable: appInfo['available'] as bool? ?? false,
+            itemCount: appInfo['count'] as int? ?? 0,
+          );
+        }
+        // Ensure the well-known types always have an entry so the
+        // device-detail grid shape is stable even for peers that
+        // don't report every type.
+        for (final appType in _fallbackAppTypes) {
+          apps.putIfAbsent(
+            appType,
+            () => DeviceAppInfo(type: appType, isAvailable: false),
+          );
         }
         return apps;
       }
@@ -298,11 +331,11 @@ class DeviceAppsService {
 
       if (response != null && response.statusCode == 200) {
         final data = json.decode(response.body) as Map<String, dynamic>;
-        final posts = data['posts'] as List? ?? [];
+        final total = _extractTotal(data, 'posts');
         return DeviceAppInfo(
           type: 'blog',
-          isAvailable: posts.isNotEmpty,
-          itemCount: posts.length,
+          isAvailable: total > 0,
+          itemCount: total,
         );
       }
     } catch (e) {
@@ -311,6 +344,22 @@ class DeviceAppsService {
       );
     }
     return DeviceAppInfo(type: 'blog', isAvailable: false);
+  }
+
+  /// Prefer the remote's reported `total` (unfiltered, un-paginated).
+  /// Fall back to `count` (filtered), then the length of the actual
+  /// list payload. Prevents "page size = reported count" bugs on peers
+  /// whose listing endpoints paginate their responses.
+  int _extractTotal(Map<String, dynamic> data, String listKey) {
+    final total = data['total'];
+    if (total is int) return total;
+    if (total is num) return total.toInt();
+    final count = data['count'];
+    if (count is int) return count;
+    if (count is num) return count.toInt();
+    final list = data[listKey];
+    if (list is List) return list.length;
+    return 0;
   }
 
   /// Check if chat app is available
@@ -324,20 +373,18 @@ class DeviceAppsService {
 
       if (response != null && response.statusCode == 200) {
         final data = json.decode(response.body);
-        List<dynamic> rooms;
-
+        int count;
         if (data is List) {
-          rooms = data;
-        } else if (data is Map<String, dynamic> && data['rooms'] != null) {
-          rooms = data['rooms'] as List;
+          count = data.length;
+        } else if (data is Map<String, dynamic>) {
+          count = _extractTotal(data, 'rooms');
         } else {
-          rooms = [];
+          count = 0;
         }
-
         return DeviceAppInfo(
           type: 'chat',
-          isAvailable: rooms.isNotEmpty,
-          itemCount: rooms.length,
+          isAvailable: count > 0,
+          itemCount: count,
         );
       }
     } catch (e) {
@@ -359,20 +406,18 @@ class DeviceAppsService {
 
       if (response != null && response.statusCode == 200) {
         final data = json.decode(response.body);
-        List<dynamic> events;
-
+        int count;
         if (data is List) {
-          events = data;
-        } else if (data is Map<String, dynamic> && data['events'] != null) {
-          events = data['events'] as List;
+          count = data.length;
+        } else if (data is Map<String, dynamic>) {
+          count = _extractTotal(data, 'events');
         } else {
-          events = [];
+          count = 0;
         }
-
         return DeviceAppInfo(
           type: 'events',
-          isAvailable: events.isNotEmpty,
-          itemCount: events.length,
+          isAvailable: count > 0,
+          itemCount: count,
         );
       }
     } catch (e) {
@@ -394,20 +439,18 @@ class DeviceAppsService {
 
       if (response != null && response.statusCode == 200) {
         final data = json.decode(response.body);
-        List<dynamic> alerts;
-
+        int count;
         if (data is List) {
-          alerts = data;
-        } else if (data is Map<String, dynamic> && data['alerts'] != null) {
-          alerts = data['alerts'] as List;
+          count = data.length;
+        } else if (data is Map<String, dynamic>) {
+          count = _extractTotal(data, 'alerts');
         } else {
-          alerts = [];
+          count = 0;
         }
-
         return DeviceAppInfo(
           type: 'alerts',
-          isAvailable: alerts.isNotEmpty,
-          itemCount: alerts.length,
+          isAvailable: count > 0,
+          itemCount: count,
         );
       }
     } catch (e) {
@@ -421,7 +464,7 @@ class DeviceAppsService {
   /// Return empty (all unavailable) apps map
   static Map<String, DeviceAppInfo> _emptyApps() {
     return {
-      for (final type in _allAppTypes)
+      for (final type in _fallbackAppTypes)
         type: DeviceAppInfo(type: type, isAvailable: false),
     };
   }
@@ -432,27 +475,20 @@ class DeviceAppInfo {
   final String type;
   final bool isAvailable;
   final int itemCount;
+  /// Title supplied by the remote device (via /api/apps). Lets a new
+  /// app type show up on the device-detail page without any client-
+  /// side change — falls back to [_defaultTitles] / the raw [type].
+  final String? title;
 
   DeviceAppInfo({
     required this.type,
     required this.isAvailable,
     this.itemCount = 0,
+    this.title,
   });
 
   String get displayName {
-    switch (type) {
-      case 'blog':
-        return 'Blog';
-      case 'chat':
-        return 'Chat';
-      case 'events':
-        return 'Events';
-      case 'alerts':
-        return 'Reports';
-      case 'shared':
-        return 'Shared';
-      default:
-        return type;
-    }
+    if (title != null && title!.isNotEmpty) return title!;
+    return _defaultTitles[type] ?? type;
   }
 }
