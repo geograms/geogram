@@ -35,6 +35,12 @@ class RecentEventEntry {
   final String displayDate;
   final DateTime dateTime;
   final String visibility;
+  // Device profile nickname (e.g. "brito"), used so the events list can show
+  // "Nickname (CALLSIGN)" the same way the blog list shows the author.
+  final String? deviceNickname;
+  final int likeCount;
+  final int commentCount;
+  final int viewCount;
 
   RecentEventEntry({
     required this.callsign,
@@ -46,6 +52,10 @@ class RecentEventEntry {
     required this.displayDate,
     required this.dateTime,
     required this.visibility,
+    this.deviceNickname,
+    this.likeCount = 0,
+    this.commentCount = 0,
+    this.viewCount = 0,
   });
 }
 
@@ -230,6 +240,10 @@ mixin HomepageMixin {
     final location = (e['location'] as String?)?.trim();
     final visibility = (e['visibility'] as String?) ?? 'public';
     final slug = e['slug'] as String?;
+    final deviceNickname = (e['device_nickname'] as String?)?.trim();
+    final likeCount = (e['like_count'] as num?)?.toInt() ?? 0;
+    final commentCount = (e['comment_count'] as num?)?.toInt() ?? 0;
+    final viewCount = (e['view_count'] as num?)?.toInt() ?? 0;
     final displayDate =
         '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
     return RecentEventEntry(
@@ -244,6 +258,11 @@ mixin HomepageMixin {
       displayDate: displayDate,
       dateTime: dt,
       visibility: visibility,
+      deviceNickname:
+          deviceNickname != null && deviceNickname.isNotEmpty ? deviceNickname : null,
+      likeCount: likeCount,
+      commentCount: commentCount,
+      viewCount: viewCount,
     );
   }
 
@@ -293,6 +312,8 @@ mixin HomepageMixin {
                     ev.visibility != 'request_access') {
                   continue;
                 }
+                final counts =
+                    await _scanFeedbackCountsOnDisk(eventEntity.path);
                 all.add(RecentEventEntry(
                   callsign: callsign,
                   eventId: eventId,
@@ -305,6 +326,9 @@ mixin HomepageMixin {
                   displayDate: ev.displayDate,
                   dateTime: ev.dateTime,
                   visibility: ev.visibility,
+                  likeCount: counts[0],
+                  commentCount: counts[1],
+                  viewCount: counts[2],
                 ));
               } catch (_) {
                 // Skip malformed event.txt
@@ -317,6 +341,38 @@ mixin HomepageMixin {
 
     all.sort((a, b) => b.dateTime.compareTo(a.dateTime));
     return all.length > limit ? all.sublist(0, limit) : all;
+  }
+
+  /// Read on-disk feedback counts for a mirrored event directory.
+  /// Returns [likes, comments, views]. Mirrors the canonical feedback
+  /// folder layout — anything missing simply contributes 0.
+  static Future<List<int>> _scanFeedbackCountsOnDisk(String eventPath) async {
+    int likes = 0;
+    int comments = 0;
+    int views = 0;
+    try {
+      final likesFile = File('$eventPath/feedback/likes.txt');
+      if (await likesFile.exists()) {
+        final txt = await likesFile.readAsString();
+        likes = txt.split('\n').where((l) => l.trim().isNotEmpty).length;
+      }
+    } catch (_) {}
+    try {
+      final commentsDir = Directory('$eventPath/feedback/comments');
+      if (await commentsDir.exists()) {
+        await for (final f in commentsDir.list()) {
+          if (f is File && f.path.endsWith('.txt')) comments++;
+        }
+      }
+    } catch (_) {}
+    try {
+      final viewsFile = File('$eventPath/feedback/views.txt');
+      if (await viewsFile.exists()) {
+        final txt = await viewsFile.readAsString();
+        views = txt.split('\n').where((l) => l.trim().isNotEmpty).length;
+      }
+    } catch (_) {}
+    return [likes, comments, views];
   }
 
   /// Convert a /api/blog post JSON object into a RecentBlogEntry.

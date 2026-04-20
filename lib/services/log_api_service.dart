@@ -8799,9 +8799,73 @@ class LogApiService with ChatModificationMixin {
 
     final years = await eventService.getAvailableYearsGlobal(dataDir);
 
+    // Enrich each event summary with live feedback counts (likes /
+    // comments / views) so the station homepage tiles can show the
+    // same engagement numbers the in-app browser does. Also surface
+    // the owning device's profile nickname so the tile can render
+    // "Nickname (CALLSIGN)".
+    String? deviceNickname;
+    try {
+      final p = ProfileService().getProfile();
+      deviceNickname = p.nickname.isEmpty ? null : p.nickname;
+    } catch (_) {}
+    final enriched = <Map<String, dynamic>>[];
+    for (final e in visible) {
+      final json = e.toApiJson(summary: true);
+      try {
+        final eventPath = await eventService.getEventPath(e.id, dataDir);
+        if (eventPath != null) {
+          // likes — line count of feedback/likes.txt (with the legacy
+          // ".feedback/" fallback the detail handler already uses)
+          int likes = 0;
+          int comments = 0;
+          int views = 0;
+          try {
+            var likesFile = io.File('$eventPath/feedback/likes.txt');
+            if (!await likesFile.exists()) {
+              final legacy = io.File('$eventPath/.feedback/likes.txt');
+              if (await legacy.exists()) likesFile = legacy;
+            }
+            if (await likesFile.exists()) {
+              likes = (await likesFile.readAsString())
+                  .split('\n')
+                  .where((l) => l.trim().isNotEmpty)
+                  .length;
+            }
+          } catch (_) {}
+          try {
+            final commentsDir = io.Directory('$eventPath/feedback/comments');
+            if (await commentsDir.exists()) {
+              comments = await commentsDir
+                  .list()
+                  .where((entity) => entity is io.File &&
+                      entity.path.endsWith('.txt'))
+                  .length;
+            }
+          } catch (_) {}
+          try {
+            final viewsFile = io.File('$eventPath/feedback/views.txt');
+            if (await viewsFile.exists()) {
+              views = (await viewsFile.readAsString())
+                  .split('\n')
+                  .where((l) => l.trim().isNotEmpty)
+                  .length;
+            }
+          } catch (_) {}
+          json['like_count'] = likes;
+          json['comment_count'] = comments;
+          json['view_count'] = views;
+        }
+      } catch (_) {}
+      if (deviceNickname != null) {
+        json['device_nickname'] = deviceNickname;
+      }
+      enriched.add(json);
+    }
+
     return shelf.Response.ok(
       jsonEncode({
-        'events': visible.map((e) => e.toApiJson(summary: true)).toList(),
+        'events': enriched,
         'years': years,
         'total': visible.length,
       }),

@@ -1418,6 +1418,14 @@ $nostrScript
       // safely on the wire.
       final pathSegment =
           ev.slug != null && ev.slug!.isNotEmpty ? ev.slug! : ev.eventId;
+      // Author label parallels the blog tiles: "Nickname (CALLSIGN)"
+      // when we know the device's profile nickname, otherwise just the
+      // callsign. Mirrored events scanned from disk only have the
+      // callsign so we degrade gracefully.
+      final authorLabel = (ev.deviceNickname != null &&
+              ev.deviceNickname!.isNotEmpty)
+          ? '${ev.deviceNickname} (${ev.callsign})'
+          : ev.callsign;
       final loc = ev.location != null && ev.location!.isNotEmpty
           ? '<span class="blog-entry-author">${escapeHtml(ev.location!)}</span>'
           : '';
@@ -1437,6 +1445,21 @@ $nostrScript
       final chip = isRequestAccess
           ? '<span class="blog-entry-likes event-access-chip" title="Access on request">&#128274; access on request</span>'
           : '';
+      // Engagement counts — only render the spans that are non-zero so
+      // brand-new events don't show "0 likes / 0 views" noise.
+      final stats = StringBuffer();
+      if (ev.likeCount > 0) {
+        stats.write(
+            '<span class="blog-entry-likes" title="Likes">&#9829; ${ev.likeCount}</span>');
+      }
+      if (ev.commentCount > 0) {
+        stats.write(
+            '<span class="blog-entry-likes" title="Comments">&#128172; ${ev.commentCount}</span>');
+      }
+      if (ev.viewCount > 0) {
+        stats.write(
+            '<span class="blog-entry-likes" title="Views">&#128065; ${ev.viewCount}</span>');
+      }
       entriesHtml.writeln('''
         <a href="/${escapeHtml(ev.callsign)}/events/${escapeHtml(Uri.encodeComponent(pathSegment))}" class="$tileClass" $tileAttrs>
           <div class="blog-entry-header">
@@ -1444,7 +1467,9 @@ $nostrScript
             <span class="blog-entry-date">${escapeHtml(ev.displayDate)}</span>
           </div>
           <div class="blog-entry-meta">
+            <span class="blog-entry-author">${escapeHtml(authorLabel)}</span>
             $loc
+            ${stats.toString()}
             $chip
           </div>
         </a>
