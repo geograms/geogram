@@ -37,6 +37,7 @@ import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
 import 'services/station_content_notification_service.dart';
 import 'services/now_service.dart';
+import 'models/now_item.dart';
 import 'services/now_notification_bridge.dart';
 import 'services/event_service.dart';
 import 'services/station_activity_publisher_service.dart';
@@ -2787,11 +2788,17 @@ class _AppsPageState extends State<AppsPage> {
   StreamSubscription<Map<String, int>>? _unreadSubscription;
   StreamSubscription<DebugActionEvent>? _debugActionSubscription;
   EventSubscription<KarmaUpdatedEvent>? _karmaUpdateSubscription;
+  // Mirror NowService items so the events tile badge reflects pending
+  // access requests in real time. NowService.itemsStream pushes the
+  // full list on every change; we only care about the access-request
+  // appType for the events count.
+  StreamSubscription<List<NowItem>>? _nowItemsSubscription;
   Map<String, int> _unreadCounts = {};
 
   List<App> _allApps = [];
   bool _isLoading = true;
   int _karmaMissionsLeft = 0;
+  int _eventActionCount = 0;
 
   /// Get filtered apps based on search query from parent
   List<App> get _filteredApps {
@@ -2877,6 +2884,21 @@ class _AppsPageState extends State<AppsPage> {
         });
       }
     });
+    // Watch NowService for events that need owner action so the
+    // "Events" tile in the apps grid surfaces a badge alongside the
+    // per-event tile badge inside the events list.
+    _eventActionCount = _countEventActionItems(NowService().items);
+    _nowItemsSubscription = NowService().itemsStream.listen((items) {
+      if (!mounted) return;
+      final next = _countEventActionItems(items);
+      if (next != _eventActionCount) {
+        setState(() => _eventActionCount = next);
+      }
+    });
+  }
+
+  int _countEventActionItems(List<NowItem> items) {
+    return items.where((i) => i.appType == 'event_access_request').length;
   }
 
   Future<void> _loadKarmaMissions() async {
@@ -2905,6 +2927,7 @@ class _AppsPageState extends State<AppsPage> {
     _profileService.activeProfileNotifier.removeListener(_onProfileChanged);
     _appService.appsNotifier.removeListener(_onAppsChanged);
     _unreadSubscription?.cancel();
+    _nowItemsSubscription?.cancel();
     _debugActionSubscription?.cancel();
     _karmaUpdateSubscription?.cancel();
     super.dispose();
@@ -3396,6 +3419,8 @@ class _AppsPageState extends State<AppsPage> {
                                     ? _chatNotificationService.totalUnreadCount
                                     : appEntry.type == 'karma'
                                     ? _karmaMissionsLeft
+                                    : appEntry.type == 'events'
+                                    ? _eventActionCount
                                     : 0,
                               );
                             }, childCount: filteredApps.length),
