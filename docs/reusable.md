@@ -98,6 +98,7 @@ This document catalogs reusable UI components available in the Geogram codebase.
 
 ### Event Utilities
 - [EventService.nextFlyerName](#eventservicenextflyername) - Generate next available flyer filename for image uploads
+- [Visibility / access control pattern](#visibility--access-control-pattern) - 5-state visibility (public / unlisted / request_access / group / private) with NOSTR-signed page-view tracking, callsign + group grants, unlisted share keys, and per-event access-request inbox
 
 ### Power Management
 - [PowerAwareService](#powerawareservice) - Singleton coordinator for mobile battery saving (foreground/background/doze modes)
@@ -9730,6 +9731,117 @@ Shared browser page builder for Events. Mirrors `ConferenceWebPageService` patte
 **Key methods:**
 - `buildListingPage(data, logoText, menuItems)` — returns themed listing page for `/events/`
 - `buildEventPage(data, logoText, menuItems)` — returns themed detail page for `/events/{eventId}`
+
+### Visibility / Access Control Pattern
+
+Reference implementation lives on the events module — `lib/models/event.dart`,
+`lib/services/log_api_service.dart` (`_handleEventDetailPage`,
+`_handleEventsListEvents`, `_handleEventsListingPage`, `_handleEventRequestAccess`),
+`lib/cli/themes_embedded.dart` (request-access banner + JS), and
+`lib/pages/new_event_page.dart` (editor dropdown + key generator). Other apps that
+need the same five-state model (blog posts, places, alerts, work documents…)
+should mirror the same field names and storage conventions so a future shared
+widget can adopt them with no per-app glue.
+
+**Five visibility states** (all stored in a single `visibility` string field on
+the content's persistent format):
+
+| State            | Listed publicly | Detail page          | Notes |
+|------------------|-----------------|----------------------|-------|
+| `public`         | ✅              | ✅                   | Anyone reads. |
+| `unlisted`       | ❌              | only with `?key=…`   | URL is the secret. Generate a 32-char hex token (16 random bytes) on first switch and persist as `unlistedKey`. Owner / admin can preview without the key. |
+| `request_access` | ✅              | teaser + request UI  | Listed so people discover; content stripped + "Request access" button shown until a grant lands on `accessCallsigns` / `groupAccess`. |
+| `group`          | only to grantees | only to grantees    | Grants come from `groupAccess` (group names → members.txt) and `accessCallsigns` (explicit callsigns). |
+| `private`        | only to grantees | only to grantees    | Same allow-list as `group`. Owner / admin / `event.npub == userNpub` always allowed. |
+
+**Required model fields** (mirror these on every content type that adopts
+the pattern):
+
+```dart
+final String visibility;            // one of the five values above
+final String? unlistedKey;          // 32-char hex; only meaningful when unlisted
+final List<String> accessCallsigns; // explicit per-callsign grants
+final List<String> groupAccess;     // group names; resolved via GroupsService.loadMembers
+```
+
+**Persisted form** (text format, defaults omitted): `VISIBILITY:`,
+`UNLISTED_KEY:`, `ACCESS_CALLSIGNS:` (comma-list), `GROUPS:` (legacy name kept
+on Event for backwards compatibility).
+
+**Server-side enforcement helpers** (already implemented on
+`LogApiService` and reusable across handlers):
+
+- `_isLocalRequest(request)` — `127.0.0.1`/`::1` so the local Flutter UI
+  always sees the user's own content regardless of visibility.
+- `_resolveViewerCallsign(npub)` — checks the local profile and `ContactService.loadContacts()`.
+- `_eventViewerInGroup(event, npub)` — iterates `event.groupAccess` and
+  matches via `GroupsService().loadMembers(group)`.
+
+The combined allow-list rule (used in three places — keep it identical):
+
+```dart
+final isOwnerOrAdmin = userNpub != null && (event.npub == userNpub || event.isAdmin(userNpub));
+final hasGroupGrant  = userNpub != null && await _eventViewerInGroup(event, userNpub);
+final hasCallsignGrant = viewerCallsign != null &&
+    event.accessCallsigns.map((c) => c.toUpperCase()).contains(viewerCallsign.toUpperCase());
+final allowed = isOwnerOrAdmin || hasGroupGrant || hasCallsignGrant;
+```
+
+**Unlisted check** — never use server-side hints that the event exists; a
+missing/wrong key should 404 (treat the URL itself as the secret):
+
+```dart
+final providedKey = request.url.queryParameters['key']?.trim() ?? '';
+final keyMatches  = providedKey.isNotEmpty && providedKey == (event.unlistedKey ?? '');
+if (!keyMatches && !isOwnerOrAdmin) return _notFound();
+```
+
+**Request-access flow** — POST `/api/{thing}/{id}/request-access` body
+`{npub, callsign?, message?}`; the handler appends to
+`{contentPath}/feedback/access_requests.json` (a JSON array of
+`{npub, callsign, message, requested_at, status: 'pending'}`). The owner
+inspects pending entries on the desktop UI and either drops the npub's
+callsign into `accessCallsigns` (or adds the requester to a group) to
+grant access. Existing pending entries from the same npub are deduplicated.
+
+**Web-side "Request access" button** — the JS reuses the
+auto-bootstrapped NOSTR identity from `nostr_login_scripts`
+(`window.GeogramNostr.pubkey`/`callsign`) and POSTs the npub. No
+manual login required for the visitor; the shared bootstrap script
+generates a key on first visit if no extension is available, so anyone
+landing on a `request_access` URL is one tap away from sending a
+request.
+
+**Editor UI** — the dropdown lives in `lib/pages/new_event_page.dart`
+(see the `_visibility` field). For each app:
+
+- Always include all five entries in the dropdown so users can pick any
+  state.
+- When the selection becomes `unlisted` and `unlistedKey` is null,
+  generate a fresh hex key with `Random.secure()` (`tracker_visibility`
+  and `document_visibility_widget` use the exact same generator —
+  `_generateUnlistedId()` at
+  `lib/work/widgets/document_visibility_widget.dart:232`).
+- When the selection is `private`, `group`, or `request_access`, expose
+  both a group selector AND a comma-list callsign input (kept as
+  `ACCESS_CALLSIGNS:` in the persisted form).
+- For `unlisted`, surface the read-only key so the owner can copy
+  `…?key=<key>` URLs. The detail-page share URL must include the query
+  param when visibility is `unlisted` (`event_detail_widget._buildEventUrl`).
+
+**Listing filter** — same shape in three places (HTML listing, JSON
+listing, station relays). Always: hide `unlisted` and `private` from
+non-owners; hide `group`/`private` unless any of the three grants
+apply; show `public` and `request_access` to everyone; show all
+local-owner content to local-Flutter requests via `_isLocalRequest`.
+
+**Reuse this pattern** by copying the field names + the four helper
+patterns above and pointing the JS template at the same endpoints. The
+visibility widget itself isn't yet generalised — `DocumentVisibilityWidget`
+in `lib/work/widgets/` is the closest existing widget but is tracker-specific.
+A generalised widget should land here as `VisibilityAccessWidget` once a
+second app needs it; the contract above gives the model fields it would
+take.
 
 ### ConferenceScheduleService
 

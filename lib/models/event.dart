@@ -23,7 +23,23 @@ class Event {
   final String? locationName;
   final String content;
   final String? agenda; // Event schedule/agenda (optional)
-  final String visibility; // "public", "private", or "group"
+  /// Visibility / access state. Recognised values:
+  ///   public          — anyone can list and open
+  ///   unlisted        — hidden from listings; openable with `?key=<unlistedKey>`
+  ///   request_access  — listed publicly, but content gated like `private`
+  ///                     unless the viewer is on `accessCallsigns` /
+  ///                     `groupAccess`; web page shows a "Request access"
+  ///                     button for blocked viewers.
+  ///   group           — listed only to viewers in `groupAccess`
+  ///   private         — listed only to author / admins / `accessCallsigns` /
+  ///                     `groupAccess`
+  final String visibility;
+  /// 32-char hex token required as `?key=` to view an `unlisted` event.
+  /// Generated automatically the first time visibility flips to `unlisted`.
+  final String? unlistedKey;
+  /// Explicit per-callsign grants. Augments `groupAccess` for the
+  /// `private`, `group` and `request_access` states.
+  final List<String> accessCallsigns;
   final List<String> likes; // List of npubs (feedback)
   final List<EventComment> comments;
   final Map<String, String> metadata;
@@ -52,6 +68,8 @@ class Event {
     required this.content,
     this.agenda,
     this.visibility = 'public',
+    this.unlistedKey,
+    this.accessCallsigns = const [],
     this.likes = const [],
     this.comments = const [],
     this.metadata = const {},
@@ -162,6 +180,11 @@ class Event {
       content: json['content'] as String? ?? '',
       agenda: json['agenda'] as String?,
       visibility: json['visibility'] as String? ?? 'public',
+      unlistedKey: json['unlisted_key'] as String? ?? json['unlistedKey'] as String?,
+      accessCallsigns:
+          (json['access_callsigns'] as List<dynamic>?)?.cast<String>() ??
+              (json['accessCallsigns'] as List<dynamic>?)?.cast<String>() ??
+              [],
       likes: (json['likes'] as List<dynamic>?)?.cast<String>() ?? [],
       comments: comments,
       flyers: (json['flyers'] as List<dynamic>?)?.cast<String>() ?? [],
@@ -363,6 +386,16 @@ class Event {
       buffer.writeln('VISIBILITY: $visibility');
     }
 
+    // Unlisted access key (only for unlisted events)
+    if (unlistedKey != null && unlistedKey!.isNotEmpty) {
+      buffer.writeln('UNLISTED_KEY: $unlistedKey');
+    }
+
+    // Per-callsign access grants (private / group / request_access)
+    if (accessCallsigns.isNotEmpty) {
+      buffer.writeln('ACCESS_CALLSIGNS: ${accessCallsigns.join(', ')}');
+    }
+
     // Contacts (optional)
     if (contacts.isNotEmpty) {
       buffer.writeln('CONTACTS: ${contacts.join(', ')}');
@@ -439,6 +472,8 @@ class Event {
     String? locationName;
     String? agenda;
     String visibility = 'public'; // Default to public
+    String? unlistedKey;
+    List<String> accessCallsigns = [];
 
     int currentLine = 3;
 
@@ -471,6 +506,15 @@ class Event {
         agenda = line.substring(8).trim();
       } else if (line.startsWith('VISIBILITY: ')) {
         visibility = line.substring(12).trim();
+      } else if (line.startsWith('UNLISTED_KEY: ')) {
+        unlistedKey = line.substring(14).trim();
+      } else if (line.startsWith('ACCESS_CALLSIGNS: ')) {
+        final csStr = line.substring(18).trim();
+        accessCallsigns = csStr
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
       } else if (line.startsWith('CONTACTS: ')) {
         final contactsStr = line.substring(10).trim();
         contacts = contactsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
@@ -535,6 +579,8 @@ class Event {
       content: content,
       agenda: agenda,
       visibility: visibility,
+      unlistedKey: unlistedKey,
+      accessCallsigns: accessCallsigns,
       contacts: contacts,
       slug: slug,
       metadata: metadata,
@@ -591,6 +637,8 @@ class Event {
     String? content,
     String? agenda,
     String? visibility,
+    String? unlistedKey,
+    List<String>? accessCallsigns,
     List<String>? likes,
     List<EventComment>? comments,
     Map<String, String>? metadata,
@@ -617,6 +665,8 @@ class Event {
       content: content ?? this.content,
       agenda: agenda ?? this.agenda,
       visibility: visibility ?? this.visibility,
+      unlistedKey: unlistedKey ?? this.unlistedKey,
+      accessCallsigns: accessCallsigns ?? this.accessCallsigns,
       likes: likes ?? this.likes,
       comments: comments ?? this.comments,
       metadata: metadata ?? this.metadata,
@@ -672,9 +722,15 @@ class Event {
       'end_date': endDate,
       'agenda': agenda,
       'visibility': visibility,
+      // unlisted_key intentionally NOT included in the default detail
+      // payload — the server is responsible for adding it back when the
+      // viewer is the event owner (so they can see the share link), and
+      // for stripping it when the viewer is anyone else (so the key
+      // doesn't leak through the public detail endpoint).
         'admins': admins,
         'moderators': moderators,
         'groups': groupAccess,
+        'access_callsigns': accessCallsigns,
         'likes': likes,
         'comments': comments.map((c) => {
           'author': c.author,

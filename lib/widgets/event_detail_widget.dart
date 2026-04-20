@@ -321,11 +321,20 @@ class EventDetailWidget extends StatelessWidget {
 
   Widget _buildEventUrl(
       BuildContext context, ThemeData theme, I18nService i18n) {
-    // Private and group-restricted events aren't reachable through the
-    // station's public /events/ path, so the URL would 404 for anyone the
-    // user shared it with — hiding it (and the open / copy actions) avoids
-    // leading the author into sharing a dead link.
-    if (event.visibility != 'public') return const SizedBox.shrink();
+    // Show the shareable URL for any state where the owner has a link
+    // worth sharing:
+    //   public          → public link
+    //   unlisted        → public path + ?key=<unlistedKey>; the key is
+    //                     the access secret
+    //   request_access  → public path; visitors will see the
+    //                     "Request access" UI
+    // For 'private' and 'group' the URL would 404 for non-grantees —
+    // hiding the share UI avoids leading the author into sharing a dead
+    // link.
+    final visible = event.visibility == 'public' ||
+        event.visibility == 'unlisted' ||
+        event.visibility == 'request_access';
+    if (!visible) return const SizedBox.shrink();
 
     final stationUrl = StationService().getPreferredStation()?.url;
     if (stationUrl == null) return const SizedBox.shrink();
@@ -346,8 +355,13 @@ class EventDetailWidget extends StatelessWidget {
     final eventPath = event.slug ?? event.id;
     // Encode the callsign and the event id (which can contain spaces, e.g.
     // "2026-04-11_Return home") so the resulting URL is shareable as-is.
-    final url =
+    var url =
         '$httpUrl/${Uri.encodeComponent(ownerCallsign)}/events/${Uri.encodeComponent(eventPath)}';
+    if (event.visibility == 'unlisted' &&
+        event.unlistedKey != null &&
+        event.unlistedKey!.isNotEmpty) {
+      url = '$url?key=${Uri.encodeComponent(event.unlistedKey!)}';
+    }
 
     return Padding(
       padding: const EdgeInsets.only(top: 12),

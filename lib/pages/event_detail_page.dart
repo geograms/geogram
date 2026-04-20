@@ -101,6 +101,9 @@ class _EventDetailPageState extends State<EventDetailPage> {
         admins: result['admins'] as List<String>?,
         moderators: result['moderators'] as List<String>?,
         groupAccess: result['groupAccess'] as List<String>?,
+        unlistedKey: result['unlistedKey'] as String?,
+        accessCallsigns:
+            (result['accessCallsigns'] as List<dynamic>?)?.cast<String>(),
         eventDateTime: result['eventDateTime'] as DateTime?,
         startDate: result['startDate'] as String?,
         endDate: result['endDate'] as String?,

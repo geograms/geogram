@@ -4,6 +4,7 @@
  */
 
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -115,6 +116,12 @@ class _NewEventPageState extends State<NewEventPage>
   Place? _selectedPlace;
 
   String _visibility = 'private';
+  String? _unlistedKey;
+  // Per-callsign access grants — applies to private / group / request_access
+  // events alongside the existing group selector. Stored as a comma-list in
+  // event.txt under ACCESS_CALLSIGNS:.
+  final TextEditingController _accessCallsignsController =
+      TextEditingController();
   bool _registrationEnabled = false;
 
   final Map<String, TextEditingController> _agendaByDate = {};
@@ -178,7 +185,11 @@ class _NewEventPageState extends State<NewEventPage>
 
     // Visibility and access
     _visibility = event.visibility;
+    _unlistedKey = event.unlistedKey;
     _selectedGroups.addAll(event.groupAccess);
+    if (event.accessCallsigns.isNotEmpty) {
+      _accessCallsignsController.text = event.accessCallsigns.join(', ');
+    }
     // Note: registrationEnabled not yet stored in Event model
 
     // Links
@@ -245,6 +256,7 @@ class _NewEventPageState extends State<NewEventPage>
     _locationNameController.dispose();
     _contentController.dispose();
     _agendaController.dispose();
+    _accessCallsignsController.dispose();
     for (final controller in _agendaByDate.values) {
       controller.dispose();
     }
@@ -766,6 +778,12 @@ class _NewEventPageState extends State<NewEventPage>
       'agenda': agenda,
       'visibility': _visibility,
       'groupAccess': _selectedGroups.toList(),
+      'unlistedKey': _visibility == 'unlisted' ? _unlistedKey : null,
+      'accessCallsigns': _accessCallsignsController.text
+          .split(',')
+          .map((s) => s.trim().toUpperCase())
+          .where((s) => s.isNotEmpty)
+          .toList(),
       'links': _links,
       'updates': _updates.map((update) => update.toMap()).toList(),
       'flyers': _flyers.map((file) => file.toMap()).toList(),
@@ -1776,12 +1794,22 @@ class _NewEventPageState extends State<NewEventPage>
               ),
             ),
             DropdownMenuItem(
-              value: 'private',
+              value: 'unlisted',
               child: Row(
-                children: [
-                  const Icon(Icons.lock, size: 20),
-                  const SizedBox(width: 8),
-                  Text(_i18n.t('private')),
+                children: const [
+                  Icon(Icons.link, size: 20),
+                  SizedBox(width: 8),
+                  Text('Unlisted'),
+                ],
+              ),
+            ),
+            DropdownMenuItem(
+              value: 'request_access',
+              child: Row(
+                children: const [
+                  Icon(Icons.how_to_reg, size: 20),
+                  SizedBox(width: 8),
+                  Text('Request access'),
                 ],
               ),
             ),
@@ -1795,15 +1823,69 @@ class _NewEventPageState extends State<NewEventPage>
                 ],
               ),
             ),
+            DropdownMenuItem(
+              value: 'private',
+              child: Row(
+                children: [
+                  const Icon(Icons.lock, size: 20),
+                  const SizedBox(width: 8),
+                  Text(_i18n.t('private')),
+                ],
+              ),
+            ),
           ],
           onChanged: (value) {
             if (value != null) {
               setState(() {
                 _visibility = value;
+                if (value == 'unlisted' &&
+                    (_unlistedKey == null || _unlistedKey!.isEmpty)) {
+                  // Generate a 32-char hex token (16 random bytes) the same
+                  // way the tracker / document widget does.
+                  final rand = Random.secure();
+                  final bytes =
+                      List.generate(16, (_) => rand.nextInt(256));
+                  _unlistedKey = bytes
+                      .map((b) => b.toRadixString(16).padLeft(2, '0'))
+                      .join();
+                }
               });
             }
           },
         ),
+        if (_visibility == 'unlisted') ...[
+          const SizedBox(height: 12),
+          // Show the share key so the owner knows what to send in the URL.
+          // Read-only — anyone with this key can open the event.
+          TextFormField(
+            initialValue: _unlistedKey ?? '',
+            readOnly: true,
+            decoration: const InputDecoration(
+              labelText: 'Unlisted access key',
+              helperText:
+                  'Share the URL with ?key=<this> to grant access. Anyone with the URL can open the event.',
+              prefixIcon: Icon(Icons.vpn_key, size: 18),
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
+        if (_visibility == 'private' ||
+            _visibility == 'group' ||
+            _visibility == 'request_access') ...[
+          const SizedBox(height: 12),
+          // Per-callsign grants. Comma-separated list. Used by the server
+          // visibility check alongside the existing group selector.
+          TextFormField(
+            controller: _accessCallsignsController,
+            decoration: const InputDecoration(
+              labelText: 'Allowed callsigns',
+              helperText:
+                  'Comma-separated. These callsigns can access in addition to any selected groups.',
+              prefixIcon: Icon(Icons.person_pin, size: 18),
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
         if (_visibility == 'group') ...[
           const SizedBox(height: 16),
           Text(

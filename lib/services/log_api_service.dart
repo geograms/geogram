@@ -155,6 +155,7 @@ import 'package:archive/archive.dart';
 import 'file_browser_cache_service.dart';
 import '../util/video_metadata_extractor.dart';
 import '../api/handlers/feedback_handler.dart';
+import 'contact_service.dart';
 
 class _MeetSessionSnapshot {
   final String state;
@@ -1697,31 +1698,37 @@ class LogApiService with ChatModificationMixin {
     final years = await eventService.getAvailableYearsGlobal(dataDir);
 
     // 3. Filter by visibility
+    final viewerCallsign = await _resolveViewerCallsign(userNpub);
     final visible = <Event>[];
     for (final event in allEvents) {
       final vis = event.visibility;
-      if (vis == 'public') {
+      if (vis == 'public' || vis == 'request_access') {
+        // request_access is publicly listed — the detail page is the
+        // place where access is gated.
         visible.add(event);
         continue;
       }
       if (vis == 'private' || vis == 'unlisted') {
-        // Never shown in listing
+        // Never shown in listing. Owner / admin / explicit grants need to
+        // navigate via the share URL or the desktop UI.
         continue;
       }
       if (vis == 'group') {
-        // Show only if user is in one of the event's groups
-        if (userNpub != null && event.groupAccess.isNotEmpty) {
-          bool inGroup = false;
-          for (final groupName in event.groupAccess) {
-            final members =
-                await GroupsService().loadMembers(groupName);
-            if (members.any((m) => m.npub == userNpub)) {
-              inGroup = true;
-              break;
-            }
-          }
-          if (inGroup) visible.add(event);
+        // Show only if user is in one of the event's groups OR listed in
+        // accessCallsigns OR is admin/author.
+        final isAdminOrAuthor = userNpub != null &&
+            (event.npub == userNpub || event.isAdmin(userNpub));
+        bool allowed = isAdminOrAuthor;
+        if (!allowed && userNpub != null) {
+          allowed = await _eventViewerInGroup(event, userNpub);
         }
+        if (!allowed && viewerCallsign != null) {
+          final cs = viewerCallsign.toUpperCase();
+          allowed = event.accessCallsigns
+              .map((c) => c.toUpperCase())
+              .contains(cs);
+        }
+        if (allowed) visible.add(event);
         continue;
       }
       // Unknown visibility → treat as public
@@ -1749,6 +1756,54 @@ class LogApiService with ChatModificationMixin {
     final htmlHeaders = Map<String, String>.from(headers);
     htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
     return shelf.Response.ok(assets.html, headers: htmlHeaders);
+  }
+
+  /// True when the request originated from the same machine. Used by the
+  /// listing endpoints to skip the visibility filter for the local Flutter
+  /// app — the user always sees their own events regardless of the
+  /// visibility they chose.
+  bool _isLocalRequest(shelf.Request request) {
+    final remote = request.context['shelf.io.connection_info'];
+    try {
+      final addr = (remote as dynamic)?.remoteAddress?.address as String?;
+      if (addr == null) return false;
+      return addr == '127.0.0.1' || addr == '::1' || addr == 'localhost';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Map a NOSTR npub back to a callsign by checking the local profile and
+  /// any known contacts. Returns null when no match is found — callsign
+  /// grants then simply don't apply for that viewer.
+  Future<String?> _resolveViewerCallsign(String? npub) async {
+    if (npub == null || npub.isEmpty) return null;
+    try {
+      final ownProfile = ProfileService().getProfile();
+      if (ownProfile.npub == npub) return ownProfile.callsign;
+    } catch (_) {}
+    try {
+      final contacts = await ContactService().loadContacts();
+      for (final c in contacts) {
+        if (c.npub == npub) return c.callsign;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// True when the viewer (npub) is a member of any group listed on the
+  /// event's groupAccess list.
+  Future<bool> _eventViewerInGroup(Event event, String npub) async {
+    if (event.groupAccess.isEmpty) return false;
+    for (final groupName in event.groupAccess) {
+      try {
+        final members = await GroupsService().loadMembers(groupName);
+        if (members.any((m) => m.npub == npub)) return true;
+      } catch (_) {
+        // Missing / unreadable group → treat as no-grant.
+      }
+    }
+    return false;
   }
 
   Future<shelf.Response> _handleEventDetailPage(
@@ -1801,11 +1856,41 @@ class LogApiService with ChatModificationMixin {
     }
 
     // 3. Visibility check
+    //
+    // Five states (see Event model):
+    //   public          → always allowed
+    //   unlisted        → allowed when ?key=<unlistedKey> matches; the URL
+    //                     itself is the secret. Owner/admin always allowed
+    //                     (so they can preview without the key).
+    //   group           → allowed when viewer is in groupAccess OR listed
+    //                     in accessCallsigns OR is admin/author.
+    //   request_access  → same allow-list as group/private; non-allowed
+    //                     viewers still get the page (so the "Request
+    //                     access" UI can show) but the page payload is
+    //                     stripped to a minimal teaser. The web template
+    //                     renders the request UI when content is empty.
+    //   private         → like group + accessCallsigns + author/admin only.
     final vis = event.visibility;
-    if (vis == 'private') {
-      if (userNpub == null ||
-          (!event.isAdmin(userNpub) &&
-              event.npub != userNpub)) {
+    final isOwnerOrAdmin = userNpub != null &&
+        (event.npub == userNpub || event.isAdmin(userNpub));
+    final viewerCallsign = await _resolveViewerCallsign(userNpub);
+    final hasGroupGrant = userNpub == null
+        ? false
+        : await _eventViewerInGroup(event, userNpub);
+    final hasCallsignGrant = viewerCallsign != null &&
+        event.accessCallsigns
+            .map((c) => c.toUpperCase())
+            .contains(viewerCallsign.toUpperCase());
+    final allowed = isOwnerOrAdmin || hasGroupGrant || hasCallsignGrant;
+
+    if (vis == 'unlisted') {
+      final providedKey =
+          request.url.queryParameters['key']?.trim() ?? '';
+      final keyMatches = providedKey.isNotEmpty &&
+          providedKey == (event.unlistedKey ?? '');
+      if (!keyMatches && !isOwnerOrAdmin) {
+        // Treat as not-found so the URL itself doesn't reveal the event
+        // exists when the key is missing or wrong.
         final htmlHeaders = Map<String, String>.from(headers);
         htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
         return shelf.Response.notFound(
@@ -1813,23 +1898,7 @@ class LogApiService with ChatModificationMixin {
           headers: htmlHeaders,
         );
       }
-    }
-    if (vis == 'group') {
-      bool allowed = false;
-      if (userNpub != null && event.groupAccess.isNotEmpty) {
-        for (final groupName in event.groupAccess) {
-          final members =
-              await GroupsService().loadMembers(groupName);
-          if (members.any((m) => m.npub == userNpub)) {
-            allowed = true;
-            break;
-          }
-        }
-      }
-      // Admins always allowed
-      if (userNpub != null && event.isAdmin(userNpub)) {
-        allowed = true;
-      }
+    } else if (vis == 'private' || vis == 'group') {
       if (!allowed) {
         final htmlHeaders = Map<String, String>.from(headers);
         htmlHeaders['Content-Type'] = 'text/html; charset=utf-8';
@@ -1839,9 +1908,36 @@ class LogApiService with ChatModificationMixin {
         );
       }
     }
+    // request_access falls through with allowed=false; the template uses
+    // the data['access_request_required'] flag below to decide what to
+    // render. Public, unlisted-with-key, group/private+grant land here too.
 
     // 4. Build full JSON with feedback data
     final data = event.toApiJson(summary: false);
+
+    // Strip private content when the viewer hasn't been granted access on
+    // a request_access event. Only metadata + the request prompt go out.
+    if (vis == 'request_access' && !allowed) {
+      data['content'] = '';
+      data['agenda'] = null;
+      data['flyers'] = const [];
+      data['trailer'] = null;
+      data['updates'] = const [];
+      data['links'] = const [];
+      data['contacts'] = const [];
+      data['access_request_required'] = true;
+    } else {
+      data['access_request_required'] = false;
+    }
+
+    // Surface the unlisted key only to the owner / admin so they can copy
+    // the share URL — never to anyone else, even if they had the key in
+    // the URL (they already have it; no need to echo).
+    if (isOwnerOrAdmin && event.unlistedKey != null) {
+      data['unlisted_key'] = event.unlistedKey;
+    } else {
+      data.remove('unlisted_key');
+    }
 
     // Resolve place coordinates for map display
     if (event.hasPlaceReference && !event.hasCoordinates) {
@@ -8379,6 +8475,19 @@ class LogApiService with ChatModificationMixin {
         return await _handleEventToggleLike(request, eventId, dataDir, headers);
       }
 
+      // POST /api/events/{eventId}/request-access - Submit an access
+      // request for a request_access-gated event. Body should include
+      // {npub, callsign?, message?}; the entry is appended to
+      // {event}/feedback/access_requests.json so the owner can see it.
+      if (pathParts.length == 2 &&
+          pathParts[1] == 'request-access' &&
+          request.method == 'POST') {
+        final eventId = pathParts[0];
+        return await _handleEventRequestAccess(
+          request, eventId, dataDir, headers,
+        );
+      }
+
       if (request.method != 'GET') {
         return shelf.Response(
           405,
@@ -8436,17 +8545,94 @@ class LogApiService with ChatModificationMixin {
       year = int.tryParse(yearParam);
     }
 
-    // Get all events
-    final events = await eventService.getAllEventsGlobal(dataDir, year: year);
+    // Identify viewer for visibility filtering — same logic as the HTML
+    // listing handler so unlisted/private events stay hidden from the
+    // public JSON endpoint too. Connections from the local desktop (the
+    // Flutter app talking to its own server, no cookie) are treated as
+    // the owner so the user always sees their own events regardless of
+    // visibility — without it, switching an event to private would make
+    // it disappear from the user's own browser.
+    String? userNpub;
+    final hexPubkey = _extractNostrPubkeyFromCookie(request);
+    if (hexPubkey != null) {
+      try {
+        userNpub = NostrCrypto.encodeNpub(hexPubkey);
+      } catch (_) {}
+    }
+    userNpub ??= _verifyNostrAuth(request);
+    final viewerCallsign = await _resolveViewerCallsign(userNpub);
+    final ownerNpub = ProfileService().getProfile().npub;
+    final isLocalRequest = _isLocalRequest(request);
 
-    // Get available years
+    final events = await eventService.getAllEventsGlobal(dataDir, year: year);
+    final visible = <Event>[];
+    for (final event in events) {
+      final vis = event.visibility;
+      // Always show events owned by the local profile to a local request.
+      // The desktop Flutter app uses this endpoint to render its events
+      // browser — it has no NOSTR cookie, so without this branch the
+      // user's own private events would disappear from their own UI.
+      final ownsThisEvent = event.npub != null &&
+          ownerNpub != null &&
+          event.npub == ownerNpub;
+      if (isLocalRequest && ownsThisEvent) {
+        visible.add(event);
+        continue;
+      }
+      if (vis == 'public' || vis == 'request_access') {
+        visible.add(event);
+        continue;
+      }
+      if (vis == 'private' || vis == 'unlisted') {
+        // Owner / admin / explicit grants: include. Unlisted is *only*
+        // listed for the owner — anyone else has the share link or
+        // nothing.
+        final isOwnerOrAdmin = userNpub != null &&
+            (event.npub == userNpub || event.isAdmin(userNpub));
+        if (vis == 'unlisted') {
+          if (isOwnerOrAdmin) visible.add(event);
+          continue;
+        }
+        bool allowed = isOwnerOrAdmin;
+        if (!allowed && userNpub != null) {
+          allowed = await _eventViewerInGroup(event, userNpub);
+        }
+        if (!allowed && viewerCallsign != null) {
+          final cs = viewerCallsign.toUpperCase();
+          allowed = event.accessCallsigns
+              .map((c) => c.toUpperCase())
+              .contains(cs);
+        }
+        if (allowed) visible.add(event);
+        continue;
+      }
+      if (vis == 'group') {
+        final isOwnerOrAdmin = userNpub != null &&
+            (event.npub == userNpub || event.isAdmin(userNpub));
+        bool allowed = isOwnerOrAdmin;
+        if (!allowed && userNpub != null) {
+          allowed = await _eventViewerInGroup(event, userNpub);
+        }
+        if (!allowed && viewerCallsign != null) {
+          final cs = viewerCallsign.toUpperCase();
+          allowed = event.accessCallsigns
+              .map((c) => c.toUpperCase())
+              .contains(cs);
+        }
+        if (allowed) visible.add(event);
+        continue;
+      }
+      // Unknown visibility → treat as public.
+      visible.add(event);
+    }
+
     final years = await eventService.getAvailableYearsGlobal(dataDir);
 
     return shelf.Response.ok(
       jsonEncode({
-        'events': events.map((e) => e.toApiJson(summary: true)).toList(),
+        'events': visible.map((e) => e.toApiJson(summary: true)).toList(),
         'years': years,
-        'total': events.length,
+        'total': visible.length,
       }),
       headers: headers,
     );
@@ -8899,6 +9085,107 @@ class LogApiService with ChatModificationMixin {
     } catch (e) {
       return shelf.Response.internalServerError(
         body: jsonEncode({'error': 'Failed to toggle like: $e'}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// POST /api/events/{eventId}/request-access
+  ///
+  /// Records an access request from a NOSTR-identified visitor for an
+  /// event whose visibility is `request_access`. The request is appended
+  /// to {event}/feedback/access_requests.json — a JSON array of objects
+  /// {npub, callsign, message, requested_at, status='pending'} so the
+  /// owner can review them in the desktop UI later.
+  ///
+  /// Body: {npub, callsign?, message?}
+  Future<shelf.Response> _handleEventRequestAccess(
+    shelf.Request request,
+    String eventId,
+    String dataDir,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = await request.readAsString();
+      final json = body.isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(body) as Map<String, dynamic>;
+      final npub = (json['npub'] as String?)?.trim() ?? '';
+      if (npub.isEmpty || !npub.startsWith('npub1')) {
+        return shelf.Response(400,
+            body: jsonEncode({'error': 'Missing or invalid npub'}),
+            headers: headers);
+      }
+      final callsign = (json['callsign'] as String?)?.trim() ?? '';
+      final message = (json['message'] as String?)?.trim() ?? '';
+
+      final event = await EventService().findEventByIdGlobal(eventId, dataDir);
+      if (event == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event not found'}),
+          headers: headers,
+        );
+      }
+      if (event.visibility != 'request_access') {
+        return shelf.Response(400,
+            body: jsonEncode({
+              'error':
+                  'Event does not accept access requests (visibility=${event.visibility})',
+            }),
+            headers: headers);
+      }
+
+      final eventPath = await EventService().getEventPath(event.id, dataDir);
+      if (eventPath == null) {
+        return shelf.Response.notFound(
+          jsonEncode({'error': 'Event path not found'}),
+          headers: headers,
+        );
+      }
+
+      final requestsFile = io.File('$eventPath/feedback/access_requests.json');
+      List<dynamic> existing = [];
+      if (await requestsFile.exists()) {
+        try {
+          final content = await requestsFile.readAsString();
+          if (content.trim().isNotEmpty) {
+            existing = jsonDecode(content) as List<dynamic>;
+          }
+        } catch (_) {}
+      }
+
+      // Replace any earlier pending entry from the same npub so we don't
+      // pile up duplicates each time the visitor reloads.
+      existing.removeWhere((e) =>
+          e is Map<String, dynamic> &&
+          e['npub'] == npub &&
+          (e['status'] ?? 'pending') == 'pending');
+
+      existing.add({
+        'npub': npub,
+        'callsign': callsign,
+        'message': message,
+        'requested_at': DateTime.now().toUtc().toIso8601String(),
+        'status': 'pending',
+      });
+
+      await requestsFile.parent.create(recursive: true);
+      await requestsFile.writeAsString(jsonEncode(existing));
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'pending': existing
+              .where((e) =>
+                  e is Map<String, dynamic> &&
+                  (e['status'] ?? 'pending') == 'pending')
+              .length,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'error': 'Failed to record access request: $e'}),
         headers: headers,
       );
     }
