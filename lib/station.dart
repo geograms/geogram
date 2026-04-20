@@ -2748,7 +2748,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         await _handleAlertsPage(request);
       } else if (path == '/api/apps' && method == 'GET') {
         await _handleAppsApi(request);
-      } else if ((path == '/api/blog' || path.startsWith('/api/blog/')) && method == 'GET') {
+      } else if (path == '/api/blog' || path.startsWith('/api/blog/')) {
         await _handleBlogApi(request);
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {
         await _handleAlertsApi(request);
@@ -4240,34 +4240,143 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   ///   - lon: longitude for distance filtering
   ///   - radius: radius in km for distance filtering (default: unlimited)
   ///   - status: filter by status (open, in-progress, resolved, closed)
-  /// GET /api/blog[/{postId}] — read-only blog listing + detail routed
-  /// to the shared BlogHandler. Writes (comments/likes) aren't wired
-  /// here yet; callers that need to mutate should go through
-  /// /api/feedback which already has a station-side route.
+  /// /api/blog[/{postId}[/{action}[/{emoji}]]] — read + write surface
+  /// delegated entirely to the shared BlogHandler.
+  ///
+  /// Supported:
+  ///   GET    /api/blog                            — list posts
+  ///   GET    /api/blog/{postId}                   — post detail
+  ///   POST   /api/blog/{postId}/comment           — add signed comment
+  ///   POST   /api/blog/{postId}/like              — toggle like
+  ///   POST   /api/blog/{postId}/dislike           — toggle dislike
+  ///   POST   /api/blog/{postId}/point             — toggle point
+  ///   POST   /api/blog/{postId}/subscribe         — toggle subscribe
+  ///   POST   /api/blog/{postId}/react/{emoji}     — toggle emoji reaction
+  ///   DELETE /api/blog/{postId}/comment/{id}      — delete comment
+  ///
+  /// All state/logic lives in BlogHandler — this method only parses
+  /// the path + body and relays the response.
   Future<void> _handleBlogApi(HttpRequest request) async {
     try {
       final path = request.uri.path;
+      final method = request.method;
       final qp = request.uri.queryParameters;
-      Map<String, dynamic> result;
+      Map<String, dynamic>? result;
+      int? statusOverride;
+
+      // Split the path into `{postId}/{action}[/{emoji}]` segments.
+      String subPath;
       if (path == '/api/blog' || path == '/api/blog/') {
-        final year = qp['year'] != null ? int.tryParse(qp['year']!) : null;
-        final tag = qp['tag'];
-        final limit = qp['limit'] != null ? int.tryParse(qp['limit']!) : null;
-        final offset =
-            qp['offset'] != null ? int.tryParse(qp['offset']!) : null;
-        result = await blogApi.getBlogPosts(
-          year: year,
-          tag: tag,
-          limit: limit,
-          offset: offset,
-        );
+        subPath = '';
       } else {
-        // /api/blog/{postId} — detail
-        final postId = path.substring('/api/blog/'.length);
-        result = await blogApi.getPostDetails(postId);
+        subPath = path.substring('/api/blog/'.length);
+        if (subPath.endsWith('/')) {
+          subPath = subPath.substring(0, subPath.length - 1);
+        }
       }
-      final statusCode = result['http_status'] as int? ?? 200;
-      request.response.statusCode = statusCode;
+      final parts = subPath.isEmpty ? <String>[] : subPath.split('/');
+
+      if (method == 'GET') {
+        if (parts.isEmpty) {
+          final year = qp['year'] != null ? int.tryParse(qp['year']!) : null;
+          final tag = qp['tag'];
+          final limit =
+              qp['limit'] != null ? int.tryParse(qp['limit']!) : null;
+          final offset =
+              qp['offset'] != null ? int.tryParse(qp['offset']!) : null;
+          result = await blogApi.getBlogPosts(
+            year: year, tag: tag, limit: limit, offset: offset,
+          );
+        } else if (parts.length == 1) {
+          result = await blogApi.getPostDetails(parts[0]);
+        } else {
+          statusOverride = 400;
+          result = {'error': 'Unknown GET sub-path: $subPath'};
+        }
+      } else if (method == 'POST') {
+        if (parts.length < 2) {
+          statusOverride = 400;
+          result = {'error': 'POST requires /api/blog/{postId}/{action}'};
+        } else {
+          final postId = parts[0];
+          final action = parts[1];
+          final bodyStr = await utf8.decoder.bind(request).join();
+          final eventJson = bodyStr.isEmpty
+              ? <String, dynamic>{}
+              : jsonDecode(bodyStr) as Map<String, dynamic>;
+          switch (action) {
+            case 'comment':
+              final author = eventJson['author'] as String?;
+              final content = eventJson['content'] as String?;
+              if (author == null || author.isEmpty) {
+                statusOverride = 400;
+                result = {'error': 'Missing required field: author'};
+              } else if (content == null || content.isEmpty) {
+                statusOverride = 400;
+                result = {'error': 'Missing required field: content'};
+              } else {
+                result = await blogApi.addComment(
+                  postId, author, content,
+                  npub: eventJson['npub'] as String?,
+                  signature: eventJson['signature'] as String?,
+                );
+              }
+              break;
+            case 'like':
+              result = await blogApi.toggleLike(postId, eventJson);
+              break;
+            case 'dislike':
+              result = await blogApi.toggleDislike(postId, eventJson);
+              break;
+            case 'point':
+              result = await blogApi.togglePoint(postId, eventJson);
+              break;
+            case 'subscribe':
+              result = await blogApi.toggleSubscribe(postId, eventJson);
+              break;
+            case 'react':
+              if (parts.length < 3) {
+                statusOverride = 400;
+                result = {'error': 'Missing emoji for react'};
+              } else {
+                result = await blogApi.toggleReaction(
+                  postId, eventJson, parts[2],
+                );
+              }
+              break;
+            default:
+              statusOverride = 400;
+              result = {'error': 'Unknown blog action: $action'};
+          }
+        }
+      } else if (method == 'DELETE') {
+        if (parts.length == 3 && parts[1] == 'comment') {
+          final requesterNpub =
+              request.headers.value('x-npub') ??
+                  request.headers.value('X-Npub') ??
+                  '';
+          if (requesterNpub.isEmpty) {
+            statusOverride = 401;
+            result = {'error': 'Missing X-Npub header'};
+          } else {
+            result = await blogApi.deleteComment(
+              parts[0], parts[2], requesterNpub,
+            );
+          }
+        } else {
+          statusOverride = 400;
+          result = {'error': 'DELETE only supported on /comment/{id}'};
+        }
+      } else {
+        statusOverride = 405;
+        result = {'error': 'Method not allowed'};
+      }
+
+      final httpStatus = statusOverride ??
+          (result['http_status'] as int?) ??
+          (result.containsKey('error') ? 400 : 200);
+      result.remove('http_status');
+      request.response.statusCode = httpStatus;
       request.response.headers.contentType = ContentType.json;
       request.response.write(jsonEncode(result));
     } catch (e) {
