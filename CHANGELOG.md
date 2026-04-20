@@ -1,5 +1,53 @@
 # Geogram Desktop Changelog
 
+## 2026-04-21 - v1.38.0
+
+### Changes
+- Restore Linux tray_manager registrant + ignore .claude/
+- BlogService: use paths relative to the storage scope
+- Remote blog actions: fix comment signature verification + debug-API test harness
+- Remote blog detail: working like/comment + views/likes/comments on the page
+- Station blog: wire POST like/comment/dislike/point/subscribe/react + DELETE comment
+- Station: serve /api/blog via the shared BlogHandler
+- Station: serve /api/apps via the shared AppsHandler
+- Android build: compatibility shims for AGP 8 / Kotlin 2
+- Device-detail tiles: fix counts via a reusable AppContentProvider
+- Backup: route Local Backup writes through SAF on Android
+- EventActivityNotifier: clear in-memory NowItems when marking seen
+- Events: split off "Interactions" tab and i18n every recent string
+- NowPage: tapping an event activity card actually opens the editor
+- Events: unified EventActivityNotifier for owner attention items
+- Events: let the author (or comment author) delete a comment
+- Events: NOSTR-signed comments on the public event page
+- Station homepage: events list shows author + likes/comments/views
+- Events: approved-request fallback so cookie-only viewers get access
+- Events: per-viewer access lookup + station-homepage probe
+- Station: publish events on visibility change + Recent Events section
+- Events: capture requester profile nickname + auto-add a Contact
+- Events: scan pending access requests at app startup
+- Apps grid: badge the Events tile when an event needs owner action
+- Events: guide owner from event-tile badge to the pending-requests list
+- Events: pending-request badge on tile + re-emit Now items on load
+- Now panel: tap an access-request card opens the event's Access tab
+- Events: request-access prompt + note + Now-panel notification
+- Events: themed 404, contact-picker access list, request-access inbox
+- Events: extend visibility with unlisted + request_access + grants
+- Events: surface engagement stats at the top + add a comment counter
+- Events: engagement row reads the live like count from feedback file
+- Events: web Like writes the canonical feedback/ path so the GUI sees it
+- Events API: URL-decode event id segments so likes/lookups match
+- Events: show view count in the desktop/Android event detail page
+- LogApiService: route /api/feedback/{type}/{id}/[action] like the stations
+- Events: NOSTR-signed page-view counter on the public detail page
+- Events: serve cached thumbnails for the public gallery
+- Events: include callsign in shareable URL and fix file paths on station
+- Events: hide station URL on private/group events
+- Events: open photo picker in grid view at the user's media folder
+- Events: accept video clips alongside photos in the media gallery
+- Regenerate themes_embedded.dart so blog/styles.css gets the timeline CSS
+- release.sh: regenerate lib/version.dart, skip F-Droid summary on pre-release
+
+
 ## 2026-04-19 - v1.38.0-beta.2
 
 ### Changes
