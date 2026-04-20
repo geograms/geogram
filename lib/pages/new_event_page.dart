@@ -166,9 +166,9 @@ class _NewEventPageState extends State<NewEventPage>
   void initState() {
     super.initState();
     _tabController = TabController(
-      length: 5,
+      length: 6,
       vsync: this,
-      initialIndex: widget.initialTab.clamp(0, 4),
+      initialIndex: widget.initialTab.clamp(0, 5),
     );
     _loadGroups();
 
@@ -268,13 +268,17 @@ class _NewEventPageState extends State<NewEventPage>
         });
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Delete failed (HTTP ${resp.statusCode})')),
+          SnackBar(
+            content: Text(_i18n
+                .t('delete_failed_http')
+                .replaceAll('{0}', '${resp.statusCode}')),
+          ),
         );
       }
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to delete comment')),
+        SnackBar(content: Text(_i18n.t('delete_comment_failed'))),
       );
     }
   }
@@ -368,7 +372,7 @@ class _NewEventPageState extends State<NewEventPage>
       // pending so the owner can retry.
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to update access request')),
+        SnackBar(content: Text(_i18n.t('access_request_update_failed'))),
       );
     }
   }
@@ -390,8 +394,10 @@ class _NewEventPageState extends State<NewEventPage>
     if (pending == 0) return label;
     return Tooltip(
       message: pending == 1
-          ? '1 access request needs your decision'
-          : '$pending access requests need your decision',
+          ? _i18n.t('access_request_count_one')
+          : _i18n
+              .t('access_request_count_many')
+              .replaceAll('{0}', '$pending'),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1125,6 +1131,7 @@ class _NewEventPageState extends State<NewEventPage>
             Tab(text: _i18n.t('links')),
             Tab(text: _i18n.t('updates_agenda')),
             Tab(child: _buildAccessControlTabLabel()),
+            Tab(child: _buildInteractionsTabLabel()),
           ],
         ),
       ),
@@ -1138,6 +1145,7 @@ class _NewEventPageState extends State<NewEventPage>
             _buildLinksTab(theme),
             _buildUpdatesTab(theme),
             _buildAccessTab(theme),
+            _buildInteractionsTab(theme),
           ],
         ),
       ),
@@ -2267,8 +2275,8 @@ class _NewEventPageState extends State<NewEventPage>
             onPressed: _openAccessCallsignPicker,
             icon: const Icon(Icons.person_add_outlined, size: 18),
             label: Text(_accessCallsigns.isEmpty
-                ? 'Add callsigns'
-                : 'Add more callsigns'),
+                ? _i18n.t('add_callsigns')
+                : _i18n.t('add_more_callsigns')),
           ),
           if (_visibility == 'request_access') ...[
             const SizedBox(height: 16),
@@ -2280,146 +2288,26 @@ class _NewEventPageState extends State<NewEventPage>
               controller: _accessRequestPromptController,
               minLines: 2,
               maxLines: 4,
-              decoration: const InputDecoration(
-                labelText: 'Request prompt (optional)',
-                helperText:
-                    'Shown to people requesting access. Use it to ask who they are or why they want access.',
-                prefixIcon: Icon(Icons.help_outline, size: 18),
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: _i18n.t('request_prompt_label'),
+                helperText: _i18n.t('request_prompt_help'),
+                prefixIcon: const Icon(Icons.help_outline, size: 18),
+                border: const OutlineInputBorder(),
               ),
             ),
-          ],
-          const SizedBox(height: 16),
-          // Author-controlled toggle for visitor comments on the public
-          // event page. NOSTR-signed comments land in feedback/comments/
-          // and are read back by the web template's compose/view section.
-          // Hidden inside a card so it visually groups with the rest of
-          // the per-event access controls.
-          Card(
-            margin: EdgeInsets.zero,
-            child: SwitchListTile(
-              value: _commentsEnabled,
-              onChanged: (v) => setState(() => _commentsEnabled = v),
-              title: const Text('Allow comments'),
-              subtitle: const Text(
-                'Visitors can leave NOSTR-signed comments on the event page.',
-              ),
-              secondary: const Icon(Icons.chat_bubble_outline),
-            ),
-          ),
-          if (widget.isEditMode && _comments.isNotEmpty) ...[
-            const SizedBox(height: 24),
-            Text(
-              'Comments (${_comments.length})',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            Text(
-              'NOSTR-signed comments left by visitors. Tap the bin to remove one.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            ..._comments.map((c) {
-              final id = (c['id'] as String?) ?? '';
-              final author = ((c['author'] as String?) ?? '').trim();
-              final ts = ((c['timestamp'] as String?) ?? '').trim();
-              final body = ((c['content'] as String?) ?? '').trim();
-              final npub = ((c['npub'] as String?) ?? '').trim();
-              return Card(
-                margin: const EdgeInsets.symmetric(vertical: 4),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.chat_bubble_outline,
-                              size: 18,
-                              color: theme.colorScheme.onSurfaceVariant),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Text(
-                              author.isNotEmpty
-                                  ? (npub.isNotEmpty
-                                      ? '$author  ·  ${npub.length > 16 ? '${npub.substring(0, 16)}…' : npub}'
-                                      : author)
-                                  : (npub.isNotEmpty
-                                      ? npub
-                                      : 'unknown'),
-                              style: theme.textTheme.bodyMedium,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (ts.isNotEmpty)
-                            Text(
-                              ts,
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          IconButton(
-                            tooltip: 'Delete comment',
-                            icon: const Icon(Icons.delete_outline, size: 18),
-                            color: theme.colorScheme.error,
-                            onPressed: id.isEmpty
-                                ? null
-                                : () async {
-                                    final ok = await showDialog<bool>(
-                                          context: context,
-                                          builder: (ctx) => AlertDialog(
-                                            title:
-                                                const Text('Delete comment?'),
-                                            content: Text(
-                                              body.length > 200
-                                                  ? '${body.substring(0, 200)}…'
-                                                  : body,
-                                            ),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(ctx, false),
-                                                child: const Text('Cancel'),
-                                              ),
-                                              FilledButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(ctx, true),
-                                                child: const Text('Delete'),
-                                              ),
-                                            ],
-                                          ),
-                                        ) ??
-                                        false;
-                                    if (ok) await _deleteComment(id);
-                                  },
-                          ),
-                        ],
-                      ),
-                      if (body.isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        Text(body, style: theme.textTheme.bodySmall),
-                      ],
-                    ],
-                  ),
-                ),
-              );
-            }),
           ],
           if (_visibility == 'request_access' &&
               widget.isEditMode &&
               _accessRequests.isNotEmpty) ...[
             const SizedBox(height: 24),
             Text(
-              'Access requests',
+              _i18n.t('access_requests_title'),
               style: theme.textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.bold,
               ),
             ),
             Text(
-              'Approve to grant access; deny is remembered so the requester can\'t spam the inbox.',
+              _i18n.t('access_requests_help'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -2488,7 +2376,7 @@ class _NewEventPageState extends State<NewEventPage>
                               onPressed: () =>
                                   _decideAccessRequest(entry, 'deny'),
                               icon: const Icon(Icons.close, size: 18),
-                              label: const Text('Deny'),
+                              label: Text(_i18n.t('deny')),
                               style: TextButton.styleFrom(
                                 foregroundColor: Colors.red,
                               ),
@@ -2498,7 +2386,7 @@ class _NewEventPageState extends State<NewEventPage>
                               onPressed: () =>
                                   _decideAccessRequest(entry, 'approve'),
                               icon: const Icon(Icons.check, size: 18),
-                              label: const Text('Approve'),
+                              label: Text(_i18n.t('approve')),
                             ),
                           ],
                         ),
@@ -2568,6 +2456,184 @@ class _NewEventPageState extends State<NewEventPage>
           },
           contentPadding: EdgeInsets.zero,
         ),
+      ],
+    );
+  }
+
+  /// Tab label for the Interactions tab — mirrors [_buildAccessControlTabLabel]
+  /// so a count badge is anchored next to the label whenever the event has
+  /// at least one comment the owner can review/delete.
+  Widget _buildInteractionsTabLabel() {
+    final count = _comments.length;
+    final theme = Theme.of(context);
+    final label = Text(_i18n.t('interactions'));
+    if (count == 0) return label;
+    return Tooltip(
+      message: _i18n.t('interactions_count_tooltip').replaceAll(
+            '{0}',
+            '$count',
+          ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          label,
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '$count',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onPrimary,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Visitor-facing interactions: the "Allow comments" toggle and the
+  /// list of NOSTR-signed comments with delete buttons. Likes don't
+  /// surface here yet because they have nothing the author can act on
+  /// (they're an opaque tally), but the tab is the natural home for
+  /// any future visitor-action moderation (reactions, RSVPs…).
+  Widget _buildInteractionsTab(ThemeData theme) {
+    return ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        Card(
+          margin: EdgeInsets.zero,
+          child: SwitchListTile(
+            value: _commentsEnabled,
+            onChanged: (v) => setState(() => _commentsEnabled = v),
+            title: Text(_i18n.t('allow_comments')),
+            subtitle: Text(_i18n.t('allow_comments_help')),
+            secondary: const Icon(Icons.chat_bubble_outline),
+          ),
+        ),
+        if (widget.isEditMode) ...[
+          const SizedBox(height: 24),
+          Text(
+            _i18n
+                .t('comments_section_title')
+                .replaceAll('{0}', '${_comments.length}'),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _i18n.t('comments_section_help'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (_comments.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Text(
+                _i18n.t('comments_empty'),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontStyle: FontStyle.italic,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            )
+          else
+            ..._comments.map((c) {
+              final id = (c['id'] as String?) ?? '';
+              final author = ((c['author'] as String?) ?? '').trim();
+              final ts = ((c['timestamp'] as String?) ?? '').trim();
+              final body = ((c['content'] as String?) ?? '').trim();
+              final npub = ((c['npub'] as String?) ?? '').trim();
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.chat_bubble_outline,
+                              size: 18,
+                              color: theme.colorScheme.onSurfaceVariant),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              author.isNotEmpty
+                                  ? (npub.isNotEmpty
+                                      ? '$author  ·  ${npub.length > 16 ? '${npub.substring(0, 16)}…' : npub}'
+                                      : author)
+                                  : (npub.isNotEmpty ? npub : _i18n.t('unknown')),
+                              style: theme.textTheme.bodyMedium,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (ts.isNotEmpty)
+                            Text(
+                              ts,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          IconButton(
+                            tooltip: _i18n.t('delete_comment'),
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            color: theme.colorScheme.error,
+                            onPressed: id.isEmpty
+                                ? null
+                                : () async {
+                                    final ok = await showDialog<bool>(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            title: Text(
+                                                _i18n.t('delete_comment_q')),
+                                            content: Text(
+                                              body.length > 200
+                                                  ? '${body.substring(0, 200)}…'
+                                                  : body,
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx, false),
+                                                child:
+                                                    Text(_i18n.t('cancel')),
+                                              ),
+                                              FilledButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx, true),
+                                                child:
+                                                    Text(_i18n.t('delete')),
+                                              ),
+                                            ],
+                                          ),
+                                        ) ??
+                                        false;
+                                    if (ok) await _deleteComment(id);
+                                  },
+                          ),
+                        ],
+                      ),
+                      if (body.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(body, style: theme.textTheme.bodySmall),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }),
+        ],
       ],
     );
   }

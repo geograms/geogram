@@ -628,11 +628,12 @@ class _NowPageState extends State<NowPage> {
       case 'event_access_request':
       case 'event_new_comment':
       case 'event_new_like':
-        // All event-activity types share the same destination: the
-        // event editor's Access tab, where the access-requests inbox
-        // and the comments admin section both live. Adding a new
-        // event-activity appType only needs the EventActivityNotifier
-        // ownedAppTypes set and a case here.
+        // All event-activity types share the same NewEventPage; pick
+        // the tab that surfaces the relevant inbox: access requests
+        // → tab 4 (Access control), comments + likes → tab 5
+        // (Interactions). Adding a new event-activity appType only
+        // needs the EventActivityNotifier ownedAppTypes set, this
+        // case, and a tab mapping.
         //
         // Use findEventByIdGlobal so this works even before the user
         // has opened the events page once — EventService.loadEvent
@@ -659,17 +660,21 @@ class _NowPageState extends State<NowPage> {
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('Event "${item.sourceName}" not found'),
+                  content: Text(_i18n
+                      .t('event_not_found_named')
+                      .replaceAll('{0}', item.sourceName)),
                 ),
               );
               return;
             }
             if (!mounted) return;
+            final tab =
+                item.appType == 'event_access_request' ? 4 : 5;
             Navigator.of(context).push(MaterialPageRoute(
               builder: (_) => NewEventPage(
                 event: event,
                 appPath: appPath,
-                initialTab: 4, // 0=basic 1=media 2=links 3=updates 4=access
+                initialTab: tab,
               ),
             ));
           } catch (e, st) {
@@ -678,7 +683,11 @@ class _NowPageState extends State<NowPage> {
             );
             if (!mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Failed to open event: $e')),
+              SnackBar(
+                content: Text(_i18n
+                    .t('event_open_failed')
+                    .replaceAll('{0}', '$e')),
+              ),
             );
           }
         }();
