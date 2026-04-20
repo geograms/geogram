@@ -3,6 +3,7 @@
 /// Used by both Flutter embedded and CLI station servers
 
 import '../server/mixins/blog_handler_mixin.dart';
+import '../server/mixins/homepage_mixin.dart';
 import 'html_utils.dart';
 import 'nostr_login_scripts.dart';
 
@@ -1404,6 +1405,53 @@ $nostrScript
 ''';
   }
 
+  /// Build the recent events HTML section for the station homepage.
+  /// Returns empty string when there are no events (section is hidden).
+  /// Mirrors the blog section so both render with the same look.
+  static String buildRecentEventsHtml(List<RecentEventEntry> events) {
+    if (events.isEmpty) return '';
+
+    final entriesHtml = StringBuffer();
+    for (final ev in events) {
+      // Slug if present, else folder id; both are URL-encoded so the
+      // user's "2026-04-11_Return home" id with a literal space lands
+      // safely on the wire.
+      final pathSegment =
+          ev.slug != null && ev.slug!.isNotEmpty ? ev.slug! : ev.eventId;
+      final loc = ev.location != null && ev.location!.isNotEmpty
+          ? '<span class="blog-entry-author">${escapeHtml(ev.location!)}</span>'
+          : '';
+      // request_access events get a tiny chip so visitors know access
+      // isn't immediate. public events render the same as blog entries.
+      final chip = ev.visibility == 'request_access'
+          ? '<span class="blog-entry-likes" title="Access on request">&#128274; access on request</span>'
+          : '';
+      entriesHtml.writeln('''
+        <a href="/${escapeHtml(ev.callsign)}/events/${escapeHtml(Uri.encodeComponent(pathSegment))}" class="blog-entry">
+          <div class="blog-entry-header">
+            <span class="blog-entry-title">${escapeHtml(ev.title)}</span>
+            <span class="blog-entry-date">${escapeHtml(ev.displayDate)}</span>
+          </div>
+          <div class="blog-entry-meta">
+            $loc
+            $chip
+          </div>
+        </a>
+      ''');
+    }
+
+    return '''
+      <section class="blog-section">
+        <div class="section-header">
+          <h2>Recent Events</h2>
+        </div>
+        <div class="blog-list">
+          ${entriesHtml.toString()}
+        </div>
+      </section>
+    ''';
+  }
+
   /// Build the recent blog posts HTML section for the station homepage.
   /// Returns empty string when there are no posts (section is hidden).
   static String buildRecentBlogPostsHtml(List<RecentBlogEntry> posts) {
@@ -1458,6 +1506,7 @@ $nostrScript
     String globalStyles = '',
     String stationStyles = '',
     String recentBlogsHtml = '',
+    String recentEventsHtml = '',
   }) {
     final mapDisplay = hasDevicesWithLocation ? 'block' : 'none';
     final devicesDisplay = clientCount > 0 ? 'grid' : 'none';
@@ -1557,6 +1606,8 @@ $extraStyles
           <p class="hint">Devices will appear here when they connect to this station.</p>
         </div>
       </section>
+
+      $recentEventsHtml
 
       $recentBlogsHtml
 

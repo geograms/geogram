@@ -813,10 +813,13 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
 
   // HomepageMixin bridge
   final Map<String, List<RecentBlogEntry>> _blogCache = {};
+  final Map<String, List<RecentEventEntry>> _eventCache = {};
   @override
   String get homepageDevicesDir => PureStorageConfig().devicesDir;
   @override
   Map<String, List<RecentBlogEntry>> get homepageBlogCache => _blogCache;
+  @override
+  Map<String, List<RecentEventEntry>> get homepageEventCache => _eventCache;
   @override
   Future<Map<String, dynamic>?> homepageProxyToClient(
           DeviceProxyClient client, String method, String path) =>
@@ -2427,6 +2430,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
           (c) => c.callsign?.toLowerCase() == lower);
       if (!stillConnected) {
         evictBlogCacheForCallsign(disconnectedCallsign);
+        evictEventCacheForCallsign(disconnectedCallsign);
       }
     }
   }
@@ -3268,8 +3272,9 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
               deliverPendingEmails(client, callsign);
             }
 
-            // Prime homepage blog cache for this device
+            // Prime homepage blog + event caches for this device
             unawaited(primeBlogCacheForDevice(client));
+            unawaited(primeEventCacheForDevice(client));
             break;
 
           case 'PING':
@@ -7591,6 +7596,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
     ).join(',');
 
     final recentBlogsHtml = await buildRecentBlogsSection();
+    final recentEventsHtml = await buildRecentEventsSection();
 
     final html = StationHtmlTemplates.buildStationHomepage(
       stationName: stationName,
@@ -7605,6 +7611,7 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       globalStyles: StationHtmlTemplates.getBaseStyles(),
       stationStyles: '',
       recentBlogsHtml: recentBlogsHtml,
+      recentEventsHtml: recentEventsHtml,
     );
 
     await _sendCompressedResponse(

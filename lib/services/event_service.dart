@@ -1255,6 +1255,30 @@ class EventService {
       }
 
       print('EventService: Updated event: $finalEventId');
+
+      // Re-publish to the station activity stream when visibility just
+      // became publishable (public or request_access). The publisher
+      // already filters out private/group entries, so firing on every
+      // edit-and-save would still be safe, but limiting the trigger to
+      // visibility transitions to a publishable state keeps the activity
+      // feed signal-only.
+      final wasPublishable = existingEvent.visibility == 'public' ||
+          existingEvent.visibility == 'request_access';
+      final newVisibility = visibility ?? existingEvent.visibility;
+      final isPublishable =
+          newVisibility == 'public' || newVisibility == 'request_access';
+      if (isPublishable && !wasPublishable) {
+        final reloaded = await loadEvent(finalEventId);
+        if (reloaded != null) {
+          EventBus().fire(EventCreatedEvent(
+            eventId: finalEventId,
+            author: reloaded.author,
+            title: reloaded.title,
+            eventRecord: reloaded,
+          ));
+        }
+      }
+
       return finalEventId;
     } catch (e) {
       print('EventService: Error updating event: $e');

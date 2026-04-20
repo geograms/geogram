@@ -711,10 +711,13 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
   // HomepageMixin bridge
   final Map<String, List<RecentBlogEntry>> _blogCache = {};
+  final Map<String, List<RecentEventEntry>> _eventCache = {};
   @override
   String get homepageDevicesDir => '$_dataDir/devices';
   @override
   Map<String, List<RecentBlogEntry>> get homepageBlogCache => _blogCache;
+  @override
+  Map<String, List<RecentEventEntry>> get homepageEventCache => _eventCache;
   @override
   Future<Map<String, dynamic>?> homepageProxyToClient(
           DeviceProxyClient client, String method, String path) =>
@@ -2236,6 +2239,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
           (c) => c.callsign?.toLowerCase() == lower);
       if (!stillConnected) {
         evictBlogCacheForCallsign(disconnectedCallsign);
+        evictEventCacheForCallsign(disconnectedCallsign);
       }
     }
   }
@@ -3107,8 +3111,9 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
               deliverPendingEmails(client, callsign);
             }
 
-            // Prime homepage blog cache for this device
+            // Prime homepage blog + event caches for this device
             unawaited(primeBlogCacheForDevice(client));
+            unawaited(primeEventCacheForDevice(client));
             break;
 
           case 'PING':
@@ -6991,6 +6996,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
     ).join(',');
 
     final recentBlogsHtml = await buildRecentBlogsSection();
+    final recentEventsHtml = await buildRecentEventsSection();
 
     final html = StationHtmlTemplates.buildStationHomepage(
       stationName: stationName,
@@ -7005,6 +7011,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       globalStyles: StationHtmlTemplates.getBaseStyles(),
       stationStyles: '',
       recentBlogsHtml: recentBlogsHtml,
+      recentEventsHtml: recentEventsHtml,
     );
 
     await _sendCompressedResponse(
