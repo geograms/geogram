@@ -4,12 +4,15 @@
  */
 
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_storage/shared_storage.dart' as saf;
 import '../models/local_backup_models.dart';
 import '../services/backup_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
+import '../services/backup_store.dart';
 import '../services/local_backup_service.dart';
 import '../models/backup_models.dart';
 
@@ -1781,9 +1784,21 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
   }
 
   Future<void> _pickLocalBackupFolder() async {
-    final result = await FilePicker.platform.getDirectoryPath(
-      dialogTitle: _i18n.t('backup_local_select_folder'),
-    );
+    String? result;
+    if (Platform.isAndroid) {
+      // SAF: lets the user pick any folder (including SD card / USB) without
+      // needing the broad MANAGE_EXTERNAL_STORAGE permission. The returned
+      // tree URI is persisted by the plugin and used as the backup destination.
+      final treeUri = await saf.openDocumentTree(
+        grantWritePermission: true,
+        persistablePermission: true,
+      );
+      if (treeUri != null) result = treeUri.toString();
+    } else {
+      result = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: _i18n.t('backup_local_select_folder'),
+      );
+    }
     if (result != null && mounted) {
       _localBackupService.setBackupFolder(result);
       setState(() {});
@@ -1923,7 +1938,9 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
                     children: [
                       Expanded(
                         child: Text(
-                          folderPath ?? _i18n.t('backup_local_select_folder'),
+                          folderPath != null
+                              ? BackupStore.openFor(folderPath).displayLabel()
+                              : _i18n.t('backup_local_select_folder'),
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: folderPath != null
                                 ? theme.colorScheme.onSurface

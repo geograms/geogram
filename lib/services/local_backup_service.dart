@@ -13,11 +13,13 @@ import 'package:archive/archive.dart';
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../models/local_backup_models.dart';
 import '../models/monitored_task.dart';
 import '../util/task_monitor_helpers.dart';
 import 'app_service.dart';
+import 'backup_store.dart';
 import 'config_service.dart';
 import 'log_service.dart';
 import 'storage_config.dart';
@@ -153,17 +155,29 @@ class LocalBackupService {
     _status = LocalBackupStatus(isInProgress: true);
     _log('Creating local backup for $callsign');
 
+    final store = BackupStore.openFor(folder);
+    final validationError = await store.validate();
+    if (validationError != null) {
+      _status = LocalBackupStatus(error: validationError);
+      _log('Cannot create backup: destination not writable: $validationError');
+      return null;
+    }
+
+    File? tempZip;
     try {
       final isEncrypted = StorageConfig().isUsingEncryptedStorage(callsign);
       final now = DateTime.now();
       final timestamp = '${now.year}-${_pad(now.month)}-${_pad(now.day)}-${_pad(now.hour)}${_pad(now.minute)}${_pad(now.second)}';
       final zipName = 'geogram-backup-${callsign.toUpperCase()}-$timestamp.zip';
-      final zipPath = p.join(folder, zipName);
 
-      // Ensure backup folder exists
-      final backupDir = Directory(folder);
-      if (!await backupDir.exists()) {
-        await backupDir.create(recursive: true);
+      // Build the ZIP in a temp file under the app sandbox first. ZipFile-
+      // Encoder needs a real filesystem path, and SAF destinations don't
+      // expose one. After the ZIP is finalised we hand its bytes to the
+      // store, which writes them into the user-picked folder.
+      final tempDir = await getTemporaryDirectory();
+      tempZip = File(p.join(tempDir.path, '$zipName.tmp'));
+      if (await tempZip.exists()) {
+        await tempZip.delete();
       }
 
       final manifest = LocalBackupManifest(
@@ -173,7 +187,7 @@ class LocalBackupService {
       );
 
       final encoder = ZipFileEncoder();
-      encoder.create(zipPath);
+      encoder.create(tempZip.path);
 
       if (isEncrypted) {
         await _backupEncryptedProfile(callsign, encoder, manifest);
@@ -187,13 +201,14 @@ class LocalBackupService {
       encoder.addArchiveFile(ArchiveFile('manifest.json', manifestBytes.length, manifestBytes));
       encoder.close();
 
-      // Get archive size
-      final archiveFile = File(zipPath);
-      final archiveSize = await archiveFile.length();
+      // Publish the finished archive into the user's backup folder.
+      final archiveBytes = await tempZip.readAsBytes();
+      final locator = await store.writeBytes(zipName, archiveBytes);
+      final archiveSize = archiveBytes.length;
 
       final snapshot = LocalBackupSnapshot(
         fileName: zipName,
-        filePath: zipPath,
+        filePath: locator,
         createdAt: now,
         totalFiles: manifest.totalFiles,
         totalBytes: manifest.totalBytes,
@@ -213,8 +228,14 @@ class LocalBackupService {
     } catch (e) {
       _status = LocalBackupStatus(error: e.toString());
       _log('Local backup failed: $e');
-      // Clean up partial ZIP
       return null;
+    } finally {
+      // Always clean up the temp ZIP, success or failure.
+      if (tempZip != null) {
+        try {
+          if (await tempZip.exists()) await tempZip.delete();
+        } catch (_) {}
+      }
     }
   }
 
@@ -226,40 +247,33 @@ class LocalBackupService {
     final folder = _settings.backupFolderPath;
     if (folder == null || folder.isEmpty) return [];
 
-    final dir = Directory(folder);
-    if (!await dir.exists()) return [];
-
+    final store = BackupStore.openFor(folder);
+    final entries = await store.list();
     final prefix = 'geogram-backup-${callsign.toUpperCase()}-';
     final snapshots = <LocalBackupSnapshot>[];
 
-    await for (final entity in dir.list()) {
-      if (entity is! File) continue;
-      final name = p.basename(entity.path);
-      if (!name.startsWith(prefix) || !name.endsWith('.zip')) continue;
+    for (final entry in entries) {
+      if (!entry.name.startsWith(prefix)) continue;
 
       try {
-        final manifest = await _readManifestFromZip(entity.path);
-        final archiveSize = await entity.length();
-
+        final bytes = await store.readBytes(entry.locator);
+        final manifest = _readManifestFromBytes(bytes, entry.name);
         snapshots.add(LocalBackupSnapshot(
-          fileName: name,
-          filePath: entity.path,
-          createdAt: manifest?.createdAt ?? entity.statSync().modified,
+          fileName: entry.name,
+          filePath: entry.locator,
+          createdAt: manifest?.createdAt ?? entry.modifiedAt ?? DateTime.now(),
           totalFiles: manifest?.totalFiles ?? 0,
           totalBytes: manifest?.totalBytes ?? 0,
-          archiveSizeBytes: archiveSize,
+          archiveSizeBytes: entry.sizeBytes ?? bytes.length,
         ));
-      } catch (e) {
-        // Corrupted ZIP — still list it with basic info
-        try {
-          final stat = await entity.stat();
-          snapshots.add(LocalBackupSnapshot(
-            fileName: name,
-            filePath: entity.path,
-            createdAt: stat.modified,
-            archiveSizeBytes: stat.size,
-          ));
-        } catch (_) {}
+      } catch (_) {
+        // Corrupted ZIP — still list it with basic info from the store.
+        snapshots.add(LocalBackupSnapshot(
+          fileName: entry.name,
+          filePath: entry.locator,
+          createdAt: entry.modifiedAt ?? DateTime.now(),
+          archiveSizeBytes: entry.sizeBytes ?? 0,
+        ));
       }
     }
 
@@ -268,8 +282,10 @@ class LocalBackupService {
     return snapshots;
   }
 
-  /// Restore a snapshot from a ZIP file.
-  Future<bool> restoreSnapshot(String zipPath) async {
+  /// Restore a snapshot. [locator] is what was stored in
+  /// [LocalBackupSnapshot.filePath] — a real path on the filesystem store
+  /// or a content URI on the SAF store.
+  Future<bool> restoreSnapshot(String locator) async {
     final callsign = AppService().currentCallsign;
     if (callsign == null) {
       _log('Cannot restore: no active callsign');
@@ -282,10 +298,11 @@ class LocalBackupService {
     }
 
     _status = LocalBackupStatus(isInProgress: true);
-    _log('Restoring local backup from: ${p.basename(zipPath)}');
+    _log('Restoring local backup from: $locator');
 
     try {
-      final bytes = await File(zipPath).readAsBytes();
+      final store = BackupStore.openFor(locator);
+      final bytes = await store.readBytes(locator);
       final archive = ZipDecoder().decodeBytes(bytes);
 
       // Read manifest
@@ -319,16 +336,14 @@ class LocalBackupService {
     }
   }
 
-  /// Delete a snapshot ZIP file.
-  Future<bool> deleteSnapshot(String zipPath) async {
+  /// Delete a snapshot. [locator] is the path or content URI previously
+  /// reported by [listSnapshots].
+  Future<bool> deleteSnapshot(String locator) async {
     try {
-      final file = File(zipPath);
-      if (await file.exists()) {
-        await file.delete();
-        _log('Deleted snapshot: ${p.basename(zipPath)}');
-        return true;
-      }
-      return false;
+      final store = BackupStore.openFor(locator);
+      final ok = await store.delete(locator);
+      if (ok) _log('Deleted snapshot: $locator');
+      return ok;
     } catch (e) {
       _log('Failed to delete snapshot: $e');
       return false;
@@ -535,17 +550,16 @@ class LocalBackupService {
     }
   }
 
-  /// Read manifest.json from a ZIP without extracting everything.
-  Future<LocalBackupManifest?> _readManifestFromZip(String zipPath) async {
+  /// Decode manifest.json from in-memory ZIP bytes.
+  LocalBackupManifest? _readManifestFromBytes(List<int> bytes, String label) {
     try {
-      final bytes = await File(zipPath).readAsBytes();
       final archive = ZipDecoder().decodeBytes(bytes);
       final entry = archive.findFile('manifest.json');
       if (entry == null) return null;
       final json = utf8.decode(entry.content as List<int>);
       return LocalBackupManifest.fromJson(jsonDecode(json) as Map<String, dynamic>);
     } catch (e) {
-      _log('Failed to read manifest from $zipPath: $e');
+      _log('Failed to read manifest from $label: $e');
       return null;
     }
   }

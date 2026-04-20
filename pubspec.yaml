@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   path_provider: ^2.1.5
   file_picker: ^10.3.6
+  shared_storage: ^0.8.1     # Android Storage Access Framework (SAF) for user-picked backup folders
   path: ^1.9.0
   mime: ^1.0.5
   url_launcher: ^6.3.1
