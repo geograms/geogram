@@ -21,6 +21,7 @@ import 'util/managed_http_client.dart';
 import 'util/network_utils.dart';
 import 'services/profile_storage.dart';
 import 'api/handlers/alert_handler.dart';
+import 'api/handlers/apps_handler.dart';
 import 'api/handlers/place_handler.dart';
 import 'api/handlers/feedback_handler.dart';
 import 'api/handlers/feedback_delete_helper.dart';
@@ -731,6 +732,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   // Shared alert API handlers
   AlertHandler? _alertApi;
   PlaceHandler? _placeApi;
+  AppsHandler? _appsApi;
   FeedbackHandler? _feedbackApi;
 
   // ── EmailHandlerMixin interface ─────────────────────────────────
@@ -859,6 +861,24 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       );
     }
     return _alertApi!;
+  }
+
+  /// Get the shared apps-discovery handler (lazy initialization).
+  /// The counting logic lives in AppContentProvider implementations —
+  /// this getter is pure wiring so the station's HTTP router can
+  /// answer `GET /api/apps` with the same data every other geogram
+  /// instance serves.
+  AppsHandler get appsApi {
+    if (_appsApi == null) {
+      if (_dataDir == null) {
+        throw StateError('appsApi accessed before init() - _dataDir is null');
+      }
+      _appsApi = AppsHandler(
+        storage: FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}'),
+        log: (level, message) => _log(level, message),
+      );
+    }
+    return _appsApi!;
   }
 
   /// Get the shared places API handlers (lazy initialization)
@@ -2707,6 +2727,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         await _handleCliCommand(request);
       } else if (path == '/alerts') {
         await _handleAlertsPage(request);
+      } else if (path == '/api/apps' && method == 'GET') {
+        await _handleAppsApi(request);
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {
         await _handleAlertsApi(request);
       } else if (path == '/api/places' || path == '/api/places/list') {
@@ -4197,6 +4219,28 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   ///   - lon: longitude for distance filtering
   ///   - radius: radius in km for distance filtering (default: unlimited)
   ///   - status: filter by status (open, in-progress, resolved, closed)
+  /// GET /api/apps — delegates to the shared AppsHandler so every
+  /// geogram instance (device or station) reports the same shape.
+  /// Pure plumbing: no per-app logic lives here.
+  Future<void> _handleAppsApi(HttpRequest request) async {
+    try {
+      final result = await appsApi.getApps();
+      final statusCode = result['http_status'] as int? ?? 200;
+      request.response.statusCode = statusCode;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      _log('ERROR', 'Error in apps API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': 'Internal server error',
+      }));
+    }
+    await request.response.close();
+  }
+
   Future<void> _handleAlertsApi(HttpRequest request) async {
     try {
       final params = request.uri.queryParameters;
