@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -10,7 +12,7 @@ import '../models/event.dart';
 import '../services/i18n_service.dart';
 
 /// Widget for displaying an event in the list
-class EventTileWidget extends StatelessWidget {
+class EventTileWidget extends StatefulWidget {
   final Event event;
   final bool isSelected;
   final VoidCallback onTap;
@@ -28,11 +30,72 @@ class EventTileWidget extends StatelessWidget {
     this.onDelete,
   }) : super(key: key);
 
+  @override
+  State<EventTileWidget> createState() => _EventTileWidgetState();
+}
+
+class _EventTileWidgetState extends State<EventTileWidget> {
+  // Number of pending access requests on this event. Loaded async from
+  // {event}/feedback/access_requests.json — only meaningful for events
+  // whose visibility is `request_access`. The tile renders a small
+  // attention badge whenever > 0 so the owner knows at a glance which
+  // events need their action.
+  int _pendingAccessRequests = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPendingAccessRequests();
+  }
+
+  @override
+  void didUpdateWidget(covariant EventTileWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.event.id != widget.event.id ||
+        oldWidget.event.visibility != widget.event.visibility ||
+        oldWidget.appPath != widget.appPath) {
+      _loadPendingAccessRequests();
+    }
+  }
+
+  Future<void> _loadPendingAccessRequests() async {
+    if (kIsWeb) return;
+    final appPath = widget.appPath;
+    if (appPath == null || appPath.isEmpty) return;
+    if (widget.event.visibility != 'request_access') {
+      if (_pendingAccessRequests != 0 && mounted) {
+        setState(() => _pendingAccessRequests = 0);
+      }
+      return;
+    }
+    if (widget.event.id.length < 4) return;
+    try {
+      final year = widget.event.id.substring(0, 4);
+      final file = File(
+        '$appPath/$year/${widget.event.id}/feedback/access_requests.json',
+      );
+      if (!await file.exists()) return;
+      final content = await file.readAsString();
+      if (content.trim().isEmpty) return;
+      final list = jsonDecode(content) as List<dynamic>;
+      final pending = list
+          .whereType<Map<String, dynamic>>()
+          .where((e) => (e['status'] as String?) == 'pending' || e['status'] == null)
+          .length;
+      if (!mounted) return;
+      if (pending != _pendingAccessRequests) {
+        setState(() => _pendingAccessRequests = pending);
+      }
+    } catch (_) {
+      // Corrupted / unreadable file — silently leave the badge off.
+    }
+  }
+
   String? _getThumbnailPath() {
-    if (kIsWeb || appPath == null) return null;
-    if (!event.hasFlyer) return null;
-    final year = event.id.substring(0, 4);
-    return '$appPath/$year/${event.id}/${event.primaryFlyer}';
+    if (kIsWeb || widget.appPath == null) return null;
+    if (!widget.event.hasFlyer) return null;
+    final year = widget.event.id.substring(0, 4);
+    return '${widget.appPath}/$year/${widget.event.id}/${widget.event.primaryFlyer}';
   }
 
   @override
@@ -40,6 +103,11 @@ class EventTileWidget extends StatelessWidget {
     final theme = Theme.of(context);
     final i18n = I18nService();
     final thumbnailPath = _getThumbnailPath();
+    final event = widget.event;
+    final isSelected = widget.isSelected;
+    final onTap = widget.onTap;
+    final onEdit = widget.onEdit;
+    final onDelete = widget.onDelete;
 
     return Material(
       color: isSelected
@@ -100,6 +168,41 @@ class EventTileWidget extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 8),
+                        // Pending access requests badge — owner-only
+                        // attention marker that the event has at least
+                        // one undecided request.
+                        if (_pendingAccessRequests > 0) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.error,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.notifications_active,
+                                  size: 12,
+                                  color: theme.colorScheme.onError,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '$_pendingAccessRequests',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: theme.colorScheme.onError,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                        ],
                         // Multi-day badge
                         if (event.isMultiDay)
                           Container(

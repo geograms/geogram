@@ -17,6 +17,7 @@ import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../util/event_bus.dart';
 import '../widgets/event_tile_widget.dart';
 import '../widgets/event_detail_widget.dart';
 import '../widgets/file_folder_picker.dart';
@@ -254,6 +255,56 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         _filteredEvents = [];
         _isLoading = false;
       });
+    }
+
+    // Re-emit NowItemEvents for any pending access requests still on disk
+    // — NowService is in-memory, so a desktop restart loses the entries.
+    // Loading the events browser is a natural moment to repopulate them.
+    if (!widget.isRemoteDevice) {
+      _republishPendingAccessRequests(accumulated);
+    }
+  }
+
+  Future<void> _republishPendingAccessRequests(List<Event> events) async {
+    final appPath = widget.appPath;
+    if (appPath == null || appPath.isEmpty) return;
+    for (final event in events) {
+      if (event.visibility != 'request_access') continue;
+      if (event.id.length < 4) continue;
+      try {
+        final year = event.id.substring(0, 4);
+        final file = File(
+          '$appPath/$year/${event.id}/feedback/access_requests.json',
+        );
+        if (!await file.exists()) continue;
+        final content = await file.readAsString();
+        if (content.trim().isEmpty) continue;
+        final list = jsonDecode(content) as List<dynamic>;
+        for (final raw in list.whereType<Map<String, dynamic>>()) {
+          final status = (raw['status'] as String?) ?? 'pending';
+          if (status != 'pending') continue;
+          final npub = (raw['npub'] as String?) ?? '';
+          if (npub.isEmpty) continue;
+          final callsign = (raw['callsign'] as String?) ?? '';
+          final message = (raw['message'] as String?) ?? '';
+          // NowService dedupes by id, so repeated fires are safe.
+          EventBus().fire(NowItemEvent(
+            id: 'access-request:${event.id}:$npub',
+            appType: 'event_access_request',
+            sourceId: event.id,
+            sourceName: event.title,
+            callsign: callsign.isNotEmpty
+                ? callsign
+                : npub.substring(0, 12),
+            summary: message.isNotEmpty
+                ? '"$message"'
+                : 'Wants access to "${event.title}"',
+            priority: NowPriority.directMessage,
+          ));
+        }
+      } catch (_) {
+        // Corrupt / unreadable request file — skip.
+      }
     }
   }
 
