@@ -146,3 +146,6 @@ vm/.user-data
 vm/.provision.sh
 esp32/thirdparty/
 wasm_bridge/target/
+
+# Claude Code local working state (scheduled task locks, etc.)
+.claude/
