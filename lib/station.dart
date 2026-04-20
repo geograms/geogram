@@ -22,6 +22,7 @@ import 'util/network_utils.dart';
 import 'services/profile_storage.dart';
 import 'api/handlers/alert_handler.dart';
 import 'api/handlers/apps_handler.dart';
+import 'api/handlers/blog_handler.dart';
 import 'api/handlers/place_handler.dart';
 import 'api/handlers/feedback_handler.dart';
 import 'api/handlers/feedback_delete_helper.dart';
@@ -733,6 +734,7 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   AlertHandler? _alertApi;
   PlaceHandler? _placeApi;
   AppsHandler? _appsApi;
+  BlogHandler? _blogApi;
   FeedbackHandler? _feedbackApi;
 
   // ── EmailHandlerMixin interface ─────────────────────────────────
@@ -861,6 +863,23 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       );
     }
     return _alertApi!;
+  }
+
+  /// Get the shared blog API handler (lazy). Read-only surface exposed
+  /// via GET /api/blog + /api/blog/{postId} so remote devices can list
+  /// and view this instance's blog through the same BlogHandler that
+  /// every other geogram device uses.
+  BlogHandler get blogApi {
+    if (_blogApi == null) {
+      if (_dataDir == null) {
+        throw StateError('blogApi accessed before init() - _dataDir is null');
+      }
+      _blogApi = BlogHandler(
+        storage: FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}'),
+        log: (level, message) => _log(level, message),
+      );
+    }
+    return _blogApi!;
   }
 
   /// Get the shared apps-discovery handler (lazy initialization).
@@ -2729,6 +2748,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         await _handleAlertsPage(request);
       } else if (path == '/api/apps' && method == 'GET') {
         await _handleAppsApi(request);
+      } else if ((path == '/api/blog' || path.startsWith('/api/blog/')) && method == 'GET') {
+        await _handleBlogApi(request);
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {
         await _handleAlertsApi(request);
       } else if (path == '/api/places' || path == '/api/places/list') {
@@ -4219,6 +4240,48 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   ///   - lon: longitude for distance filtering
   ///   - radius: radius in km for distance filtering (default: unlimited)
   ///   - status: filter by status (open, in-progress, resolved, closed)
+  /// GET /api/blog[/{postId}] — read-only blog listing + detail routed
+  /// to the shared BlogHandler. Writes (comments/likes) aren't wired
+  /// here yet; callers that need to mutate should go through
+  /// /api/feedback which already has a station-side route.
+  Future<void> _handleBlogApi(HttpRequest request) async {
+    try {
+      final path = request.uri.path;
+      final qp = request.uri.queryParameters;
+      Map<String, dynamic> result;
+      if (path == '/api/blog' || path == '/api/blog/') {
+        final year = qp['year'] != null ? int.tryParse(qp['year']!) : null;
+        final tag = qp['tag'];
+        final limit = qp['limit'] != null ? int.tryParse(qp['limit']!) : null;
+        final offset =
+            qp['offset'] != null ? int.tryParse(qp['offset']!) : null;
+        result = await blogApi.getBlogPosts(
+          year: year,
+          tag: tag,
+          limit: limit,
+          offset: offset,
+        );
+      } else {
+        // /api/blog/{postId} — detail
+        final postId = path.substring('/api/blog/'.length);
+        result = await blogApi.getPostDetails(postId);
+      }
+      final statusCode = result['http_status'] as int? ?? 200;
+      request.response.statusCode = statusCode;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode(result));
+    } catch (e) {
+      _log('ERROR', 'Error in blog API: $e');
+      request.response.statusCode = 500;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'success': false,
+        'error': 'Internal server error',
+      }));
+    }
+    await request.response.close();
+  }
+
   /// GET /api/apps — delegates to the shared AppsHandler so every
   /// geogram instance (device or station) reports the same shape.
   /// Pure plumbing: no per-app logic lives here.
