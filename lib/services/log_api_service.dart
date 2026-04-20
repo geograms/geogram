@@ -9216,6 +9216,7 @@ class LogApiService with ChatModificationMixin {
         (e) => e is Map<String, dynamic> && e['npub'] == npub,
         orElse: () => null,
       );
+      var firedNotification = false;
       if (prior is Map<String, dynamic>) {
         final priorStatus = (prior['status'] as String?) ?? 'pending';
         if (priorStatus == 'approved' || priorStatus == 'denied') {
@@ -9247,10 +9248,34 @@ class LogApiService with ChatModificationMixin {
           'requested_at': DateTime.now().toUtc().toIso8601String(),
           'status': 'pending',
         });
+        firedNotification = true;
       }
 
       await requestsFile.parent.create(recursive: true);
       await requestsFile.writeAsString(jsonEncode(existing));
+
+      // Surface a "now" entry for the desktop UI so the owner sees the
+      // pending request show up in the Now panel + drawer badge. Only
+      // fire on a brand-new pending entry — subsequent reloads from the
+      // same requester refresh metadata in place and shouldn't pile up
+      // notifications.
+      if (firedNotification) {
+        try {
+          EventBus().fire(NowItemEvent(
+            id: 'access-request:${event.id}:$npub',
+            appType: 'event_access_request',
+            sourceId: event.id,
+            sourceName: event.title,
+            callsign: callsign.isNotEmpty ? callsign : npub.substring(0, 12),
+            summary: message.isNotEmpty
+                ? '"$message"'
+                : 'Wants access to "${event.title}"',
+            priority: NowPriority.directMessage,
+          ));
+        } catch (e) {
+          LogService().log('Now event fire failed: $e');
+        }
+      }
 
       return shelf.Response.ok(
         jsonEncode({
@@ -9405,6 +9430,12 @@ class LogApiService with ChatModificationMixin {
           }
         }
       }
+
+      // Drop the matching Now entry so the owner doesn't keep seeing
+      // the decided request in the panel.
+      try {
+        NowService().removeItem('access-request:${event.id}:$npub');
+      } catch (_) {}
 
       return shelf.Response.ok(
         jsonEncode({'success': true, 'status': newStatus}),

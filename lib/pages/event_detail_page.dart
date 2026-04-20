@@ -104,6 +104,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
         unlistedKey: result['unlistedKey'] as String?,
         accessCallsigns:
             (result['accessCallsigns'] as List<dynamic>?)?.cast<String>(),
+        accessRequestPrompt: result['accessRequestPrompt'] as String?,
         eventDateTime: result['eventDateTime'] as DateTime?,
         startDate: result['startDate'] as String?,
         endDate: result['endDate'] as String?,

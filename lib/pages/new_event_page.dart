@@ -124,6 +124,11 @@ class _NewEventPageState extends State<NewEventPage>
   // text input) so the author selects entries from their existing contacts;
   // persisted as the ACCESS_CALLSIGNS: comma-list in event.txt.
   final Map<String, ContactPickerResult> _accessCallsigns = {};
+  // Optional prompt the author writes for `request_access` events. Shown
+  // to blocked viewers above the request form so they know what kind of
+  // note to send. Persisted as ACCESS_REQUEST_PROMPT: in event.txt.
+  final TextEditingController _accessRequestPromptController =
+      TextEditingController();
   // Pending / decided access requests (request_access events only). Each
   // entry: {npub, callsign, message, requested_at, status, decided_at?}.
   // Loaded from {event}/feedback/access_requests.json on init.
@@ -287,6 +292,9 @@ class _NewEventPageState extends State<NewEventPage>
         ),
       );
     }
+    if (event.accessRequestPrompt != null) {
+      _accessRequestPromptController.text = event.accessRequestPrompt!;
+    }
     // Note: registrationEnabled not yet stored in Event model
 
     // Links
@@ -353,6 +361,7 @@ class _NewEventPageState extends State<NewEventPage>
     _locationNameController.dispose();
     _contentController.dispose();
     _agendaController.dispose();
+    _accessRequestPromptController.dispose();
     for (final controller in _agendaByDate.values) {
       controller.dispose();
     }
@@ -901,6 +910,9 @@ class _NewEventPageState extends State<NewEventPage>
       'groupAccess': _selectedGroups.toList(),
       'unlistedKey': _visibility == 'unlisted' ? _unlistedKey : null,
       'accessCallsigns': _accessCallsigns.keys.toList(),
+      'accessRequestPrompt': _accessRequestPromptController.text.trim().isEmpty
+          ? null
+          : _accessRequestPromptController.text.trim(),
       'links': _links,
       'updates': _updates.map((update) => update.toMap()).toList(),
       'flyers': _flyers.map((file) => file.toMap()).toList(),
@@ -2045,6 +2057,25 @@ class _NewEventPageState extends State<NewEventPage>
                 ? 'Add callsigns'
                 : 'Add more callsigns'),
           ),
+          if (_visibility == 'request_access') ...[
+            const SizedBox(height: 16),
+            // Optional question / instruction to show requesters above the
+            // request-note field. NOSTR identities are random by default
+            // so this is the author's chance to ask for "who are you?",
+            // "how do we know each other?", etc.
+            TextFormField(
+              controller: _accessRequestPromptController,
+              minLines: 2,
+              maxLines: 4,
+              decoration: const InputDecoration(
+                labelText: 'Request prompt (optional)',
+                helperText:
+                    'Shown to people requesting access. Use it to ask who they are or why they want access.',
+                prefixIcon: Icon(Icons.help_outline, size: 18),
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
           if (_visibility == 'request_access' &&
               widget.isEditMode &&
               _accessRequests.isNotEmpty) ...[

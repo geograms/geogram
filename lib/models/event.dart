@@ -40,6 +40,10 @@ class Event {
   /// Explicit per-callsign grants. Augments `groupAccess` for the
   /// `private`, `group` and `request_access` states.
   final List<String> accessCallsigns;
+  /// Optional prompt the author writes for `request_access` events,
+  /// shown to blocked viewers above the request form so they know what
+  /// to put in the note. Empty / null → no prompt rendered.
+  final String? accessRequestPrompt;
   final List<String> likes; // List of npubs (feedback)
   final List<EventComment> comments;
   final Map<String, String> metadata;
@@ -70,6 +74,7 @@ class Event {
     this.visibility = 'public',
     this.unlistedKey,
     this.accessCallsigns = const [],
+    this.accessRequestPrompt,
     this.likes = const [],
     this.comments = const [],
     this.metadata = const {},
@@ -185,6 +190,8 @@ class Event {
           (json['access_callsigns'] as List<dynamic>?)?.cast<String>() ??
               (json['accessCallsigns'] as List<dynamic>?)?.cast<String>() ??
               [],
+      accessRequestPrompt: json['access_request_prompt'] as String? ??
+          json['accessRequestPrompt'] as String?,
       likes: (json['likes'] as List<dynamic>?)?.cast<String>() ?? [],
       comments: comments,
       flyers: (json['flyers'] as List<dynamic>?)?.cast<String>() ?? [],
@@ -396,6 +403,12 @@ class Event {
       buffer.writeln('ACCESS_CALLSIGNS: ${accessCallsigns.join(', ')}');
     }
 
+    // Optional access-request prompt (shown to visitors of request_access
+    // events so they know what to put in their request note).
+    if (accessRequestPrompt != null && accessRequestPrompt!.trim().isNotEmpty) {
+      buffer.writeln('ACCESS_REQUEST_PROMPT: ${accessRequestPrompt!.trim()}');
+    }
+
     // Contacts (optional)
     if (contacts.isNotEmpty) {
       buffer.writeln('CONTACTS: ${contacts.join(', ')}');
@@ -474,6 +487,7 @@ class Event {
     String visibility = 'public'; // Default to public
     String? unlistedKey;
     List<String> accessCallsigns = [];
+    String? accessRequestPrompt;
 
     int currentLine = 3;
 
@@ -515,6 +529,8 @@ class Event {
             .map((s) => s.trim())
             .where((s) => s.isNotEmpty)
             .toList();
+      } else if (line.startsWith('ACCESS_REQUEST_PROMPT: ')) {
+        accessRequestPrompt = line.substring(23).trim();
       } else if (line.startsWith('CONTACTS: ')) {
         final contactsStr = line.substring(10).trim();
         contacts = contactsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
@@ -581,6 +597,7 @@ class Event {
       visibility: visibility,
       unlistedKey: unlistedKey,
       accessCallsigns: accessCallsigns,
+      accessRequestPrompt: accessRequestPrompt,
       contacts: contacts,
       slug: slug,
       metadata: metadata,
@@ -639,6 +656,7 @@ class Event {
     String? visibility,
     String? unlistedKey,
     List<String>? accessCallsigns,
+    String? accessRequestPrompt,
     List<String>? likes,
     List<EventComment>? comments,
     Map<String, String>? metadata,
@@ -667,6 +685,7 @@ class Event {
       visibility: visibility ?? this.visibility,
       unlistedKey: unlistedKey ?? this.unlistedKey,
       accessCallsigns: accessCallsigns ?? this.accessCallsigns,
+      accessRequestPrompt: accessRequestPrompt ?? this.accessRequestPrompt,
       likes: likes ?? this.likes,
       comments: comments ?? this.comments,
       metadata: metadata ?? this.metadata,
@@ -731,6 +750,8 @@ class Event {
         'moderators': moderators,
         'groups': groupAccess,
         'access_callsigns': accessCallsigns,
+        if (accessRequestPrompt != null && accessRequestPrompt!.isNotEmpty)
+          'access_request_prompt': accessRequestPrompt,
         'likes': likes,
         'comments': comments.map((c) => {
           'author': c.author,

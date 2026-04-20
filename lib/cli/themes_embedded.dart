@@ -1272,13 +1272,23 @@ class ThemesEmbedded {
     // stripped to a teaser; surface a clear explanation + a button that
     // POSTs the visitor's NOSTR identity to the request endpoint.
     if (ev.access_request_required) {
+      var promptHtml = '';
+      if (ev.access_request_prompt && ev.access_request_prompt.trim()) {
+        promptHtml =
+          '<div class="event-request-access-prompt">' +
+          esc(ev.access_request_prompt).replace(/\n/g, '<br>') +
+          '</div>';
+      }
       html += '<div id="event-request-access" class="event-request-access">' +
         '<div class="event-request-access-title">This event is access-controlled</div>' +
         '<div class="event-request-access-msg">' +
           'Ask the organiser for access. They\'ll see your NOSTR identity ' +
           '(' + (window.GeogramNostr && window.GeogramNostr.callsign ? window.GeogramNostr.callsign : 'connecting…') + ') ' +
-          'in their pending requests list.' +
+          'plus your note in their pending requests list.' +
         '</div>' +
+        promptHtml +
+        '<textarea id="event-request-note" class="event-request-note" rows="3" maxlength="500" ' +
+          'placeholder="Add a note: who you are, why you want access…"></textarea>' +
         '<div class="event-request-access-actions">' +
           '<button id="event-request-btn" class="event-request-btn" disabled>' +
             'Request access' +
@@ -1653,6 +1663,7 @@ class ThemesEmbedded {
       if (requestSent) return;
       var btn = document.getElementById('event-request-btn');
       var status = document.getElementById('event-request-status');
+      var noteEl = document.getElementById('event-request-note');
       var nostr = window.GeogramNostr || {};
       if (!nostr.pubkey || !nostr.connected) {
         if (status) status.textContent = 'Connecting…';
@@ -1667,6 +1678,7 @@ class ThemesEmbedded {
                     window.NostrTools.nip19.npubEncode)
           ? window.NostrTools.nip19.npubEncode(nostr.pubkey)
           : null;
+        var note = noteEl ? (noteEl.value || '').trim() : '';
         var resp = await fetch(
           '../api/events/' + encodeURIComponent(ev.id) + '/request-access',
           {
@@ -1675,12 +1687,20 @@ class ThemesEmbedded {
             body: JSON.stringify({
               npub: npub,
               callsign: nostr.callsign || '',
-              message: '',
+              message: note,
             }),
           }
         );
         if (resp.ok) {
-          if (status) status.textContent = 'Request sent. Check back later.';
+          var data;
+          try { data = await resp.json(); } catch (e) { data = {}; }
+          if (data && data.status === 'approved') {
+            if (status) status.textContent = 'Access granted — reload to view.';
+          } else if (data && data.status === 'denied') {
+            if (status) status.textContent = 'Access previously denied.';
+          } else {
+            if (status) status.textContent = 'Request sent. Check back later.';
+          }
         } else {
           requestSent = false;
           if (btn) btn.disabled = false;
@@ -2146,6 +2166,25 @@ class ThemesEmbedded {
   margin-bottom: 6px;
 }
 .event-request-access-msg { font-size: 0.9rem; opacity: 0.85; }
+.event-request-access-prompt {
+  margin-top: 12px; padding: 10px 12px;
+  background: var(--accent-alpha-20);
+  border-left: 3px solid var(--accent);
+  font-size: 0.9rem;
+}
+.event-request-note {
+  margin-top: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--background);
+  color: var(--color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  resize: vertical;
+}
 .event-request-access-actions {
   margin-top: 12px;
   display: flex; align-items: center; gap: 12px;

@@ -338,6 +338,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         unlistedKey: result['unlistedKey'] as String?,
         accessCallsigns:
             (result['accessCallsigns'] as List<dynamic>?)?.cast<String>(),
+        accessRequestPrompt: result['accessRequestPrompt'] as String?,
         contacts: (result['contacts'] as List<dynamic>?)?.cast<String>(),
         npub: profile.npub,
         metadata: metadata,
@@ -535,6 +536,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         unlistedKey: result['unlistedKey'] as String?,
         accessCallsigns:
             (result['accessCallsigns'] as List<dynamic>?)?.cast<String>(),
+        accessRequestPrompt: result['accessRequestPrompt'] as String?,
         eventDateTime: result['eventDateTime'] as DateTime?,
         startDate: result['startDate'] as String?,
         endDate: result['endDate'] as String?,
@@ -594,6 +596,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         unlistedKey: result['unlistedKey'] as String?,
         accessCallsigns:
             (result['accessCallsigns'] as List<dynamic>?)?.cast<String>(),
+        accessRequestPrompt: result['accessRequestPrompt'] as String?,
         eventDateTime: result['eventDateTime'] as DateTime?,
         startDate: result['startDate'] as String?,
         endDate: result['endDate'] as String?,
