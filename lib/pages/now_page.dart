@@ -18,6 +18,8 @@ import '../teleport/telegram/telegram_service.dart';
 import 'events_browser_page.dart';
 import 'new_event_page.dart';
 import '../services/event_service.dart';
+import '../services/log_service.dart';
+import '../services/storage_config.dart';
 import 'remote_blog_browser_page.dart';
 import 'remote_chat_browser_page.dart';
 import 'remote_chat_room_page.dart';
@@ -631,13 +633,38 @@ class _NowPageState extends State<NowPage> {
         // and the comments admin section both live. Adding a new
         // event-activity appType only needs the EventActivityNotifier
         // ownedAppTypes set and a case here.
+        //
+        // Use findEventByIdGlobal so this works even before the user
+        // has opened the events page once — EventService.loadEvent
+        // requires an initialized _appPath and silently returns null
+        // otherwise, which made the Now-panel taps look like dead
+        // clicks the first time.
         () async {
           try {
             final eventsApp = AppService().getAppByType('events');
             final appPath = eventsApp?.storagePath;
-            if (appPath == null || appPath.isEmpty) return;
-            final event = await EventService().loadEvent(item.sourceId);
-            if (event == null || !mounted) return;
+            if (appPath == null || appPath.isEmpty) {
+              LogService().log(
+                'NowPage: no events app installed; cannot open ${item.sourceId}',
+              );
+              return;
+            }
+            final dataDir = StorageConfig().baseDir;
+            final event = await EventService()
+                .findEventByIdGlobal(item.sourceId, dataDir);
+            if (event == null) {
+              LogService().log(
+                'NowPage: event ${item.sourceId} not found for ${item.appType}',
+              );
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Event "${item.sourceName}" not found'),
+                ),
+              );
+              return;
+            }
+            if (!mounted) return;
             Navigator.of(context).push(MaterialPageRoute(
               builder: (_) => NewEventPage(
                 event: event,
@@ -645,7 +672,15 @@ class _NowPageState extends State<NowPage> {
                 initialTab: 4, // 0=basic 1=media 2=links 3=updates 4=access
               ),
             ));
-          } catch (_) {}
+          } catch (e, st) {
+            LogService().log(
+              'NowPage: failed to open event ${item.sourceId}: $e\n$st',
+            );
+            if (!mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Failed to open event: $e')),
+            );
+          }
         }();
         break;
       case 'places':
