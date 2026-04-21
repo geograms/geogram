@@ -39,6 +39,21 @@ subprojects {
             android.compileOptions.sourceCompatibility = JavaVersion.VERSION_17
             android.compileOptions.targetCompatibility = JavaVersion.VERSION_17
 
+            // Some plugins (e.g. shared_storage 0.8.x) pin compileSdkVersion 30
+            // and then fail :verifyReleaseResources with
+            //   "AAPT: error: resource android:attr/lStar not found"
+            // because androidx.core 1.10+ references attrs that only exist on
+            // SDK 31+. Force every plugin up to the same compile target the
+            // app uses (35).
+            try {
+                val current = android.compileSdkVersion
+                if (current == null || current == "android-30" || current == "android-29") {
+                    android.compileSdkVersion(35)
+                }
+            } catch (_: Throwable) {
+                // Older AGP without the property — leave alone.
+            }
+
             if (project.name == "whisper_flutter_new") {
                 android.ndkVersion = "28.2.13676358"
             }
