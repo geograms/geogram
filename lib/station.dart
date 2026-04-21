@@ -33,6 +33,7 @@ import 'server/mixins/xmpp_server_mixin.dart';
 import 'server/ssl_certificate_manager.dart';
 import 'util/alert_folder_utils.dart';
 import 'util/feedback_folder_utils.dart';
+import 'util/media_thumbnail_utils.dart';
 import 'util/nostr_key_generator.dart';
 import 'util/nostr_event.dart';
 import 'util/rsa_utils.dart' as rsa_utils;
@@ -4896,6 +4897,25 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       };
       if (mimeTypes.containsKey(ext)) {
         contentType = mimeTypes[ext]!;
+      }
+
+      // ?thumb=1 → hand back the ~480 px JPEG preview instead of the
+      // full-res original so the events web page gallery doesn't
+      // download every 3 MB photo per tile. Falls back to full bytes
+      // when thumbnailing isn't possible. Shared with the device's
+      // log_api_service path so cached thumbnails are reused.
+      final wantThumb = request.uri.queryParameters['thumb'] == '1';
+      if (wantThumb && MediaThumbnailUtils.isGalleryMedia(ext)) {
+        final thumb = await MediaThumbnailUtils.generateForPath(fullPath, ext);
+        if (thumb != null) {
+          request.response.headers.set('Content-Type', thumb.contentType);
+          request.response.headers
+              .set('Content-Length', thumb.bytes.length.toString());
+          request.response.headers
+              .set('Cache-Control', 'public, max-age=604800');
+          request.response.add(thumb.bytes);
+          return;
+        }
       }
 
       final bytes = await file.readAsBytes();

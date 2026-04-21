@@ -70,10 +70,16 @@ abstract class AppContentProvider {
   /// path relative to the item's folder — implementations must
   /// reject `..` / absolute paths / escapes. Returns `null` for
   /// not-found or not-public.
+  ///
+  /// When [thumbnail] is true the provider should return a small
+  /// preview version if applicable (typically ~480 px JPEG). If the
+  /// provider can't thumbnail the file it returns the full bytes
+  /// unchanged and the handler falls back to raw delivery.
   Future<RemoteFile?> getPublicFile(
     String itemId,
     String relativePath, {
     required ProfileStorage storage,
+    bool thumbnail = false,
   }) =>
       throw UnimplementedError(
           'getPublicFile not implemented for $appType');

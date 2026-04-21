@@ -529,20 +529,24 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
             .toList() ??
         const <String>[];
     if (flyers.isEmpty) return const SizedBox.shrink();
-    // Single flyer → wide hero image; multiple → horizontally
-    // scrollable strip so the user can browse without leaving the
-    // page. Bytes fetched through ConnectionManager so every
-    // transport works (USB AOA, LAN, BLE, peer relay, …).
+    // Gallery tiles use ?thumb=1 (~480 px JPEG) so the grid loads
+    // fast. Tapping a tile opens a lightbox that fetches the full
+    // resolution image. Bytes flow through ConnectionManager so
+    // every transport (USB AOA / LAN / BLE / peer relay / …) works.
     if (flyers.length == 1) {
-      return AspectRatio(
-        aspectRatio: 16 / 9,
-        child: RemoteContentImage(
-          remoteCallsign: widget.device.callsign,
-          appType: 'events',
-          itemId: widget.eventId,
-          relativePath: flyers.first,
-          fit: BoxFit.cover,
-          borderRadius: BorderRadius.circular(12),
+      return InkWell(
+        onTap: () => _openLightbox(flyers, 0),
+        borderRadius: BorderRadius.circular(12),
+        child: AspectRatio(
+          aspectRatio: 16 / 9,
+          child: RemoteContentImage(
+            remoteCallsign: widget.device.callsign,
+            appType: 'events',
+            itemId: widget.eventId,
+            relativePath: flyers.first,
+            fit: BoxFit.cover,
+            borderRadius: BorderRadius.circular(12),
+          ),
         ),
       );
     }
@@ -552,15 +556,34 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
         scrollDirection: Axis.horizontal,
         itemCount: flyers.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (_, i) => RemoteContentImage(
-          remoteCallsign: widget.device.callsign,
-          appType: 'events',
-          itemId: widget.eventId,
-          relativePath: flyers[i],
-          width: 280,
-          height: 180,
-          fit: BoxFit.cover,
+        itemBuilder: (_, i) => InkWell(
+          onTap: () => _openLightbox(flyers, i),
           borderRadius: BorderRadius.circular(12),
+          child: RemoteContentImage(
+            remoteCallsign: widget.device.callsign,
+            appType: 'events',
+            itemId: widget.eventId,
+            relativePath: flyers[i],
+            width: 280,
+            height: 180,
+            fit: BoxFit.cover,
+            borderRadius: BorderRadius.circular(12),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openLightbox(List<String> flyers, int startIndex) {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black.withValues(alpha: 0.95),
+        pageBuilder: (_, __, ___) => _LightboxPage(
+          remoteCallsign: widget.device.callsign,
+          itemId: widget.eventId,
+          flyers: flyers,
+          startIndex: startIndex,
         ),
       ),
     );
@@ -722,4 +745,101 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
   // a dependency loop.
   // ignore: unused_element
   static final _stationService = StationService();
+}
+
+// ─────────────── lightbox ───────────────
+
+class _LightboxPage extends StatefulWidget {
+  final String remoteCallsign;
+  final String itemId;
+  final List<String> flyers;
+  final int startIndex;
+
+  const _LightboxPage({
+    required this.remoteCallsign,
+    required this.itemId,
+    required this.flyers,
+    required this.startIndex,
+  });
+
+  @override
+  State<_LightboxPage> createState() => _LightboxPageState();
+}
+
+class _LightboxPageState extends State<_LightboxPage> {
+  late final PageController _controller;
+  late int _index;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.startIndex;
+    _controller = PageController(initialPage: _index);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // Full-resolution viewer with swipe navigation.
+            PageView.builder(
+              controller: _controller,
+              itemCount: widget.flyers.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (_, i) => Center(
+                child: InteractiveViewer(
+                  maxScale: 4,
+                  child: RemoteContentImage(
+                    remoteCallsign: widget.remoteCallsign,
+                    appType: 'events',
+                    itemId: widget.itemId,
+                    relativePath: widget.flyers[i],
+                    thumbnail: false,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
+            ),
+            // Counter + close button overlay.
+            Positioned(
+              top: 8,
+              left: 8,
+              right: 8,
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                  const Spacer(),
+                  if (widget.flyers.length > 1)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '${_index + 1} / ${widget.flyers.length}',
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

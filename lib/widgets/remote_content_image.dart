@@ -28,6 +28,12 @@ class RemoteContentImage extends StatefulWidget {
   final BorderRadius? borderRadius;
   final Widget Function(BuildContext, Object error)? errorBuilder;
 
+  /// When true (default) the widget asks the remote device for a
+  /// ~480 px preview instead of the full-res original. Gallery
+  /// grids / list tiles should keep this on; a lightbox that wants
+  /// the full image should set it false.
+  final bool thumbnail;
+
   const RemoteContentImage({
     super.key,
     required this.remoteCallsign,
@@ -39,6 +45,7 @@ class RemoteContentImage extends StatefulWidget {
     this.fit = BoxFit.cover,
     this.borderRadius,
     this.errorBuilder,
+    this.thumbnail = true,
   });
 
   @override
@@ -60,18 +67,22 @@ class _RemoteContentImageState extends State<RemoteContentImage> {
     if (oldWidget.remoteCallsign != widget.remoteCallsign ||
         oldWidget.appType != widget.appType ||
         oldWidget.itemId != widget.itemId ||
-        oldWidget.relativePath != widget.relativePath) {
+        oldWidget.relativePath != widget.relativePath ||
+        oldWidget.thumbnail != widget.thumbnail) {
       _future = _fetch();
     }
   }
 
   Future<Uint8List?> _fetch() async {
     try {
-      final path = RemoteContent.filePath(
+      var path = RemoteContent.filePath(
         appType: widget.appType,
         itemId: widget.itemId,
         relativePath: widget.relativePath,
       );
+      if (widget.thumbnail) {
+        path = '$path?thumb=1';
+      }
       final resp = await DevicesService().makeDeviceApiRequestBytes(
         callsign: widget.remoteCallsign,
         method: 'GET',

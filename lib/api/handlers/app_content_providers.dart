@@ -17,6 +17,7 @@ import '../../models/event.dart';
 import '../../services/profile_storage.dart';
 import '../../util/blog_folder_utils.dart';
 import '../../util/feedback_folder_utils.dart';
+import '../../util/media_thumbnail_utils.dart';
 import 'app_content_provider.dart';
 import 'blog_handler.dart';
 
@@ -91,18 +92,14 @@ class BlogContentProvider extends AppContentProvider {
     String itemId,
     String relativePath, {
     required ProfileStorage storage,
+    bool thumbnail = false,
   }) async {
     if (_unsafePath(relativePath)) return null;
     final api = BlogHandler(storage: storage);
     // Existing helper accepts a single filename — for now reuse it.
     final filePath = await api.getFilePath(itemId, relativePath);
     if (filePath == null) return null;
-    final bytes = await storage.readBytes(filePath);
-    if (bytes == null) return null;
-    return RemoteFile(
-      bytes: bytes,
-      contentType: _guessContentType(relativePath),
-    );
+    return _readFile(storage, filePath, relativePath, thumbnail: thumbnail);
   }
 }
 
@@ -211,6 +208,7 @@ class EventContentProvider extends AppContentProvider {
     String itemId,
     String relativePath, {
     required ProfileStorage storage,
+    bool thumbnail = false,
   }) async {
     if (_unsafePath(relativePath)) return null;
     final entry = await _findEvent(storage, itemId);
@@ -219,12 +217,7 @@ class EventContentProvider extends AppContentProvider {
     // Files inside request_access events stay private until granted.
     if (vis != 'public') return null;
     final filePath = '${entry.eventPath}/$relativePath';
-    final bytes = await storage.readBytes(filePath);
-    if (bytes == null) return null;
-    return RemoteFile(
-      bytes: bytes,
-      contentType: _guessContentType(relativePath),
-    );
+    return _readFile(storage, filePath, relativePath, thumbnail: thumbnail);
   }
 
   // ── helpers ────────────────────────────────────────────────────
@@ -450,6 +443,48 @@ Future<_Counts> _engagementCounts(
     }
   } catch (_) {}
   return _Counts(likes: likes, comments: comments, views: views);
+}
+
+/// Read the bytes at [storagePath] and, when [thumbnail] is set
+/// and the file is a supported gallery type, return the downscaled
+/// preview instead. Falls back to raw bytes when thumbnail
+/// generation isn't possible (unknown format, decode failure, non-
+/// filesystem storage backend).
+Future<RemoteFile?> _readFile(
+  ProfileStorage storage,
+  String storagePath,
+  String relativePath, {
+  required bool thumbnail,
+}) async {
+  final ext = _extensionOf(relativePath);
+  if (thumbnail && MediaThumbnailUtils.isGalleryMedia(ext)) {
+    try {
+      final abs = storage.getAbsolutePath(storagePath);
+      final thumb =
+          await MediaThumbnailUtils.generateForPath(abs, ext);
+      if (thumb != null) {
+        return RemoteFile(
+          bytes: thumb.bytes,
+          contentType: thumb.contentType,
+        );
+      }
+    } catch (_) {
+      // Thumbnail path doesn't work for every storage backend — fall
+      // through to raw bytes.
+    }
+  }
+  final bytes = await storage.readBytes(storagePath);
+  if (bytes == null) return null;
+  return RemoteFile(
+    bytes: bytes,
+    contentType: _guessContentType(relativePath),
+  );
+}
+
+String _extensionOf(String path) {
+  final dot = path.lastIndexOf('.');
+  if (dot < 0 || dot == path.length - 1) return '';
+  return path.substring(dot).toLowerCase();
 }
 
 bool _unsafePath(String path) {

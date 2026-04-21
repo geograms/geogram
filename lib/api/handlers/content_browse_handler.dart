@@ -146,12 +146,17 @@ class ContentBrowseHandler {
       }
 
       // /api/content/{appType}/{itemId}/files/{path…} — raw file
+      // or a ~480 px preview when `?thumb=1` is set. The provider
+      // applies visibility gating and decides whether the file is
+      // eligible for thumbnailing (see MediaThumbnailUtils).
       if (segments.length >= 4 && segments[2] == 'files') {
         final relativePath = segments.sublist(3).join('/');
+        final wantThumb = query['thumb'] == '1';
         final file = await provider.getPublicFile(
           segments[1],
           relativePath,
           storage: storage,
+          thumbnail: wantThumb,
         );
         if (file == null) {
           return ContentBrowseResult.error(
