@@ -143,10 +143,17 @@ class EventService {
     try {
       final event = Event.fromText(content, eventId);
 
-      // Only scan for flyers (needed for thumbnail in list tile)
-      final flyers = await _loadFlyersStorage(eventRelativePath);
+      // Only scan for photos (needed for thumbnail in list tile)
+      final photos = await _loadFlyersStorage(eventRelativePath);
+      final flyer = photos.firstWhere(
+        (p) => p.toLowerCase().startsWith('flyer.'),
+        orElse: () => '',
+      );
 
-      return event.copyWith(flyers: flyers);
+      return event.copyWith(
+        photos: photos,
+        flyer: flyer.isEmpty ? null : flyer,
+      );
     } catch (e) {
       print('EventService: Error loading event summary $eventId: $e');
       return null;
@@ -252,7 +259,11 @@ class EventService {
       }
 
       // Load v1.2 features via storage abstraction
-      final flyers = await _loadFlyersStorage(eventRelativePath);
+      final photos = await _loadFlyersStorage(eventRelativePath);
+      final flyer = photos.firstWhere(
+        (p) => p.toLowerCase().startsWith('flyer.'),
+        orElse: () => '',
+      );
       final trailer = await _loadTrailerStorage(eventRelativePath);
       final updates = await _loadUpdatesStorage(eventRelativePath);
       final registration = await _loadRegistrationStorage(eventRelativePath);
@@ -261,7 +272,8 @@ class EventService {
       return event.copyWith(
         likes: eventLikes,
         comments: eventComments,
-        flyers: flyers,
+        photos: photos,
+        flyer: flyer.isEmpty ? null : flyer,
         trailer: trailer,
         updates: updates,
         registration: registration,

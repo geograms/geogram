@@ -136,13 +136,16 @@ class EventContentProvider extends AppContentProvider {
       // this to know whether to show a thumbnail.
       if (entry.event.visibility == 'public') {
         final media = await _scanEventMedia(storage, entry.eventPath);
-        json['flyers'] = media.flyers;
-        json['has_flyer'] = media.flyers.isNotEmpty;
+        json['photos'] = media.photos;
+        if (media.flyer != null) json['flyer'] = media.flyer;
+        json['has_photos'] = media.photos.isNotEmpty;
+        json['has_flyer'] = media.flyer != null;
         if (media.trailer != null) {
           json['trailer'] = media.trailer;
           json['has_trailer'] = true;
         }
       } else {
+        json['has_photos'] = false;
         json['has_flyer'] = false;
         json['has_trailer'] = false;
       }
@@ -175,7 +178,7 @@ class EventContentProvider extends AppContentProvider {
 
     final data = entry.event.toApiJson(summary: false);
 
-    // Event.fromText never populates `flyers` / `trailer` — those
+    // Event.fromText never populates `photos` / `trailer` — those
     // are disk-scanned. For public events we surface every image /
     // short-clip the event folder contains (minus `trailer.*` which
     // gets its own slot). For request_access events we hide media
@@ -183,7 +186,8 @@ class EventContentProvider extends AppContentProvider {
     if (vis == 'request_access') {
       data['content'] = '';
       data['agenda'] = null;
-      data['flyers'] = const [];
+      data['photos'] = const [];
+      data.remove('flyer');
       data['trailer'] = null;
       data['updates'] = const [];
       data['links'] = const [];
@@ -191,7 +195,8 @@ class EventContentProvider extends AppContentProvider {
       data['access_request_required'] = true;
     } else {
       final media = await _scanEventMedia(storage, entry.eventPath);
-      data['flyers'] = media.flyers;
+      data['photos'] = media.photos;
+      if (media.flyer != null) data['flyer'] = media.flyer;
       if (media.trailer != null) data['trailer'] = media.trailer;
       data['access_request_required'] = false;
     }
@@ -274,8 +279,9 @@ class EventContentProvider extends AppContentProvider {
 
   Future<_EventMedia> _scanEventMedia(
       ProfileStorage storage, String eventPath) async {
-    final flyers = <String>[];
+    final photos = <String>[];
     String? trailer;
+    String? flyer;
     try {
       final entries = await storage.listDirectory(eventPath);
       for (final entry in entries) {
@@ -286,12 +292,19 @@ class EventContentProvider extends AppContentProvider {
           trailer ??= name;
           continue;
         }
-        if (_mediaPattern.hasMatch(name)) flyers.add(name);
+        if (_mediaPattern.hasMatch(name)) {
+          photos.add(name);
+          // A file literally named `flyer.<ext>` is the author's
+          // designated cover. Anything else is just a photo.
+          if (flyer == null && name.toLowerCase().startsWith('flyer.')) {
+            flyer = name;
+          }
+        }
       }
     } catch (_) {}
     // Same ordering the local list widget uses: flyer.* first, then
     // photo-N.* in numeric order, then the rest alphabetically.
-    flyers.sort((a, b) {
+    photos.sort((a, b) {
       final aLower = a.toLowerCase();
       final bLower = b.toLowerCase();
       final aIsFlyer = aLower.startsWith('flyer.');
@@ -309,14 +322,15 @@ class EventContentProvider extends AppContentProvider {
       if (bMatch != null) return 1;
       return aLower.compareTo(bLower);
     });
-    return _EventMedia(flyers: flyers, trailer: trailer);
+    return _EventMedia(photos: photos, flyer: flyer, trailer: trailer);
   }
 }
 
 class _EventMedia {
-  final List<String> flyers;
+  final List<String> photos;
+  final String? flyer;
   final String? trailer;
-  const _EventMedia({required this.flyers, this.trailer});
+  const _EventMedia({required this.photos, this.flyer, this.trailer});
 }
 
 class _EventEntry {

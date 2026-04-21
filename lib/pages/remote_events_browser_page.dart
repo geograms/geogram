@@ -490,7 +490,7 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
         if (accessRequestRequired)
           _buildAccessRequestCard(theme, visibility)
         else ...[
-          _buildFlyers(theme, ev),
+          _buildPhotos(theme, ev),
           if (content.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(content, style: theme.textTheme.bodyMedium),
@@ -522,20 +522,20 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
     );
   }
 
-  Widget _buildFlyers(ThemeData theme, Map<String, dynamic> ev) {
-    final flyers = (ev['flyers'] as List?)
+  Widget _buildPhotos(ThemeData theme, Map<String, dynamic> ev) {
+    final photos = (ev['photos'] as List? ?? ev['flyers'] as List?)
             ?.whereType<String>()
             .where((name) => name.trim().isNotEmpty)
             .toList() ??
         const <String>[];
-    if (flyers.isEmpty) return const SizedBox.shrink();
+    if (photos.isEmpty) return const SizedBox.shrink();
     // Gallery tiles use ?thumb=1 (~480 px JPEG) so the grid loads
     // fast. Tapping a tile opens a lightbox that fetches the full
     // resolution image. Bytes flow through ConnectionManager so
     // every transport (USB AOA / LAN / BLE / peer relay / …) works.
-    if (flyers.length == 1) {
+    if (photos.length == 1) {
       return InkWell(
-        onTap: () => _openLightbox(flyers, 0),
+        onTap: () => _openLightbox(photos, 0),
         borderRadius: BorderRadius.circular(12),
         child: AspectRatio(
           aspectRatio: 16 / 9,
@@ -543,7 +543,7 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
             remoteCallsign: widget.device.callsign,
             appType: 'events',
             itemId: widget.eventId,
-            relativePath: flyers.first,
+            relativePath: photos.first,
             fit: BoxFit.cover,
             borderRadius: BorderRadius.circular(12),
           ),
@@ -554,16 +554,16 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
       height: 180,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: flyers.length,
+        itemCount: photos.length,
         separatorBuilder: (_, __) => const SizedBox(width: 8),
         itemBuilder: (_, i) => InkWell(
-          onTap: () => _openLightbox(flyers, i),
+          onTap: () => _openLightbox(photos, i),
           borderRadius: BorderRadius.circular(12),
           child: RemoteContentImage(
             remoteCallsign: widget.device.callsign,
             appType: 'events',
             itemId: widget.eventId,
-            relativePath: flyers[i],
+            relativePath: photos[i],
             width: 280,
             height: 180,
             fit: BoxFit.cover,
@@ -574,7 +574,7 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
     );
   }
 
-  void _openLightbox(List<String> flyers, int startIndex) {
+  void _openLightbox(List<String> photos, int startIndex) {
     Navigator.of(context).push(
       PageRouteBuilder(
         opaque: false,
@@ -582,7 +582,7 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
         pageBuilder: (_, __, ___) => _LightboxPage(
           remoteCallsign: widget.device.callsign,
           itemId: widget.eventId,
-          flyers: flyers,
+          photos: photos,
           startIndex: startIndex,
         ),
       ),
@@ -752,13 +752,13 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
 class _LightboxPage extends StatefulWidget {
   final String remoteCallsign;
   final String itemId;
-  final List<String> flyers;
+  final List<String> photos;
   final int startIndex;
 
   const _LightboxPage({
     required this.remoteCallsign,
     required this.itemId,
-    required this.flyers,
+    required this.photos,
     required this.startIndex,
   });
 
@@ -793,7 +793,7 @@ class _LightboxPageState extends State<_LightboxPage> {
             // Full-resolution viewer with swipe navigation.
             PageView.builder(
               controller: _controller,
-              itemCount: widget.flyers.length,
+              itemCount: widget.photos.length,
               onPageChanged: (i) => setState(() => _index = i),
               itemBuilder: (_, i) => Center(
                 child: InteractiveViewer(
@@ -802,7 +802,7 @@ class _LightboxPageState extends State<_LightboxPage> {
                     remoteCallsign: widget.remoteCallsign,
                     appType: 'events',
                     itemId: widget.itemId,
-                    relativePath: widget.flyers[i],
+                    relativePath: widget.photos[i],
                     thumbnail: false,
                     fit: BoxFit.contain,
                   ),
@@ -821,7 +821,7 @@ class _LightboxPageState extends State<_LightboxPage> {
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                   const Spacer(),
-                  if (widget.flyers.length > 1)
+                  if (widget.photos.length > 1)
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 4),
@@ -830,7 +830,7 @@ class _LightboxPageState extends State<_LightboxPage> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        '${_index + 1} / ${widget.flyers.length}',
+                        '${_index + 1} / ${widget.photos.length}',
                         style: const TextStyle(color: Colors.white),
                       ),
                     ),

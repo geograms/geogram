@@ -152,7 +152,7 @@ class _NewEventPageState extends State<NewEventPage>
   final Map<String, TextEditingController> _agendaByDate = {};
   final List<EventLink> _links = [];
   final List<_PendingUpdate> _updates = [];
-  final List<_PendingFile> _flyers = [];
+  final List<_PendingFile> _photos = [];
   _PendingFile? _trailer;
   final List<_PendingFile> _mediaFiles = [];
   final List<_GroupOption> _availableGroups = [];
@@ -497,17 +497,17 @@ class _NewEventPageState extends State<NewEventPage>
       );
     }
 
-    // Load existing flyers/photos
-    if (widget.appPath != null && event.flyers.isNotEmpty) {
+    // Load existing photos
+    if (widget.appPath != null && event.photos.isNotEmpty) {
       final year = event.id.substring(0, 4);
       final eventFolderPath = '${widget.appPath}/$year/${event.id}';
-      for (final flyerName in event.flyers) {
-        final flyerPath = '$eventFolderPath/$flyerName';
-        if (File(flyerPath).existsSync()) {
-          _flyers.add(_PendingFile(
-            path: flyerPath,
-            name: flyerName,
-            targetName: flyerName,
+      for (final photoName in event.photos) {
+        final photoPath = '$eventFolderPath/$photoName';
+        if (File(photoPath).existsSync()) {
+          _photos.add(_PendingFile(
+            path: photoPath,
+            name: photoName,
+            targetName: photoName,
           ));
         }
       }
@@ -775,7 +775,7 @@ class _NewEventPageState extends State<NewEventPage>
     } else {
       final paths = await FileFolderPicker.show(
         context,
-        title: _i18n.t('select_flyer_image'),
+        title: _i18n.t('select_photo_image'),
         allowMultiSelect: false,
         allowedExtensions: FileFolderPicker.imageExtensions,
         profileStorage: AppService().profileStorage,
@@ -789,11 +789,11 @@ class _NewEventPageState extends State<NewEventPage>
       final effectiveExt = ext.isNotEmpty ? ext : 'jpg';
 
       String targetName;
-      if (_flyers.isEmpty) {
+      if (_photos.isEmpty) {
         targetName = 'flyer.$effectiveExt';
       } else {
-        final existingNames = _flyers.map((f) => f.targetName).toSet();
-        int num = _flyers.length;
+        final existingNames = _photos.map((f) => f.targetName).toSet();
+        int num = _photos.length;
         targetName = 'photo-$num.$effectiveExt';
         while (existingNames.contains(targetName)) {
           num++;
@@ -802,7 +802,7 @@ class _NewEventPageState extends State<NewEventPage>
       }
 
       setState(() {
-        _flyers.add(
+        _photos.add(
           _PendingFile(
             path: filePath!,
             name: originalFileName,
@@ -815,7 +815,7 @@ class _NewEventPageState extends State<NewEventPage>
 
   void _removeFlyer(_PendingFile flyer) {
     setState(() {
-      _flyers.remove(flyer);
+      _photos.remove(flyer);
     });
   }
 
@@ -1101,7 +1101,7 @@ class _NewEventPageState extends State<NewEventPage>
       'commentsEnabled': _commentsEnabled,
       'links': _links,
       'updates': _updates.map((update) => update.toMap()).toList(),
-      'flyers': _flyers.map((file) => file.toMap()).toList(),
+      'photos': _photos.map((file) => file.toMap()).toList(),
       'trailer': _trailer?.toMap(),
       'mediaFiles': _mediaFiles.map((file) => file.toMap()).toList(),
       'registrationEnabled': _registrationEnabled,
@@ -1503,7 +1503,7 @@ class _NewEventPageState extends State<NewEventPage>
           ],
         ),
         const SizedBox(height: 12),
-        if (_flyers.isEmpty)
+        if (_photos.isEmpty)
           InkWell(
             onTap: _selectPhotos,
             borderRadius: BorderRadius.circular(8),
@@ -1541,9 +1541,9 @@ class _NewEventPageState extends State<NewEventPage>
               crossAxisSpacing: 8,
               mainAxisSpacing: 8,
             ),
-            itemCount: _flyers.length,
+            itemCount: _photos.length,
             itemBuilder: (context, index) {
-              final photo = _flyers[index];
+              final photo = _photos[index];
               final isPrimary = index == 0;
               return _buildPhotoTile(theme, photo, isPrimary, index);
             },
@@ -1685,13 +1685,13 @@ class _NewEventPageState extends State<NewEventPage>
         final effectiveExt = ext.isNotEmpty ? ext : 'jpg';
 
         String targetName;
-        if (_flyers.isEmpty) {
+        if (_photos.isEmpty) {
           // First photo becomes the cover/flyer
           targetName = 'flyer.$effectiveExt';
         } else {
           // Subsequent photos are named photo-1, photo-2, ...
-          final existingNames = _flyers.map((f) => f.targetName).toSet();
-          int num = _flyers.length;
+          final existingNames = _photos.map((f) => f.targetName).toSet();
+          int num = _photos.length;
           targetName = 'photo-$num.$effectiveExt';
           while (existingNames.contains(targetName)) {
             num++;
@@ -1699,7 +1699,7 @@ class _NewEventPageState extends State<NewEventPage>
           }
         }
 
-        _flyers.add(
+        _photos.add(
           _PendingFile(
             path: filePath,
             name: originalFileName,
@@ -1711,29 +1711,29 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   void _setAsPrimaryPhoto(int index) {
-    if (index == 0 || index >= _flyers.length) return;
+    if (index == 0 || index >= _photos.length) return;
     setState(() {
-      final photo = _flyers.removeAt(index);
+      final photo = _photos.removeAt(index);
       final ext = path.extension(photo.targetName);
       final primaryName = 'flyer$ext';
       // Demote old cover to photo-*
-      if (_flyers.isNotEmpty) {
-        final oldPrimary = _flyers.first;
+      if (_photos.isNotEmpty) {
+        final oldPrimary = _photos.first;
         final oldExt = path.extension(oldPrimary.targetName);
-        final existingNames = _flyers.map((f) => f.targetName).toSet();
+        final existingNames = _photos.map((f) => f.targetName).toSet();
         int num = 1;
         var demotedName = 'photo-$num$oldExt';
         while (existingNames.contains(demotedName)) {
           num++;
           demotedName = 'photo-$num$oldExt';
         }
-        _flyers[0] = _PendingFile(
+        _photos[0] = _PendingFile(
           path: oldPrimary.path,
           name: oldPrimary.name,
           targetName: demotedName,
         );
       }
-      _flyers.insert(0, _PendingFile(
+      _photos.insert(0, _PendingFile(
         path: photo.path,
         name: photo.name,
         targetName: primaryName,
@@ -1779,23 +1779,23 @@ class _NewEventPageState extends State<NewEventPage>
           label: Text(_i18n.t('add_files')),
         ),
 
-        // Flyers section
+        // Photos section
         const SizedBox(height: 32),
         Text(
-          _i18n.t('flyers'),
+          _i18n.t('photos'),
           style: theme.textTheme.titleMedium?.copyWith(
             fontWeight: FontWeight.bold,
           ),
         ),
         const SizedBox(height: 12),
-        if (_flyers.isNotEmpty) ...[
-          ..._flyers.map((flyer) => Card(
+        if (_photos.isNotEmpty) ...[
+          ..._photos.map((photo) => Card(
                 child: ListTile(
                   leading: const Icon(Icons.image),
-                  title: Text(flyer.targetName),
+                  title: Text(photo.targetName),
                   trailing: IconButton(
                     icon: const Icon(Icons.delete),
-                    onPressed: () => _removeFlyer(flyer),
+                    onPressed: () => _removeFlyer(photo),
                   ),
                 ),
               )),
@@ -1804,13 +1804,13 @@ class _NewEventPageState extends State<NewEventPage>
         OutlinedButton.icon(
           onPressed: _selectFlyer,
           icon: const Icon(Icons.add_photo_alternate),
-          label: Text(_flyers.isEmpty
-              ? _i18n.t('add_flyer')
-              : _i18n.t('add_another_flyer')),
+          label: Text(_photos.isEmpty
+              ? _i18n.t('add_photo')
+              : _i18n.t('add_another_photo')),
         ),
         const SizedBox(height: 8),
         Text(
-          _i18n.t('flyers_stored_event_folder'),
+          _i18n.t('photos_stored_event_folder'),
           style: theme.textTheme.bodySmall?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),

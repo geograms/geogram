@@ -1374,10 +1374,14 @@ class ThemesEmbedded {
 
     html += '</div>'; // .event-hero
 
-    // --- Flyer Gallery ---
-    if (ev.flyers && ev.flyers.length > 0) {
+    // --- Photo Gallery ---
+    // Prefer the new `photos` field; fall back to legacy `flyers` for
+    // older event payloads still in the mirror.
+    var gallery = (ev.photos && ev.photos.length > 0) ? ev.photos
+                : ((ev.flyers && ev.flyers.length > 0) ? ev.flyers : []);
+    if (gallery.length > 0) {
       html += '<div class="event-gallery">';
-      ev.flyers.forEach(function(f, i) {
+      gallery.forEach(function(f, i) {
         // onerror: first failure retries the thumbnail after 1.5s
         // (may still be generating in the station\'s isolate pool);
         // second failure falls back to the full-resolution file so
@@ -1536,7 +1540,8 @@ class ThemesEmbedded {
     detailEl.innerHTML = html;
 
     // === Lightbox ===
-    var lbImages = (ev.flyers || []).map(fileUrl);
+    var lbImages = ((ev.photos && ev.photos.length > 0) ? ev.photos
+                  : (ev.flyers || [])).map(fileUrl);
     var lbIndex = 0;
 
     window.openLightbox = function(i) {

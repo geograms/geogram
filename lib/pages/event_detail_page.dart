@@ -177,8 +177,8 @@ class _EventDetailPageState extends State<EventDetailPage> {
         final year = _event.id.substring(0, 4);
         final eventPath = '${widget.appPath}/$year/${_event.id}';
 
-        // Collect existing flyer names for renaming
-        final existingFlyers = List<String>.from(_event.flyers);
+        // Collect existing photo names for renaming
+        final existingFlyers = List<String>.from(_event.photos);
 
         int copiedCount = 0;
         for (var filePath in paths) {

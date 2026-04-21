@@ -2050,7 +2050,8 @@ class LogApiService with ChatModificationMixin, ContentBrowseMixin {
     if (vis == 'request_access' && !allowed) {
       data['content'] = '';
       data['agenda'] = null;
-      data['flyers'] = const [];
+      data['photos'] = const [];
+      data.remove('flyer');
       data['trailer'] = null;
       data['updates'] = const [];
       data['links'] = const [];

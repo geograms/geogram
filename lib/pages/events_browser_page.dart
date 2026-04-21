@@ -409,12 +409,12 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       );
     }
 
-    final flyerFiles = (result['flyers'] as List<dynamic>?)
+    final photoFiles = (result['photos'] as List<dynamic>?)
             ?.map((entry) => Map<String, String>.from(entry as Map))
             .toList() ??
         [];
-    if (flyerFiles.isNotEmpty) {
-      await _copyPendingFiles(eventId, flyerFiles, ensureUnique: false);
+    if (photoFiles.isNotEmpty) {
+      await _copyPendingFiles(eventId, photoFiles, ensureUnique: false);
     }
 
     final trailer = result['trailer'] as Map<String, String>?;
@@ -710,8 +710,8 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         final year = _selectedEvent!.id.substring(0, 4);
         final eventPath = '${widget.appPath}/$year/${_selectedEvent!.id}';
 
-        // Collect existing flyer names for renaming
-        final existingFlyers = List<String>.from(_selectedEvent!.flyers);
+        // Collect existing photo names for renaming
+        final existingFlyers = List<String>.from(_selectedEvent!.photos);
 
         int copiedCount = 0;
         for (var filePath in paths) {

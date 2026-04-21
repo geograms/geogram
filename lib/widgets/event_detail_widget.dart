@@ -468,8 +468,8 @@ class EventDetailWidget extends StatelessWidget {
 
   Widget _buildFlyer(BuildContext context, ThemeData theme, I18nService i18n) {
     final year = event.id.substring(0, 4);
-    final flyerPaths = event.flyers
-        .map((flyer) => '$appPath/$year/${event.id}/$flyer')
+    final flyerPaths = event.photos
+        .map((photo) => '$appPath/$year/${event.id}/$photo')
         .toList();
 
     return _SwipeableFlyer(flyerPaths: flyerPaths);

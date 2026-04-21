@@ -53,7 +53,14 @@ class Event {
   final Map<String, String> metadata;
 
   // New v1.2 features
-  final List<String> flyers; // List of flyer filenames
+  /// All photo filenames inside the event folder. A photo only becomes
+  /// the "flyer" when the author explicitly designates it via [flyer].
+  final List<String> photos;
+  /// Optional cover image — the one photo the author picked to
+  /// represent the event. Null means no cover was chosen; the UI
+  /// should fall back to [photos.first] (or show nothing) rather
+  /// than treating every photo as a flyer.
+  final String? flyer;
   final String? trailer; // Trailer filename (usually "trailer.mp4")
   final List<EventUpdate> updates; // Event updates
   final EventRegistration? registration; // Going/Interested lists
@@ -84,7 +91,8 @@ class Event {
     this.comments = const [],
     this.metadata = const {},
     // New v1.2 features
-    this.flyers = const [],
+    this.photos = const [],
+    this.flyer,
     this.trailer,
     this.updates = const [],
     this.registration,
@@ -202,7 +210,10 @@ class Event {
           true,
       likes: (json['likes'] as List<dynamic>?)?.cast<String>() ?? [],
       comments: comments,
-      flyers: (json['flyers'] as List<dynamic>?)?.cast<String>() ?? [],
+      photos: (json['photos'] as List<dynamic>?)?.cast<String>() ??
+          (json['flyers'] as List<dynamic>?)?.cast<String>() ??
+          [],
+      flyer: json['flyer'] as String?,
       trailer: json['trailer'] as String?,
       updates: updates,
       registration: registration,
@@ -629,15 +640,25 @@ class Event {
   /// Get contact count
   int get contactCount => contacts.length;
 
-  /// Get primary flyer filename
+  /// The cover photo the UI should display prominently. Uses the
+  /// explicit [flyer] if set; otherwise falls back to the first photo
+  /// so existing events (pre-flyer-field) still get a cover image.
   String? get primaryFlyer {
-    if (flyers.isEmpty) return null;
-    // Primary flyer is first one (sorted alphabetically, so "flyer.jpg" comes first)
-    return flyers.first;
+    if (flyer != null && flyer!.isNotEmpty) return flyer;
+    if (photos.isEmpty) return null;
+    return photos.first;
   }
 
-  /// Check if event has flyer
-  bool get hasFlyer => flyers.isNotEmpty;
+  /// True when the event has at least one photo (with or without an
+  /// explicit flyer designation).
+  bool get hasPhotos => photos.isNotEmpty;
+
+  /// True when the author has designated one of the photos as the
+  /// event flyer (the cover image). Prefer this over [hasPhotos]
+  /// when you want to know whether the author made an intentional
+  /// choice rather than just uploaded any photos.
+  bool get hasFlyer =>
+      (flyer != null && flyer!.isNotEmpty) || photos.isNotEmpty;
 
   /// Check if event has trailer
   bool get hasTrailer => trailer != null;
@@ -680,7 +701,8 @@ class Event {
     List<String>? likes,
     List<EventComment>? comments,
     Map<String, String>? metadata,
-    List<String>? flyers,
+    List<String>? photos,
+    String? flyer,
     String? trailer,
     List<EventUpdate>? updates,
     EventRegistration? registration,
@@ -710,7 +732,8 @@ class Event {
       likes: likes ?? this.likes,
       comments: comments ?? this.comments,
       metadata: metadata ?? this.metadata,
-      flyers: flyers ?? this.flyers,
+      photos: photos ?? this.photos,
+      flyer: flyer ?? this.flyer,
       trailer: trailer ?? this.trailer,
       updates: updates ?? this.updates,
       registration: registration ?? this.registration,
@@ -739,7 +762,8 @@ class Event {
         'groups': groupAccess,
         'like_count': likes.length,
         'comment_count': comments.length,
-        'has_flyer': flyers.isNotEmpty,
+        'has_flyer': flyer != null && flyer!.isNotEmpty,
+        'has_photos': photos.isNotEmpty,
         'has_trailer': trailer != null,
         'update_count': updates.length,
         'going_count': registration?.goingCount ?? 0,
@@ -781,7 +805,8 @@ class Event {
         'content': c.content,
         'npub': c.npub,
       }).toList(),
-      'flyers': flyers,
+      'photos': photos,
+      if (flyer != null && flyer!.isNotEmpty) 'flyer': flyer,
       'trailer': trailer,
       'updates': updates.map((u) => {
         'id': u.id,
