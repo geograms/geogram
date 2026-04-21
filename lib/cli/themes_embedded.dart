@@ -1282,8 +1282,14 @@ class ThemesEmbedded {
       heart0:   '<svg ' + svgSize + '><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
       heart1:   '<svg ' + svgSize.replace('fill="none"', 'fill="currentColor"') + '><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>',
       arrow:    '<svg ' + svgSize + ' width="12" height="12"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>',
-      expand:   '<svg ' + svgSize + '><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>'
+      expand:   '<svg ' + svgSize + '><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>',
+      upload:   '<svg ' + svgSize + '><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>'
     };
+
+    // Accumulator that the lightbox uses for its image list. Photos
+    // come first, then any approved contributor files appended in
+    // order. openLightbox / lbNav index into this same array.
+    var lbImagesAccum = (gallery || []).slice();
 
     // --- Request-access banner ---
     // Server flips `access_request_required` to true on a request_access
@@ -1398,6 +1404,55 @@ class ThemesEmbedded {
       });
       html += '</div>';
     }
+
+    // --- Contributed by (visitor submissions, approved) ---
+    // Renders one block per contributor with their thumbnail strip.
+    // Files live at `contributors/{CALLSIGN}/<file>` inside the
+    // event folder so fileUrl()/thumbUrl() work without changes.
+    var contributors = (ev.contributors && ev.contributors.length > 0)
+                       ? ev.contributors : [];
+    if (contributors.length > 0) {
+      contributors.forEach(function(c) {
+        if (!c || !c.callsign || !c.files || c.files.length === 0) return;
+        html += '<div class="event-section event-contributor">';
+        html += '<h3 class="event-contributor-title">Contributed by ' + esc(c.callsign) + '</h3>';
+        if (c.description) {
+          html += '<p class="event-contributor-desc">' + esc(c.description) + '</p>';
+        }
+        html += '<div class="event-gallery">';
+        c.files.forEach(function(f, i) {
+          var rel = 'contributors/' + c.callsign + '/' + f;
+          // Track the per-contributor index in a data-attribute so
+          // openLightbox can include these in the same lightbox
+          // sequence after the main photos.
+          var lbIdx = (lbImagesAccum.length);
+          lbImagesAccum.push(rel);
+          html += '<div class="event-gallery-item" onclick="openLightbox(' + lbIdx + ')">' +
+            '<img src="' + thumbUrl(rel) + '" ' +
+              'data-full="' + fileUrl(rel) + '" ' +
+              'data-thumb="' + thumbUrl(rel) + '" ' +
+              'data-retry="0" ' +
+              'alt="Contributed photo" loading="lazy" ' +
+              'onerror="retryGalleryImg(this)">' +
+          '</div>';
+        });
+        html += '</div></div>';
+      });
+    }
+
+    // --- Contribute media CTA (NOSTR-signed upload) ---
+    // Visible only when window.nostr is available (NIP-07 extension).
+    // The button opens a hidden file input; each picked file is
+    // hashed (SHA-256), tagged + signed in the browser, and POSTed
+    // to /api/events/{id}/contributors/{CALLSIGN}/submit/{filename}.
+    html += '<div class="event-section event-contribute" id="event-contribute" style="display:none">' +
+      '<button class="event-contribute-btn" id="contribute-btn" type="button">' +
+        ico.upload + ' <span>Contribute media</span>' +
+      '</button>' +
+      '<div class="event-contribute-help">Photos and short videos sent here go to the event author for approval before they appear publicly.</div>' +
+      '<div id="contribute-status" class="event-contribute-status" style="display:none"></div>' +
+      '<input type="file" id="contribute-input" accept="image/*,video/*" multiple style="display:none">' +
+    '</div>';
 
     // --- Registration Stats (going/interested only) ---
     var likeCount = ev.feedback_like_count || (ev.likes ? ev.likes.length : 0);
@@ -1540,8 +1595,9 @@ class ThemesEmbedded {
     detailEl.innerHTML = html;
 
     // === Lightbox ===
-    var lbImages = ((ev.photos && ev.photos.length > 0) ? ev.photos
-                  : (ev.flyers || [])).map(fileUrl);
+    // lbImagesAccum was populated above (event photos first, then
+    // approved contributor files). Map to fully-qualified file URLs.
+    var lbImages = lbImagesAccum.map(fileUrl);
     var lbIndex = 0;
     // Keep prefetched Image objects alive so the browser does not GC
     // them before we navigate to that slide.
@@ -1725,6 +1781,135 @@ class ThemesEmbedded {
     if (window.GeogramNostr && window.GeogramNostr.connected) {
       recordEventView();
     }
+
+    // ── Contribute media (visitor → author approval gate) ─────────────
+    // Visible only when window.nostr.signEvent is available (NIP-07
+    // extension or geogram bootstrap). For each picked file we hash
+    // the bytes (SHA-256), build a kind-1 event whose content is the
+    // hex digest with tags locking it to (eventId, filename, callsign),
+    // ask window.nostr to sign, and POST the raw file bytes through
+    // /api/events/{id}/contributors/{CALLSIGN}/submit/{filename}.
+    // Server rebuilds the same event and verifies — tampering or a
+    // mismatched filename invalidates.
+    function showContributeIfReady() {
+      var section = document.getElementById('event-contribute');
+      if (!section) return;
+      var nostr = window.GeogramNostr || {};
+      if (!nostr.connected || !nostr.callsign ||
+          !window.nostr || typeof window.nostr.signEvent !== 'function') {
+        return;
+      }
+      section.style.display = '';
+    }
+    document.addEventListener('nostr-connected', showContributeIfReady);
+    showContributeIfReady();
+
+    async function sha256Hex(bytes) {
+      var buf = await crypto.subtle.digest('SHA-256', bytes);
+      var arr = Array.from(new Uint8Array(buf));
+      return arr.map(function(b) {
+        return ('00' + b.toString(16)).slice(-2);
+      }).join('');
+    }
+
+    async function submitOneContribution(file, callsign) {
+      var status = document.getElementById('contribute-status');
+      var bytes = new Uint8Array(await file.arrayBuffer());
+      var hash = await sha256Hex(bytes);
+      var createdAt = Math.floor(Date.now() / 1000);
+      var unsigned = {
+        kind: 1,
+        created_at: createdAt,
+        tags: [
+          ['e', ev.id],
+          ['f', file.name],
+          ['callsign', callsign],
+          ['kind', 'event_contribution'],
+        ],
+        content: hash,
+      };
+      var signed = await window.nostr.signEvent(unsigned);
+      if (!signed || !signed.sig || !signed.pubkey) {
+        throw new Error('Signing failed');
+      }
+      // Encode npub for the header so the server can decodeNpub() the
+      // same way the Flutter client does.
+      var npub = (window.NostrTools &&
+                  window.NostrTools.nip19 &&
+                  window.NostrTools.nip19.npubEncode)
+        ? window.NostrTools.nip19.npubEncode(signed.pubkey)
+        : signed.pubkey;
+      var url = '../api/events/' + encodeURIComponent(ev.id) +
+                '/contributors/' + encodeURIComponent(callsign) +
+                '/submit/' + encodeURIComponent(file.name);
+      var resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+          'X-Nostr-Npub': npub,
+          'X-Nostr-Signature': signed.sig,
+          'X-Nostr-Timestamp': String(createdAt),
+        },
+        body: bytes,
+      });
+      if (!resp.ok) {
+        var err = '';
+        try { err = (await resp.json()).error || ''; } catch (_) {}
+        throw new Error(err || ('HTTP ' + resp.status));
+      }
+      return await resp.json();
+    }
+
+    function setContributeStatus(msg, isError) {
+      var status = document.getElementById('contribute-status');
+      if (!status) return;
+      status.style.display = msg ? '' : 'none';
+      status.textContent = msg || '';
+      status.style.color = isError ? '#c33' : '';
+    }
+
+    function bindContributeUploader() {
+      var btn = document.getElementById('contribute-btn');
+      var input = document.getElementById('contribute-input');
+      if (!btn || !input) return;
+      btn.onclick = function() { input.click(); };
+      input.onchange = async function() {
+        var files = Array.from(input.files || []);
+        input.value = '';
+        if (files.length === 0) return;
+        var nostr = window.GeogramNostr || {};
+        var callsign = nostr.callsign || '';
+        if (!callsign) {
+          setContributeStatus('No callsign — connect a NOSTR identity first.', true);
+          return;
+        }
+        btn.disabled = true;
+        var ok = 0;
+        var failed = [];
+        for (var i = 0; i < files.length; i++) {
+          var f = files[i];
+          setContributeStatus('Uploading ' + f.name + ' (' + (i + 1) + '/' + files.length + ')…');
+          try {
+            await submitOneContribution(f, callsign);
+            ok++;
+          } catch (err) {
+            failed.push(f.name + ' (' + err.message + ')');
+          }
+        }
+        btn.disabled = false;
+        var summary = ok + ' file(s) submitted for approval.';
+        if (failed.length > 0) {
+          summary += ' Failed: ' + failed.join(', ');
+          setContributeStatus(summary, true);
+        } else {
+          setContributeStatus(summary, false);
+          // Reload after a short delay so the page reflects anything
+          // that landed directly in approved (already-trusted contributor).
+          setTimeout(function() { window.location.reload(); }, 1200);
+        }
+      };
+    }
+    bindContributeUploader();
 
     // ── Request-access button ─────────────────────────────────────────
     // Only present when the server stripped this page to a teaser. POSTs
@@ -2840,6 +3025,64 @@ class ThemesEmbedded {
   color: var(--accent);
   border-bottom: 1px dashed var(--border-color);
   padding-bottom: 8px;
+}
+
+/* Contributor blocks (approved visitor submissions) */
+.event-contributor-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.event-contributor-desc {
+  margin: 0 0 8px 0;
+  font-size: 0.9rem;
+  opacity: 0.75;
+}
+
+/* Contribute media CTA */
+.event-contribute {
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 24px;
+  background: var(--accent-alpha-20);
+}
+
+.event-contribute-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: var(--background);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.event-contribute-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.event-contribute-help {
+  margin-top: 8px;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+.event-contribute-status {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  padding: 8px 12px;
+  background: var(--background);
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
 }
 
 .event-body {

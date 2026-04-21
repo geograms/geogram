@@ -40,6 +40,7 @@ class EventActivityNotifier {
     'event_access_request',
     'event_new_comment',
     'event_new_like',
+    'event_contribution',
   };
 
   static const String _seenFileName = 'notifications_seen.json';
@@ -81,6 +82,11 @@ class EventActivityNotifier {
         eventId: eventId,
         eventTitle: eventTitle,
         seen: seen,
+      );
+      emitted += await _scanPendingContributors(
+        eventPath: eventPath,
+        eventId: eventId,
+        eventTitle: eventTitle,
       );
     } catch (e) {
       LogService().log('EventActivityNotifier: scanEvent($eventId) failed: $e');
@@ -279,6 +285,56 @@ class EventActivityNotifier {
     } catch (e) {
       LogService().log(
         'EventActivityNotifier: access-request parse failed for $eventId: $e',
+      );
+    }
+    return emitted;
+  }
+
+  /// Pending visitor contributions (per docs/apps/events-format-
+  /// specification.md §Contributors). One Now item per pending
+  /// callsign — re-firing on every scan is cheap because the Now
+  /// panel deduplicates by id, and the badge clears as soon as the
+  /// author opens the Contributions tab and approves / rejects.
+  static Future<int> _scanPendingContributors({
+    required String eventPath,
+    required String eventId,
+    required String eventTitle,
+  }) async {
+    final dir = Directory('$eventPath/contributors/_pending');
+    if (!await dir.exists()) return 0;
+    int emitted = 0;
+    try {
+      await for (final entry in dir.list()) {
+        if (entry is! Directory) continue;
+        final callsign = entry.path.split(Platform.pathSeparator).last;
+        if (callsign.isEmpty || callsign.startsWith('.')) continue;
+        // Count submitted media files so the summary tells the
+        // author how much they need to look at.
+        var fileCount = 0;
+        await for (final f in entry.list()) {
+          if (f is File &&
+              !f.path.endsWith('contributor.txt') &&
+              !f.path.contains('${Platform.pathSeparator}.meta${Platform.pathSeparator}')) {
+            fileCount++;
+          }
+        }
+        if (fileCount == 0) continue;
+        EventBus().fire(NowItemEvent(
+          id: 'contribution:$eventId:$callsign',
+          appType: 'event_contribution',
+          sourceId: eventId,
+          sourceName: eventTitle,
+          callsign: callsign,
+          summary: fileCount == 1
+              ? 'Submitted 1 media file to "$eventTitle"'
+              : 'Submitted $fileCount media files to "$eventTitle"',
+          priority: NowPriority.directMessage,
+        ));
+        emitted++;
+      }
+    } catch (e) {
+      LogService().log(
+        'EventActivityNotifier: contributor scan failed for $eventId: $e',
       );
     }
     return emitted;

@@ -10,15 +10,21 @@
  * via [RemoteEventActions].
  */
 
-import 'package:flutter/material.dart';
+import 'dart:io';
 
+import 'package:flutter/material.dart';
+import 'package:path/path.dart' as path;
+
+import '../services/app_service.dart';
 import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/remote_content_client.dart';
+import '../services/remote_contributor_actions.dart';
 import '../services/remote_event_actions.dart';
 import '../services/station_service.dart';
+import '../widgets/file_folder_picker.dart';
 import '../widgets/remote_content_image.dart';
 
 class RemoteEventsBrowserPage extends StatefulWidget {
@@ -292,6 +298,7 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
   bool _isLoading = true;
   bool _posting = false;
   bool _viewRecorded = false;
+  bool _isUploading = false;
   String? _error;
 
   @override
@@ -495,6 +502,10 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
             const SizedBox(height: 12),
             Text(content, style: theme.textTheme.bodyMedium),
           ],
+          const SizedBox(height: 16),
+          _buildContributorsSection(theme, ev),
+          const SizedBox(height: 12),
+          _buildContributeButton(theme),
         ],
         const SizedBox(height: 16),
         _buildEngagementRow(theme, viewCount, likeCount, commentCount),
@@ -587,6 +598,212 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
         ),
       ),
     );
+  }
+
+  /// "Contributed by" gallery — one card per approved contributor
+  /// with their files. Source data comes from the event detail JSON
+  /// served by EventContentProvider; pending contributors are not
+  /// surfaced here (only the author sees them, in the editor).
+  Widget _buildContributorsSection(ThemeData theme, Map<String, dynamic> ev) {
+    final contributors = (ev['contributors'] as List?)
+            ?.whereType<Map>()
+            .map((m) => m.cast<String, dynamic>())
+            .where((m) =>
+                m['callsign'] is String &&
+                (m['files'] is List) &&
+                (m['files'] as List).isNotEmpty)
+            .toList() ??
+        const <Map<String, dynamic>>[];
+    if (contributors.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(height: 24),
+        for (final c in contributors) _buildContributorCard(theme, c),
+      ],
+    );
+  }
+
+  Widget _buildContributorCard(ThemeData theme, Map<String, dynamic> c) {
+    final callsign = c['callsign'] as String;
+    final files = (c['files'] as List).cast<String>();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8, left: 4),
+            child: Text(
+              _i18n.t('contributed_by').replaceAll('{0}', callsign),
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.bold),
+            ),
+          ),
+          SizedBox(
+            height: 120,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: files.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (_, i) => InkWell(
+                onTap: () => _openLightbox(
+                  files
+                      .map((name) => 'contributors/$callsign/$name')
+                      .toList(),
+                  i,
+                ),
+                borderRadius: BorderRadius.circular(12),
+                child: RemoteContentImage(
+                  remoteCallsign: widget.device.callsign,
+                  appType: 'events',
+                  itemId: widget.eventId,
+                  relativePath: 'contributors/$callsign/${files[i]}',
+                  width: 160,
+                  height: 120,
+                  fit: BoxFit.cover,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Visitor-side upload button. Opens the file picker, then submits
+  /// each file via [RemoteContributorActions.submitFile]. Progress +
+  /// per-file failures are surfaced as SnackBars; on the first
+  /// success we refresh the event detail so anything that landed in
+  /// approved (because the contributor is already approved) shows
+  /// up immediately.
+  Widget _buildContributeButton(ThemeData theme) {
+    return Card(
+      margin: EdgeInsets.zero,
+      color: theme.colorScheme.primaryContainer.withOpacity(0.4),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Icon(Icons.add_a_photo_outlined,
+                color: theme.colorScheme.onPrimaryContainer),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _i18n.t('contribute_media'),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: theme.colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _i18n.t('contribute_media_help'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.tonalIcon(
+              onPressed: _isUploading ? null : _pickAndSubmitContributions,
+              icon: _isUploading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child:
+                          CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.upload),
+              label: Text(_i18n.t('contribute_media')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickAndSubmitContributions() async {
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('contribute_media'),
+      allowMultiSelect: true,
+      allowedExtensions: {
+        ...FileFolderPicker.imageExtensions,
+        ...FileFolderPicker.videoExtensions,
+      },
+      profileStorage: AppService().profileStorage,
+      initialGridView: true,
+      initialDirectory: FileFolderPicker.defaultMediaDirectory(),
+    );
+    if (paths == null || paths.isEmpty) return;
+    setState(() => _isUploading = true);
+    int succeeded = 0;
+    final failures = <String>[];
+    try {
+      for (final filePath in paths) {
+        final filename = path.basename(filePath);
+        final file = File(filePath);
+        if (!await file.exists()) {
+          failures.add(filename);
+          continue;
+        }
+        if (!mounted) break;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 1),
+            content: Text(
+              _i18n.t('contributor_uploading').replaceAll('{0}', filename),
+            ),
+          ),
+        );
+        final bytes = await file.readAsBytes();
+        final result = await RemoteContributorActions.submitFile(
+          remoteCallsign: widget.device.callsign,
+          eventId: widget.eventId,
+          filename: filename,
+          bytes: bytes,
+        );
+        if (result.success) {
+          succeeded++;
+        } else {
+          failures.add('$filename (${result.error ?? 'failed'})');
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _isUploading = false);
+    }
+    if (!mounted) return;
+    if (succeeded > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _i18n
+                .t('contributor_upload_done')
+                .replaceAll('{0}', '$succeeded'),
+          ),
+        ),
+      );
+      // Refresh in case any landed in approved (already-trusted contributor).
+      await _load();
+    }
+    for (final f in failures) {
+      if (!mounted) break;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Theme.of(context).colorScheme.error,
+          content: Text(
+            _i18n.t('contributor_upload_failed').replaceAll('{0}', f),
+          ),
+        ),
+      );
+    }
   }
 
   Widget _buildAccessRequestCard(ThemeData theme, String visibility) =>

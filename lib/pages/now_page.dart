@@ -628,12 +628,14 @@ class _NowPageState extends State<NowPage> {
       case 'event_access_request':
       case 'event_new_comment':
       case 'event_new_like':
+      case 'event_contribution':
         // All event-activity types share the same NewEventPage; pick
         // the tab that surfaces the relevant inbox: access requests
         // → tab 4 (Access control), comments + likes → tab 5
-        // (Interactions). Adding a new event-activity appType only
-        // needs the EventActivityNotifier ownedAppTypes set, this
-        // case, and a tab mapping.
+        // (Interactions), contributions → tab 6 (Contributions).
+        // Adding a new event-activity appType only needs the
+        // EventActivityNotifier ownedAppTypes set, this case, and a
+        // tab mapping.
         //
         // Use findEventByIdGlobal so this works even before the user
         // has opened the events page once — EventService.loadEvent
@@ -668,8 +670,11 @@ class _NowPageState extends State<NowPage> {
               return;
             }
             if (!mounted) return;
-            final tab =
-                item.appType == 'event_access_request' ? 4 : 5;
+            final tab = switch (item.appType) {
+              'event_access_request' => 4,
+              'event_contribution' => 6,
+              _ => 5,
+            };
             Navigator.of(context).push(MaterialPageRoute(
               builder: (_) => NewEventPage(
                 event: event,

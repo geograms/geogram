@@ -144,6 +144,13 @@ class _NewEventPageState extends State<NewEventPage>
   // Each entry: {id, author, timestamp, content, npub?}. Loaded on init
   // when in edit mode so the author can review and delete inline.
   final List<Map<String, dynamic>> _comments = [];
+  // Visitor contributor folders for this event, scanned from disk.
+  // Each entry: {callsign, files, npub?, created?, description?}.
+  // _pendingContributors live under contributors/_pending/{CALLSIGN}/
+  // and need approve/reject; _approvedContributors are the public
+  // ones the author can revoke.
+  final List<Map<String, dynamic>> _pendingContributors = [];
+  final List<Map<String, dynamic>> _approvedContributors = [];
   // Whether visitors can post NOSTR-signed comments on the public event
   // page. Default true so the toggle starts in the "permissive" position.
   bool _commentsEnabled = true;
@@ -166,9 +173,9 @@ class _NewEventPageState extends State<NewEventPage>
   void initState() {
     super.initState();
     _tabController = TabController(
-      length: 6,
+      length: 7,
       vsync: this,
-      initialIndex: widget.initialTab.clamp(0, 5),
+      initialIndex: widget.initialTab.clamp(0, 6),
     );
     _loadGroups();
 
@@ -177,6 +184,7 @@ class _NewEventPageState extends State<NewEventPage>
       _populateFromEvent(widget.event!);
       _loadAccessRequests();
       _loadComments();
+      _loadContributors();
       // Once the owner has the editor open they're aware of any new
       // comments + likes — flush the unseen markers so the tile + apps
       // grid badge reflect that. Access requests are unaffected
@@ -242,6 +250,164 @@ class _NewEventPageState extends State<NewEventPage>
           ..addAll(entries);
       });
     } catch (_) {}
+  }
+
+  /// Scan visitor contributor folders so the Contributions tab can
+  /// list them. Direct filesystem read — same pattern as
+  /// [_loadAccessRequests] / [_loadComments]. Quiet on error so a
+  /// fresh event with no folders shows the empty state.
+  Future<void> _loadContributors() async {
+    final event = widget.event;
+    final appPath = widget.appPath;
+    if (event == null || appPath == null || appPath.isEmpty) return;
+    if (event.id.length < 4) return;
+    try {
+      final year = event.id.substring(0, 4);
+      final eventPath = '$appPath/$year/${event.id}';
+      final pending = await _scanContributorFolder(
+        '$eventPath/contributors/_pending',
+        skipNamesStartingWithDot: true,
+      );
+      final approved = await _scanContributorFolder(
+        '$eventPath/contributors',
+        excludeNames: const {'_pending'},
+      );
+      if (!mounted) return;
+      setState(() {
+        _pendingContributors
+          ..clear()
+          ..addAll(pending);
+        _approvedContributors
+          ..clear()
+          ..addAll(approved);
+      });
+    } catch (_) {}
+  }
+
+  Future<List<Map<String, dynamic>>> _scanContributorFolder(
+    String parentPath, {
+    Set<String> excludeNames = const {},
+    bool skipNamesStartingWithDot = false,
+  }) async {
+    final out = <Map<String, dynamic>>[];
+    final dir = Directory(parentPath);
+    if (!await dir.exists()) return out;
+    await for (final entry in dir.list()) {
+      if (entry is! Directory) continue;
+      final name = entry.path.split(Platform.pathSeparator).last;
+      if (excludeNames.contains(name)) continue;
+      if (skipNamesStartingWithDot && name.startsWith('.')) continue;
+      final files = <String>[];
+      String? npub;
+      String? created;
+      String? description;
+      await for (final f in entry.list()) {
+        if (f is! File) continue;
+        final filename = f.path.split(Platform.pathSeparator).last;
+        if (filename == 'contributor.txt') {
+          try {
+            final raw = await f.readAsString();
+            for (final line in raw.split('\n')) {
+              if (line.startsWith('CREATED: ')) {
+                created = line.substring(9).trim();
+              } else if (line.startsWith('--> npub: ')) {
+                npub = line.substring(10).trim();
+              } else if (line.startsWith('# CONTRIBUTOR:') ||
+                  line.startsWith('--> signature:')) {
+                continue;
+              } else if (line.trim().isNotEmpty) {
+                description = (description ?? '') +
+                    (description == null ? '' : '\n') +
+                    line.trim();
+              }
+            }
+          } catch (_) {}
+          continue;
+        }
+        if (filename.startsWith('.')) continue;
+        files.add(filename);
+      }
+      if (files.isEmpty) continue;
+      files.sort();
+      out.add({
+        'callsign': name,
+        'files': files,
+        if (npub != null) 'npub': npub,
+        if (created != null) 'created': created,
+        if (description != null && description.isNotEmpty)
+          'description': description,
+      });
+    }
+    out.sort((a, b) =>
+        (a['callsign'] as String).compareTo(b['callsign'] as String));
+    return out;
+  }
+
+  Future<void> _approveContributor(String callsign) async {
+    await _runContributorDecision('approve', callsign);
+  }
+
+  Future<void> _rejectContributor(String callsign) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_i18n.t('contributor_reject_title')),
+        content: Text(_i18n
+            .t('contributor_reject_confirm')
+            .replaceAll('{0}', callsign)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(_i18n.t('reject')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _runContributorDecision('reject', callsign);
+  }
+
+  Future<void> _runContributorDecision(String action, String callsign) async {
+    final event = widget.event;
+    if (event == null) return;
+    try {
+      final port = LogApiService().port;
+      final uri = Uri.parse('http://127.0.0.1:$port/api/debug');
+      final req = await HttpClient().postUrl(uri);
+      req.headers.set('Content-Type', 'application/json');
+      req.write(jsonEncode({
+        'action':
+            action == 'approve' ? 'contributor_approve' : 'contributor_reject',
+        'eventId': event.id,
+        'callsign': callsign,
+      }));
+      final resp = await req.close();
+      await resp.drain<void>();
+      await _loadContributors();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n
+              .t(action == 'approve'
+                  ? 'contributor_approved'
+                  : 'contributor_rejected')
+              .replaceAll('{0}', callsign)),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_i18n
+              .t('contributor_action_failed')
+              .replaceAll('{0}', '$e')),
+        ),
+      );
+    }
   }
 
   /// Delete a comment via the shared DELETE endpoint. Authorisation is
@@ -1133,6 +1299,7 @@ class _NewEventPageState extends State<NewEventPage>
             Tab(text: _i18n.t('updates_agenda')),
             Tab(child: _buildAccessControlTabLabel()),
             Tab(child: _buildInteractionsTabLabel()),
+            Tab(child: _buildContributionsTabLabel()),
           ],
         ),
       ),
@@ -1147,6 +1314,7 @@ class _NewEventPageState extends State<NewEventPage>
             _buildUpdatesTab(theme),
             _buildAccessTab(theme),
             _buildInteractionsTab(theme),
+            _buildContributionsTab(theme),
           ],
         ),
       ),
@@ -2636,6 +2804,284 @@ class _NewEventPageState extends State<NewEventPage>
             }),
         ],
       ],
+    );
+  }
+
+  /// Tab label for the Contributions tab — shows the pending count
+  /// as a badge so the author sees at a glance whether anyone is
+  /// waiting on approval. Mirrors [_buildInteractionsTabLabel].
+  Widget _buildContributionsTabLabel() {
+    final count = _pendingContributors.length;
+    final theme = Theme.of(context);
+    final label = Text(_i18n.t('contributions'));
+    if (count == 0) return label;
+    return Tooltip(
+      message: _i18n
+          .t('contributions_pending_tooltip')
+          .replaceAll('{0}', '$count'),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          label,
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              '$count',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onPrimary,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Visitor contributions tab. Two sections:
+  ///   • Pending — needs Approve / Reject from the author. Once
+  ///     approved, future submissions from that callsign auto-flow
+  ///     to the public gallery without re-asking.
+  ///   • Approved — already public, with a Revoke button if the
+  ///     author changes their mind (revoke moves the folder back to
+  ///     pending so they can review then reject cleanly).
+  Widget _buildContributionsTab(ThemeData theme) {
+    if (!widget.isEditMode) {
+      return Padding(
+        padding: const EdgeInsets.all(24),
+        child: Center(
+          child: Text(
+            _i18n.t('contributions_only_after_save'),
+            style: theme.textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: _loadContributors,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (_pendingContributors.isEmpty && _approvedContributors.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 48),
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.collections_outlined,
+                    size: 48,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _i18n.t('contributions_empty'),
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (_pendingContributors.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8, left: 4),
+              child: Text(
+                _i18n.t('contributions_pending'),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            ..._pendingContributors.map(
+              (c) => _buildContributorCard(theme, c, pending: true),
+            ),
+            const SizedBox(height: 16),
+          ],
+          if (_approvedContributors.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8, left: 4),
+              child: Text(
+                _i18n.t('contributions_approved'),
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            ..._approvedContributors.map(
+              (c) => _buildContributorCard(theme, c, pending: false),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContributorCard(
+    ThemeData theme,
+    Map<String, dynamic> contrib, {
+    required bool pending,
+  }) {
+    final callsign = contrib['callsign'] as String;
+    final files = (contrib['files'] as List).cast<String>();
+    final created = contrib['created'] as String?;
+    final description = contrib['description'] as String?;
+    final event = widget.event!;
+    final year = event.id.substring(0, 4);
+    final folder = pending
+        ? '${widget.appPath}/$year/${event.id}/contributors/_pending/$callsign'
+        : '${widget.appPath}/$year/${event.id}/contributors/$callsign';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  child: Text(
+                    callsign.isEmpty ? '?' : callsign[0],
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        callsign,
+                        style: theme.textTheme.titleSmall
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                      if (created != null && created.isNotEmpty)
+                        Text(
+                          created,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                Text(
+                  '${files.length}',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.image_outlined,
+                  color: theme.colorScheme.onSurfaceVariant,
+                  size: 18,
+                ),
+              ],
+            ),
+            if (description != null && description.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(description, style: theme.textTheme.bodyMedium),
+            ],
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 96,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: files.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (_, i) {
+                  final filePath = '$folder/${files[i]}';
+                  final ext = files[i].toLowerCase().split('.').last;
+                  final isImage = const {
+                    'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'
+                  }.contains(ext);
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(
+                      width: 96,
+                      height: 96,
+                      child: isImage
+                          ? Image.file(
+                              File(filePath),
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) =>
+                                  _filePlaceholder(theme, files[i]),
+                            )
+                          : _filePlaceholder(theme, files[i]),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                if (pending) ...[
+                  TextButton.icon(
+                    onPressed: () => _rejectContributor(callsign),
+                    icon: const Icon(Icons.close),
+                    label: Text(_i18n.t('reject')),
+                    style: TextButton.styleFrom(
+                      foregroundColor: theme.colorScheme.error,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    onPressed: () => _approveContributor(callsign),
+                    icon: const Icon(Icons.check),
+                    label: Text(_i18n.t('approve')),
+                  ),
+                ] else ...[
+                  TextButton.icon(
+                    onPressed: () => _rejectContributor(callsign),
+                    icon: const Icon(Icons.undo),
+                    label: Text(_i18n.t('contributor_revoke')),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _filePlaceholder(ThemeData theme, String name) {
+    return Container(
+      color: theme.colorScheme.surfaceContainerHighest,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.all(4),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            name.toLowerCase().endsWith('.mp4') ||
+                    name.toLowerCase().endsWith('.mov') ||
+                    name.toLowerCase().endsWith('.webm')
+                ? Icons.movie_outlined
+                : Icons.insert_drive_file_outlined,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            name,
+            style: theme.textTheme.labelSmall,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
     );
   }
 }
