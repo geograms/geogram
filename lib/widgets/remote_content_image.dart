@@ -10,12 +10,51 @@
  * would only work for callsigns with a direct HTTP URL.
  */
 
+import 'dart:collection';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
 import '../services/devices_service.dart';
 import '../services/remote_content_client.dart';
+
+/// Tiny in-memory LRU of image bytes keyed by the full request URL
+/// (callsign + app + item + path + thumb flag). Lets the lightbox
+/// prefetch the next/previous photo so flipping through the gallery
+/// feels instant instead of waiting on a full round-trip every time.
+/// Capped by total bytes — images get evicted oldest-first once the
+/// cache grows past the budget.
+class _RemoteImageCache {
+  static const int _maxBytes = 48 * 1024 * 1024; // 48 MB
+  static final LinkedHashMap<String, Uint8List> _store =
+      LinkedHashMap<String, Uint8List>();
+  static final Map<String, Future<Uint8List?>> _inFlight = {};
+  static int _currentBytes = 0;
+
+  static Uint8List? get(String key) {
+    final v = _store.remove(key);
+    if (v != null) _store[key] = v; // mark as most-recent
+    return v;
+  }
+
+  static void put(String key, Uint8List bytes) {
+    final existing = _store.remove(key);
+    if (existing != null) _currentBytes -= existing.length;
+    _store[key] = bytes;
+    _currentBytes += bytes.length;
+    while (_currentBytes > _maxBytes && _store.isNotEmpty) {
+      final oldest = _store.keys.first;
+      final evicted = _store.remove(oldest);
+      if (evicted != null) _currentBytes -= evicted.length;
+    }
+  }
+
+  static Future<Uint8List?>? inFlight(String key) => _inFlight[key];
+  static void setInFlight(String key, Future<Uint8List?> f) {
+    _inFlight[key] = f;
+  }
+  static void clearInFlight(String key) => _inFlight.remove(key);
+}
 
 class RemoteContentImage extends StatefulWidget {
   final String remoteCallsign;
@@ -48,6 +87,85 @@ class RemoteContentImage extends StatefulWidget {
     this.thumbnail = true,
   });
 
+  /// Kick off a fetch for an image the user is likely to view next
+  /// (e.g. the slide after the one they're currently on in a
+  /// lightbox). Results land in the shared in-memory cache so the
+  /// next matching [RemoteContentImage] renders instantly. Safe to
+  /// call repeatedly — duplicate requests are coalesced.
+  static void prefetch({
+    required String remoteCallsign,
+    required String appType,
+    required String itemId,
+    required String relativePath,
+    bool thumbnail = false,
+  }) {
+    final key = _cacheKey(
+      remoteCallsign: remoteCallsign,
+      appType: appType,
+      itemId: itemId,
+      relativePath: relativePath,
+      thumbnail: thumbnail,
+    );
+    if (_RemoteImageCache.get(key) != null) return;
+    if (_RemoteImageCache.inFlight(key) != null) return;
+    final future = _fetchBytes(
+      remoteCallsign: remoteCallsign,
+      appType: appType,
+      itemId: itemId,
+      relativePath: relativePath,
+      thumbnail: thumbnail,
+    );
+    _RemoteImageCache.setInFlight(key, future);
+    future.whenComplete(() => _RemoteImageCache.clearInFlight(key));
+  }
+
+  static String _cacheKey({
+    required String remoteCallsign,
+    required String appType,
+    required String itemId,
+    required String relativePath,
+    required bool thumbnail,
+  }) =>
+      '$remoteCallsign|$appType|$itemId|$relativePath|${thumbnail ? "t" : "f"}';
+
+  static Future<Uint8List?> _fetchBytes({
+    required String remoteCallsign,
+    required String appType,
+    required String itemId,
+    required String relativePath,
+    required bool thumbnail,
+  }) async {
+    final key = _cacheKey(
+      remoteCallsign: remoteCallsign,
+      appType: appType,
+      itemId: itemId,
+      relativePath: relativePath,
+      thumbnail: thumbnail,
+    );
+    final cached = _RemoteImageCache.get(key);
+    if (cached != null) return cached;
+    final existing = _RemoteImageCache.inFlight(key);
+    if (existing != null) return existing;
+    try {
+      var path = RemoteContent.filePath(
+        appType: appType,
+        itemId: itemId,
+        relativePath: relativePath,
+      );
+      if (thumbnail) path = '$path?thumb=1';
+      final resp = await DevicesService().makeDeviceApiRequestBytes(
+        callsign: remoteCallsign,
+        method: 'GET',
+        path: path,
+      );
+      if (resp == null || resp.statusCode != 200) return null;
+      _RemoteImageCache.put(key, resp.bytes);
+      return resp.bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+
   @override
   State<RemoteContentImage> createState() => _RemoteContentImageState();
 }
@@ -73,27 +191,13 @@ class _RemoteContentImageState extends State<RemoteContentImage> {
     }
   }
 
-  Future<Uint8List?> _fetch() async {
-    try {
-      var path = RemoteContent.filePath(
+  Future<Uint8List?> _fetch() => RemoteContentImage._fetchBytes(
+        remoteCallsign: widget.remoteCallsign,
         appType: widget.appType,
         itemId: widget.itemId,
         relativePath: widget.relativePath,
+        thumbnail: widget.thumbnail,
       );
-      if (widget.thumbnail) {
-        path = '$path?thumb=1';
-      }
-      final resp = await DevicesService().makeDeviceApiRequestBytes(
-        callsign: widget.remoteCallsign,
-        method: 'GET',
-        path: path,
-      );
-      if (resp == null || resp.statusCode != 200) return null;
-      return resp.bytes;
-    } catch (_) {
-      return null;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

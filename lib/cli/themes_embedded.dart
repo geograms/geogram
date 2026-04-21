@@ -1543,6 +1543,20 @@ class ThemesEmbedded {
     var lbImages = ((ev.photos && ev.photos.length > 0) ? ev.photos
                   : (ev.flyers || [])).map(fileUrl);
     var lbIndex = 0;
+    // Keep prefetched Image objects alive so the browser does not GC
+    // them before we navigate to that slide.
+    var lbPrefetch = {};
+    function lbPrefetchAround(i) {
+      if (lbImages.length < 2) return;
+      var offsets = [1, -1, 2];
+      for (var k = 0; k < offsets.length; k++) {
+        var idx = (i + offsets[k] + lbImages.length) % lbImages.length;
+        if (lbPrefetch[idx]) continue;
+        var img = new Image();
+        img.src = lbImages[idx];
+        lbPrefetch[idx] = img;
+      }
+    }
 
     window.openLightbox = function(i) {
       lbIndex = i;
@@ -1552,6 +1566,7 @@ class ThemesEmbedded {
       document.getElementById('lb-prev').style.display = lbImages.length > 1 ? '' : 'none';
       document.getElementById('lb-next').style.display = lbImages.length > 1 ? '' : 'none';
       document.body.style.overflow = 'hidden';
+      lbPrefetchAround(lbIndex);
     };
     window.closeLightbox = function() {
       document.getElementById('lightbox').style.display = 'none';
@@ -1560,6 +1575,7 @@ class ThemesEmbedded {
     window.lbNav = function(dir) {
       lbIndex = (lbIndex + dir + lbImages.length) % lbImages.length;
       document.getElementById('lightbox-img').src = lbImages[lbIndex];
+      lbPrefetchAround(lbIndex);
     };
     document.addEventListener('keydown', function(e) {
       var lb = document.getElementById('lightbox');

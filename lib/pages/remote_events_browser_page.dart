@@ -775,12 +775,30 @@ class _LightboxPageState extends State<_LightboxPage> {
     super.initState();
     _index = widget.startIndex;
     _controller = PageController(initialPage: _index);
+    _prefetchAround(_index);
   }
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  /// Warm the cache with ±1 neighbours (and +2 when swiping forward)
+  /// so the user doesn't stare at a spinner every time they flip.
+  void _prefetchAround(int current) {
+    final n = widget.photos.length;
+    if (n < 2) return;
+    for (final offset in const [1, -1, 2]) {
+      final i = (current + offset + n) % n;
+      RemoteContentImage.prefetch(
+        remoteCallsign: widget.remoteCallsign,
+        appType: 'events',
+        itemId: widget.itemId,
+        relativePath: widget.photos[i],
+        thumbnail: false,
+      );
+    }
   }
 
   @override
@@ -794,7 +812,10 @@ class _LightboxPageState extends State<_LightboxPage> {
             PageView.builder(
               controller: _controller,
               itemCount: widget.photos.length,
-              onPageChanged: (i) => setState(() => _index = i),
+              onPageChanged: (i) {
+                setState(() => _index = i);
+                _prefetchAround(i);
+              },
               itemBuilder: (_, i) => Center(
                 child: InteractiveViewer(
                   maxScale: 4,
