@@ -15,8 +15,8 @@ RepoType: git
 Repo: https://github.com/geograms/geogram.git
 
 Builds:
-  - versionName: 1.38.0
-    versionCode: 1832
+  - versionName: 1.38.1
+    versionCode: 1835
     commit: 328a85fa8b96b9894dc261a9c121b8f8a6831f43
     timeout: 10800
     sudo:
@@ -109,5 +109,5 @@ Builds:
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
 UpdateCheckData: pubspec.yaml|version:\s.+\+(\d+)|.|version:\s(.+)\+
-CurrentVersion: 1.38.0
-CurrentVersionCode: 1832
+CurrentVersion: 1.38.1
+CurrentVersionCode: 1835

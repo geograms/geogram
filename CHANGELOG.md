@@ -1,5 +1,12 @@
 # Geogram Desktop Changelog
 
+## 2026-04-21 - v1.38.1
+
+### Changes
+- Android: bump shared_storage's pinned compileSdkVersion 30 to 35
+- release.sh: probe ~/flutter/bin/dart so version.dart actually syncs
+
+
 ## 2026-04-21 - v1.38.0
 
 ### Changes
