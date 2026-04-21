@@ -10,15 +10,12 @@
  */
 
 import 'dart:async';
-import 'dart:typed_data';
-
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import '../models/mirror_config.dart';
 import '../models/monitored_task.dart';
 import '../util/task_monitor_helpers.dart';
-import '../util/tlsh.dart';
 import 'log_service.dart';
 import 'profile_storage.dart';
 import 'sqlite_loader.dart';
@@ -130,7 +127,7 @@ class FileIndexService {
   void batchPutHashes(
     String folder,
     List<({String path, int size, int mtime, String sha1, String? tlsh})>
-        entries,
+    entries,
   ) {
     final db = _db;
     if (db == null || entries.isEmpty) return;
@@ -158,10 +155,9 @@ class FileIndexService {
     final db = _db;
     if (db == null) return;
 
-    final existing = db.select(
-      'SELECT path FROM file_index WHERE folder = ?',
-      [folder],
-    );
+    final existing = db.select('SELECT path FROM file_index WHERE folder = ?', [
+      folder,
+    ]);
 
     final toDelete = existing
         .where((row) => !currentPaths.contains(row['path'] as String))
@@ -204,8 +200,14 @@ class FileIndexService {
            VALUES (?, ?, ?, ?, ?, NULL, ?)''',
       );
       for (final file in files) {
-        stmt.execute(
-            [folder, file.path, file.size, file.mtime, file.sha1, now]);
+        stmt.execute([
+          folder,
+          file.path,
+          file.size,
+          file.mtime,
+          file.sha1,
+          now,
+        ]);
       }
       stmt.dispose();
       db.execute('COMMIT');
@@ -257,10 +259,7 @@ class FileIndexService {
   ///
   /// [folder] is the folder name (e.g., "blog").
   /// [storage] is the ProfileStorage (already scoped to the callsign).
-  Future<void> refreshFolder(
-    String folder,
-    ProfileStorage? storage,
-  ) async {
+  Future<void> refreshFolder(String folder, ProfileStorage? storage) async {
     if (_db == null || storage == null) return;
 
     final exists = await storage.directoryExists(folder);
@@ -285,8 +284,7 @@ class FileIndexService {
       fileCount++;
       currentPaths.add(relativePath);
 
-      final entryMtime =
-          (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000;
+      final entryMtime = (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000;
       final entrySize = entry.size ?? 0;
 
       // Dirty-check against cache
@@ -302,9 +300,7 @@ class FileIndexService {
         final bytes = await storage.readBytes(fullRelPath);
         if (bytes == null) continue;
         final sha1Hash = sha1.convert(bytes).toString();
-        final tlshHash = TLSH.hash(Uint8List.fromList(bytes));
-        putHash(folder, relativePath, entrySize, entryMtime, sha1Hash,
-            tlsh: tlshHash);
+        putHash(folder, relativePath, entrySize, entryMtime, sha1Hash);
       } catch (e) {
         LogService().log('FileIndex: Error indexing $folder/$relativePath: $e');
       }
@@ -374,9 +370,7 @@ class FileIndexService {
     _bgRunning = false;
   }
 
-  static Future<void> _runBackgroundScan(
-    ProfileStorage? storage,
-  ) async {
+  static Future<void> _runBackgroundScan(ProfileStorage? storage) async {
     final instance = _bgInstance;
     if (instance == null || _bgRunning) return;
     _bgRunning = true;
@@ -389,8 +383,11 @@ class FileIndexService {
         if (instance._db == null) break; // Stopped while running
 
         // Quick change detection: check if folder needs re-indexing
-        final needsReindex =
-            await _folderNeedsReindex(instance, folder, storage);
+        final needsReindex = await _folderNeedsReindex(
+          instance,
+          folder,
+          storage,
+        );
         if (!needsReindex) {
           skipped++;
           continue;

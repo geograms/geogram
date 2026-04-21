@@ -558,7 +558,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       if (mounted) {
         setState(() {
           _currentDiffFolder = kFolderLabels[folder]?.$1 ?? folder;
-          _diffFoldersDone = _appFolders.indexOf(folder);
+          _diffFoldersDone = _appFolders.indexOf(folder) + 1;
         });
       }
 
@@ -634,7 +634,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             }
             if (foldersErrored > 0) issues.add('$foldersErrored errored');
             _diffError =
-                'Could not compare any folders (${issues.join(', ')}). '
+                'Could not compare any apps (${issues.join(', ')}). '
                 'Check that the peer device is online and mirror sync is enabled on both devices.';
           } else {
             _diffError = 'Devices are in sync — no differences found.';
@@ -665,7 +665,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       if (mounted) {
         setState(() {
           _currentDiffFolder = kFolderLabels[folder]?.$1 ?? folder;
-          _diffFoldersDone = _appFolders.indexOf(folder);
+          _diffFoldersDone = _appFolders.indexOf(folder) + 1;
         });
       }
 
@@ -759,7 +759,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         _currentDiffFolder = null;
         if (_diffs.isEmpty) {
           _diffError = foldersCompared == 0
-              ? 'Could not compare any folders. Check device connectivity.'
+              ? 'Could not compare any apps. Check device connectivity.'
               : 'All devices are up to date — nothing to push.';
         }
       });
@@ -778,8 +778,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                   : null,
             ),
             const SizedBox(height: 16),
-            Text('Comparing ${_currentDiffFolder ?? "files"}...'),
-            Text('$_diffFoldersDone / $_diffFoldersTotal folders'),
+            const Text('Comparing apps...'),
+            if (_currentDiffFolder != null) Text(_currentDiffFolder!),
+            Text('$_diffFoldersDone / $_diffFoldersTotal apps'),
           ],
         ),
       );

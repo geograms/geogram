@@ -21,7 +21,6 @@ import 'package:uuid/uuid.dart';
 import '../util/managed_http_client.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
-import '../util/tlsh.dart';
 import 'file_index_service.dart';
 import 'log_service.dart';
 import 'mirror_config_service.dart';
@@ -672,7 +671,6 @@ class MirrorSyncService {
               ? cached.sha1
               : null;
           String sha1Hash;
-          String? tlshHash;
 
           if (cachedHash != null) {
             sha1Hash = cachedHash;
@@ -680,13 +678,12 @@ class MirrorSyncService {
             final bytes = await storage.readBytes(fullRelPath);
             if (bytes == null) continue;
             sha1Hash = sha1.convert(bytes).toString();
-            tlshHash = TLSH.hash(Uint8List.fromList(bytes));
             cacheMisses.add((
               path: relativePath,
               size: entrySize,
               mtime: entryMtime,
               sha1: sha1Hash,
-              tlsh: tlshHash,
+              tlsh: null,
             ));
           }
 
@@ -696,7 +693,7 @@ class MirrorSyncService {
               sha1: sha1Hash,
               mtime: entryMtime,
               size: entrySize,
-              tlsh: tlshHash,
+              tlsh: null,
             ),
           );
 
@@ -745,20 +742,18 @@ class MirrorSyncService {
                 ? cached.sha1
                 : null;
             String sha1Hash;
-            String? tlshHash;
 
             if (cachedHash != null) {
               sha1Hash = cachedHash;
             } else {
               final bytes = await entity.readAsBytes();
               sha1Hash = sha1.convert(bytes).toString();
-              tlshHash = TLSH.hash(Uint8List.fromList(bytes));
               cacheMisses.add((
                 path: relativePath,
                 size: entrySize,
                 mtime: entryMtime,
                 sha1: sha1Hash,
-                tlsh: tlshHash,
+                tlsh: null,
               ));
             }
 
@@ -768,7 +763,7 @@ class MirrorSyncService {
                 sha1: sha1Hash,
                 mtime: entryMtime,
                 size: entrySize,
-                tlsh: tlshHash,
+                tlsh: null,
               ),
             );
 
