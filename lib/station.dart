@@ -4923,11 +4923,20 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       request.response.headers.set('Content-Length', bytes.length.toString());
       request.response.headers.set('Cache-Control', 'public, max-age=86400');
       request.response.add(bytes);
+    } on SocketException catch (e) {
+      // Client went away mid-response (common on mobile / flaky WiFi
+      // when a gallery is still loading). Not an error worth escalating
+      // — just log and continue so the next request isn't starved.
+      _log('DEBUG', 'Event file client disconnected: $e');
+    } on HttpException catch (e) {
+      _log('DEBUG', 'Event file HTTP error: $e');
     } catch (e) {
       _log('ERROR', 'Error serving event file: $e');
-      request.response.statusCode = 500;
-      request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+      try {
+        request.response.statusCode = 500;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({'error': 'Internal server error', 'message': e.toString()}));
+      } catch (_) {}
     }
   }
 

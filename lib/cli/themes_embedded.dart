@@ -1249,6 +1249,25 @@ class ThemesEmbedded {
       return fileUrl(filename) + '?thumb=1';
     }
 
+    // When a thumbnail request fails (socket reset mid-transfer,
+    // isolate pool saturated, transient error) retry once after a
+    // short backoff, then fall back to the full-resolution original
+    // so users always see the photo.
+    window.retryGalleryImg = function(imgEl) {
+      var n = parseInt(imgEl.getAttribute('data-retry') || '0', 10);
+      imgEl.setAttribute('data-retry', String(n + 1));
+      if (n === 0) {
+        setTimeout(function() {
+          imgEl.src = imgEl.getAttribute('data-thumb') + '&_r=' + Date.now();
+        }, 1500);
+      } else if (n === 1) {
+        imgEl.src = imgEl.getAttribute('data-full');
+      } else {
+        imgEl.onerror = null;
+        imgEl.style.display = 'none';
+      }
+    };
+
     // === Build page ===
     var html = '';
 
@@ -1359,8 +1378,18 @@ class ThemesEmbedded {
     if (ev.flyers && ev.flyers.length > 0) {
       html += '<div class="event-gallery">';
       ev.flyers.forEach(function(f, i) {
+        // onerror: first failure retries the thumbnail after 1.5s
+        // (may still be generating in the station\'s isolate pool);
+        // second failure falls back to the full-resolution file so
+        // the user always sees the photo even if the thumbnailer
+        // is misbehaving.
         html += '<div class="event-gallery-item" onclick="openLightbox(' + i + ')">' +
-          '<img src="' + thumbUrl(f) + '" alt="Event flyer" loading="lazy">' +
+          '<img src="' + thumbUrl(f) + '" ' +
+            'data-full="' + fileUrl(f) + '" ' +
+            'data-thumb="' + thumbUrl(f) + '" ' +
+            'data-retry="0" ' +
+            'alt="Event photo" loading="lazy" ' +
+            'onerror="retryGalleryImg(this)">' +
         '</div>';
       });
       html += '</div>';

@@ -14,6 +14,7 @@
  */
 
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
@@ -30,6 +31,12 @@ class MediaThumbnail {
 
 class MediaThumbnailUtils {
   MediaThumbnailUtils._();
+
+  // In-flight deduplication: when N parallel requests arrive for the
+  // same file (e.g. N gallery tiles loaded at once on first view),
+  // only one generation runs — the rest await the same future. Keyed
+  // by `path|mtime` so an edited file re-generates.
+  static final Map<String, Future<MediaThumbnail?>> _inFlight = {};
 
   static const galleryImageExts = {
     '.jpg',
@@ -57,17 +64,41 @@ class MediaThumbnailUtils {
   /// Returns `null` when the extension isn't a supported gallery type
   /// or when decoding / encoding fails — the caller can fall back to
   /// the raw file.
+  ///
+  /// Image decode/resize/encode runs in a background isolate so the
+  /// HTTP event loop keeps serving other requests while a gallery
+  /// warms its cache. Concurrent requests for the same file share one
+  /// generation via an in-flight map.
   static Future<MediaThumbnail?> generateForPath(
       String sourcePath, String ext) async {
     if (!isGalleryMedia(ext)) return null;
     final source = File(sourcePath);
+    final DateTime mtime;
     try {
-      final stat = await source.stat();
+      mtime = (await source.stat()).modified;
+    } catch (_) {
+      return null;
+    }
+    final key = '$sourcePath|${mtime.microsecondsSinceEpoch}';
+    final existing = _inFlight[key];
+    if (existing != null) return existing;
+    final future = _generate(source, sourcePath, ext, mtime);
+    _inFlight[key] = future;
+    try {
+      return await future;
+    } finally {
+      _inFlight.remove(key);
+    }
+  }
+
+  static Future<MediaThumbnail?> _generate(
+      File source, String sourcePath, String ext, DateTime mtime) async {
+    try {
       final cache = FileBrowserCacheService();
       await cache.initialize();
 
       // Cache hit?
-      if (await cache.hasThumbnail(sourcePath, stat.modified)) {
+      if (await cache.hasThumbnail(sourcePath, mtime)) {
         final cachedPath = await cache.getThumbnailTempPath(sourcePath);
         if (cachedPath != null) {
           final cachedFile = File(cachedPath);
@@ -86,19 +117,13 @@ class MediaThumbnailUtils {
       String contentType = 'image/jpeg';
 
       if (galleryImageExts.contains(ext)) {
-        // Decode + downscale + re-encode as JPEG so the grid loads
-        // quickly even on mobile data.
+        // Decode+resize+re-encode on a background isolate — the
+        // `image` package is pure Dart and each of these steps can
+        // block the main isolate for hundreds of ms per photo, which
+        // would otherwise serialise every HTTP request through the
+        // thumbnail generator when a gallery loads.
         final original = await source.readAsBytes();
-        final decoded = img.decodeImage(original);
-        if (decoded == null) return null;
-        final resized = decoded.width > 480
-            ? img.copyResize(
-                decoded,
-                width: 480,
-                interpolation: img.Interpolation.average,
-              )
-            : decoded;
-        bytes = Uint8List.fromList(img.encodeJpg(resized, quality: 75));
+        bytes = await Isolate.run(() => _resizeToJpeg(original));
       } else {
         // Video — single-frame PNG at ~1 s.
         final tempDir = Directory.systemTemp;
@@ -120,12 +145,11 @@ class MediaThumbnailUtils {
 
       if (bytes == null) return null;
 
-      // Persist for reuse across endpoints.
       try {
         await cache.saveThumbnail(
           sourcePath,
           bytes,
-          stat.modified,
+          mtime,
           extension: cacheExt,
         );
       } catch (_) {
@@ -137,5 +161,18 @@ class MediaThumbnailUtils {
       LogService().log('MediaThumbnailUtils: thumbnail failed ($sourcePath): $e');
       return null;
     }
+  }
+
+  static Uint8List? _resizeToJpeg(Uint8List original) {
+    final decoded = img.decodeImage(original);
+    if (decoded == null) return null;
+    final resized = decoded.width > 480
+        ? img.copyResize(
+            decoded,
+            width: 480,
+            interpolation: img.Interpolation.average,
+          )
+        : decoded;
+    return Uint8List.fromList(img.encodeJpg(resized, quality: 75));
   }
 }
