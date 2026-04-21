@@ -16,6 +16,7 @@ import 'dart:convert';
 import '../../models/event.dart';
 import '../../services/profile_storage.dart';
 import '../../util/blog_folder_utils.dart';
+import '../../util/contributor_folder_utils.dart';
 import '../../util/feedback_folder_utils.dart';
 import '../../util/media_thumbnail_utils.dart';
 import 'app_content_provider.dart';
@@ -199,6 +200,11 @@ class EventContentProvider extends AppContentProvider {
       if (media.flyer != null) data['flyer'] = media.flyer;
       if (media.trailer != null) data['trailer'] = media.trailer;
       data['access_request_required'] = false;
+      // Approved visitor contributions (docs/apps/events-format-
+      // specification.md §Contributors). Pending submissions stay
+      // quarantined in `_pending/` and never appear publicly.
+      data['contributors'] =
+          await _scanApprovedContributors(storage, entry.eventPath);
     }
 
     final counts = await _engagementCounts(storage, entry.eventPath);
@@ -206,6 +212,37 @@ class EventContentProvider extends AppContentProvider {
     data['comment_count'] = counts.comments;
     data['view_count'] = counts.views;
     return data;
+  }
+
+  Future<List<Map<String, dynamic>>> _scanApprovedContributors(
+      ProfileStorage storage, String eventPath) async {
+    final out = <Map<String, dynamic>>[];
+    final callsigns = await ContributorFolderUtils.listApprovedCallsigns(
+      eventPath: eventPath,
+      storage: storage,
+    );
+    for (final callsign in callsigns) {
+      final folder =
+          ContributorFolderUtils.approvedFolder(eventPath, callsign);
+      final files = await ContributorFolderUtils.listMediaFiles(
+        folderPath: folder,
+        storage: storage,
+      );
+      if (files.isEmpty) continue;
+      final meta = await ContributorFolderUtils.readMeta(
+        folderPath: folder,
+        storage: storage,
+      );
+      out.add({
+        'callsign': callsign,
+        'files': files,
+        if (meta?.npub != null) 'npub': meta!.npub,
+        if (meta?.created.isNotEmpty == true) 'created': meta!.created,
+        if (meta?.description.isNotEmpty == true)
+          'description': meta!.description,
+      });
+    }
+    return out;
   }
 
   @override

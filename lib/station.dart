@@ -72,6 +72,7 @@ import 'server/mixins/mirror_notify_mixin.dart';
 import 'server/mixins/heartbeat_mixin.dart';
 import 'server/mixins/homepage_mixin.dart';
 import 'server/mixins/content_browse_mixin.dart';
+import 'server/mixins/contributor_submit_mixin.dart';
 import 'server/mixins/karma_mixin.dart';
 import 'cli/themes_embedded.dart';
 import 'server/chat_message_store.dart';
@@ -626,7 +627,7 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin, HomepageMixin, ContentBrowseMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin, HomepageMixin, ContentBrowseMixin, ContributorSubmitMixin
     implements StationCommandInterface, AcmeChallengeHandler {
 
   // Wire the ContentBrowseMixin to the station's per-callsign
@@ -635,6 +636,20 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   @override
   ProfileStorage get contentBrowseStorage =>
       FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}');
+
+  @override
+  ProfileStorage get contributorStorage => contentBrowseStorage;
+
+  @override
+  void contributorLog(String level, String message) =>
+      _log(level, 'Contributor: $message');
+
+  @override
+  void onContributionSubmitted(String eventPath, String callsign) {
+    // The activity notifier on this device scans `_pending/` and
+    // raises the Now-panel notification — just log here.
+    _log('INFO', 'Contributor: new pending submission from $callsign in $eventPath');
+  }
 
   @override
   void contentBrowseLog(String level, String message) =>
@@ -2768,6 +2783,12 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         // only requires a new AppContentProvider, not a new route
         // here.
         await handleContentBrowseRequest(request);
+      } else if (path.startsWith('/api/events/') &&
+          path.contains('/contributors/') &&
+          await handleContributorRequest(request)) {
+        // Visitor contribution submit — mixin returns true when it
+        // handled the request. Only matches the submit route; other
+        // contributor operations fall through to event file serving.
       } else if (path == '/api/blog' || path.startsWith('/api/blog/')) {
         await _handleBlogApi(request);
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {

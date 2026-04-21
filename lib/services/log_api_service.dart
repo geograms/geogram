@@ -4,6 +4,7 @@ import 'dart:io' as io if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 import 'package:http/http.dart' as http;
@@ -80,6 +81,7 @@ import '../work/models/ndf_permission.dart';
 import '../util/reaction_utils.dart';
 import '../util/nostr_bundle.dart';
 import '../util/feedback_folder_utils.dart';
+import '../util/contributor_folder_utils.dart';
 import 'audio_service.dart';
 import 'backup_service.dart';
 import '../models/backup_models.dart';
@@ -137,6 +139,7 @@ import '../util/event_activity_notifier.dart';
 import '../util/station_html_templates.dart';
 import '../server/mixins/chat_modification_mixin.dart';
 import '../server/mixins/content_browse_mixin.dart';
+import '../server/mixins/contributor_submit_mixin.dart';
 import '../models/shared_folder.dart';
 import 'shared_folder_service.dart';
 import 'groups_service.dart';
@@ -182,7 +185,8 @@ class _MeetSessionSnapshot {
       : this._(state: 'archive', archive: archive);
 }
 
-class LogApiService with ChatModificationMixin, ContentBrowseMixin {
+class LogApiService
+    with ChatModificationMixin, ContentBrowseMixin, ContributorSubmitMixin {
   static final LogApiService _instance = LogApiService._internal();
   factory LogApiService() => _instance;
   LogApiService._internal();
@@ -192,6 +196,23 @@ class LogApiService with ChatModificationMixin, ContentBrowseMixin {
     final dataDir = StorageConfig().baseDir;
     final callsign = ProfileService().getProfile().callsign;
     return FilesystemProfileStorage('$dataDir/devices/$callsign');
+  }
+
+  @override
+  ProfileStorage get contributorStorage => contentBrowseStorage;
+
+  @override
+  void contributorLog(String level, String message) =>
+      LogService().log('Contributor [$level]: $message');
+
+  @override
+  void onContributionSubmitted(String eventPath, String callsign) {
+    // Pending submissions surface via the Now panel through
+    // EventActivityNotifier scanning. Just log for diagnostics; the
+    // notifier watcher picks up the new folder on its next tick.
+    LogService().log(
+      'Contributor: new pending submission from $callsign in $eventPath',
+    );
   }
 
   @override
@@ -727,6 +748,11 @@ class LogApiService with ChatModificationMixin, ContentBrowseMixin {
     final contentResult =
         await handleContentBrowseShelf(request, urlPath);
     if (contentResult != null) return contentResult;
+
+    // Contributor submissions (visitor-side upload to a remote event)
+    final contributorResult =
+        await handleContributorShelf(request, urlPath);
+    if (contributorResult != null) return contributorResult;
 
     // Events API endpoints (public read-only access to events)
     if (urlPath == 'api/events' || urlPath == 'api/events/' || urlPath.startsWith('api/events/')) {
@@ -3003,6 +3029,14 @@ class LogApiService with ChatModificationMixin, ContentBrowseMixin {
       // Handle backup actions separately (they are async)
       if (action.toLowerCase().startsWith('backup_')) {
         return await _handleBackupAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle contributor actions before the generic event_ prefix
+      // (so contributor_* actions don't get routed to _handleEventAction).
+      if (action.toLowerCase().startsWith('contributor_') ||
+          action.toLowerCase() == 'remote_contribution_submit') {
+        return await _handleContributorAction(
+            action.toLowerCase(), params, headers);
       }
 
       // Handle event actions separately (they are async)
@@ -12453,6 +12487,12 @@ class LogApiService with ChatModificationMixin, ContentBrowseMixin {
         case 'remote_event_comment':
           return await _handleRemoteEventAction(action, params, headers);
 
+        case 'remote_contribution_submit':
+        case 'contributor_approve':
+        case 'contributor_reject':
+        case 'contributor_list_pending':
+          return await _handleContributorAction(action, params, headers);
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
@@ -12808,6 +12848,220 @@ class LogApiService with ChatModificationMixin, ContentBrowseMixin {
     }
 
     return shelf.Response.ok(jsonEncode(result), headers: headers);
+  }
+
+  // ============================================================
+  // Debug API - Contributor Debug Actions
+  // ============================================================
+
+  /// Drives the visitor-side submission end-to-end from the local
+  /// device so tests can prove the flow without a human picking
+  /// files in the UI. Signs with the active profile's nsec and hits
+  /// the target device via ConnectionManager.
+  ///
+  /// Actions:
+  ///   remote_contribution_submit  — sign + POST one file to a
+  ///       remote device's event
+  ///   event_contributor_approve   — move a pending contributor on
+  ///       the LOCAL device to the approved folder (author action)
+  ///   event_contributor_reject    — delete a pending contributor
+  ///       on the LOCAL device
+  ///   event_contributors_pending  — list pending contributors on
+  ///       the local device (author inspection)
+  Future<shelf.Response> _handleContributorAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final storage = contentBrowseStorage;
+      if (action == 'contributor_list_pending') {
+        final eventId = (params['eventId'] as String?)?.trim();
+        if (eventId == null || eventId.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({'success': false, 'error': 'eventId required'}),
+            headers: headers,
+          );
+        }
+        final eventPath = await _resolveLocalEventPath(storage, eventId);
+        if (eventPath == null) {
+          return shelf.Response.notFound(
+            jsonEncode({'success': false, 'error': 'Event not found'}),
+            headers: headers,
+          );
+        }
+        final callsigns = await ContributorFolderUtils.listPendingCallsigns(
+            eventPath: eventPath, storage: storage);
+        final pending = <Map<String, dynamic>>[];
+        for (final cs in callsigns) {
+          final folder =
+              ContributorFolderUtils.pendingFolder(eventPath, cs);
+          final files = await ContributorFolderUtils.listMediaFiles(
+              folderPath: folder, storage: storage);
+          final meta = await ContributorFolderUtils.readMeta(
+              folderPath: folder, storage: storage);
+          pending.add({
+            'callsign': cs,
+            'files': files,
+            if (meta?.npub != null) 'npub': meta!.npub,
+            if (meta?.created.isNotEmpty == true) 'created': meta!.created,
+            if (meta?.description.isNotEmpty == true)
+              'description': meta!.description,
+          });
+        }
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'pending': pending}),
+          headers: headers,
+        );
+      }
+
+      if (action == 'contributor_approve' ||
+          action == 'contributor_reject') {
+        final eventId = (params['eventId'] as String?)?.trim();
+        final callsign = (params['callsign'] as String?)?.trim().toUpperCase();
+        if (eventId == null || eventId.isEmpty || callsign == null ||
+            callsign.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode(
+                {'success': false, 'error': 'eventId + callsign required'}),
+            headers: headers,
+          );
+        }
+        final eventPath = await _resolveLocalEventPath(storage, eventId);
+        if (eventPath == null) {
+          return shelf.Response.notFound(
+            jsonEncode({'success': false, 'error': 'Event not found'}),
+            headers: headers,
+          );
+        }
+        final applied = action == 'contributor_approve'
+            ? await ContributorFolderUtils.approve(
+                eventPath: eventPath, callsign: callsign, storage: storage)
+            : await ContributorFolderUtils.reject(
+                eventPath: eventPath, callsign: callsign, storage: storage);
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': applied,
+            'action': action,
+            'callsign': callsign,
+          }),
+          headers: headers,
+        );
+      }
+
+      // remote_contribution_submit: sign + POST to a remote device.
+      final remoteCallsign = (params['callsign'] as String?)?.trim();
+      final eventId = (params['eventId'] as String?)?.trim();
+      final filename = (params['filename'] as String?)?.trim();
+      final sourcePath = (params['sourcePath'] as String?)?.trim();
+      if (remoteCallsign == null || remoteCallsign.isEmpty ||
+          eventId == null || eventId.isEmpty ||
+          filename == null || filename.isEmpty ||
+          sourcePath == null || sourcePath.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'callsign + eventId + filename + sourcePath required',
+          }),
+          headers: headers,
+        );
+      }
+      final file = io.File(sourcePath);
+      if (!await file.exists()) {
+        return shelf.Response.notFound(
+          jsonEncode({'success': false, 'error': 'sourcePath not found'}),
+          headers: headers,
+        );
+      }
+      final bytes = await file.readAsBytes();
+      final profile = ProfileService().getProfile();
+      final nsec = profile.nsec;
+      final npub = profile.npub;
+      if (nsec.isEmpty || npub.isEmpty) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Local profile has no NOSTR identity',
+          }),
+          headers: headers,
+        );
+      }
+      final createdAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final pubkeyHex = NostrCrypto.decodeNpub(npub);
+      final fileHash = crypto.sha256.convert(bytes).toString();
+      final ev = NostrEvent(
+        pubkey: pubkeyHex,
+        createdAt: createdAt,
+        kind: NostrEventKind.textNote,
+        tags: [
+          ['e', eventId],
+          ['f', filename],
+          ['callsign', profile.callsign],
+          ['kind', 'event_contribution'],
+        ],
+        content: fileHash,
+      );
+      ev.calculateId();
+      final signature = ev.signWithNsec(nsec);
+
+      final resp = await DevicesService().makeDeviceApiRequest(
+        callsign: remoteCallsign,
+        method: 'POST',
+        path: '/api/events/${Uri.encodeComponent(eventId)}'
+            '/contributors/${Uri.encodeComponent(profile.callsign)}'
+            '/submit/${Uri.encodeComponent(filename)}',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Nostr-Npub': npub,
+          'X-Nostr-Signature': signature,
+          'X-Nostr-Timestamp': createdAt.toString(),
+        },
+        bodyBytes: bytes,
+      );
+      if (resp == null) {
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': false,
+            'error': 'Transport unavailable or request failed',
+          }),
+          headers: headers,
+        );
+      }
+      Map<String, dynamic>? body;
+      try {
+        body = jsonDecode(resp.body) as Map<String, dynamic>;
+      } catch (_) {}
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': resp.statusCode == 200,
+          'status_code': resp.statusCode,
+          'response': body ?? resp.body,
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<String?> _resolveLocalEventPath(
+      ProfileStorage storage, String eventId) async {
+    try {
+      final entries = await storage.listDirectory('events', recursive: true);
+      for (final entry in entries) {
+        if (entry.isDirectory) continue;
+        if (!entry.name.endsWith('event.txt')) continue;
+        final parts = entry.path.split('/');
+        final idIdx = parts.lastIndexOf('event.txt') - 1;
+        if (idIdx < 0) continue;
+        if (parts[idIdx] != eventId) continue;
+        return entry.path.replaceAll(RegExp(r'/event\.txt$'), '');
+      }
+    } catch (_) {}
+    return null;
   }
 
   // ============================================================

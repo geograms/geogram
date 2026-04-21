@@ -1874,12 +1874,18 @@ class DevicesService {
   /// Make an API request to a remote device, using ConnectionManager for routing
   /// This enables device-to-device communication using the best available transport
   /// Returns null if no route is available
+  ///
+  /// Pass [bodyBytes] instead of [body] for binary payloads (file
+  /// uploads, media submissions). The LAN transport hands
+  /// `List<int>` straight through to the HTTP client without any
+  /// UTF-8 round-trip. [body] is ignored when [bodyBytes] is set.
   Future<http.Response?> makeDeviceApiRequest({
     required String callsign,
     required String method,
     required String path,
     Map<String, String>? headers,
     String? body,
+    List<int>? bodyBytes,
   }) async {
     final normalizedCallsign = callsign.toUpperCase();
     LogService().log(
@@ -1906,6 +1912,7 @@ class DevicesService {
         path: path,
         headers: headers,
         body: body,
+        bodyBytes: bodyBytes,
       );
     }
 
@@ -1919,7 +1926,7 @@ class DevicesService {
       method: method,
       path: path,
       headers: headers,
-      body: body,
+      body: bodyBytes ?? body,
     );
 
     if (result.success) {
@@ -2006,6 +2013,7 @@ class DevicesService {
     required String path,
     Map<String, String>? headers,
     String? body,
+    List<int>? bodyBytes,
   }) async {
     final normalizedCallsign = callsign.toUpperCase();
     final device = getDevice(normalizedCallsign);
@@ -2034,6 +2042,7 @@ class DevicesService {
           uri,
           headers,
           body,
+          bodyBytes: bodyBytes,
         ).timeout(const Duration(seconds: 5));
         if (response.statusCode < 500) {
           return response; // Success or client error - don't retry via station
@@ -2066,7 +2075,8 @@ class DevicesService {
       LogService().log(
         'DevicesService: Proxying via station to $normalizedCallsign: $method $path',
       );
-      return await _makeHttpRequest(method, proxyUri, headers, body);
+      return await _makeHttpRequest(method, proxyUri, headers, body,
+          bodyBytes: bodyBytes);
     } catch (e) {
       LogService().log('DevicesService: Station proxy request failed: $e');
       return null;
@@ -2186,20 +2196,24 @@ class DevicesService {
     String method,
     Uri uri,
     Map<String, String>? headers,
-    String? body,
-  ) async {
+    String? body, {
+    List<int>? bodyBytes,
+  }) async {
     final h = headers ?? {'Content-Type': 'application/json'};
     const defaultTimeout = Duration(seconds: 10);
+    // bodyBytes wins over body for binary uploads — package:http's
+    // `body` argument accepts either a String or a List<int>.
+    final dynamic payload = bodyBytes ?? body;
     switch (method.toUpperCase()) {
       case 'GET':
         return await http.get(uri, headers: h).timeout(defaultTimeout);
       case 'POST':
         return await http
-            .post(uri, headers: h, body: body)
+            .post(uri, headers: h, body: payload)
             .timeout(defaultTimeout);
       case 'PUT':
         return await http
-            .put(uri, headers: h, body: body)
+            .put(uri, headers: h, body: payload)
             .timeout(defaultTimeout);
       case 'DELETE':
         return await http.delete(uri, headers: h).timeout(defaultTimeout);
