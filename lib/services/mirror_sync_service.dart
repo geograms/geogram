@@ -104,13 +104,17 @@ class MirrorFileEntry {
   }
 
   Map<String, dynamic> toJson() => {
-        'path': path,
-        'sha1': sha1,
-        'mtime': mtime,
-        'size': size,
-        if (tlsh != null) 'tlsh': tlsh,
-      };
+    'path': path,
+    'sha1': sha1,
+    'mtime': mtime,
+    'size': size,
+    if (tlsh != null) 'tlsh': tlsh,
+  };
 }
+
+/// Local file metadata used during diffing. The SHA1 may be absent until an
+/// on-demand hash is actually needed.
+typedef LocalDiffEntry = ({int size, int mtime, String? sha1});
 
 /// Manifest of a folder for mirror sync
 class MirrorManifest {
@@ -150,12 +154,12 @@ class MirrorManifest {
   }
 
   Map<String, dynamic> toJson() => {
-        'folder': folder,
-        'total_files': totalFiles,
-        'total_bytes': totalBytes,
-        'files': files.map((f) => f.toJson()).toList(),
-        'generated_at': generatedAt,
-      };
+    'folder': folder,
+    'total_files': totalFiles,
+    'total_bytes': totalBytes,
+    'files': files.map((f) => f.toJson()).toList(),
+    'generated_at': generatedAt,
+  };
 }
 
 /// Type of file change detected during diff
@@ -190,29 +194,26 @@ class FileChange {
   });
 
   factory FileChange.add(MirrorFileEntry entry) => FileChange(
-        type: FileChangeType.add,
-        path: entry.path,
-        remoteEntry: entry,
-      );
+    type: FileChangeType.add,
+    path: entry.path,
+    remoteEntry: entry,
+  );
 
   factory FileChange.modify(MirrorFileEntry entry, int localSize) => FileChange(
-        type: FileChangeType.modify,
-        path: entry.path,
-        remoteEntry: entry,
-        localSize: localSize,
-      );
+    type: FileChangeType.modify,
+    path: entry.path,
+    remoteEntry: entry,
+    localSize: localSize,
+  );
 
-  factory FileChange.delete(String path, int localSize) => FileChange(
-        type: FileChangeType.delete,
-        path: path,
-        localSize: localSize,
-      );
+  factory FileChange.delete(String path, int localSize) =>
+      FileChange(type: FileChangeType.delete, path: path, localSize: localSize);
 
   factory FileChange.upload(MirrorFileEntry localEntry) => FileChange(
-        type: FileChangeType.upload,
-        path: localEntry.path,
-        localEntry: localEntry,
-      );
+    type: FileChangeType.upload,
+    path: localEntry.path,
+    localEntry: localEntry,
+  );
 }
 
 /// Access token for a sync session
@@ -237,16 +238,17 @@ class MirrorAccessToken {
       peerCallsign: json['peer_callsign'] as String,
       folder: json['folder'] as String,
       expiresAt: DateTime.fromMillisecondsSinceEpoch(
-          (json['expires_at'] as int) * 1000),
+        (json['expires_at'] as int) * 1000,
+      ),
     );
   }
 
   Map<String, dynamic> toJson() => {
-        'token': token,
-        'peer_callsign': peerCallsign,
-        'folder': folder,
-        'expires_at': expiresAt.millisecondsSinceEpoch ~/ 1000,
-      };
+    'token': token,
+    'peer_callsign': peerCallsign,
+    'folder': folder,
+    'expires_at': expiresAt.millisecondsSinceEpoch ~/ 1000,
+  };
 }
 
 /// Result of a sync operation
@@ -273,17 +275,17 @@ class SyncResult {
     this.duration = Duration.zero,
   });
 
-  factory SyncResult.failure(String error) => SyncResult(
-        success: false,
-        error: error,
-      );
+  factory SyncResult.failure(String error) =>
+      SyncResult(success: false, error: error);
 
-  int get totalChanges => filesAdded + filesModified + filesDeleted + filesUploaded;
+  int get totalChanges =>
+      filesAdded + filesModified + filesDeleted + filesUploaded;
 }
 
 /// Sync status for tracking progress
 class SyncStatus {
-  final String state; // 'idle', 'requesting', 'fetching_manifest', 'syncing', 'done', 'error'
+  final String
+  state; // 'idle', 'requesting', 'fetching_manifest', 'syncing', 'done', 'error'
   final String? currentFile;
   final int filesProcessed;
   final int totalFiles;
@@ -301,21 +303,20 @@ class SyncStatus {
     this.error,
   });
 
-  double get progress =>
-      totalFiles > 0 ? filesProcessed / totalFiles : 0.0;
+  double get progress => totalFiles > 0 ? filesProcessed / totalFiles : 0.0;
 
   factory SyncStatus.idle() => const SyncStatus(state: 'idle');
 
   Map<String, dynamic> toJson() => {
-        'state': state,
-        if (currentFile != null) 'current_file': currentFile,
-        'files_processed': filesProcessed,
-        'total_files': totalFiles,
-        'bytes_transferred': bytesTransferred,
-        'total_bytes': totalBytes,
-        if (error != null) 'error': error,
-        'progress': progress,
-      };
+    'state': state,
+    if (currentFile != null) 'current_file': currentFile,
+    'files_processed': filesProcessed,
+    'total_files': totalFiles,
+    'bytes_transferred': bytesTransferred,
+    'total_bytes': totalBytes,
+    if (error != null) 'error': error,
+    'progress': progress,
+  };
 }
 
 /// A challenge for challenge-response authentication
@@ -335,11 +336,11 @@ class MirrorChallenge {
   bool get isExpired => DateTime.now().isAfter(expiresAt);
 
   Map<String, dynamic> toJson() => {
-        'nonce': nonce,
-        'folder': folder,
-        'expires_at': expiresAt.millisecondsSinceEpoch ~/ 1000,
-        'created_at': createdAt.millisecondsSinceEpoch ~/ 1000,
-      };
+    'nonce': nonce,
+    'folder': folder,
+    'expires_at': expiresAt.millisecondsSinceEpoch ~/ 1000,
+    'created_at': createdAt.millisecondsSinceEpoch ~/ 1000,
+  };
 }
 
 /// Service for Simple Mirror synchronization
@@ -425,7 +426,9 @@ class MirrorSyncService {
     // Always auto-add own npub — even without a config file (fresh device)
     // so that mirror devices with the same identity can authenticate.
     _addOwnNpubAsAllowedPeer();
-    LogService().log('MirrorSync: Loaded ${_allowedPeers.length} allowed peers from config');
+    LogService().log(
+      'MirrorSync: Loaded ${_allowedPeers.length} allowed peers from config',
+    );
   }
 
   /// Auto-add own npub as allowed peer so mirror devices with the same
@@ -436,7 +439,9 @@ class MirrorSyncService {
       if (profile.npub.isNotEmpty && profile.callsign.isNotEmpty) {
         if (!_allowedPeers.containsKey(profile.npub)) {
           _allowedPeers[profile.npub] = profile.callsign;
-          LogService().log('MirrorSync: Auto-added own npub as allowed peer for mirror sync');
+          LogService().log(
+            'MirrorSync: Auto-added own npub as allowed peer for mirror sync',
+          );
         }
       }
     } catch (_) {
@@ -451,7 +456,10 @@ class MirrorSyncService {
     _activeChallenges.removeWhere((_, c) => c.isExpired);
 
     // Generate random nonce (32 bytes hex = 64 chars)
-    final random = List<int>.generate(32, (_) => DateTime.now().microsecondsSinceEpoch % 256);
+    final random = List<int>.generate(
+      32,
+      (_) => DateTime.now().microsecondsSinceEpoch % 256,
+    );
     final nonce = sha256.convert(random).toString();
 
     final challenge = MirrorChallenge(
@@ -461,35 +469,38 @@ class MirrorSyncService {
     );
 
     _activeChallenges[nonce] = challenge;
-    LogService().log('MirrorSync: Generated challenge for folder $folder: ${nonce.substring(0, 16)}...');
+    LogService().log(
+      'MirrorSync: Generated challenge for folder $folder: ${nonce.substring(0, 16)}...',
+    );
 
     return challenge;
   }
 
   /// Verify an incoming sync request with challenge-response
-  /// The event content must be: "mirror_response:<nonce>:<folder>"
+  /// The event content must be `mirror_response:<nonce>:<folder>`.
   /// Returns access token if valid, null otherwise
   Future<({bool allowed, String? token, String? error, int? expiresAt})>
-      verifyRequest(NostrEvent event, String folder) async {
+  verifyRequest(NostrEvent event, String folder) async {
     // 1. Verify NOSTR signature
     if (!event.verify()) {
       return (
         allowed: false,
         token: null,
         error: 'INVALID_SIGNATURE',
-        expiresAt: null
+        expiresAt: null,
       );
     }
 
     // 2. Check request freshness
-    final requestTime =
-        DateTime.fromMillisecondsSinceEpoch(event.createdAt * 1000);
+    final requestTime = DateTime.fromMillisecondsSinceEpoch(
+      event.createdAt * 1000,
+    );
     if (DateTime.now().difference(requestTime) > _requestMaxAge) {
       return (
         allowed: false,
         token: null,
         error: 'EXPIRED_REQUEST',
-        expiresAt: null
+        expiresAt: null,
       );
     }
 
@@ -501,7 +512,7 @@ class MirrorSyncService {
         allowed: false,
         token: null,
         error: 'PEER_NOT_ALLOWED',
-        expiresAt: null
+        expiresAt: null,
       );
     }
 
@@ -513,7 +524,7 @@ class MirrorSyncService {
         allowed: false,
         token: null,
         error: 'INVALID_CHALLENGE_FORMAT',
-        expiresAt: null
+        expiresAt: null,
       );
     }
 
@@ -523,7 +534,7 @@ class MirrorSyncService {
         allowed: false,
         token: null,
         error: 'INVALID_CHALLENGE_FORMAT',
-        expiresAt: null
+        expiresAt: null,
       );
     }
 
@@ -537,7 +548,7 @@ class MirrorSyncService {
         allowed: false,
         token: null,
         error: 'INVALID_CHALLENGE',
-        expiresAt: null
+        expiresAt: null,
       );
     }
 
@@ -547,7 +558,7 @@ class MirrorSyncService {
         allowed: false,
         token: null,
         error: 'CHALLENGE_EXPIRED',
-        expiresAt: null
+        expiresAt: null,
       );
     }
 
@@ -557,7 +568,7 @@ class MirrorSyncService {
         allowed: false,
         token: null,
         error: 'FOLDER_MISMATCH',
-        expiresAt: null
+        expiresAt: null,
       );
     }
 
@@ -583,13 +594,14 @@ class MirrorSyncService {
 
     _activeTokens[token] = accessToken;
     LogService().log(
-        'MirrorSync: Issued token for $peerCallsign to sync $folder');
+      'MirrorSync: Issued token for $peerCallsign to sync $folder',
+    );
 
     return (
       allowed: true,
       token: token,
       error: null,
-      expiresAt: expiresAt.millisecondsSinceEpoch ~/ 1000
+      expiresAt: expiresAt.millisecondsSinceEpoch ~/ 1000,
     );
   }
 
@@ -654,9 +666,11 @@ class MirrorSyncService {
           // Try bulk-loaded cache first
           final cached = cachedIndex[relativePath];
           final cachedHash =
-              (cached != null && cached.size == entrySize && cached.mtime == entryMtime)
-                  ? cached.sha1
-                  : null;
+              (cached != null &&
+                  cached.size == entrySize &&
+                  cached.mtime == entryMtime)
+              ? cached.sha1
+              : null;
           String sha1Hash;
           String? tlshHash;
 
@@ -676,13 +690,15 @@ class MirrorSyncService {
             ));
           }
 
-          files.add(MirrorFileEntry(
-            path: relativePath,
-            sha1: sha1Hash,
-            mtime: entryMtime,
-            size: entrySize,
-            tlsh: tlshHash,
-          ));
+          files.add(
+            MirrorFileEntry(
+              path: relativePath,
+              sha1: sha1Hash,
+              mtime: entryMtime,
+              size: entrySize,
+              tlsh: tlshHash,
+            ),
+          );
 
           totalBytes += entrySize;
         } catch (e) {
@@ -709,7 +725,9 @@ class MirrorSyncService {
           final relativePath = path.relative(entity.path, from: folderPath);
 
           if (relativePath.startsWith('.')) continue;
-          if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
+          if (relativePath == 'log' || relativePath.startsWith('log/')) {
+            continue;
+          }
 
           currentPaths.add(relativePath);
 
@@ -721,9 +739,11 @@ class MirrorSyncService {
             // Try bulk-loaded cache first
             final cached = cachedIndex[relativePath];
             final cachedHash =
-                (cached != null && cached.size == entrySize && cached.mtime == entryMtime)
-                    ? cached.sha1
-                    : null;
+                (cached != null &&
+                    cached.size == entrySize &&
+                    cached.mtime == entryMtime)
+                ? cached.sha1
+                : null;
             String sha1Hash;
             String? tlshHash;
 
@@ -742,17 +762,21 @@ class MirrorSyncService {
               ));
             }
 
-            files.add(MirrorFileEntry(
-              path: relativePath,
-              sha1: sha1Hash,
-              mtime: entryMtime,
-              size: entrySize,
-              tlsh: tlshHash,
-            ));
+            files.add(
+              MirrorFileEntry(
+                path: relativePath,
+                sha1: sha1Hash,
+                mtime: entryMtime,
+                size: entrySize,
+                tlsh: tlshHash,
+              ),
+            );
 
             totalBytes += entrySize;
           } catch (e) {
-            LogService().log('MirrorSync: Error reading file $relativePath: $e');
+            LogService().log(
+              'MirrorSync: Error reading file $relativePath: $e',
+            );
           }
         }
       }
@@ -808,7 +832,11 @@ class MirrorSyncService {
 
   /// Build a URI from a peer base URL, an API path, and optional query params.
   /// Preserves any query params already on [peerUrl] (e.g. `?target=ID`).
-  static Uri _buildPeerUri(String peerUrl, String apiPath, [Map<String, String>? params]) {
+  static Uri _buildPeerUri(
+    String peerUrl,
+    String apiPath, [
+    Map<String, String>? params,
+  ]) {
     final base = Uri.parse(peerUrl);
     final merged = <String, String>{
       ...base.queryParameters,
@@ -826,17 +854,25 @@ class MirrorSyncService {
     String folder,
   ) async {
     try {
-      final url = _buildPeerUri(peerUrl, '/api/mirror/challenge', {'folder': folder});
+      final url = _buildPeerUri(peerUrl, '/api/mirror/challenge', {
+        'folder': folder,
+      });
       final response = await http.get(url);
 
       if (response.statusCode != 200) {
         final body = jsonDecode(response.body);
-        return (nonce: null, error: (body['error'] ?? 'Challenge failed') as String?);
+        return (
+          nonce: null,
+          error: (body['error'] ?? 'Challenge failed') as String?,
+        );
       }
 
       final body = jsonDecode(response.body);
       if (body['success'] != true) {
-        return (nonce: null, error: (body['error'] ?? 'Challenge failed') as String?);
+        return (
+          nonce: null,
+          error: (body['error'] ?? 'Challenge failed') as String?,
+        );
       }
 
       return (nonce: body['nonce'] as String, error: null);
@@ -847,8 +883,11 @@ class MirrorSyncService {
   }
 
   /// Create a signed challenge response event
-  /// Content format: "mirror_response:<nonce>:<folder>"
-  Future<NostrEvent?> createChallengeResponse(String nonce, String folder) async {
+  /// Content format: `mirror_response:<nonce>:<folder>`.
+  Future<NostrEvent?> createChallengeResponse(
+    String nonce,
+    String folder,
+  ) async {
     final profile = ProfileService().getProfile();
     if (profile.nsec.isEmpty) {
       LogService().log('MirrorSync: Cannot create response without nsec');
@@ -887,14 +926,19 @@ class MirrorSyncService {
         return (
           allowed: false,
           token: null,
-          error: challengeResult.error ?? 'Failed to get challenge'
+          error: challengeResult.error ?? 'Failed to get challenge',
         );
       }
 
-      LogService().log('MirrorSync: Got challenge: ${challengeResult.nonce!.substring(0, 16)}...');
+      LogService().log(
+        'MirrorSync: Got challenge: ${challengeResult.nonce!.substring(0, 16)}...',
+      );
 
       // 2. Sign the challenge
-      final event = await createChallengeResponse(challengeResult.nonce!, folder);
+      final event = await createChallengeResponse(
+        challengeResult.nonce!,
+        folder,
+      );
       if (event == null) {
         return (allowed: false, token: null, error: 'Failed to sign challenge');
       }
@@ -904,10 +948,7 @@ class MirrorSyncService {
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'event': event.toJson(),
-          'folder': folder,
-        }),
+        body: jsonEncode({'event': event.toJson(), 'folder': folder}),
       );
 
       if (response.statusCode != 200) {
@@ -915,7 +956,7 @@ class MirrorSyncService {
         return (
           allowed: false,
           token: null,
-          error: (body['error'] ?? 'Request failed') as String?
+          error: (body['error'] ?? 'Request failed') as String?,
         );
       }
 
@@ -924,15 +965,11 @@ class MirrorSyncService {
         return (
           allowed: false,
           token: null,
-          error: (body['error'] ?? 'Not allowed') as String?
+          error: (body['error'] ?? 'Not allowed') as String?,
         );
       }
 
-      return (
-        allowed: true,
-        token: body['token'] as String,
-        error: null,
-      );
+      return (allowed: true, token: body['token'] as String, error: null);
     } catch (e) {
       LogService().log('MirrorSync: Request failed: $e');
       return (allowed: false, token: null, error: e.toString());
@@ -948,20 +985,25 @@ class MirrorSyncService {
     _updateStatus(const SyncStatus(state: 'fetching_manifest'));
 
     try {
-      final url = _buildPeerUri(peerUrl, '/api/mirror/manifest', {'folder': folder, 'token': token});
+      final url = _buildPeerUri(peerUrl, '/api/mirror/manifest', {
+        'folder': folder,
+        'token': token,
+      });
 
       final response = await http.get(url);
 
       if (response.statusCode != 200) {
-        LogService()
-            .log('MirrorSync: Manifest request failed: ${response.statusCode}');
+        LogService().log(
+          'MirrorSync: Manifest request failed: ${response.statusCode}',
+        );
         return null;
       }
 
       final body = jsonDecode(response.body);
       if (body['success'] != true) {
-        LogService()
-            .log('MirrorSync: Manifest request failed: ${body['error']}');
+        LogService().log(
+          'MirrorSync: Manifest request failed: ${body['error']}',
+        );
         return null;
       }
 
@@ -985,8 +1027,10 @@ class MirrorSyncService {
     void Function(int done, int total)? onProgress,
   }) async {
     final changes = <FileChange>[];
-    final localFiles = <String, ({int size, int mtime, String sha1})>{};
+    final localFiles = <String, LocalDiffEntry>{};
     final folder = path.basename(localPath);
+    final cacheMisses =
+        <({String path, int size, int mtime, String sha1, String? tlsh})>[];
 
     // Merge per-app ignorePatterns with global "always" exclude rules.
     // Exclude-rule patterns may be folder-scoped (e.g. "blog/file.json")
@@ -1008,19 +1052,59 @@ class MirrorSyncService {
     int filesProcessed = 0;
     int totalEntries = 0;
 
+    Future<String?> ensureLocalSha1(
+      String relativePath,
+      LocalDiffEntry current,
+    ) async {
+      final existing = localFiles[relativePath];
+      if (existing != null &&
+          existing.sha1 != null &&
+          existing.sha1!.isNotEmpty) {
+        return existing.sha1;
+      }
+
+      try {
+        late final Uint8List? bytes;
+        if (storage != null) {
+          bytes = await storage.readBytes('$folder/$relativePath');
+        } else {
+          final file = File('$localPath/$relativePath');
+          if (!await file.exists()) return null;
+          bytes = await file.readAsBytes();
+        }
+
+        if (bytes == null) return null;
+        final hash = sha1.convert(bytes).toString();
+        localFiles[relativePath] = (
+          size: current.size,
+          mtime: current.mtime,
+          sha1: hash,
+        );
+        cacheMisses.add((
+          path: relativePath,
+          size: current.size,
+          mtime: current.mtime,
+          sha1: hash,
+          tlsh: null,
+        ));
+        return hash;
+      } catch (e) {
+        LogService().log(
+          'MirrorSync: Error hashing local file $relativePath: $e',
+        );
+        return null;
+      }
+    }
+
     if (storage != null) {
       // Scan via ProfileStorage
       final exists = await storage.directoryExists(folder);
       if (exists) {
         final entries = await storage.listDirectory(folder, recursive: true);
-        final fileEntries =
-            entries.where((e) => !e.isDirectory).toList();
+        final fileEntries = entries.where((e) => !e.isDirectory).toList();
         totalEntries = fileEntries.length;
         final currentPaths = <String>{};
         final cachedIndex = fileIndex?.getFolderIndex(folder) ?? {};
-        final cacheMisses =
-            <({String path, int size, int mtime, String sha1, String? tlsh})>[];
-
         for (final entry in fileEntries) {
           final fullRelPath = entry.path;
           final relativePath = fullRelPath.startsWith('$folder/')
@@ -1051,35 +1135,15 @@ class MirrorSyncService {
           // Try bulk-loaded cache first
           final cached = cachedIndex[relativePath];
           final cachedHash =
-              (cached != null && cached.size == entrySize && cached.mtime == entryMtime)
-                  ? cached.sha1
-                  : null;
-          String hash;
-
-          if (cachedHash != null) {
-            hash = cachedHash;
-          } else {
-            final bytes = await storage.readBytes(fullRelPath);
-            if (bytes == null) {
-              filesProcessed++;
-              onProgress?.call(filesProcessed, totalEntries);
-              continue;
-            }
-            hash = sha1.convert(bytes).toString();
-            final tlshHash = TLSH.hash(Uint8List.fromList(bytes));
-            cacheMisses.add((
-              path: relativePath,
-              size: entrySize,
-              mtime: entryMtime,
-              sha1: hash,
-              tlsh: tlshHash,
-            ));
-          }
-
+              (cached != null &&
+                  cached.size == entrySize &&
+                  cached.mtime == entryMtime)
+              ? cached.sha1
+              : null;
           localFiles[relativePath] = (
             size: entrySize,
             mtime: entryMtime,
-            sha1: hash,
+            sha1: cachedHash,
           );
 
           filesProcessed++;
@@ -1100,9 +1164,6 @@ class MirrorSyncService {
         totalEntries = fileEntries.length;
         final currentPaths = <String>{};
         final cachedIndex = fileIndex?.getFolderIndex(folder) ?? {};
-        final cacheMisses =
-            <({String path, int size, int mtime, String sha1, String? tlsh})>[];
-
         for (final entity in fileEntries) {
           final relativePath = path.relative(entity.path, from: localPath);
           if (relativePath.startsWith('.')) {
@@ -1130,30 +1191,15 @@ class MirrorSyncService {
           // Try bulk-loaded cache first
           final cached = cachedIndex[relativePath];
           final cachedHash =
-              (cached != null && cached.size == entrySize && cached.mtime == entryMtime)
-                  ? cached.sha1
-                  : null;
-          String hash;
-
-          if (cachedHash != null) {
-            hash = cachedHash;
-          } else {
-            final bytes = await (entity as File).readAsBytes();
-            hash = sha1.convert(bytes).toString();
-            final tlshHash = TLSH.hash(Uint8List.fromList(bytes));
-            cacheMisses.add((
-              path: relativePath,
-              size: entrySize,
-              mtime: entryMtime,
-              sha1: hash,
-              tlsh: tlshHash,
-            ));
-          }
-
+              (cached != null &&
+                  cached.size == entrySize &&
+                  cached.mtime == entryMtime)
+              ? cached.sha1
+              : null;
           localFiles[relativePath] = (
             size: entrySize,
             mtime: entryMtime,
-            sha1: hash,
+            sha1: cachedHash,
           );
 
           filesProcessed++;
@@ -1167,19 +1213,26 @@ class MirrorSyncService {
 
     // Check remote files against local
     for (final remoteFile in remote.files) {
-      if (remoteFile.path == 'log' || remoteFile.path.startsWith('log/')) continue;
+      if (remoteFile.path == 'log' || remoteFile.path.startsWith('log/')) {
+        continue;
+      }
       if (isIgnored(remoteFile.path, alwaysExclude)) continue;
 
       final local = localFiles.remove(remoteFile.path);
 
       if (local == null) {
-        // File doesn't exist locally - add (download from remote)
-        changes.add(FileChange.add(remoteFile));
-      } else if (local.sha1 != remoteFile.sha1) {
+        if (syncStyle != SyncStyle.sendOnly) {
+          // File doesn't exist locally - add (download from remote)
+          changes.add(FileChange.add(remoteFile));
+        }
+      } else if (local.size == remoteFile.size &&
+          local.mtime == remoteFile.mtime) {
+        // Fast path: unchanged by metadata, no need to hash.
+        continue;
+      } else {
         // Skip if the file matches a "modified only" exclude rule
         if (isIgnored(remoteFile.path, modifiedOnlyExclude)) continue;
 
-        // SHA1 differs
         if (syncStyle == SyncStyle.sendReceive) {
           // Bidirectional: most recent mtime wins
           if (remoteFile.mtime > local.mtime) {
@@ -1187,16 +1240,49 @@ class MirrorSyncService {
             changes.add(FileChange.modify(remoteFile, local.size));
           } else if (local.mtime > remoteFile.mtime) {
             // Local is newer — upload
-            changes.add(FileChange.upload(MirrorFileEntry(
-              path: remoteFile.path,
-              sha1: local.sha1,
-              mtime: local.mtime,
-              size: local.size,
-            )));
+            changes.add(
+              FileChange.upload(
+                MirrorFileEntry(
+                  path: remoteFile.path,
+                  sha1: local.sha1 ?? '',
+                  mtime: local.mtime,
+                  size: local.size,
+                ),
+              ),
+            );
+          } else {
+            // Same timestamp but different metadata — hash only this file.
+            final localSha1 = await ensureLocalSha1(remoteFile.path, local);
+            if (localSha1 == null || localSha1 == remoteFile.sha1) continue;
+            // Tie-break equal-mtime conflicts in favor of keeping the local
+            // side pushable; the user can still choose direction in the UI.
+            changes.add(
+              FileChange.upload(
+                MirrorFileEntry(
+                  path: remoteFile.path,
+                  sha1: localSha1,
+                  mtime: local.mtime,
+                  size: local.size,
+                ),
+              ),
+            );
           }
-          // Equal mtime + different SHA1 = true conflict, skip
+        } else if (syncStyle == SyncStyle.sendOnly) {
+          final localSha1 =
+              local.sha1 ?? await ensureLocalSha1(remoteFile.path, local);
+          if (localSha1 == null || localSha1 == remoteFile.sha1) continue;
+          changes.add(
+            FileChange.upload(
+              MirrorFileEntry(
+                path: remoteFile.path,
+                sha1: localSha1,
+                mtime: local.mtime,
+                size: local.size,
+              ),
+            ),
+          );
         } else {
-          // receiveOnly / sendOnly: source (remote) always wins
+          // receiveOnly: remote always wins
           changes.add(FileChange.modify(remoteFile, local.size));
         }
       }
@@ -1207,18 +1293,24 @@ class MirrorSyncService {
       for (final entry in localFiles.entries) {
         changes.add(FileChange.delete(entry.key, entry.value.size));
       }
-    } else if (syncStyle == SyncStyle.sendReceive) {
-      // Local-only files should be uploaded to remote
+    } else if (syncStyle == SyncStyle.sendReceive ||
+        syncStyle == SyncStyle.sendOnly) {
+      // Local-only files should be uploaded to remote.
       for (final entry in localFiles.entries) {
-        changes.add(FileChange.upload(MirrorFileEntry(
-          path: entry.key,
-          sha1: entry.value.sha1,
-          mtime: entry.value.mtime,
-          size: entry.value.size,
-        )));
+        changes.add(
+          FileChange.upload(
+            MirrorFileEntry(
+              path: entry.key,
+              sha1: entry.value.sha1 ?? '',
+              mtime: entry.value.mtime,
+              size: entry.value.size,
+            ),
+          ),
+        );
       }
     }
 
+    fileIndex?.batchPutHashes(folder, cacheMisses);
     return changes;
   }
 
@@ -1244,12 +1336,20 @@ class MirrorSyncService {
     ProfileStorage? storage,
   }) async {
     try {
-      final url = _buildPeerUri(peerUrl, '/api/mirror/file', {'path': filePath, 'token': token});
+      final url = _buildPeerUri(peerUrl, '/api/mirror/file', {
+        'path': filePath,
+        'token': token,
+      });
 
       if (storage != null) {
         // ProfileStorage requires Uint8List — stream into BytesBuilder with size cap
         return await _downloadFileBuffered(
-          url, folder, filePath, expectedSha1, storage);
+          url,
+          folder,
+          filePath,
+          expectedSha1,
+          storage,
+        );
       }
 
       // Filesystem path: stream directly to file (no full-body buffer)
@@ -1262,14 +1362,16 @@ class MirrorSyncService {
 
       if (!result.success) {
         LogService().log(
-            'MirrorSync: File download failed: $filePath (stream error or too large)');
+          'MirrorSync: File download failed: $filePath (stream error or too large)',
+        );
         return false;
       }
 
       // Verify SHA1 if provided
       if (expectedSha1 != null && result.sha1 != expectedSha1) {
         LogService().log(
-            'MirrorSync: SHA1 mismatch for $filePath: expected $expectedSha1, got ${result.sha1}');
+          'MirrorSync: SHA1 mismatch for $filePath: expected $expectedSha1, got ${result.sha1}',
+        );
         // Remove the bad file
         final f = File(targetPath);
         if (await f.exists()) await f.delete();
@@ -1294,12 +1396,14 @@ class MirrorSyncService {
   ) async {
     return withHttpClient((client) async {
       final request = http.Request('GET', url);
-      final response = await client.send(request).timeout(
-          const Duration(minutes: 5));
+      final response = await client
+          .send(request)
+          .timeout(const Duration(minutes: 5));
 
       if (response.statusCode != 200) {
         LogService().log(
-            'MirrorSync: File download failed: $filePath (${response.statusCode})');
+          'MirrorSync: File download failed: $filePath (${response.statusCode})',
+        );
         return false;
       }
 
@@ -1307,8 +1411,9 @@ class MirrorSyncService {
       if (response.contentLength != null &&
           response.contentLength! > _maxStorageFileBytes) {
         LogService().log(
-            'MirrorSync: Skipping $filePath — too large for storage '
-            '(${response.contentLength} bytes)');
+          'MirrorSync: Skipping $filePath — too large for storage '
+          '(${response.contentLength} bytes)',
+        );
         await response.stream.drain<void>();
         return false;
       }
@@ -1318,7 +1423,8 @@ class MirrorSyncService {
         builder.add(chunk);
         if (builder.length > _maxStorageFileBytes) {
           LogService().log(
-              'MirrorSync: Skipping $filePath — exceeded ${_maxStorageFileBytes ~/ (1024 * 1024)} MB during download');
+            'MirrorSync: Skipping $filePath — exceeded ${_maxStorageFileBytes ~/ (1024 * 1024)} MB during download',
+          );
           return false;
         }
       }
@@ -1330,7 +1436,8 @@ class MirrorSyncService {
         final actualSha1 = sha1.convert(bytes).toString();
         if (actualSha1 != expectedSha1) {
           LogService().log(
-              'MirrorSync: SHA1 mismatch for $filePath: expected $expectedSha1, got $actualSha1');
+            'MirrorSync: SHA1 mismatch for $filePath: expected $expectedSha1, got $actualSha1',
+          );
           return false;
         }
       }
@@ -1355,14 +1462,18 @@ class MirrorSyncService {
       if (storage != null) {
         final data = await storage.readBytes('$folder/$filePath');
         if (data == null) {
-          LogService().log('MirrorSync: Upload failed, file not found: $filePath');
+          LogService().log(
+            'MirrorSync: Upload failed, file not found: $filePath',
+          );
           return false;
         }
         bytes = data;
       } else {
         final localFile = File('$localPath/$filePath');
         if (!await localFile.exists()) {
-          LogService().log('MirrorSync: Upload failed, file not found: $filePath');
+          LogService().log(
+            'MirrorSync: Upload failed, file not found: $filePath',
+          );
           return false;
         }
         bytes = await localFile.readAsBytes();
@@ -1370,7 +1481,11 @@ class MirrorSyncService {
 
       final hash = sha1Hash ?? sha1.convert(bytes).toString();
 
-      final url = _buildPeerUri(peerUrl, '/api/mirror/upload', {'path': filePath, 'token': token, 'sha1': hash});
+      final url = _buildPeerUri(peerUrl, '/api/mirror/upload', {
+        'path': filePath,
+        'token': token,
+        'sha1': hash,
+      });
 
       final response = await http.post(
         url,
@@ -1380,7 +1495,8 @@ class MirrorSyncService {
 
       if (response.statusCode != 200) {
         LogService().log(
-            'MirrorSync: File upload failed: $filePath (${response.statusCode})');
+          'MirrorSync: File upload failed: $filePath (${response.statusCode})',
+        );
         return false;
       }
 
@@ -1453,29 +1569,30 @@ class MirrorSyncService {
       if (changes.isEmpty) {
         stopwatch.stop();
         _updateStatus(SyncStatus.idle());
-        return SyncResult(
-          success: true,
-          duration: stopwatch.elapsed,
-        );
+        return SyncResult(success: true, duration: stopwatch.elapsed);
       }
 
       // 5. Apply changes
-      _updateStatus(SyncStatus(
-        state: 'syncing',
-        totalFiles: changes.length,
-        totalBytes: manifest.totalBytes,
-      ));
+      _updateStatus(
+        SyncStatus(
+          state: 'syncing',
+          totalFiles: changes.length,
+          totalBytes: manifest.totalBytes,
+        ),
+      );
 
       var processed = 0;
       for (final change in changes) {
-        _updateStatus(SyncStatus(
-          state: 'syncing',
-          currentFile: change.path,
-          filesProcessed: processed,
-          totalFiles: changes.length,
-          bytesTransferred: bytesTransferred,
-          totalBytes: manifest.totalBytes,
-        ));
+        _updateStatus(
+          SyncStatus(
+            state: 'syncing',
+            currentFile: change.path,
+            filesProcessed: processed,
+            totalFiles: changes.length,
+            bytesTransferred: bytesTransferred,
+            totalBytes: manifest.totalBytes,
+          ),
+        );
 
         onProgress?.call(_syncStatus);
 
@@ -1525,7 +1642,9 @@ class MirrorSyncService {
               change.path,
               localPath,
               token,
-              sha1Hash: change.localEntry?.sha1,
+              sha1Hash: (change.localEntry?.sha1.isNotEmpty ?? false)
+                  ? change.localEntry!.sha1
+                  : null,
               storage: storage,
             );
 

@@ -32,12 +32,12 @@ class SyncTransferProgress {
   });
 
   const SyncTransferProgress.empty()
-      : filesTransferred = 0,
-        totalFiles = 0,
-        currentFile = null,
-        currentDevice = null,
-        isComplete = false,
-        failCount = 0;
+    : filesTransferred = 0,
+      totalFiles = 0,
+      currentFile = null,
+      currentDevice = null,
+      isComplete = false,
+      failCount = 0;
 
   SyncTransferProgress copyWith({
     int? filesTransferred,
@@ -82,20 +82,21 @@ class SyncTransferRequest {
     required Map<String, Set<String>> selectedFiles,
     required Map<String, bool> fileDirections,
     required Map<String, List<FileChange>> diffs,
-  })  : tokens = {for (final e in tokens.entries) e.key: e.value},
-        selectedFiles = {
-          for (final e in selectedFiles.entries) e.key: Set<String>.from(e.value)
-        },
-        fileDirections = Map<String, bool>.from(fileDirections),
-        diffs = {
-          for (final e in diffs.entries) e.key: List<FileChange>.from(e.value)
-        },
-        mirrors = const [],
-        peerUrls = const {},
-        multiTokens = const {},
-        deviceNeeds = const {},
-        isMultiMode = false,
-        totalFiles = selectedFiles.values.fold<int>(0, (s, v) => s + v.length);
+  }) : tokens = {for (final e in tokens.entries) e.key: e.value},
+       selectedFiles = {
+         for (final e in selectedFiles.entries)
+           e.key: Set<String>.from(e.value),
+       },
+       fileDirections = Map<String, bool>.from(fileDirections),
+       diffs = {
+         for (final e in diffs.entries) e.key: List<FileChange>.from(e.value),
+       },
+       mirrors = const [],
+       peerUrls = const {},
+       multiTokens = const {},
+       deviceNeeds = const {},
+       isMultiMode = false,
+       totalFiles = selectedFiles.values.fold<int>(0, (s, v) => s + v.length);
 
   SyncTransferRequest.multi({
     required List<MirrorDevice> mirrors,
@@ -104,30 +105,30 @@ class SyncTransferRequest {
     required Map<String, Map<String, Set<String>>> deviceNeeds,
     required Map<String, Set<String>> selectedFiles,
     required Map<String, List<FileChange>> diffs,
-  })  : mirrors = List<MirrorDevice>.from(mirrors),
-        peerUrls = Map<String, String>.from(peerUrls),
-        multiTokens = {
-          for (final e in tokens.entries)
-            e.key: Map<String, String>.from(e.value)
-        },
-        deviceNeeds = {
-          for (final e in deviceNeeds.entries)
-            e.key: {
-              for (final f in e.value.entries)
-                f.key: Set<String>.from(f.value)
-            }
-        },
-        selectedFiles = {
-          for (final e in selectedFiles.entries) e.key: Set<String>.from(e.value)
-        },
-        diffs = {
-          for (final e in diffs.entries) e.key: List<FileChange>.from(e.value)
-        },
-        peerUrl = null,
-        tokens = const {},
-        fileDirections = const {},
-        isMultiMode = true,
-        totalFiles = _countMultiTransfers(selectedFiles, deviceNeeds);
+  }) : mirrors = List<MirrorDevice>.from(mirrors),
+       peerUrls = Map<String, String>.from(peerUrls),
+       multiTokens = {
+         for (final e in tokens.entries)
+           e.key: Map<String, String>.from(e.value),
+       },
+       deviceNeeds = {
+         for (final e in deviceNeeds.entries)
+           e.key: {
+             for (final f in e.value.entries) f.key: Set<String>.from(f.value),
+           },
+       },
+       selectedFiles = {
+         for (final e in selectedFiles.entries)
+           e.key: Set<String>.from(e.value),
+       },
+       diffs = {
+         for (final e in diffs.entries) e.key: List<FileChange>.from(e.value),
+       },
+       peerUrl = null,
+       tokens = const {},
+       fileDirections = const {},
+       isMultiMode = true,
+       totalFiles = _countMultiTransfers(selectedFiles, deviceNeeds);
 
   static int _countMultiTransfers(
     Map<String, Set<String>> selectedFiles,
@@ -163,8 +164,7 @@ class SyncTransferService {
   final _progressController =
       StreamController<SyncTransferProgress>.broadcast();
 
-  Stream<SyncTransferProgress> get progressStream =>
-      _progressController.stream;
+  Stream<SyncTransferProgress> get progressStream => _progressController.stream;
   bool get isBusy => _isBusy;
   SyncTransferProgress get lastProgress => _lastProgress;
 
@@ -174,14 +174,16 @@ class SyncTransferService {
     _isBusy = true;
     _lastProgress = const SyncTransferProgress.empty();
 
-    TaskMonitorService().register(MonitoredTask(
-      id: _taskId,
-      name: 'Device Sync',
-      description: 'Syncing ${request.totalFiles} file(s)...',
-      serviceName: 'SyncTransfer',
-      priority: TaskPriority.normal,
-      type: TaskType.oneshot,
-    ));
+    TaskMonitorService().register(
+      MonitoredTask(
+        id: _taskId,
+        name: 'Device Sync',
+        description: 'Syncing ${request.totalFiles} file(s)...',
+        serviceName: 'SyncTransfer',
+        priority: TaskPriority.normal,
+        type: TaskType.oneshot,
+      ),
+    );
     TaskMonitorService().reportStart(_taskId);
 
     // Fire-and-forget
@@ -203,7 +205,8 @@ class SyncTransferService {
     _progressController.add(progress);
     final task = TaskMonitorService().getTask(_taskId);
     if (task != null) {
-      task.description = '${progress.filesTransferred}/${progress.totalFiles}'
+      task.description =
+          '${progress.filesTransferred}/${progress.totalFiles}'
           '${progress.currentFile != null ? " \u2014 ${progress.currentFile}" : ""}';
     }
   }
@@ -232,12 +235,14 @@ class SyncTransferService {
       TaskMonitorService().reportFailure(_taskId, e);
       TaskMonitorService().unregister(_taskId);
       _isBusy = false;
-      _emitProgress(SyncTransferProgress(
-        filesTransferred: _lastProgress.filesTransferred,
-        totalFiles: request.totalFiles,
-        isComplete: true,
-        failCount: _lastProgress.failCount + 1,
-      ));
+      _emitProgress(
+        SyncTransferProgress(
+          filesTransferred: _lastProgress.filesTransferred,
+          totalFiles: request.totalFiles,
+          isComplete: true,
+          failCount: _lastProgress.failCount + 1,
+        ),
+      );
     }
   }
 
@@ -259,18 +264,22 @@ class SyncTransferService {
         final isPull = request.fileDirections[key] ?? true;
         final localPath = '${profile.callsign}/$folder';
 
-        _emitProgress(SyncTransferProgress(
-          filesTransferred: transferred,
-          totalFiles: request.totalFiles,
-          currentFile: '$folder/$filePath',
-          failCount: failCount,
-        ));
+        _emitProgress(
+          SyncTransferProgress(
+            filesTransferred: transferred,
+            totalFiles: request.totalFiles,
+            currentFile: '$folder/$filePath',
+            failCount: failCount,
+          ),
+        );
 
         try {
+          bool success;
           if (isPull) {
-            final change =
-                request.diffs[folder]?.where((c) => c.path == filePath).firstOrNull;
-            await mirror.downloadFile(
+            final change = request.diffs[folder]
+                ?.where((c) => c.path == filePath)
+                .firstOrNull;
+            success = await mirror.downloadFile(
               request.peerUrl!,
               folder,
               filePath,
@@ -280,30 +289,40 @@ class SyncTransferService {
               storage: storage,
             );
           } else {
-            final change =
-                request.diffs[folder]?.where((c) => c.path == filePath).firstOrNull;
-            await mirror.uploadFile(
+            final change = request.diffs[folder]
+                ?.where((c) => c.path == filePath)
+                .firstOrNull;
+            success = await mirror.uploadFile(
               request.peerUrl!,
               folder,
               filePath,
               localPath,
               token,
-              sha1Hash: change?.localEntry?.sha1,
+              sha1Hash: (change?.localEntry?.sha1.isNotEmpty ?? false)
+                  ? change!.localEntry!.sha1
+                  : null,
               storage: storage,
             );
           }
+          if (!success) {
+            failCount++;
+          }
         } catch (e) {
-          LogService().log('SyncTransferService: Transfer failed for $filePath: $e');
+          LogService().log(
+            'SyncTransferService: Transfer failed for $filePath: $e',
+          );
           failCount++;
         }
 
         transferred++;
-        _emitProgress(SyncTransferProgress(
-          filesTransferred: transferred,
-          totalFiles: request.totalFiles,
-          currentFile: '$folder/$filePath',
-          failCount: failCount,
-        ));
+        _emitProgress(
+          SyncTransferProgress(
+            filesTransferred: transferred,
+            totalFiles: request.totalFiles,
+            currentFile: '$folder/$filePath',
+            failCount: failCount,
+          ),
+        );
       }
     }
   }
@@ -330,26 +349,34 @@ class SyncTransferService {
           final token = request.multiTokens[deviceId]?[folder];
           if (peerUrl == null || token == null) continue;
 
-          _emitProgress(SyncTransferProgress(
-            filesTransferred: transferred,
-            totalFiles: request.totalFiles,
-            currentFile: '$folder/$filePath',
-            currentDevice: mirror.displayName,
-            failCount: failCount,
-          ));
+          _emitProgress(
+            SyncTransferProgress(
+              filesTransferred: transferred,
+              totalFiles: request.totalFiles,
+              currentFile: '$folder/$filePath',
+              currentDevice: mirror.displayName,
+              failCount: failCount,
+            ),
+          );
 
           try {
-            final change =
-                request.diffs[folder]?.where((c) => c.path == filePath).firstOrNull;
-            await mirrorService.uploadFile(
+            final change = request.diffs[folder]
+                ?.where((c) => c.path == filePath)
+                .firstOrNull;
+            final success = await mirrorService.uploadFile(
               peerUrl,
               folder,
               filePath,
               localPath,
               token,
-              sha1Hash: change?.localEntry?.sha1,
+              sha1Hash: (change?.localEntry?.sha1.isNotEmpty ?? false)
+                  ? change!.localEntry!.sha1
+                  : null,
               storage: storage,
             );
+            if (!success) {
+              failCount++;
+            }
           } catch (e) {
             LogService().log(
               'SyncTransferService: Multi-push failed for $filePath to $deviceId: $e',
@@ -358,13 +385,15 @@ class SyncTransferService {
           }
 
           transferred++;
-          _emitProgress(SyncTransferProgress(
-            filesTransferred: transferred,
-            totalFiles: request.totalFiles,
-            currentFile: '$folder/$filePath',
-            currentDevice: mirror.displayName,
-            failCount: failCount,
-          ));
+          _emitProgress(
+            SyncTransferProgress(
+              filesTransferred: transferred,
+              totalFiles: request.totalFiles,
+              currentFile: '$folder/$filePath',
+              currentDevice: mirror.displayName,
+              failCount: failCount,
+            ),
+          );
         }
       }
     }
