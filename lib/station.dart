@@ -70,6 +70,7 @@ import 'server/mixins/device_proxy_mixin.dart';
 import 'server/mixins/mirror_notify_mixin.dart';
 import 'server/mixins/heartbeat_mixin.dart';
 import 'server/mixins/homepage_mixin.dart';
+import 'server/mixins/content_browse_mixin.dart';
 import 'server/mixins/karma_mixin.dart';
 import 'cli/themes_embedded.dart';
 import 'server/chat_message_store.dart';
@@ -624,8 +625,20 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin, HomepageMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin, HomepageMixin, ContentBrowseMixin
     implements StationCommandInterface, AcmeChallengeHandler {
+
+  // Wire the ContentBrowseMixin to the station's per-callsign
+  // storage root so /api/content/{appType}/… picks up exactly the
+  // same data the station's own handlers already read.
+  @override
+  ProfileStorage get contentBrowseStorage =>
+      FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}');
+
+  @override
+  void contentBrowseLog(String level, String message) =>
+      _log(level, message);
+
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;
@@ -2748,6 +2761,12 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         await _handleAlertsPage(request);
       } else if (path == '/api/apps' && method == 'GET') {
         await _handleAppsApi(request);
+      } else if (path == '/api/content' || path.startsWith('/api/content/')) {
+        // Generic content browse — shared with every other HTTP
+        // surface through ContentBrowseMixin. Adding a new app type
+        // only requires a new AppContentProvider, not a new route
+        // here.
+        await handleContentBrowseRequest(request);
       } else if (path == '/api/blog' || path.startsWith('/api/blog/')) {
         await _handleBlogApi(request);
       } else if (path == '/api/alerts' || path == '/api/alerts/list') {

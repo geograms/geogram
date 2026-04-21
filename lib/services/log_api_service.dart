@@ -39,6 +39,8 @@ import 'conference_web_page_service.dart';
 import 'event_web_page_service.dart';
 import 'device_apps_service.dart';
 import 'remote_blog_actions.dart';
+import 'remote_content_client.dart';
+import 'remote_event_actions.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../connection/connection_manager.dart';
@@ -134,6 +136,7 @@ import '../util/event_bus.dart';
 import '../util/event_activity_notifier.dart';
 import '../util/station_html_templates.dart';
 import '../server/mixins/chat_modification_mixin.dart';
+import '../server/mixins/content_browse_mixin.dart';
 import '../models/shared_folder.dart';
 import 'shared_folder_service.dart';
 import 'groups_service.dart';
@@ -179,10 +182,21 @@ class _MeetSessionSnapshot {
       : this._(state: 'archive', archive: archive);
 }
 
-class LogApiService with ChatModificationMixin {
+class LogApiService with ChatModificationMixin, ContentBrowseMixin {
   static final LogApiService _instance = LogApiService._internal();
   factory LogApiService() => _instance;
   LogApiService._internal();
+
+  @override
+  ProfileStorage get contentBrowseStorage {
+    final dataDir = StorageConfig().baseDir;
+    final callsign = ProfileService().getProfile().callsign;
+    return FilesystemProfileStorage('$dataDir/devices/$callsign');
+  }
+
+  @override
+  void contentBrowseLog(String level, String message) =>
+      LogService().log('ContentBrowse [$level]: $message');
 
   // Use dynamic to avoid type conflicts between stub and real dart:io
   dynamic _server;
@@ -705,6 +719,14 @@ class LogApiService with ChatModificationMixin {
     if (urlPath == 'api/apps' && request.method == 'GET') {
       return await _handleAppsDiscoveryRequest(headers);
     }
+
+    // Generic content browse — /api/content/{appType}/…  backed by the
+    // AppContentProvider registry. Handled entirely in the shared
+    // mixin so every app type automatically surfaces here without a
+    // per-app route.
+    final contentResult =
+        await handleContentBrowseShelf(request, urlPath);
+    if (contentResult != null) return contentResult;
 
     // Events API endpoints (public read-only access to events)
     if (urlPath == 'api/events' || urlPath == 'api/events/' || urlPath.startsWith('api/events/')) {
@@ -12421,6 +12443,15 @@ class LogApiService with ChatModificationMixin {
         case 'remote_blog_view':
           return await _handleRemoteBlogAction(action, params, headers);
 
+        case 'remote_content_list':
+        case 'remote_content_get':
+        case 'remote_event_fetch':
+        case 'remote_event_view':
+        case 'remote_event_like':
+        case 'remote_event_dislike':
+        case 'remote_event_comment':
+          return await _handleRemoteEventAction(action, params, headers);
+
         default:
           return shelf.Response.badRequest(
             body: jsonEncode({
@@ -12601,6 +12632,181 @@ class LogApiService with ChatModificationMixin {
       }),
       headers: headers,
     );
+  }
+
+  /// Drives the remote-events / generic-content panel via debug
+  /// API. Exercises the same code path the UI uses
+  /// ([RemoteContent] for reads, [RemoteEventActions] for writes)
+  /// so tests can prove the button works without a human tap.
+  Future<shelf.Response> _handleRemoteEventAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    final callsign = (params['callsign'] as String?)?.trim();
+    if (callsign == null || callsign.isEmpty) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({
+          'success': false,
+          'error': 'callsign is required',
+        }),
+        headers: headers,
+      );
+    }
+
+    Object result;
+    switch (action) {
+      case 'remote_content_list':
+        final appType = (params['appType'] as String?)?.trim();
+        if (appType == null || appType.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'appType is required',
+            }),
+            headers: headers,
+          );
+        }
+        final query = <String, String>{};
+        final q = params['query'];
+        if (q is Map) {
+          q.forEach((k, v) {
+            if (k is String && v != null) query[k] = v.toString();
+          });
+        }
+        final r = await RemoteContent.list(
+          remoteCallsign: callsign,
+          appType: appType,
+          query: query.isEmpty ? null : query,
+        );
+        result = r.toJson();
+        break;
+      case 'remote_content_get':
+        final appType = (params['appType'] as String?)?.trim();
+        final itemId = (params['itemId'] as String?)?.trim();
+        if (appType == null || appType.isEmpty ||
+            itemId == null || itemId.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'appType and itemId are required',
+            }),
+            headers: headers,
+          );
+        }
+        final r = await RemoteContent.get(
+          remoteCallsign: callsign,
+          appType: appType,
+          itemId: itemId,
+        );
+        result = r.toJson();
+        break;
+      case 'remote_event_fetch':
+        final eventId = (params['eventId'] as String? ??
+                params['postId'] as String?)
+            ?.trim();
+        if (eventId == null || eventId.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'eventId is required',
+            }),
+            headers: headers,
+          );
+        }
+        final r = await RemoteContent.get(
+          remoteCallsign: callsign,
+          appType: 'events',
+          itemId: eventId,
+        );
+        result = r.toJson();
+        break;
+      case 'remote_event_view':
+      case 'remote_event_like':
+      case 'remote_event_dislike':
+      case 'remote_event_comment':
+        final eventId = (params['eventId'] as String? ??
+                params['postId'] as String?)
+            ?.trim();
+        if (eventId == null || eventId.isEmpty) {
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'eventId is required',
+            }),
+            headers: headers,
+          );
+        }
+        RemoteEventActionResult write;
+        switch (action) {
+          case 'remote_event_view':
+            write = await RemoteEventActions.recordView(
+              remoteCallsign: callsign, eventId: eventId);
+            break;
+          case 'remote_event_like':
+            write = await RemoteEventActions.like(
+              remoteCallsign: callsign,
+              eventId: eventId,
+              authorNpub: params['authorNpub'] as String?,
+            );
+            break;
+          case 'remote_event_dislike':
+            write = await RemoteEventActions.dislike(
+              remoteCallsign: callsign,
+              eventId: eventId,
+              authorNpub: params['authorNpub'] as String?,
+            );
+            break;
+          case 'remote_event_comment':
+            final content = (params['content'] as String?)?.trim();
+            if (content == null || content.isEmpty) {
+              return shelf.Response.badRequest(
+                body: jsonEncode({
+                  'success': false,
+                  'error': 'content is required for remote_event_comment',
+                }),
+                headers: headers,
+              );
+            }
+            write = await RemoteEventActions.sendComment(
+              remoteCallsign: callsign,
+              eventId: eventId,
+              content: content,
+            );
+            break;
+          default:
+            write = const RemoteEventActionResult(
+                success: false, error: 'unreachable');
+        }
+        // Fetch the updated detail so callers can verify deltas
+        // the same way remote_blog_* does.
+        final after = await RemoteContent.get(
+          remoteCallsign: callsign,
+          appType: 'events',
+          itemId: eventId,
+        );
+        result = {
+          ...write.toJson(),
+          if (after.success && after.data != null)
+            'post_snapshot': {
+              'view_count': after.data!['view_count'],
+              'like_count': after.data!['like_count'],
+              'dislike_count': after.data!['dislikes_count'],
+              'comment_count': after.data!['comment_count'],
+            },
+        };
+        break;
+      default:
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Unsupported action: $action',
+          }),
+          headers: headers,
+        );
+    }
+
+    return shelf.Response.ok(jsonEncode(result), headers: headers);
   }
 
   // ============================================================

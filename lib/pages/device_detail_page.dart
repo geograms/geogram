@@ -13,7 +13,7 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import 'remote_blog_browser_page.dart';
 import 'remote_chat_browser_page.dart';
-import 'events_browser_page.dart';
+import 'remote_events_browser_page.dart';
 import 'report_browser_page.dart';
 
 /// Page showing available apps on a remote device
@@ -141,11 +141,12 @@ class _DeviceDetailPageState extends State<DeviceDetailPage> {
         );
         break;
       case 'events':
-        // Use existing EventsBrowserPage but filtered to this device
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => const EventsBrowserPage(),
+            builder: (context) => RemoteEventsBrowserPage(
+              device: widget.device,
+            ),
           ),
         );
         break;

@@ -7,7 +7,8 @@
  * and reuses the existing storage utilities where possible.
  *
  * Adding a new app type: implement [AppContentProvider], then add one
- * line to [defaultAppContentProviders].
+ * line to [defaultAppContentProviders]. The /api/content/{appType}/…
+ * endpoint surfaces it without further wiring.
  */
 
 import 'dart:convert';
@@ -15,7 +16,9 @@ import 'dart:convert';
 import '../../models/event.dart';
 import '../../services/profile_storage.dart';
 import '../../util/blog_folder_utils.dart';
+import '../../util/feedback_folder_utils.dart';
 import 'app_content_provider.dart';
+import 'blog_handler.dart';
 
 /// Canonical list of providers every device ships with.
 List<AppContentProvider> defaultAppContentProviders() => [
@@ -26,7 +29,9 @@ List<AppContentProvider> defaultAppContentProviders() => [
       SharedContentProvider(),
     ];
 
-class BlogContentProvider implements AppContentProvider {
+// ─────────────────────────── Blog ───────────────────────────────
+
+class BlogContentProvider extends AppContentProvider {
   @override
   String get appType => 'blog';
 
@@ -47,9 +52,63 @@ class BlogContentProvider implements AppContentProvider {
       return 0;
     }
   }
+
+  @override
+  Future<List<Map<String, dynamic>>> listPublic({
+    required ProfileStorage storage,
+    Map<String, String> query = const {},
+  }) async {
+    final api = BlogHandler(storage: storage);
+    final result = await api.getBlogPosts(
+      year: int.tryParse(query['year'] ?? ''),
+      tag: query['tag'],
+      limit: int.tryParse(query['limit'] ?? ''),
+      offset: int.tryParse(query['offset'] ?? ''),
+    );
+    if (result['success'] != true) return const [];
+    final posts = result['posts'];
+    if (posts is List) {
+      return posts.whereType<Map<String, dynamic>>().toList(growable: false);
+    }
+    return const [];
+  }
+
+  @override
+  Future<Map<String, dynamic>?> getPublicItem(
+    String itemId, {
+    required ProfileStorage storage,
+  }) async {
+    final api = BlogHandler(storage: storage);
+    final result = await api.getPostDetails(itemId);
+    if (result['success'] == true) {
+      return result;
+    }
+    return null;
+  }
+
+  @override
+  Future<RemoteFile?> getPublicFile(
+    String itemId,
+    String relativePath, {
+    required ProfileStorage storage,
+  }) async {
+    if (_unsafePath(relativePath)) return null;
+    final api = BlogHandler(storage: storage);
+    // Existing helper accepts a single filename — for now reuse it.
+    final filePath = await api.getFilePath(itemId, relativePath);
+    if (filePath == null) return null;
+    final bytes = await storage.readBytes(filePath);
+    if (bytes == null) return null;
+    return RemoteFile(
+      bytes: bytes,
+      contentType: _guessContentType(relativePath),
+    );
+  }
 }
 
-class EventContentProvider implements AppContentProvider {
+// ─────────────────────────── Events ─────────────────────────────
+
+class EventContentProvider extends AppContentProvider {
   @override
   String get appType => 'events';
 
@@ -58,38 +117,224 @@ class EventContentProvider implements AppContentProvider {
 
   @override
   Future<int> countPublic({required ProfileStorage storage}) async {
+    final entries = await _listPublicEventEntries(storage);
+    return entries.length;
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> listPublic({
+    required ProfileStorage storage,
+    Map<String, String> query = const {},
+  }) async {
+    final entries = await _listPublicEventEntries(storage);
+    final yearFilter = int.tryParse(query['year'] ?? '');
+    final limit = int.tryParse(query['limit'] ?? '');
+
+    final out = <Map<String, dynamic>>[];
+    for (final entry in entries) {
+      if (yearFilter != null && entry.event.year != yearFilter) continue;
+      final json = entry.event.toApiJson(summary: true);
+      // Flyer / trailer presence from disk (public events only — a
+      // request_access event keeps its media hidden). The list uses
+      // this to know whether to show a thumbnail.
+      if (entry.event.visibility == 'public') {
+        final media = await _scanEventMedia(storage, entry.eventPath);
+        json['flyers'] = media.flyers;
+        json['has_flyer'] = media.flyers.isNotEmpty;
+        if (media.trailer != null) {
+          json['trailer'] = media.trailer;
+          json['has_trailer'] = true;
+        }
+      } else {
+        json['has_flyer'] = false;
+        json['has_trailer'] = false;
+      }
+      // Engagement counts straight from the canonical feedback
+      // folder so the list view can show "N likes · N views" without
+      // a second round-trip per event.
+      final counts = await _engagementCounts(storage, entry.eventPath);
+      json['like_count'] = counts.likes;
+      json['comment_count'] = counts.comments;
+      json['view_count'] = counts.views;
+      out.add(json);
+    }
+    out.sort((a, b) => (b['timestamp'] as String? ?? '')
+        .compareTo(a['timestamp'] as String? ?? ''));
+    if (limit != null && limit > 0 && out.length > limit) {
+      return out.sublist(0, limit);
+    }
+    return out;
+  }
+
+  @override
+  Future<Map<String, dynamic>?> getPublicItem(
+    String itemId, {
+    required ProfileStorage storage,
+  }) async {
+    final entry = await _findEvent(storage, itemId);
+    if (entry == null) return null;
+    final vis = entry.event.visibility;
+    if (vis != 'public' && vis != 'request_access') return null;
+
+    final data = entry.event.toApiJson(summary: false);
+
+    // Event.fromText never populates `flyers` / `trailer` — those
+    // are disk-scanned. For public events we surface every image /
+    // short-clip the event folder contains (minus `trailer.*` which
+    // gets its own slot). For request_access events we hide media
+    // until access is granted.
+    if (vis == 'request_access') {
+      data['content'] = '';
+      data['agenda'] = null;
+      data['flyers'] = const [];
+      data['trailer'] = null;
+      data['updates'] = const [];
+      data['links'] = const [];
+      data['contacts'] = const [];
+      data['access_request_required'] = true;
+    } else {
+      final media = await _scanEventMedia(storage, entry.eventPath);
+      data['flyers'] = media.flyers;
+      if (media.trailer != null) data['trailer'] = media.trailer;
+      data['access_request_required'] = false;
+    }
+
+    final counts = await _engagementCounts(storage, entry.eventPath);
+    data['like_count'] = counts.likes;
+    data['comment_count'] = counts.comments;
+    data['view_count'] = counts.views;
+    return data;
+  }
+
+  @override
+  Future<RemoteFile?> getPublicFile(
+    String itemId,
+    String relativePath, {
+    required ProfileStorage storage,
+  }) async {
+    if (_unsafePath(relativePath)) return null;
+    final entry = await _findEvent(storage, itemId);
+    if (entry == null) return null;
+    final vis = entry.event.visibility;
+    // Files inside request_access events stay private until granted.
+    if (vis != 'public') return null;
+    final filePath = '${entry.eventPath}/$relativePath';
+    final bytes = await storage.readBytes(filePath);
+    if (bytes == null) return null;
+    return RemoteFile(
+      bytes: bytes,
+      contentType: _guessContentType(relativePath),
+    );
+  }
+
+  // ── helpers ────────────────────────────────────────────────────
+
+  Future<List<_EventEntry>> _listPublicEventEntries(
+      ProfileStorage storage) async {
+    final out = <_EventEntry>[];
     try {
       final entries = await storage.listDirectory('events', recursive: true);
-      var count = 0;
       for (final entry in entries) {
         if (entry.isDirectory) continue;
         if (!entry.name.endsWith('event.txt')) continue;
         try {
           final content = await storage.readString(entry.path);
           if (content == null) continue;
-          // Extract the event id from the path for the parser so it
-          // doesn't throw; only the visibility field is read.
           final parts = entry.path.split('/');
           final idIndex = parts.lastIndexOf('event.txt') - 1;
           final eventId = idIndex >= 0 ? parts[idIndex] : entry.path;
           final ev = Event.fromText(content, eventId);
-          if (ev.visibility == 'public' ||
-              ev.visibility == 'request_access') {
-            count++;
+          if (ev.visibility != 'public' &&
+              ev.visibility != 'request_access') {
+            continue;
           }
+          // event.txt path → the parent directory is the event folder.
+          final eventPath = entry.path.replaceAll(RegExp(r'/event\.txt$'), '');
+          out.add(_EventEntry(event: ev, eventPath: eventPath));
         } catch (_) {
-          // Skip unreadable / malformed events — they shouldn't break
-          // the whole discovery response.
+          // Skip unreadable / malformed events.
         }
       }
-      return count;
-    } catch (_) {
-      return 0;
+    } catch (_) {}
+    return out;
+  }
+
+  Future<_EventEntry?> _findEvent(
+      ProfileStorage storage, String eventId) async {
+    final entries = await _listPublicEventEntries(storage);
+    for (final e in entries) {
+      if (e.event.id == eventId) return e;
     }
+    return null;
+  }
+
+  /// Scan the event folder for gallery media (images + short clips).
+  /// `trailer.*` is surfaced separately. Matches the same pattern
+  /// the local EventService uses so on-device and remote browse
+  /// stay consistent.
+  static final RegExp _mediaPattern = RegExp(
+    r'\.(jpg|jpeg|png|gif|webp|mp4|mov|webm|mkv|avi|wmv|flv)$',
+    caseSensitive: false,
+  );
+  static final RegExp _trailerPattern =
+      RegExp(r'^trailer\.', caseSensitive: false);
+
+  Future<_EventMedia> _scanEventMedia(
+      ProfileStorage storage, String eventPath) async {
+    final flyers = <String>[];
+    String? trailer;
+    try {
+      final entries = await storage.listDirectory(eventPath);
+      for (final entry in entries) {
+        if (entry.isDirectory) continue;
+        final name = entry.name;
+        if (_trailerPattern.hasMatch(name) &&
+            _mediaPattern.hasMatch(name)) {
+          trailer ??= name;
+          continue;
+        }
+        if (_mediaPattern.hasMatch(name)) flyers.add(name);
+      }
+    } catch (_) {}
+    // Same ordering the local list widget uses: flyer.* first, then
+    // photo-N.* in numeric order, then the rest alphabetically.
+    flyers.sort((a, b) {
+      final aLower = a.toLowerCase();
+      final bLower = b.toLowerCase();
+      final aIsFlyer = aLower.startsWith('flyer.');
+      final bIsFlyer = bLower.startsWith('flyer.');
+      if (aIsFlyer && !bIsFlyer) return -1;
+      if (!aIsFlyer && bIsFlyer) return 1;
+      final photoNum = RegExp(r'^photo-(\d+)\.');
+      final aMatch = photoNum.firstMatch(aLower);
+      final bMatch = photoNum.firstMatch(bLower);
+      if (aMatch != null && bMatch != null) {
+        return int.parse(aMatch.group(1)!)
+            .compareTo(int.parse(bMatch.group(1)!));
+      }
+      if (aMatch != null) return -1;
+      if (bMatch != null) return 1;
+      return aLower.compareTo(bLower);
+    });
+    return _EventMedia(flyers: flyers, trailer: trailer);
   }
 }
 
-class ChatContentProvider implements AppContentProvider {
+class _EventMedia {
+  final List<String> flyers;
+  final String? trailer;
+  const _EventMedia({required this.flyers, this.trailer});
+}
+
+class _EventEntry {
+  final Event event;
+  final String eventPath;
+  _EventEntry({required this.event, required this.eventPath});
+}
+
+// ─────────────────────────── Chat ───────────────────────────────
+
+class ChatContentProvider extends AppContentProvider {
   @override
   String get appType => 'chat';
 
@@ -111,7 +356,9 @@ class ChatContentProvider implements AppContentProvider {
   }
 }
 
-class AlertContentProvider implements AppContentProvider {
+// ─────────────────────────── Alerts ─────────────────────────────
+
+class AlertContentProvider extends AppContentProvider {
   @override
   String get appType => 'alerts';
 
@@ -130,9 +377,7 @@ class AlertContentProvider implements AppContentProvider {
           for (final alertEntry in alerts) {
             if (alertEntry.isDirectory) count++;
           }
-        } catch (_) {
-          // Unreadable callsign dir — skip.
-        }
+        } catch (_) {}
       }
       return count;
     } catch (_) {
@@ -141,7 +386,9 @@ class AlertContentProvider implements AppContentProvider {
   }
 }
 
-class SharedContentProvider implements AppContentProvider {
+// ─────────────────────────── Shared ─────────────────────────────
+
+class SharedContentProvider extends AppContentProvider {
   @override
   String get appType => 'shared';
 
@@ -164,5 +411,85 @@ class SharedContentProvider implements AppContentProvider {
     } catch (_) {
       return 0;
     }
+  }
+}
+
+// ─────────────────────────── Helpers ────────────────────────────
+
+class _Counts {
+  final int likes;
+  final int comments;
+  final int views;
+  const _Counts(
+      {this.likes = 0, this.comments = 0, this.views = 0});
+}
+
+Future<_Counts> _engagementCounts(
+    ProfileStorage storage, String contentPath) async {
+  int likes = 0;
+  int comments = 0;
+  int views = 0;
+  try {
+    likes = await FeedbackFolderUtils.getFeedbackCount(
+      contentPath,
+      FeedbackFolderUtils.feedbackTypeLikes,
+      storage: storage,
+    );
+  } catch (_) {}
+  try {
+    views = await FeedbackFolderUtils.getViewCount(
+      contentPath,
+      storage: storage,
+    );
+  } catch (_) {}
+  try {
+    final commentsDir = '$contentPath/feedback/comments';
+    final entries = await storage.listDirectory(commentsDir);
+    for (final e in entries) {
+      if (!e.isDirectory && e.name.endsWith('.txt')) comments++;
+    }
+  } catch (_) {}
+  return _Counts(likes: likes, comments: comments, views: views);
+}
+
+bool _unsafePath(String path) {
+  if (path.isEmpty) return true;
+  if (path.startsWith('/') || path.startsWith('\\')) return true;
+  for (final segment in path.split(RegExp(r'[\\/]'))) {
+    if (segment == '..' || segment.isEmpty) return true;
+  }
+  return false;
+}
+
+String _guessContentType(String path) {
+  final ext = path.toLowerCase().split('.').last;
+  switch (ext) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'webp':
+      return 'image/webp';
+    case 'gif':
+      return 'image/gif';
+    case 'svg':
+      return 'image/svg+xml';
+    case 'mp4':
+      return 'video/mp4';
+    case 'webm':
+      return 'video/webm';
+    case 'pdf':
+      return 'application/pdf';
+    case 'json':
+      return 'application/json';
+    case 'txt':
+    case 'md':
+      return 'text/plain; charset=utf-8';
+    case 'html':
+    case 'htm':
+      return 'text/html; charset=utf-8';
+    default:
+      return 'application/octet-stream';
   }
 }

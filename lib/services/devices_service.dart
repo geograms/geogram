@@ -1947,6 +1947,58 @@ class DevicesService {
     }
   }
 
+  /// Byte-preserving variant of [makeDeviceApiRequest] for binary
+  /// payloads (images, video frames, attached files). Same routing
+  /// as the main method but returns the raw transport bytes instead
+  /// of a UTF-8-decoded String — `http.Response.body` is lossy for
+  /// anything that isn't text.
+  Future<({int statusCode, Uint8List bytes})?> makeDeviceApiRequestBytes({
+    required String callsign,
+    required String method,
+    required String path,
+    Map<String, String>? headers,
+    String? body,
+  }) async {
+    final normalizedCallsign = callsign.toUpperCase();
+    syncDeviceToConnectionManager(normalizedCallsign);
+
+    final connectionManager = ConnectionManager();
+    if (!connectionManager.isInitialized) {
+      final resp = await _makeDeviceApiRequestLegacy(
+        callsign: normalizedCallsign,
+        method: method,
+        path: path,
+        headers: headers,
+        body: body,
+      );
+      if (resp == null) return null;
+      return (statusCode: resp.statusCode, bytes: resp.bodyBytes);
+    }
+
+    final result = await connectionManager.apiRequest(
+      callsign: normalizedCallsign,
+      method: method,
+      path: path,
+      headers: headers,
+      body: body,
+    );
+    if (!result.success) return null;
+
+    final data = result.responseData;
+    Uint8List bytes;
+    if (data == null) {
+      bytes = Uint8List(0);
+    } else if (data is List<int>) {
+      bytes = Uint8List.fromList(data);
+    } else if (data is String) {
+      // Latin-1 round-trips each code unit back to its original byte.
+      bytes = Uint8List.fromList(latin1.encode(data));
+    } else {
+      bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
+    }
+    return (statusCode: result.statusCode ?? 200, bytes: bytes);
+  }
+
   /// Legacy API request method (fallback when ConnectionManager not initialized)
   Future<http.Response?> _makeDeviceApiRequestLegacy({
     required String callsign,

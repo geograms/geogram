@@ -1,0 +1,725 @@
+/*
+ * Copyright (c) geogram
+ * License: Apache-2.0
+ *
+ * Browse + view events that live on another device. Uses the
+ * generic /api/content/events surface — any device that serves the
+ * endpoint (regular or station mode) shows up here without any
+ * per-endpoint plumbing. Engagement (like / comment / view) goes
+ * through the already-generic /api/feedback/event/{id}/… surface
+ * via [RemoteEventActions].
+ */
+
+import 'package:flutter/material.dart';
+
+import '../services/devices_service.dart';
+import '../services/i18n_service.dart';
+import '../services/log_service.dart';
+import '../services/profile_service.dart';
+import '../services/remote_content_client.dart';
+import '../services/remote_event_actions.dart';
+import '../services/station_service.dart';
+import '../widgets/remote_content_image.dart';
+
+class RemoteEventsBrowserPage extends StatefulWidget {
+  final RemoteDevice device;
+
+  const RemoteEventsBrowserPage({super.key, required this.device});
+
+  @override
+  State<RemoteEventsBrowserPage> createState() =>
+      _RemoteEventsBrowserPageState();
+}
+
+class _RemoteEventsBrowserPageState extends State<RemoteEventsBrowserPage> {
+  final I18nService _i18n = I18nService();
+
+  List<Map<String, dynamic>> _events = [];
+  bool _isLoading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEvents();
+  }
+
+  Future<void> _loadEvents() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final r = await RemoteContent.list(
+        remoteCallsign: widget.device.callsign,
+        appType: 'events',
+      );
+      if (!mounted) return;
+      if (!r.success) {
+        setState(() {
+          _error = r.error ?? 'Failed to load events';
+          _isLoading = false;
+        });
+        return;
+      }
+      final items = (r.data?['items'] as List?) ?? const [];
+      setState(() {
+        _events = items
+            .whereType<Map<String, dynamic>>()
+            .toList(growable: false);
+        _isLoading = false;
+      });
+    } catch (e) {
+      LogService().log('RemoteEventsBrowserPage: load error: $e');
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _openEvent(Map<String, dynamic> summary) async {
+    final id = summary['id'] as String?;
+    if (id == null) return;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => _RemoteEventDetailPage(
+        device: widget.device,
+        eventId: id,
+      ),
+    ));
+    // Refresh the list when returning — counts may have changed.
+    _loadEvents();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('${widget.device.displayName} - Events'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadEvents,
+            tooltip: _i18n.t('refresh'),
+          ),
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? _buildError(theme)
+              : _events.isEmpty
+                  ? _buildEmpty(theme)
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: _events.length,
+                      itemBuilder: (context, i) =>
+                          _buildEventCard(theme, _events[i]),
+                    ),
+    );
+  }
+
+  Widget _buildError(ThemeData theme) => Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.error_outline,
+                size: 64, color: theme.colorScheme.error),
+            const SizedBox(height: 16),
+            Text(_i18n.t('error_loading_data'),
+                style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                _error!,
+                style: theme.textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _loadEvents,
+              child: Text(_i18n.t('retry')),
+            ),
+          ],
+        ),
+      );
+
+  Widget _buildEmpty(ThemeData theme) => Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.event_note_outlined,
+                size: 64, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(height: 16),
+            Text(_i18n.t('no_events'),
+                style: theme.textTheme.titleMedium),
+          ],
+        ),
+      );
+
+  Widget _buildEventCard(ThemeData theme, Map<String, dynamic> ev) {
+    final title = (ev['title'] as String?) ?? 'Untitled';
+    final timestamp = (ev['timestamp'] as String?) ?? '';
+    final visibility = (ev['visibility'] as String?) ?? 'public';
+    final locationName =
+        (ev['location_name'] as String?)?.trim() ?? '';
+    final likeCount = (ev['like_count'] as num?)?.toInt() ?? 0;
+    final commentCount = (ev['comment_count'] as num?)?.toInt() ?? 0;
+    final viewCount = (ev['view_count'] as num?)?.toInt() ?? 0;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: () => _openEvent(ev),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  if (visibility == 'request_access')
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.tertiaryContainer,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Icon(Icons.lock_open_outlined,
+                          size: 14,
+                          color: theme.colorScheme.onTertiaryContainer),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (timestamp.isNotEmpty)
+                Row(
+                  children: [
+                    Icon(Icons.schedule,
+                        size: 14,
+                        color: theme.colorScheme.onSurfaceVariant),
+                    const SizedBox(width: 4),
+                    Text(timestamp,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        )),
+                  ],
+                ),
+              if (locationName.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(Icons.place_outlined,
+                        size: 14,
+                        color: theme.colorScheme.onSurfaceVariant),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(locationName,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          )),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  _statChip(theme, Icons.visibility, viewCount),
+                  const SizedBox(width: 12),
+                  _statChip(theme, Icons.thumb_up_outlined, likeCount),
+                  const SizedBox(width: 12),
+                  _statChip(theme, Icons.chat_bubble_outline, commentCount),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _statChip(ThemeData theme, IconData icon, int count) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon,
+              size: 14, color: theme.colorScheme.onSurfaceVariant),
+          const SizedBox(width: 4),
+          Text('$count',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              )),
+        ],
+      );
+}
+
+// ─────────────────── detail page ───────────────────
+
+class _RemoteEventDetailPage extends StatefulWidget {
+  final RemoteDevice device;
+  final String eventId;
+
+  const _RemoteEventDetailPage({
+    required this.device,
+    required this.eventId,
+  });
+
+  @override
+  State<_RemoteEventDetailPage> createState() =>
+      _RemoteEventDetailPageState();
+}
+
+class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
+  final I18nService _i18n = I18nService();
+  final ProfileService _profileService = ProfileService();
+  final TextEditingController _commentController = TextEditingController();
+
+  Map<String, dynamic>? _event;
+  bool _isLoading = true;
+  bool _posting = false;
+  bool _viewRecorded = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    try {
+      final r = await RemoteContent.get(
+        remoteCallsign: widget.device.callsign,
+        appType: 'events',
+        itemId: widget.eventId,
+      );
+      if (!mounted) return;
+      if (!r.success) {
+        setState(() {
+          _error = r.error ?? 'Failed to load event';
+          _isLoading = false;
+        });
+        return;
+      }
+      setState(() {
+        _event = r.data;
+        _isLoading = false;
+      });
+      _recordView();
+    } catch (e) {
+      LogService().log('RemoteEventDetail: load error: $e');
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _recordView() async {
+    if (_viewRecorded) return;
+    _viewRecorded = true;
+    final r = await RemoteEventActions.recordView(
+      remoteCallsign: widget.device.callsign,
+      eventId: widget.eventId,
+    );
+    if (r.success && mounted) {
+      final total = r.body?['total_views'];
+      if (total is num && _event != null) {
+        setState(() => _event!['view_count'] = total.toInt());
+      }
+    }
+  }
+
+  bool _requireKeys() {
+    final profile = _profileService.getProfile();
+    if (profile.npub.isEmpty || profile.nsec.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NOSTR key required')),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _toggleLike() async {
+    if (_posting || !_requireKeys()) return;
+    setState(() => _posting = true);
+    try {
+      final r = await RemoteEventActions.like(
+        remoteCallsign: widget.device.callsign,
+        eventId: widget.eventId,
+        authorNpub: _event?['npub'] as String?,
+      );
+      if (!r.success) {
+        _toast(r.error ?? 'Like failed');
+      } else {
+        await _load();
+      }
+    } finally {
+      if (mounted) setState(() => _posting = false);
+    }
+  }
+
+  Future<void> _postComment() async {
+    final text = _commentController.text.trim();
+    if (text.isEmpty || _posting || !_requireKeys()) return;
+    setState(() => _posting = true);
+    try {
+      final r = await RemoteEventActions.sendComment(
+        remoteCallsign: widget.device.callsign,
+        eventId: widget.eventId,
+        content: text,
+      );
+      if (!r.success) {
+        _toast(r.error ?? 'Comment rejected');
+      } else {
+        _commentController.clear();
+        await _load();
+      }
+    } finally {
+      if (mounted) setState(() => _posting = false);
+    }
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg), duration: const Duration(seconds: 3)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_event?['title'] as String? ?? _i18n.t('event') ?? 'Event'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _load,
+            tooltip: _i18n.t('refresh'),
+          ),
+        ],
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(_error!,
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: theme.colorScheme.error)),
+                )
+              : _event == null
+                  ? const SizedBox.shrink()
+                  : _buildBody(theme),
+    );
+  }
+
+  Widget _buildBody(ThemeData theme) {
+    final ev = _event!;
+    final title = (ev['title'] as String?) ?? '';
+    final timestamp = (ev['timestamp'] as String?) ?? '';
+    final location = (ev['location_name'] as String?)?.trim() ?? '';
+    final content = (ev['content'] as String?)?.trim() ?? '';
+    final visibility = (ev['visibility'] as String?) ?? 'public';
+    final accessRequestRequired =
+        ev['access_request_required'] == true;
+    final likeCount = (ev['like_count'] as num?)?.toInt() ?? 0;
+    final commentCount = (ev['comment_count'] as num?)?.toInt() ?? 0;
+    final viewCount = (ev['view_count'] as num?)?.toInt() ?? 0;
+    final comments = (ev['comments'] as List?) ?? const [];
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text(title,
+            style: theme.textTheme.headlineSmall
+                ?.copyWith(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        if (timestamp.isNotEmpty)
+          Row(children: [
+            Icon(Icons.schedule, size: 16, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 4),
+            Text(timestamp,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                )),
+          ]),
+        if (location.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Row(children: [
+            Icon(Icons.place_outlined, size: 16, color: theme.colorScheme.onSurfaceVariant),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(location,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  )),
+            ),
+          ]),
+        ],
+        const SizedBox(height: 16),
+        if (accessRequestRequired)
+          _buildAccessRequestCard(theme, visibility)
+        else ...[
+          _buildFlyers(theme, ev),
+          if (content.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(content, style: theme.textTheme.bodyMedium),
+          ],
+        ],
+        const SizedBox(height: 16),
+        _buildEngagementRow(theme, viewCount, likeCount, commentCount),
+        const Divider(height: 32),
+        Text('${_i18n.t('comments') ?? 'Comments'} (${comments.length})',
+            style: theme.textTheme.titleMedium
+                ?.copyWith(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 12),
+        _buildCommentCompose(theme),
+        const SizedBox(height: 16),
+        if (comments.isEmpty)
+          Text(
+            _i18n.t('no_comments_yet') ?? 'No comments yet.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontStyle: FontStyle.italic,
+            ),
+            textAlign: TextAlign.center,
+          )
+        else
+          ...comments
+              .whereType<Map<String, dynamic>>()
+              .map((c) => _buildCommentCard(theme, c)),
+      ],
+    );
+  }
+
+  Widget _buildFlyers(ThemeData theme, Map<String, dynamic> ev) {
+    final flyers = (ev['flyers'] as List?)
+            ?.whereType<String>()
+            .where((name) => name.trim().isNotEmpty)
+            .toList() ??
+        const <String>[];
+    if (flyers.isEmpty) return const SizedBox.shrink();
+    // Single flyer → wide hero image; multiple → horizontally
+    // scrollable strip so the user can browse without leaving the
+    // page. Bytes fetched through ConnectionManager so every
+    // transport works (USB AOA, LAN, BLE, peer relay, …).
+    if (flyers.length == 1) {
+      return AspectRatio(
+        aspectRatio: 16 / 9,
+        child: RemoteContentImage(
+          remoteCallsign: widget.device.callsign,
+          appType: 'events',
+          itemId: widget.eventId,
+          relativePath: flyers.first,
+          fit: BoxFit.cover,
+          borderRadius: BorderRadius.circular(12),
+        ),
+      );
+    }
+    return SizedBox(
+      height: 180,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: flyers.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) => RemoteContentImage(
+          remoteCallsign: widget.device.callsign,
+          appType: 'events',
+          itemId: widget.eventId,
+          relativePath: flyers[i],
+          width: 280,
+          height: 180,
+          fit: BoxFit.cover,
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAccessRequestCard(ThemeData theme, String visibility) =>
+      Card(
+        color: theme.colorScheme.tertiaryContainer.withOpacity(0.3),
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              Icon(Icons.lock_open_outlined,
+                  color: theme.colorScheme.tertiary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Private event — the author must grant access to view details.',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+  Widget _buildEngagementRow(
+      ThemeData theme, int views, int likes, int comments) {
+    return Row(
+      children: [
+        _iconCount(theme, Icons.visibility, views, 'views'),
+        const SizedBox(width: 16),
+        InkWell(
+          onTap: _posting ? null : _toggleLike,
+          borderRadius: BorderRadius.circular(4),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 6, vertical: 4),
+            child: _iconCount(theme, Icons.thumb_up, likes, 'likes'),
+          ),
+        ),
+        const SizedBox(width: 16),
+        _iconCount(theme, Icons.chat_bubble, comments, 'comments'),
+      ],
+    );
+  }
+
+  Widget _iconCount(
+      ThemeData theme, IconData icon, int count, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
+        const SizedBox(width: 4),
+        Text(
+          '$count $label',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCommentCompose(ThemeData theme) {
+    final profile = _profileService.getProfile();
+    final hasKeys = profile.npub.isNotEmpty && profile.nsec.isNotEmpty;
+    if (!hasKeys) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          'NOSTR key required to comment',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      );
+    }
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _commentController,
+            enabled: !_posting,
+            minLines: 1,
+            maxLines: 4,
+            decoration: InputDecoration(
+              hintText: _i18n.t('write_a_comment') ?? 'Write a comment…',
+              border: const OutlineInputBorder(),
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 10),
+            ),
+            onSubmitted: (_) => _postComment(),
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          icon: _posting
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.send),
+          onPressed: _posting ? null : _postComment,
+          tooltip: _i18n.t('post_comment') ?? 'Post comment',
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCommentCard(ThemeData theme, Map<String, dynamic> c) {
+    final author = (c['author'] as String?) ?? 'unknown';
+    final timestamp = (c['timestamp'] as String?) ?? '';
+    final content = (c['content'] as String?) ?? '';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Icon(Icons.person,
+                  size: 16, color: theme.colorScheme.onSurfaceVariant),
+              const SizedBox(width: 4),
+              Text(author,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.bold,
+                  )),
+              const SizedBox(width: 12),
+              if (timestamp.isNotEmpty) ...[
+                Icon(Icons.schedule,
+                    size: 16, color: theme.colorScheme.onSurfaceVariant),
+                const SizedBox(width: 4),
+                Text(timestamp,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    )),
+              ],
+            ]),
+            const SizedBox(height: 8),
+            Text(content, style: theme.textTheme.bodyMedium),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Silence the linter about the unused StationService import on
+  // platforms where the remote device already has a URL — the
+  // constant reference keeps the import reachable without hard-coding
+  // a dependency loop.
+  // ignore: unused_element
+  static final _stationService = StationService();
+}
