@@ -1028,6 +1028,7 @@ class MirrorSyncService {
   }) async {
     final changes = <FileChange>[];
     final localFiles = <String, LocalDiffEntry>{};
+    final resolvedLocalSha1s = <String, String>{};
     final folder = path.basename(localPath);
     final cacheMisses =
         <({String path, int size, int mtime, String sha1, String? tlsh})>[];
@@ -1056,6 +1057,11 @@ class MirrorSyncService {
       String relativePath,
       LocalDiffEntry current,
     ) async {
+      final resolved = resolvedLocalSha1s[relativePath];
+      if (resolved != null && resolved.isNotEmpty) {
+        return resolved;
+      }
+
       final existing = localFiles[relativePath];
       if (existing != null &&
           existing.sha1 != null &&
@@ -1075,11 +1081,7 @@ class MirrorSyncService {
 
         if (bytes == null) return null;
         final hash = sha1.convert(bytes).toString();
-        localFiles[relativePath] = (
-          size: current.size,
-          mtime: current.mtime,
-          sha1: hash,
-        );
+        resolvedLocalSha1s[relativePath] = hash;
         cacheMisses.add((
           path: relativePath,
           size: current.size,
@@ -1225,13 +1227,31 @@ class MirrorSyncService {
           // File doesn't exist locally - add (download from remote)
           changes.add(FileChange.add(remoteFile));
         }
-      } else if (local.size == remoteFile.size &&
-          local.mtime == remoteFile.mtime) {
-        // Fast path: unchanged by metadata, no need to hash.
-        continue;
       } else {
+        if (local.size == remoteFile.size && local.mtime == remoteFile.mtime) {
+          // Fast path: unchanged by metadata, no need to hash.
+          continue;
+        }
+
+        if (local.size == remoteFile.size &&
+            local.sha1 != null &&
+            local.sha1!.isNotEmpty &&
+            local.sha1 == remoteFile.sha1) {
+          // Cached local hash confirms contents are equal despite mtime drift.
+          continue;
+        }
+
         // Skip if the file matches a "modified only" exclude rule
         if (isIgnored(remoteFile.path, modifiedOnlyExclude)) continue;
+
+        final resolvedLocalSha1 =
+            local.sha1 ?? await ensureLocalSha1(remoteFile.path, local);
+        final contentDiffers =
+            local.size != remoteFile.size ||
+            (resolvedLocalSha1 != remoteFile.sha1);
+        if (!contentDiffers) {
+          continue;
+        }
 
         if (syncStyle == SyncStyle.sendReceive) {
           // Bidirectional: most recent mtime wins
