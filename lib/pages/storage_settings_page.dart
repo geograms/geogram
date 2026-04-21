@@ -20,8 +20,10 @@ import '../services/storage_stats_service.dart';
 enum StorageRoot {
   /// Relative to StorageConfig.baseDir (geogram folder)
   baseDir,
+
   /// Relative to getApplicationSupportDirectory (Android: files/)
   appSupport,
+
   /// The system cache directory
   cache,
 }
@@ -36,9 +38,12 @@ class StorageCategory {
   final Color color;
   final StorageRoot root;
   final bool isFile; // true if this is a single file, not a directory
-  final bool isAppData; // true if clearing removes entire folder (app becomes unavailable)
-  final bool isPerCallsign; // true if path is relative to each callsign in devices/
-  final bool isRemoteCache; // true if this is remote device cache (excludes local profiles)
+  final bool
+  isAppData; // true if clearing removes entire folder (app becomes unavailable)
+  final bool
+  isPerCallsign; // true if path is relative to each callsign in devices/
+  final bool
+  isRemoteCache; // true if this is remote device cache (excludes local profiles)
 
   const StorageCategory({
     required this.id,
@@ -347,14 +352,18 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
     setState(() => _isRefreshing = true);
 
     // Convert StorageCategory to StorageCategoryDef for the service
-    final categoryDefs = _storageCategories.map((cat) => StorageCategoryDef(
-      id: cat.id,
-      relativePath: cat.relativePath,
-      root: _convertRoot(cat.root),
-      isFile: cat.isFile,
-      isRemoteCache: cat.isRemoteCache,
-      isPerCallsign: cat.isPerCallsign,
-    )).toList();
+    final categoryDefs = _storageCategories
+        .map(
+          (cat) => StorageCategoryDef(
+            id: cat.id,
+            relativePath: cat.relativePath,
+            root: _convertRoot(cat.root),
+            isFile: cat.isFile,
+            isRemoteCache: cat.isRemoteCache,
+            isPerCallsign: cat.isPerCallsign,
+          ),
+        )
+        .toList();
 
     _storageStatsService.refreshSizes(categoryDefs);
   }
@@ -411,7 +420,10 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
       }
 
       int totalSize = 0;
-      await for (final entity in dir.list(recursive: true, followLinks: false)) {
+      await for (final entity in dir.list(
+        recursive: true,
+        followLinks: false,
+      )) {
         if (entity is File) {
           try {
             totalSize += await entity.length();
@@ -422,7 +434,9 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
       }
       return totalSize;
     } catch (e) {
-      LogService().log('StorageSettingsPage: Error calculating size for ${category.id}: $e');
+      LogService().log(
+        'StorageSettingsPage: Error calculating size for ${category.id}: $e',
+      );
       return 0;
     }
   }
@@ -439,7 +453,10 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
         if (callsignEntity is Directory) {
           final appDir = Directory(p.join(callsignEntity.path, subFolder));
           if (await appDir.exists()) {
-            await for (final entity in appDir.list(recursive: true, followLinks: false)) {
+            await for (final entity in appDir.list(
+              recursive: true,
+              followLinks: false,
+            )) {
               if (entity is File) {
                 try {
                   totalSize += await entity.length();
@@ -452,7 +469,9 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
         }
       }
     } catch (e) {
-      LogService().log('StorageSettingsPage: Error calculating per-callsign size for $subFolder: $e');
+      LogService().log(
+        'StorageSettingsPage: Error calculating per-callsign size for $subFolder: $e',
+      );
     }
 
     return totalSize;
@@ -469,19 +488,23 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
           final appDir = Directory(p.join(callsignEntity.path, subFolder));
           if (await appDir.exists()) {
             await appDir.delete(recursive: true);
-            LogService().log('StorageSettingsPage: Deleted $subFolder from ${callsignEntity.path}');
+            LogService().log(
+              'StorageSettingsPage: Deleted $subFolder from ${callsignEntity.path}',
+            );
           }
         }
       }
     } catch (e) {
-      LogService().log('StorageSettingsPage: Error clearing per-callsign data for $subFolder: $e');
+      LogService().log(
+        'StorageSettingsPage: Error clearing per-callsign data for $subFolder: $e',
+      );
       rethrow;
     }
   }
 
   /// Get set of callsigns belonging to local profiles
   Set<String> _getLocalProfileCallsigns() {
-    final profiles = _profileService.getAllProfiles();
+    final profiles = _profileService.getAllStoredProfiles();
     return profiles.map((p) => p.callsign).toSet();
   }
 
@@ -500,7 +523,10 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
           // Skip local profile callsigns
           if (localCallsigns.contains(callsign)) continue;
 
-          await for (final entity in callsignEntity.list(recursive: true, followLinks: false)) {
+          await for (final entity in callsignEntity.list(
+            recursive: true,
+            followLinks: false,
+          )) {
             if (entity is File) {
               try {
                 totalSize += await entity.length();
@@ -512,7 +538,9 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
         }
       }
     } catch (e) {
-      LogService().log('StorageSettingsPage: Error calculating remote cache size: $e');
+      LogService().log(
+        'StorageSettingsPage: Error calculating remote cache size: $e',
+      );
     }
 
     return totalSize;
@@ -531,12 +559,16 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
           final callsign = p.basename(callsignEntity.path);
           // Skip local profile callsigns - never delete these!
           if (localCallsigns.contains(callsign)) {
-            LogService().log('StorageSettingsPage: Skipping local profile: $callsign');
+            LogService().log(
+              'StorageSettingsPage: Skipping local profile: $callsign',
+            );
             continue;
           }
 
           await callsignEntity.delete(recursive: true);
-          LogService().log('StorageSettingsPage: Deleted remote cache for: $callsign');
+          LogService().log(
+            'StorageSettingsPage: Deleted remote cache for: $callsign',
+          );
         }
       }
     } catch (e) {
@@ -574,12 +606,14 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
 
     // Use different confirmation message for app data
     final confirmMessage = category.isAppData
-        ? _i18n.t('storage_clear_app_confirm_message', params: [
-            _i18n.t(category.translationKey),
-          ])
-        : _i18n.t('storage_clear_confirm_message', params: [
-            _i18n.t(category.translationKey),
-          ]);
+        ? _i18n.t(
+            'storage_clear_app_confirm_message',
+            params: [_i18n.t(category.translationKey)],
+          )
+        : _i18n.t(
+            'storage_clear_confirm_message',
+            params: [_i18n.t(category.translationKey)],
+          );
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -593,9 +627,7 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: FilledButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
             child: Text(_i18n.t('delete')),
           ),
         ],
@@ -634,7 +666,9 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
             try {
               await entity.delete(recursive: true);
             } catch (e) {
-              LogService().log('StorageSettingsPage: Error deleting ${entity.path}: $e');
+              LogService().log(
+                'StorageSettingsPage: Error deleting ${entity.path}: $e',
+              );
             }
           }
         }
@@ -652,14 +686,19 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_i18n.t('storage_cleared_success', params: [
-              _i18n.t(category.translationKey),
-            ])),
+            content: Text(
+              _i18n.t(
+                'storage_cleared_success',
+                params: [_i18n.t(category.translationKey)],
+              ),
+            ),
           ),
         );
       }
     } catch (e) {
-      LogService().log('StorageSettingsPage: Error clearing ${category.id}: $e');
+      LogService().log(
+        'StorageSettingsPage: Error clearing ${category.id}: $e',
+      );
       setState(() {
         _categoryLoading[category.id] = false;
       });
@@ -681,9 +720,7 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
 
     if (kIsWeb) {
       return Scaffold(
-        appBar: AppBar(
-          title: Text(_i18n.t('storage')),
-        ),
+        appBar: AppBar(title: Text(_i18n.t('storage'))),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -719,25 +756,26 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
         ],
       ),
       body: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                // Total storage card
-                _buildTotalStorageCard(theme),
-                const SizedBox(height: 24),
+        padding: const EdgeInsets.all(16),
+        children: [
+          // Total storage card
+          _buildTotalStorageCard(theme),
+          const SizedBox(height: 24),
 
-                // Section header
-                _buildSectionHeader(
-                  theme,
-                  _i18n.t('storage_by_category'),
-                  Icons.folder,
-                ),
-                const SizedBox(height: 8),
+          // Section header
+          _buildSectionHeader(
+            theme,
+            _i18n.t('storage_by_category'),
+            Icons.folder,
+          ),
+          const SizedBox(height: 8),
 
-                // Category cards (sorted by size, largest first)
-                ..._getSortedCategories().map((category) =>
-                    _buildCategoryCard(theme, category)),
-              ],
-            ),
+          // Category cards (sorted by size, largest first)
+          ..._getSortedCategories().map(
+            (category) => _buildCategoryCard(theme, category),
+          ),
+        ],
+      ),
     );
   }
 
@@ -747,11 +785,7 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            Icon(
-              Icons.storage,
-              size: 48,
-              color: theme.colorScheme.primary,
-            ),
+            Icon(Icons.storage, size: 48, color: theme.colorScheme.primary),
             const SizedBox(height: 12),
             Text(
               _i18n.t('storage_total_used'),
@@ -815,11 +849,7 @@ class _StorageSettingsPageState extends State<StorageSettingsPage> {
                 color: category.color.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(
-                category.icon,
-                color: category.color,
-                size: 24,
-              ),
+              child: Icon(category.icon, color: category.color, size: 24),
             ),
             const SizedBox(width: 16),
 

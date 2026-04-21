@@ -8,7 +8,8 @@ import '../models/profile.dart';
 import '../services/log_service.dart';
 import '../services/config_service.dart';
 import '../services/app_service.dart';
-import '../services/encrypted_storage_stub.dart' if (dart.library.ui) '../services/encrypted_storage_service.dart';
+import '../services/encrypted_storage_stub.dart'
+    if (dart.library.ui) '../services/encrypted_storage_service.dart';
 import '../services/storage_config.dart';
 import '../services/signing_service.dart';
 import '../services/file_index_service.dart';
@@ -40,7 +41,9 @@ class ProfileService {
   final ValueNotifier<int> profileNotifier = ValueNotifier<int>(0);
 
   /// Notifier specifically for active profile switches
-  final ValueNotifier<String?> activeProfileNotifier = ValueNotifier<String?>(null);
+  final ValueNotifier<String?> activeProfileNotifier = ValueNotifier<String?>(
+    null,
+  );
 
   /// Initialize profile service
   Future<void> initialize() async {
@@ -52,14 +55,18 @@ class ProfileService {
       if (appArgs.newIdentity) {
         await _createNewIdentityFromArgs();
         _initialized = true;
-        LogService().log('ProfileService initialized with new identity from command line');
+        LogService().log(
+          'ProfileService initialized with new identity from command line',
+        );
         return;
       }
 
       await _loadProfiles();
       await _repairProfilesIfNeeded();
       _initialized = true;
-      LogService().log('ProfileService initialized with ${_profiles.length} profile(s)');
+      LogService().log(
+        'ProfileService initialized with ${_profiles.length} profile(s)',
+      );
     } catch (e) {
       LogService().log('Error initializing ProfileService: $e');
       // Try to salvage any loaded profiles before falling back
@@ -80,7 +87,9 @@ class ProfileService {
   /// Create a new identity based on command line arguments
   Future<void> _createNewIdentityFromArgs() async {
     final appArgs = AppArgs();
-    final profileType = appArgs.isStation ? ProfileType.station : ProfileType.client;
+    final profileType = appArgs.isStation
+        ? ProfileType.station
+        : ProfileType.client;
 
     final newProfile = Profile(
       type: profileType,
@@ -93,7 +102,9 @@ class ProfileService {
     _activeProfileId = newProfile.id;
     _saveAllProfiles();
 
-    LogService().log('Created new ${profileType.name} identity: ${newProfile.callsign} (${newProfile.nickname})');
+    LogService().log(
+      'Created new ${profileType.name} identity: ${newProfile.callsign} (${newProfile.nickname})',
+    );
   }
 
   /// Load profiles from config (supports both legacy single profile and new multi-profile format)
@@ -123,7 +134,9 @@ class ProfileService {
       bool profilesUpdated = false;
       for (final profile in _profiles) {
         if (!_hasValidNostrKeys(profile)) {
-          LogService().log('Profile ${profile.callsign} has invalid NOSTR keys, regenerating...');
+          LogService().log(
+            'Profile ${profile.callsign} has invalid NOSTR keys, regenerating...',
+          );
           await _generateIdentityForProfile(profile);
           profilesUpdated = true;
         }
@@ -141,11 +154,15 @@ class ProfileService {
 
       // Auto-generate identity if missing or invalid
       if (!_hasValidNostrKeys(legacyProfile)) {
-        LogService().log('Legacy profile has invalid NOSTR keys, regenerating...');
+        LogService().log(
+          'Legacy profile has invalid NOSTR keys, regenerating...',
+        );
         await _generateIdentityForProfile(legacyProfile);
       } else if (legacyProfile.callsign.isEmpty) {
         // Derive callsign from existing npub if missing
-        legacyProfile.callsign = NostrKeyGenerator.deriveCallsign(legacyProfile.npub);
+        legacyProfile.callsign = NostrKeyGenerator.deriveCallsign(
+          legacyProfile.npub,
+        );
       }
 
       _profiles = [legacyProfile];
@@ -201,10 +218,21 @@ class ProfileService {
         if (callsign != null && callsign.isNotEmpty) {
           final profile = Profile(callsign: callsign);
           // Set a placeholder color
-          final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
+          final colors = [
+            'red',
+            'blue',
+            'green',
+            'yellow',
+            'purple',
+            'orange',
+            'pink',
+            'cyan',
+          ];
           profile.preferredColor = colors[recovered.length % colors.length];
           recovered.add(profile);
-          LogService().log('ProfileService: Recovered profile folder for $callsign (nsec missing — re-import required)');
+          LogService().log(
+            'ProfileService: Recovered profile folder for $callsign (nsec missing — re-import required)',
+          );
         }
       }
 
@@ -217,7 +245,9 @@ class ProfileService {
       // Skip onboarding since this is clearly not a fresh install
       ConfigService().set('firstLaunchComplete', true);
 
-      LogService().log('ProfileService: Recovered ${recovered.length} profile(s) from filesystem. Private keys must be re-imported.');
+      LogService().log(
+        'ProfileService: Recovered ${recovered.length} profile(s) from filesystem. Private keys must be re-imported.',
+      );
       return true;
     } catch (e) {
       LogService().log('ProfileService: Filesystem recovery failed: $e');
@@ -242,17 +272,9 @@ class ProfileService {
       changed = true;
     }
 
-    // Drop profiles that still can't sign (no usable nsec)
-    final before = _profiles.length;
-    _profiles = _profiles.where(_hasUsableNsec).toList();
-    if (_profiles.length != before) {
-      changed = true;
-      LogService().log(
-        'ProfileService: filtered out ${before - _profiles.length} profile(s) without usable nsec',
-      );
-    }
-
-    // Ensure the active profile points to a usable entry
+    // Keep recovered profiles even when their nsec is missing so reinstall or
+    // config-loss recovery does not discard the user's on-disk data.
+    // Callers that require signing must continue to check _hasUsableNsec().
     if (_activeProfileId != null &&
         !_profiles.any((p) => p.id == _activeProfileId)) {
       _activeProfileId = _profiles.isNotEmpty ? _profiles.first.id : null;
@@ -261,7 +283,9 @@ class ProfileService {
 
     if (changed) {
       _saveAllProfiles();
-      LogService().log('ProfileService: repaired profiles and refreshed config');
+      LogService().log(
+        'ProfileService: repaired profiles and refreshed config',
+      );
     }
   }
 
@@ -283,13 +307,16 @@ class ProfileService {
               ? NostrKeyGenerator.getPrivateKeyHex(profile.nsec)
               : null;
           updated = true;
-          LogService().log('ProfileService: recovered nsec from raw hex for ${profile.id}');
+          LogService().log(
+            'ProfileService: recovered nsec from raw hex for ${profile.id}',
+          );
         } catch (_) {}
       }
     }
 
     // Rebuild npub from valid nsec
-    if ((profile.npub.isEmpty || !NostrKeyGenerator.isValidNpub(profile.npub)) &&
+    if ((profile.npub.isEmpty ||
+            !NostrKeyGenerator.isValidNpub(profile.npub)) &&
         privateHex != null) {
       try {
         final pubHex = NostrCrypto.derivePublicKey(privateHex);
@@ -297,7 +324,9 @@ class ProfileService {
         updated = true;
         LogService().log('ProfileService: regenerated npub for ${profile.id}');
       } catch (e) {
-        LogService().log('ProfileService: failed to regenerate npub for ${profile.id}: $e');
+        LogService().log(
+          'ProfileService: failed to regenerate npub for ${profile.id}: $e',
+        );
       }
     }
 
@@ -310,7 +339,9 @@ class ProfileService {
         updated = true;
         LogService().log('ProfileService: derived callsign for ${profile.id}');
       } catch (e) {
-        LogService().log('ProfileService: failed to derive callsign for ${profile.id}: $e');
+        LogService().log(
+          'ProfileService: failed to derive callsign for ${profile.id}: $e',
+        );
       }
     }
 
@@ -322,7 +353,16 @@ class ProfileService {
 
     // Set a preferred color if missing
     if (profile.preferredColor.isEmpty) {
-      final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
+      final colors = [
+        'red',
+        'blue',
+        'green',
+        'yellow',
+        'purple',
+        'orange',
+        'pink',
+        'cyan',
+      ];
       profile.preferredColor = colors[Random().nextInt(colors.length)];
       updated = true;
     }
@@ -331,7 +371,10 @@ class ProfileService {
   }
 
   /// Generate new NOSTR identity for a specific profile
-  Future<void> _generateIdentityForProfile(Profile profile, {ProfileType? type}) async {
+  Future<void> _generateIdentityForProfile(
+    Profile profile, {
+    ProfileType? type,
+  }) async {
     final keys = NostrKeyGenerator.generateKeyPair();
     profile.npub = keys.npub;
     profile.nsec = keys.nsec;
@@ -348,11 +391,22 @@ class ProfileService {
 
     // Set random preferred color if not set
     if (profile.preferredColor.isEmpty) {
-      final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
+      final colors = [
+        'red',
+        'blue',
+        'green',
+        'yellow',
+        'purple',
+        'orange',
+        'pink',
+        'cyan',
+      ];
       profile.preferredColor = colors[Random().nextInt(colors.length)];
     }
 
-    LogService().log('Generated new identity: ${profile.callsign} (${profileType.name})');
+    LogService().log(
+      'Generated new identity: ${profile.callsign} (${profileType.name})',
+    );
   }
 
   /// Regenerate identity for the active profile (generates new keys and callsign)
@@ -361,7 +415,9 @@ class ProfileService {
     await _generateIdentityForProfile(profile, type: profile.type);
     _saveAllProfiles();
     await _applyActiveIdentityChanges(profile);
-    LogService().log('Regenerated identity for active profile: ${profile.callsign}');
+    LogService().log(
+      'Regenerated identity for active profile: ${profile.callsign}',
+    );
   }
 
   /// Check if a profile has valid NOSTR keys (proper bech32 encoding)
@@ -423,7 +479,8 @@ class ProfileService {
     }
     final byId = _profiles.firstWhere(
       (p) => p.id == _activeProfileId && _hasUsableNsec(p),
-      orElse: () => _profiles.firstWhere(_hasUsableNsec, orElse: () => _profiles.first),
+      orElse: () =>
+          _profiles.firstWhere(_hasUsableNsec, orElse: () => _profiles.first),
     );
     return byId;
   }
@@ -435,6 +492,14 @@ class ProfileService {
       return [];
     }
     return List.unmodifiable(_profiles.where(_hasUsableNsec));
+  }
+
+  /// Get all stored profiles, including recovered profiles without usable keys.
+  List<Profile> getAllStoredProfiles() {
+    if (!_initialized) {
+      return [];
+    }
+    return List.unmodifiable(_profiles);
   }
 
   /// Get profile by ID
@@ -578,7 +643,9 @@ class ProfileService {
     await _generateIdentityForProfile(newProfile, type: type);
     _profiles.add(newProfile);
     _saveAllProfiles();
-    LogService().log('Created new profile: ${newProfile.callsign} (${type.name})');
+    LogService().log(
+      'Created new profile: ${newProfile.callsign} (${type.name})',
+    );
     return newProfile;
   }
 
@@ -601,13 +668,24 @@ class ProfileService {
 
     // Set random preferred color
     if (newProfile.preferredColor.isEmpty) {
-      final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
+      final colors = [
+        'red',
+        'blue',
+        'green',
+        'yellow',
+        'purple',
+        'orange',
+        'pink',
+        'cyan',
+      ];
       newProfile.preferredColor = colors[Random().nextInt(colors.length)];
     }
 
     _profiles.add(newProfile);
     _saveAllProfiles();
-    LogService().log('Created new profile with pre-generated keys: $callsign (${type.name})');
+    LogService().log(
+      'Created new profile with pre-generated keys: $callsign (${type.name})',
+    );
     return newProfile;
   }
 
@@ -652,14 +730,25 @@ class ProfileService {
       );
 
       // Set random preferred color
-      final colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan'];
+      final colors = [
+        'red',
+        'blue',
+        'green',
+        'yellow',
+        'purple',
+        'orange',
+        'pink',
+        'cyan',
+      ];
       newProfile.preferredColor = colors[Random().nextInt(colors.length)];
 
       _profiles.add(newProfile);
       _activeProfileId = newProfile.id;
       _saveAllProfiles();
 
-      LogService().log('Created profile with extension: ${newProfile.callsign}');
+      LogService().log(
+        'Created profile with extension: ${newProfile.callsign}',
+      );
       return newProfile;
     } catch (e) {
       LogService().log('Error creating profile with extension: $e');
@@ -780,7 +869,9 @@ class ProfileService {
       // Clear stale mirror runtime state, then load new profile's config
       MirrorAutoSyncService.instance.stop();
       MirrorSyncService.instance.resetForProfileSwitch();
-      await MirrorConfigService.instance.setStorage(AppService().profileStorage);
+      await MirrorConfigService.instance.setStorage(
+        AppService().profileStorage,
+      );
       MirrorSyncService.instance.loadAllowedPeersFromConfig();
       MirrorAutoSyncService.instance.start();
 
@@ -799,10 +890,9 @@ class ProfileService {
     activeProfileNotifier.notifyListeners();
 
     if (EventBus().hasSubscribers<ProfileChangedEvent>()) {
-      EventBus().fire(ProfileChangedEvent(
-        callsign: profile.callsign,
-        npub: profile.npub,
-      ));
+      EventBus().fire(
+        ProfileChangedEvent(callsign: profile.callsign, npub: profile.npub),
+      );
     }
   }
 
@@ -812,7 +902,9 @@ class ProfileService {
   /// creating folders on disk.
   Future<void> finalizeProfileIdentity(Profile profile) async {
     await _applyActiveIdentityChanges(profile);
-    LogService().log('ProfileService: Finalized identity for ${profile.callsign}');
+    LogService().log(
+      'ProfileService: Finalized identity for ${profile.callsign}',
+    );
   }
 
   /// Set profile picture from file
@@ -989,11 +1081,7 @@ class ProfileService {
       );
 
       if (result == null || result.files.isEmpty) {
-        return {
-          'success': false,
-          'error': 'cancelled',
-          'imported': 0,
-        };
+        return {'success': false, 'error': 'cancelled', 'imported': 0};
       }
 
       final filePath = result.files.first.path;
@@ -1029,7 +1117,8 @@ class ProfileService {
       if (version > _exportVersion) {
         return {
           'success': false,
-          'error': 'Export file is from a newer version. Please update the app.',
+          'error':
+              'Export file is from a newer version. Please update the app.',
           'imported': 0,
         };
       }
@@ -1045,7 +1134,9 @@ class ProfileService {
       else if (data.containsKey('profiles')) {
         final profilesList = data['profiles'] as List;
         for (final profileData in profilesList) {
-          profilesToImport.add(Profile.fromJson(profileData as Map<String, dynamic>));
+          profilesToImport.add(
+            Profile.fromJson(profileData as Map<String, dynamic>),
+          );
         }
       } else {
         return {
@@ -1070,12 +1161,18 @@ class ProfileService {
 
       for (final importedProfile in profilesToImport) {
         // Check if profile with same callsign already exists
-        final existingByCallsign = getProfileByCallsign(importedProfile.callsign);
+        final existingByCallsign = getProfileByCallsign(
+          importedProfile.callsign,
+        );
         // Check if profile with same npub already exists
-        final existingByNpub = _profiles.where((p) => p.npub == importedProfile.npub).firstOrNull;
+        final existingByNpub = _profiles
+            .where((p) => p.npub == importedProfile.npub)
+            .firstOrNull;
 
         if (existingByCallsign != null || existingByNpub != null) {
-          LogService().log('Skipping duplicate profile: ${importedProfile.callsign}');
+          LogService().log(
+            'Skipping duplicate profile: ${importedProfile.callsign}',
+          );
           skippedCount++;
           continue;
         }

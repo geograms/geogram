@@ -17,7 +17,6 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/storage_config.dart';
 import '../util/nostr_key_generator.dart';
-import '../util/nostr_crypto.dart';
 import '../dialogs/import_nsec_dialog.dart';
 
 /// Isolate entry point for vanity key generation
@@ -54,10 +53,7 @@ void _vanityGeneratorIsolate(SendPort mainSendPort) {
         }
       }
 
-      mainSendPort.send({
-        'keysGenerated': keysGenerated,
-        'matches': matches,
-      });
+      mainSendPort.send({'keysGenerated': keysGenerated, 'matches': matches});
     }
   });
 }
@@ -68,7 +64,11 @@ class _VanityMatch {
   final DateTime foundAt;
   bool pinned;
 
-  _VanityMatch({required this.keys, required this.foundAt, this.pinned = false});
+  _VanityMatch({
+    required this.keys,
+    required this.foundAt,
+    this.pinned = false,
+  });
 }
 
 /// Full-screen welcome page shown after onboarding to display the generated callsign.
@@ -86,7 +86,8 @@ class WelcomePage extends StatefulWidget {
 class _WelcomePageState extends State<WelcomePage> {
   final I18nService _i18n = I18nService();
   final ProfileService _profileService = ProfileService();
-  final TextEditingController _vanityPatternController = TextEditingController();
+  final TextEditingController _vanityPatternController =
+      TextEditingController();
 
   // Preview keys - not persisted until user confirms
   late String _previewNpub;
@@ -144,7 +145,9 @@ class _WelcomePageState extends State<WelcomePage> {
     _previewNpub = keys.npub;
     _previewNsec = keys.nsec;
     _previewCallsign = keys.callsign;
-    LogService().log('WelcomePage: Generated preview callsign: $_previewCallsign');
+    LogService().log(
+      'WelcomePage: Generated preview callsign: $_previewCallsign',
+    );
   }
 
   /// Get the currently displayed callsign (from vanity match or preview)
@@ -211,7 +214,9 @@ class _WelcomePageState extends State<WelcomePage> {
       _selectedVanityMatch = null;
     });
 
-    LogService().log('WelcomePage: Went back to previous callsign: $_previewCallsign');
+    LogService().log(
+      'WelcomePage: Went back to previous callsign: $_previewCallsign',
+    );
   }
 
   /// Start the vanity generator
@@ -259,14 +264,17 @@ class _WelcomePageState extends State<WelcomePage> {
 
             for (final match in matches) {
               final m = match as Map<String, dynamic>;
-              _vanityMatches.insert(0, _VanityMatch(
-                keys: NostrKeys(
-                  npub: m['npub'] as String,
-                  nsec: m['nsec'] as String,
-                  callsign: m['callsign'] as String,
+              _vanityMatches.insert(
+                0,
+                _VanityMatch(
+                  keys: NostrKeys(
+                    npub: m['npub'] as String,
+                    nsec: m['nsec'] as String,
+                    callsign: m['callsign'] as String,
+                  ),
+                  foundAt: DateTime.now(),
                 ),
-                foundAt: DateTime.now(),
-              ));
+              );
               // Keep only 500 most recent matches (but preserve pinned)
               if (_vanityMatches.length > 500) {
                 for (int i = _vanityMatches.length - 1; i >= 0; i--) {
@@ -289,10 +297,7 @@ class _WelcomePageState extends State<WelcomePage> {
   }
 
   void _requestNextBatch(String pattern) {
-    _vanitySendPort?.send({
-      'pattern': pattern,
-      'batchSize': 1000,
-    });
+    _vanitySendPort?.send({'pattern': pattern, 'batchSize': 1000});
   }
 
   void _stopVanityGenerator() {
@@ -345,6 +350,8 @@ class _WelcomePageState extends State<WelcomePage> {
     try {
       final profile = _profileService.getProfile();
       final oldCallsign = profile.callsign;
+      final wasFirstLaunch =
+          ConfigService().getNestedValue('firstLaunchComplete', false) != true;
 
       profile.npub = result['npub'] as String;
       profile.nsec = result['nsec'] as String;
@@ -358,16 +365,25 @@ class _WelcomePageState extends State<WelcomePage> {
       await _profileService.finalizeProfileIdentity(profile);
 
       // Clean up orphaned folder from initial random callsign
-      if (oldCallsign != profile.callsign && oldCallsign.isNotEmpty && !kIsWeb) {
+      if (_shouldCleanupOldCallsignFolder(
+        oldCallsign: oldCallsign,
+        newCallsign: profile.callsign,
+        wasFirstLaunch: wasFirstLaunch,
+      )) {
         _cleanupOldCallsignFolder(oldCallsign);
       }
 
-      final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false);
+      final firstLaunchComplete = ConfigService().getNestedValue(
+        'firstLaunchComplete',
+        false,
+      );
       if (firstLaunchComplete != true) {
         ConfigService().set('firstLaunchComplete', true);
       }
 
-      LogService().log('WelcomePage: Imported profile with callsign: ${profile.callsign}');
+      LogService().log(
+        'WelcomePage: Imported profile with callsign: ${profile.callsign}',
+      );
       widget.onComplete();
     } catch (e) {
       LogService().log('WelcomePage: Error importing profile: $e');
@@ -384,11 +400,24 @@ class _WelcomePageState extends State<WelcomePage> {
       final oldDir = Directory(path.join(devicesDir, oldCallsign));
       if (oldDir.existsSync()) {
         oldDir.deleteSync(recursive: true);
-        LogService().log('WelcomePage: Cleaned up old callsign folder: $oldCallsign');
+        LogService().log(
+          'WelcomePage: Cleaned up old callsign folder: $oldCallsign',
+        );
       }
     } catch (e) {
       LogService().log('WelcomePage: Failed to clean up old folder: $e');
     }
+  }
+
+  bool _shouldCleanupOldCallsignFolder({
+    required String oldCallsign,
+    required String newCallsign,
+    required bool wasFirstLaunch,
+  }) {
+    if (kIsWeb) return false;
+    if (!wasFirstLaunch) return false;
+    if (oldCallsign.isEmpty || oldCallsign == newCallsign) return false;
+    return true;
   }
 
   String _formatDuration(Duration d) {
@@ -398,7 +427,8 @@ class _WelcomePageState extends State<WelcomePage> {
     if (minutes > 0) {
       return '${minutes}m ${seconds}s';
     }
-    return '${seconds}.${tenths}s';
+    return '$seconds.$tenths'
+        's';
   }
 
   /// Finalize the profile with the chosen keys and create folders
@@ -410,6 +440,8 @@ class _WelcomePageState extends State<WelcomePage> {
     try {
       // Get the active keys (from vanity match or preview)
       final (npub, nsec, callsign) = _getActiveKeys();
+      final wasFirstLaunch =
+          ConfigService().getNestedValue('firstLaunchComplete', false) != true;
 
       // Capture old callsign before updating (for orphaned folder cleanup)
       final profile = _profileService.getProfile();
@@ -425,17 +457,26 @@ class _WelcomePageState extends State<WelcomePage> {
       await _profileService.finalizeProfileIdentity(profile);
 
       // Clean up orphaned folder from initial random callsign
-      if (oldCallsign != callsign && oldCallsign.isNotEmpty && !kIsWeb) {
+      if (_shouldCleanupOldCallsignFolder(
+        oldCallsign: oldCallsign,
+        newCallsign: callsign,
+        wasFirstLaunch: wasFirstLaunch,
+      )) {
         _cleanupOldCallsignFolder(oldCallsign);
       }
 
       // Mark first launch as complete (if not already set by onboarding)
-      final firstLaunchComplete = ConfigService().getNestedValue('firstLaunchComplete', false);
+      final firstLaunchComplete = ConfigService().getNestedValue(
+        'firstLaunchComplete',
+        false,
+      );
       if (firstLaunchComplete != true) {
         ConfigService().set('firstLaunchComplete', true);
       }
 
-      LogService().log('WelcomePage: Finalized profile with callsign: $callsign');
+      LogService().log(
+        'WelcomePage: Finalized profile with callsign: $callsign',
+      );
 
       widget.onComplete();
     } catch (e) {
@@ -537,24 +578,29 @@ class _WelcomePageState extends State<WelcomePage> {
                                 // Go back button (only visible if there's a previous callsign)
                                 if (_previousCallsign != null)
                                   IconButton(
-                                    onPressed: _isGenerating || _isFinalizing ? null : _goBackToPrevious,
+                                    onPressed: _isGenerating || _isFinalizing
+                                        ? null
+                                        : _goBackToPrevious,
                                     icon: const Icon(Icons.undo),
                                     tooltip: 'Go back to previous',
                                     color: theme.colorScheme.primary,
                                   )
                                 else
-                                  const SizedBox(width: 48), // Placeholder for alignment
+                                  const SizedBox(
+                                    width: 48,
+                                  ), // Placeholder for alignment
                                 const SizedBox(width: 8),
                                 AnimatedSwitcher(
                                   duration: const Duration(milliseconds: 200),
                                   child: Text(
                                     _getDisplayCallsign(),
                                     key: ValueKey(_getDisplayCallsign()),
-                                    style: theme.textTheme.headlineMedium?.copyWith(
-                                      fontWeight: FontWeight.bold,
-                                      color: theme.colorScheme.primary,
-                                      letterSpacing: 2,
-                                    ),
+                                    style: theme.textTheme.headlineMedium
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                          color: theme.colorScheme.primary,
+                                          letterSpacing: 2,
+                                        ),
                                   ),
                                 ),
                                 const SizedBox(width: 8),
@@ -569,7 +615,9 @@ class _WelcomePageState extends State<WelcomePage> {
                               runSpacing: 8,
                               children: [
                                 OutlinedButton.icon(
-                                  onPressed: _isGenerating || _isFinalizing ? null : _regeneratePreview,
+                                  onPressed: _isGenerating || _isFinalizing
+                                      ? null
+                                      : _regeneratePreview,
                                   icon: _isGenerating
                                       ? SizedBox(
                                           width: 16,
@@ -583,12 +631,16 @@ class _WelcomePageState extends State<WelcomePage> {
                                   label: Text(_i18n.t('generate_new')),
                                 ),
                                 OutlinedButton.icon(
-                                  onPressed: _isFinalizing ? null : _importNsecAndFinalize,
+                                  onPressed: _isFinalizing
+                                      ? null
+                                      : _importNsecAndFinalize,
                                   icon: const Icon(Icons.key, size: 18),
                                   label: Text(_i18n.t('import_nsec')),
                                 ),
                                 FilledButton.icon(
-                                  onPressed: _isFinalizing || _vanityRunning ? null : _finalizeProfile,
+                                  onPressed: _isFinalizing || _vanityRunning
+                                      ? null
+                                      : _finalizeProfile,
                                   icon: _isFinalizing
                                       ? SizedBox(
                                           width: 16,
@@ -626,7 +678,8 @@ class _WelcomePageState extends State<WelcomePage> {
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                          color: theme.colorScheme.secondaryContainer
+                              .withValues(alpha: 0.5),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Row(
@@ -828,8 +881,10 @@ class _WelcomePageState extends State<WelcomePage> {
                         color: isSelected
                             ? theme.colorScheme.primaryContainer
                             : match.pinned
-                                ? theme.colorScheme.tertiaryContainer.withValues(alpha: 0.5)
-                                : null,
+                            ? theme.colorScheme.tertiaryContainer.withValues(
+                                alpha: 0.5,
+                              )
+                            : null,
                         child: InkWell(
                           onTap: () => _selectVanityMatch(match),
                           borderRadius: BorderRadius.circular(12),
@@ -852,26 +907,36 @@ class _WelcomePageState extends State<WelcomePage> {
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         match.keys.callsign,
-                                        style: theme.textTheme.titleMedium?.copyWith(
-                                          fontWeight: FontWeight.bold,
-                                          fontFamily: 'monospace',
-                                          color: isSelected
-                                              ? theme.colorScheme.onPrimaryContainer
-                                              : null,
-                                        ),
+                                        style: theme.textTheme.titleMedium
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.bold,
+                                              fontFamily: 'monospace',
+                                              color: isSelected
+                                                  ? theme
+                                                        .colorScheme
+                                                        .onPrimaryContainer
+                                                  : null,
+                                            ),
                                       ),
                                       Text(
                                         '${match.keys.npub.substring(0, 20)}...',
-                                        style: theme.textTheme.bodySmall?.copyWith(
-                                          color: isSelected
-                                              ? theme.colorScheme.onPrimaryContainer.withValues(alpha: 0.7)
-                                              : theme.colorScheme.onSurfaceVariant,
-                                          fontFamily: 'monospace',
-                                        ),
+                                        style: theme.textTheme.bodySmall
+                                            ?.copyWith(
+                                              color: isSelected
+                                                  ? theme
+                                                        .colorScheme
+                                                        .onPrimaryContainer
+                                                        .withValues(alpha: 0.7)
+                                                  : theme
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                              fontFamily: 'monospace',
+                                            ),
                                       ),
                                     ],
                                   ),
@@ -879,7 +944,9 @@ class _WelcomePageState extends State<WelcomePage> {
                                 IconButton(
                                   onPressed: () => _togglePin(match),
                                   icon: Icon(
-                                    match.pinned ? Icons.push_pin : Icons.push_pin_outlined,
+                                    match.pinned
+                                        ? Icons.push_pin
+                                        : Icons.push_pin_outlined,
                                     size: 20,
                                     color: match.pinned
                                         ? theme.colorScheme.tertiary

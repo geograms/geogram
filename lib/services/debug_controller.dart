@@ -539,6 +539,8 @@ class DebugController {
       final profileService = ProfileService();
       final profile = profileService.getProfile();
       final oldCallsign = profile.callsign;
+      final wasFirstLaunch =
+          ConfigService().getNestedValue('firstLaunchComplete', false) != true;
 
       // Generate a new identity (simulating user choosing a different callsign)
       final keys = NostrKeyGenerator.generateKeyPair();
@@ -551,7 +553,9 @@ class DebugController {
 
       // Clean up orphaned folder (same as WelcomePage._cleanupOldCallsignFolder)
       String? cleanedUp;
-      if (oldCallsign != keys.callsign && oldCallsign.isNotEmpty) {
+      if (wasFirstLaunch &&
+          oldCallsign != keys.callsign &&
+          oldCallsign.isNotEmpty) {
         final devicesDir = StorageConfig().devicesDir;
         final oldDir = Directory(path.join(devicesDir, oldCallsign));
         if (oldDir.existsSync()) {

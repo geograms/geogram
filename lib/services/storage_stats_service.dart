@@ -99,7 +99,8 @@ class StorageStatsService {
   bool get isRefreshing => _isRefreshing;
 
   /// Path to the cache file
-  String get _cacheFilePath => p.join(_storageConfig.baseDir, 'storage_stats.json');
+  String get _cacheFilePath =>
+      p.join(_storageConfig.baseDir, 'storage_stats.json');
 
   /// Platform directories (cached after first resolution)
   String? _appSupportDir;
@@ -130,7 +131,9 @@ class StorageStatsService {
               _cachedSizes![entry.key] = entry.value['size'] as int;
             }
           }
-          LogService().log('StorageStatsService: Loaded ${_cachedSizes!.length} cached sizes');
+          LogService().log(
+            'StorageStatsService: Loaded ${_cachedSizes!.length} cached sizes',
+          );
         }
       }
     } catch (e) {
@@ -189,21 +192,25 @@ class StorageStatsService {
       for (final cat in categories) {
         final fullPath = _getFullPath(cat);
         if (fullPath != null) {
-          categoryInfos.add(_CategoryInfo(
-            id: cat.id,
-            fullPath: fullPath,
-            isFile: cat.isFile,
-            isRemoteCache: cat.isRemoteCache,
-            isPerCallsign: cat.isPerCallsign,
-            relativePath: cat.relativePath,
-            devicesDir: _storageConfig.devicesDir,
-            localCallsigns: localCallsigns,
-          ));
+          categoryInfos.add(
+            _CategoryInfo(
+              id: cat.id,
+              fullPath: fullPath,
+              isFile: cat.isFile,
+              isRemoteCache: cat.isRemoteCache,
+              isPerCallsign: cat.isPerCallsign,
+              relativePath: cat.relativePath,
+              devicesDir: _storageConfig.devicesDir,
+              localCallsigns: localCallsigns,
+            ),
+          );
         }
       }
 
       // Convert to JSON-safe format for isolate
-      final input = _ComputeInput(categoryInfos.map((c) => c.toJson()).toList());
+      final input = _ComputeInput(
+        categoryInfos.map((c) => c.toJson()).toList(),
+      );
 
       // Run computation in isolate
       final results = await compute(_computeStorageSizes, input);
@@ -217,7 +224,9 @@ class StorageStatsService {
       // Emit update
       _sizesController.add(results);
 
-      LogService().log('StorageStatsService: Refreshed ${results.length} category sizes');
+      LogService().log(
+        'StorageStatsService: Refreshed ${results.length} category sizes',
+      );
     } catch (e) {
       LogService().log('StorageStatsService: Error refreshing sizes: $e');
     } finally {
@@ -240,7 +249,7 @@ class StorageStatsService {
 
   /// Get local profile callsigns
   Set<String> _getLocalProfileCallsigns() {
-    final profiles = _profileService.getAllProfiles();
+    final profiles = _profileService.getAllStoredProfiles();
     return profiles.map((p) => p.callsign).toSet();
   }
 
@@ -297,11 +306,7 @@ class StorageCategoryDef {
 }
 
 /// Storage root type (matches StorageRoot enum in storage_settings_page.dart)
-enum StorageRootType {
-  baseDir,
-  appSupport,
-  cache,
-}
+enum StorageRootType { baseDir, appSupport, cache }
 
 /// Isolate worker function - computes sizes for all categories
 Future<Map<String, int>> _computeStorageSizes(_ComputeInput input) async {
@@ -316,7 +321,10 @@ Future<Map<String, int>> _computeStorageSizes(_ComputeInput input) async {
       if (cat.isFile) {
         size = await _computeFileSize(cat.fullPath);
       } else if (cat.isRemoteCache) {
-        size = await _computeRemoteCacheSize(cat.devicesDir, cat.localCallsigns);
+        size = await _computeRemoteCacheSize(
+          cat.devicesDir,
+          cat.localCallsigns,
+        );
       } else if (cat.isPerCallsign) {
         size = await _computePerCallsignSize(cat.devicesDir, cat.relativePath);
       } else {
@@ -362,7 +370,10 @@ Future<int> _computeDirectorySize(String path) async {
 }
 
 /// Compute size of remote cache (excludes local callsigns)
-Future<int> _computeRemoteCacheSize(String devicesDir, Set<String> localCallsigns) async {
+Future<int> _computeRemoteCacheSize(
+  String devicesDir,
+  Set<String> localCallsigns,
+) async {
   int totalSize = 0;
   final dir = Directory(devicesDir);
 
@@ -374,7 +385,10 @@ Future<int> _computeRemoteCacheSize(String devicesDir, Set<String> localCallsign
       // Skip local profile callsigns
       if (localCallsigns.contains(callsign)) continue;
 
-      await for (final entity in callsignEntity.list(recursive: true, followLinks: false)) {
+      await for (final entity in callsignEntity.list(
+        recursive: true,
+        followLinks: false,
+      )) {
         if (entity is File) {
           try {
             totalSize += await entity.length();
@@ -400,7 +414,10 @@ Future<int> _computePerCallsignSize(String devicesDir, String subFolder) async {
     if (callsignEntity is Directory) {
       final appDir = Directory(p.join(callsignEntity.path, subFolder));
       if (await appDir.exists()) {
-        await for (final entity in appDir.list(recursive: true, followLinks: false)) {
+        await for (final entity in appDir.list(
+          recursive: true,
+          followLinks: false,
+        )) {
           if (entity is File) {
             try {
               totalSize += await entity.length();
