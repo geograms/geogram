@@ -19,6 +19,12 @@ class EventTileWidget extends StatefulWidget {
   final String? appPath;
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
+  /// Whether this event is currently pinned to the top. The tile
+  /// just renders the icon — the parent owns the storage so it can
+  /// re-sort the list after a toggle.
+  final bool isPinned;
+  /// Fired when the user taps the pin icon. Null hides the icon.
+  final VoidCallback? onTogglePin;
 
   const EventTileWidget({
     Key? key,
@@ -28,6 +34,8 @@ class EventTileWidget extends StatefulWidget {
     this.appPath,
     this.onEdit,
     this.onDelete,
+    this.isPinned = false,
+    this.onTogglePin,
   }) : super(key: key);
 
   @override
@@ -153,7 +161,33 @@ class _EventTileWidgetState extends State<EventTileWidget> {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 4),
+                        // Pin / unpin toggle — pinned events float
+                        // to the top of the list. Tap is captured
+                        // here so the parent ListTile.onTap doesn\'t
+                        // also fire and open the event.
+                        if (widget.onTogglePin != null)
+                          SizedBox(
+                            width: 32,
+                            height: 32,
+                            child: IconButton(
+                              padding: EdgeInsets.zero,
+                              iconSize: 18,
+                              tooltip: widget.isPinned
+                                  ? i18n.t('unpin')
+                                  : i18n.t('pin'),
+                              icon: Icon(
+                                widget.isPinned
+                                    ? Icons.push_pin
+                                    : Icons.push_pin_outlined,
+                                color: widget.isPinned
+                                    ? theme.colorScheme.primary
+                                    : theme.colorScheme.onSurfaceVariant,
+                              ),
+                              onPressed: widget.onTogglePin,
+                            ),
+                          ),
+                        const SizedBox(width: 4),
                         // Pending access requests badge — owner-only
                         // attention marker that the event has at least
                         // one undecided request.

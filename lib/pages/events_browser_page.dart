@@ -13,6 +13,7 @@ import '../models/event_link.dart';
 import '../models/event_registration.dart';
 import '../services/app_service.dart';
 import '../services/devices_service.dart';
+import '../services/event_pin_service.dart';
 import '../services/event_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -308,16 +309,29 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       Iterable<Event> scoped = _showMineOnly
           ? _allEvents.where(isMine)
           : _remoteEvents;
+      List<Event> result;
       if (query.isEmpty) {
-        _filteredEvents = scoped.toList();
+        result = scoped.toList();
       } else {
-        _filteredEvents = scoped.where((event) {
+        result = scoped.where((event) {
           return event.title.toLowerCase().contains(query) ||
                  event.location.toLowerCase().contains(query) ||
                  (event.locationName?.toLowerCase().contains(query) ?? false) ||
                  event.content.toLowerCase().contains(query);
         }).toList();
       }
+      // Pinned events float to the top regardless of date / scope.
+      // Inside each group (pinned, not pinned) the original order is
+      // preserved — _allEvents / _remoteEvents are already sorted
+      // by date so the date sort survives.
+      final pinnedKeys = EventPinService.all();
+      result.sort((a, b) {
+        final aPinned = pinnedKeys.contains(EventPinService.keyFor(a));
+        final bPinned = pinnedKeys.contains(EventPinService.keyFor(b));
+        if (aPinned != bPinned) return aPinned ? -1 : 1;
+        return b.dateTime.compareTo(a.dateTime);
+      });
+      _filteredEvents = result;
     });
   }
 
@@ -1218,6 +1232,11 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
           event: event,
           isSelected: _selectedEvent?.id == event.id,
           appPath: widget.appPath,
+          isPinned: EventPinService.isPinned(event),
+          onTogglePin: () {
+            EventPinService.toggle(event);
+            _filterEvents();
+          },
           onTap: () {
             if (widget.isRemoteDevice) {
               _selectRemoteEvent(event);
