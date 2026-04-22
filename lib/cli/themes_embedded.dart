@@ -1945,6 +1945,12 @@ class ThemesEmbedded {
       return BACKOFF_MS[idx];
     }
 
+    // Session counter — bumped each time an upload actually lands on
+    // the device. Drives the banner that tells the user "the device
+    // got your photo, the author hasn't approved it yet" so they
+    // don\'t mistake a successful upload for a stuck queue.
+    var contributionsAccepted = 0;
+
     async function processQueue() {
       if (queueProcessing) return;
       queueProcessing = true;
@@ -1967,6 +1973,7 @@ class ThemesEmbedded {
           var result = await tryUploadItem(item);
           if (result.done) {
             await queueDelete(item.id);
+            contributionsAccepted++;
           } else if (result.permanent) {
             await queueUpdate(item.id, {
               status: 'failed',
@@ -1986,6 +1993,7 @@ class ThemesEmbedded {
             if (nextWake === null || nextAt < nextWake) nextWake = nextAt;
           }
           renderQueueUI();
+          updateContributeStatus();
         }
         if (nextWake !== null) {
           var ms = Math.max(1000, nextWake - Date.now());
@@ -1998,6 +2006,42 @@ class ThemesEmbedded {
       } finally {
         queueProcessing = false;
       }
+    }
+
+    // Single source of truth for the status banner. Reflects the
+    // actual queue state: nothing pending + recent acceptances →
+    // "submitted, waiting for approval"; pending → counts; idle →
+    // hide banner. Keeps the message honest as items move.
+    async function updateContributeStatus() {
+      var pending = 0;
+      var failed = 0;
+      try {
+        var items = (await queueAll()).filter(function(i) {
+          return i.eventId === ev.id;
+        });
+        for (var i = 0; i < items.length; i++) {
+          if (items[i].status === 'failed') failed++;
+          else pending++;
+        }
+      } catch (_) {
+        return;
+      }
+      var msg = '';
+      var isError = false;
+      if (pending > 0) {
+        msg = pending + ' upload(s) in progress. They will keep ' +
+              'retrying until the device receives them.';
+      } else if (contributionsAccepted > 0) {
+        msg = contributionsAccepted +
+              ' file(s) delivered to the device. ' +
+              'Waiting for the event author to approve them. ' +
+              'They will show up in the gallery once approved.';
+      } else if (failed > 0) {
+        msg = failed + ' upload(s) failed permanently. ' +
+              'See the list below for details.';
+        isError = true;
+      }
+      setContributeStatus(msg, isError);
     }
 
     function setContributeStatus(msg, isError) {
@@ -2157,17 +2201,16 @@ class ThemesEmbedded {
           }
         }
         btn.disabled = false;
-        if (enqueued > 0) {
-          setContributeStatus(
-            enqueued + ' file(s) queued. Uploads will keep trying until the device receives them.',
-            false
-          );
-        }
         if (rejected.length > 0) {
           setContributeStatus(
             'Could not queue: ' + rejected.join(', '),
             true
           );
+        } else {
+          // processQueue() will overwrite this immediately with an
+          // accurate "in progress" message; this just bridges the
+          // tiny gap before the worker starts.
+          updateContributeStatus();
         }
         renderQueueUI();
         processQueue();
@@ -2177,6 +2220,7 @@ class ThemesEmbedded {
 
     // Resume any uploads queued from a previous tab session.
     renderQueueUI();
+    updateContributeStatus();
     processQueue();
     window.addEventListener('online', function() {
       // Reset backoff so a returned connection retries immediately.
