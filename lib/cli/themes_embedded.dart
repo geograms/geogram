@@ -1443,14 +1443,18 @@ class ThemesEmbedded {
     // --- Contribute media CTA (NOSTR-signed upload) ---
     // Visible only when window.nostr is available (NIP-07 extension).
     // The button opens a hidden file input; each picked file is
-    // hashed (SHA-256), tagged + signed in the browser, and POSTed
-    // to /api/events/{id}/contributors/{CALLSIGN}/submit/{filename}.
+    // hashed (SHA-256), tagged + signed in the browser, persisted to
+    // IndexedDB, and uploaded by a background queue with exponential
+    // backoff. The contributing device often goes offline for
+    // minutes (mobile / weak link) so we keep retrying — closing
+    // the tab and reopening it later resumes any queued uploads.
     html += '<div class="event-section event-contribute" id="event-contribute" style="display:none">' +
       '<button class="event-contribute-btn" id="contribute-btn" type="button">' +
         ico.upload + ' <span>Contribute media</span>' +
       '</button>' +
-      '<div class="event-contribute-help">Photos and short videos sent here go to the event author for approval before they appear publicly.</div>' +
+      '<div class="event-contribute-help">Photos and short videos sent here go to the event author for approval before they appear publicly. Uploads are kept in your browser until they reach the device, even if you close this tab.</div>' +
       '<div id="contribute-status" class="event-contribute-status" style="display:none"></div>' +
+      '<div id="contribute-queue" class="event-contribute-queue" style="display:none"></div>' +
       '<input type="file" id="contribute-input" accept="image/*,video/*" multiple style="display:none">' +
     '</div>';
 
@@ -1812,8 +1816,274 @@ class ThemesEmbedded {
       }).join('');
     }
 
-    async function submitOneContribution(file, callsign) {
+    // ── Persistent upload queue ────────────────────────────────────
+    // Each picked file is hashed + signed at submit-time, then
+    // persisted to IndexedDB along with the file Blob. A worker
+    // drains the queue with exponential backoff (5 s → 1 h cap),
+    // resumes on `online`, and survives tab reloads. Permanent
+    // server rejections (400 / 401 / 403 / 415) stop retrying and
+    // surface in the queue UI; transient failures (5xx, network)
+    // keep going until the device comes back.
+    var QUEUE_DB_NAME = 'geogram-event-uploads';
+    var QUEUE_STORE = 'pending';
+    var QUEUE_DB_VER = 1;
+    var BACKOFF_MS = [5000, 15000, 30000, 60000, 120000, 300000, 900000, 1800000, 3600000];
+    var queueProcessing = false;
+    var queueTimer = null;
+
+    function queueOpen() {
+      return new Promise(function(resolve, reject) {
+        if (!window.indexedDB) {
+          reject(new Error('IndexedDB unavailable'));
+          return;
+        }
+        var req = window.indexedDB.open(QUEUE_DB_NAME, QUEUE_DB_VER);
+        req.onupgradeneeded = function() {
+          var db = req.result;
+          if (!db.objectStoreNames.contains(QUEUE_STORE)) {
+            db.createObjectStore(QUEUE_STORE, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = function() { resolve(req.result); };
+        req.onerror = function() { reject(req.error); };
+      });
+    }
+
+    function queueAdd(item) {
+      return queueOpen().then(function(db) {
+        return new Promise(function(resolve, reject) {
+          var tx = db.transaction(QUEUE_STORE, 'readwrite');
+          tx.objectStore(QUEUE_STORE).add(item);
+          tx.oncomplete = function() { resolve(); };
+          tx.onerror = function() { reject(tx.error); };
+        });
+      });
+    }
+
+    function queueAll() {
+      return queueOpen().then(function(db) {
+        return new Promise(function(resolve, reject) {
+          var tx = db.transaction(QUEUE_STORE, 'readonly');
+          var req = tx.objectStore(QUEUE_STORE).getAll();
+          req.onsuccess = function() { resolve(req.result || []); };
+          req.onerror = function() { reject(req.error); };
+        });
+      });
+    }
+
+    function queueDelete(id) {
+      return queueOpen().then(function(db) {
+        return new Promise(function(resolve, reject) {
+          var tx = db.transaction(QUEUE_STORE, 'readwrite');
+          tx.objectStore(QUEUE_STORE).delete(id);
+          tx.oncomplete = function() { resolve(); };
+          tx.onerror = function() { reject(tx.error); };
+        });
+      });
+    }
+
+    function queueUpdate(id, patch) {
+      return queueOpen().then(function(db) {
+        return new Promise(function(resolve, reject) {
+          var tx = db.transaction(QUEUE_STORE, 'readwrite');
+          var store = tx.objectStore(QUEUE_STORE);
+          var req = store.get(id);
+          req.onsuccess = function() {
+            var rec = req.result;
+            if (!rec) { resolve(); return; }
+            for (var k in patch) rec[k] = patch[k];
+            store.put(rec);
+          };
+          tx.oncomplete = function() { resolve(); };
+          tx.onerror = function() { reject(tx.error); };
+        });
+      });
+    }
+
+    function isPermanentStatus(code) {
+      // Bad request, missing/invalid signature, type rejection,
+      // payload too large — retrying would never help.
+      return code === 400 || code === 401 || code === 403 ||
+             code === 413 || code === 415;
+    }
+
+    async function tryUploadItem(item) {
+      // Only this event\'s queue; other events served from the same
+      // origin keep their own items but we ignore them here.
+      if (item.eventId !== ev.id) {
+        return { skipped: true };
+      }
+      var url = '../api/events/' + encodeURIComponent(item.eventId) +
+                '/contributors/' + encodeURIComponent(item.callsign) +
+                '/submit/' + encodeURIComponent(item.filename);
+      try {
+        var resp = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': item.contentType || 'application/octet-stream',
+            'X-Nostr-Npub': item.npub,
+            'X-Nostr-Signature': item.signature,
+            'X-Nostr-Timestamp': String(item.createdAt),
+          },
+          body: item.bytes,
+        });
+        if (resp.ok) return { done: true };
+        var err = '';
+        try { err = (await resp.json()).error || ''; } catch (_) {}
+        return {
+          permanent: isPermanentStatus(resp.status),
+          error: err || ('HTTP ' + resp.status),
+        };
+      } catch (e) {
+        // Network error / offline — always retry.
+        return { error: e && e.message ? e.message : String(e) };
+      }
+    }
+
+    function backoffFor(attempts) {
+      var idx = Math.min(attempts, BACKOFF_MS.length - 1);
+      return BACKOFF_MS[idx];
+    }
+
+    async function processQueue() {
+      if (queueProcessing) return;
+      queueProcessing = true;
+      try {
+        var items = await queueAll();
+        var now = Date.now();
+        var nextWake = null;
+        for (var i = 0; i < items.length; i++) {
+          var item = items[i];
+          if (item.eventId !== ev.id) continue;
+          if (item.status === 'failed') continue;
+          if (item.nextAttempt && item.nextAttempt > now) {
+            if (nextWake === null || item.nextAttempt < nextWake) {
+              nextWake = item.nextAttempt;
+            }
+            continue;
+          }
+          await queueUpdate(item.id, { status: 'uploading' });
+          renderQueueUI();
+          var result = await tryUploadItem(item);
+          if (result.done) {
+            await queueDelete(item.id);
+          } else if (result.permanent) {
+            await queueUpdate(item.id, {
+              status: 'failed',
+              lastError: result.error,
+              attempts: (item.attempts || 0) + 1,
+            });
+          } else {
+            var attempts = (item.attempts || 0) + 1;
+            var delay = backoffFor(attempts - 1);
+            var nextAt = Date.now() + delay;
+            await queueUpdate(item.id, {
+              status: 'queued',
+              attempts: attempts,
+              nextAttempt: nextAt,
+              lastError: result.error,
+            });
+            if (nextWake === null || nextAt < nextWake) nextWake = nextAt;
+          }
+          renderQueueUI();
+        }
+        if (nextWake !== null) {
+          var ms = Math.max(1000, nextWake - Date.now());
+          if (queueTimer) clearTimeout(queueTimer);
+          queueTimer = setTimeout(processQueue, ms);
+        }
+      } catch (e) {
+        // IDB unavailable / quota — log and back off.
+        console.warn('processQueue failed:', e);
+      } finally {
+        queueProcessing = false;
+      }
+    }
+
+    function setContributeStatus(msg, isError) {
       var status = document.getElementById('contribute-status');
+      if (!status) return;
+      status.style.display = msg ? '' : 'none';
+      status.textContent = msg || '';
+      status.style.color = isError ? '#c33' : '';
+    }
+
+    async function renderQueueUI() {
+      var container = document.getElementById('contribute-queue');
+      if (!container) return;
+      var items;
+      try {
+        items = (await queueAll()).filter(function(i) {
+          return i.eventId === ev.id;
+        });
+      } catch (_) {
+        container.style.display = 'none';
+        return;
+      }
+      if (items.length === 0) {
+        container.style.display = 'none';
+        container.innerHTML = '';
+        return;
+      }
+      items.sort(function(a, b) { return a.queuedAt - b.queuedAt; });
+      var rows = items.map(function(item) {
+        var label;
+        if (item.status === 'uploading') {
+          label = 'Uploading…';
+        } else if (item.status === 'failed') {
+          label = 'Failed: ' + (item.lastError || 'unknown error');
+        } else if (item.attempts && item.attempts > 0) {
+          var wait = Math.max(0, (item.nextAttempt || 0) - Date.now());
+          var secs = Math.ceil(wait / 1000);
+          label = 'Retrying in ' + secs + 's (attempt ' + (item.attempts + 1) + ')';
+          if (item.lastError) label += ' — ' + item.lastError;
+        } else {
+          label = 'Queued';
+        }
+        var actions = '';
+        if (item.status !== 'uploading') {
+          actions += '<button class="event-contribute-mini" data-act="retry" data-id="' +
+            esc(item.id) + '">Retry now</button>';
+        }
+        actions += '<button class="event-contribute-mini" data-act="remove" data-id="' +
+          esc(item.id) + '">Remove</button>';
+        return '<div class="event-contribute-item">' +
+          '<div class="event-contribute-item-name">' + esc(item.filename) + '</div>' +
+          '<div class="event-contribute-item-status">' + esc(label) + '</div>' +
+          '<div class="event-contribute-item-actions">' + actions + '</div>' +
+        '</div>';
+      });
+      container.innerHTML =
+        '<div class="event-contribute-summary">' + items.length +
+          ' upload(s) waiting on the device</div>' +
+        rows.join('');
+      container.style.display = '';
+
+      // Wire per-item buttons.
+      var btns = container.querySelectorAll('button[data-act]');
+      for (var i = 0; i < btns.length; i++) {
+        (function(btn) {
+          btn.onclick = async function() {
+            var id = btn.getAttribute('data-id');
+            var act = btn.getAttribute('data-act');
+            if (act === 'remove') {
+              await queueDelete(id);
+            } else if (act === 'retry') {
+              await queueUpdate(id, {
+                attempts: 0,
+                nextAttempt: 0,
+                status: 'queued',
+                lastError: null,
+              });
+              processQueue();
+            }
+            renderQueueUI();
+          };
+        })(btns[i]);
+      }
+    }
+
+    async function enqueueContribution(file, callsign) {
       var bytes = new Uint8Array(await file.arrayBuffer());
       var hash = await sha256Hex(bytes);
       var createdAt = Math.floor(Date.now() / 1000);
@@ -1832,40 +2102,31 @@ class ThemesEmbedded {
       if (!signed || !signed.sig || !signed.pubkey) {
         throw new Error('Signing failed');
       }
-      // Encode npub for the header so the server can decodeNpub() the
-      // same way the Flutter client does.
       var npub = (window.NostrTools &&
                   window.NostrTools.nip19 &&
                   window.NostrTools.nip19.npubEncode)
         ? window.NostrTools.nip19.npubEncode(signed.pubkey)
         : signed.pubkey;
-      var url = '../api/events/' + encodeURIComponent(ev.id) +
-                '/contributors/' + encodeURIComponent(callsign) +
-                '/submit/' + encodeURIComponent(file.name);
-      var resp = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream',
-          'X-Nostr-Npub': npub,
-          'X-Nostr-Signature': signed.sig,
-          'X-Nostr-Timestamp': String(createdAt),
-        },
-        body: bytes,
+      // IDB stores Blobs natively — keep the original Blob so large
+      // videos don\'t balloon in memory as base64.
+      var blob = new Blob([bytes], { type: file.type || 'application/octet-stream' });
+      var id = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 10);
+      await queueAdd({
+        id: id,
+        eventId: ev.id,
+        callsign: callsign,
+        filename: file.name,
+        contentType: file.type || 'application/octet-stream',
+        bytes: blob,
+        npub: npub,
+        signature: signed.sig,
+        createdAt: createdAt,
+        queuedAt: Date.now(),
+        attempts: 0,
+        nextAttempt: 0,
+        lastError: null,
+        status: 'queued',
       });
-      if (!resp.ok) {
-        var err = '';
-        try { err = (await resp.json()).error || ''; } catch (_) {}
-        throw new Error(err || ('HTTP ' + resp.status));
-      }
-      return await resp.json();
-    }
-
-    function setContributeStatus(msg, isError) {
-      var status = document.getElementById('contribute-status');
-      if (!status) return;
-      status.style.display = msg ? '' : 'none';
-      status.textContent = msg || '';
-      status.style.color = isError ? '#c33' : '';
     }
 
     function bindContributeUploader() {
@@ -1884,32 +2145,54 @@ class ThemesEmbedded {
           return;
         }
         btn.disabled = true;
-        var ok = 0;
-        var failed = [];
+        var enqueued = 0;
+        var rejected = [];
         for (var i = 0; i < files.length; i++) {
           var f = files[i];
-          setContributeStatus('Uploading ' + f.name + ' (' + (i + 1) + '/' + files.length + ')…');
           try {
-            await submitOneContribution(f, callsign);
-            ok++;
+            await enqueueContribution(f, callsign);
+            enqueued++;
           } catch (err) {
-            failed.push(f.name + ' (' + err.message + ')');
+            rejected.push(f.name + ' (' + (err && err.message ? err.message : err) + ')');
           }
         }
         btn.disabled = false;
-        var summary = ok + ' file(s) submitted for approval.';
-        if (failed.length > 0) {
-          summary += ' Failed: ' + failed.join(', ');
-          setContributeStatus(summary, true);
-        } else {
-          setContributeStatus(summary, false);
-          // Reload after a short delay so the page reflects anything
-          // that landed directly in approved (already-trusted contributor).
-          setTimeout(function() { window.location.reload(); }, 1200);
+        if (enqueued > 0) {
+          setContributeStatus(
+            enqueued + ' file(s) queued. Uploads will keep trying until the device receives them.',
+            false
+          );
         }
+        if (rejected.length > 0) {
+          setContributeStatus(
+            'Could not queue: ' + rejected.join(', '),
+            true
+          );
+        }
+        renderQueueUI();
+        processQueue();
       };
     }
     bindContributeUploader();
+
+    // Resume any uploads queued from a previous tab session.
+    renderQueueUI();
+    processQueue();
+    window.addEventListener('online', function() {
+      // Reset backoff so a returned connection retries immediately.
+      queueAll().then(function(items) {
+        var todo = [];
+        items.forEach(function(item) {
+          if (item.eventId !== ev.id) return;
+          if (item.status === 'failed') return;
+          todo.push(queueUpdate(item.id, { nextAttempt: 0 }));
+        });
+        return Promise.all(todo);
+      }).then(processQueue).catch(function() {});
+    });
+    // Safety-net periodic processor in case timers were missed (tab
+    // backgrounded / throttled).
+    setInterval(function() { processQueue(); }, 60000);
 
     // ── Request-access button ─────────────────────────────────────────
     // Only present when the server stripped this page to a teaser. POSTs
@@ -3083,6 +3366,65 @@ class ThemesEmbedded {
   background: var(--background);
   border-radius: 4px;
   border: 1px solid var(--border-color);
+}
+
+.event-contribute-queue {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.event-contribute-summary {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+.event-contribute-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  padding: 8px 10px;
+  background: var(--background);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  align-items: center;
+}
+
+.event-contribute-item-name {
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.event-contribute-item-status {
+  grid-column: 1;
+  opacity: 0.75;
+  font-size: 0.8rem;
+}
+
+.event-contribute-item-actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  gap: 6px;
+  align-self: center;
+}
+
+.event-contribute-mini {
+  background: transparent;
+  color: var(--color);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  opacity: 0.8;
+}
+.event-contribute-mini:hover {
+  opacity: 1;
+  border-color: var(--accent);
 }
 
 .event-body {
