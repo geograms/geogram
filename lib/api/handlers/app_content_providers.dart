@@ -17,6 +17,7 @@ import '../../models/event.dart';
 import '../../services/profile_storage.dart';
 import '../../util/blog_folder_utils.dart';
 import '../../util/contributor_folder_utils.dart';
+import '../../util/feedback_comment_utils.dart';
 import '../../util/feedback_folder_utils.dart';
 import '../../util/media_thumbnail_utils.dart';
 import 'app_content_provider.dart';
@@ -216,6 +217,38 @@ class EventContentProvider extends AppContentProvider {
     data['like_count'] = counts.likes;
     data['comment_count'] = counts.comments;
     data['view_count'] = counts.views;
+    // Canonical likes (npubs from feedback/likes.txt) + comments
+    // (signed entries from feedback/comments/) so a visitor / cache
+    // walker has the same lists the local app sees, not the legacy
+    // in-event Event.likes / Event.comments arrays.
+    try {
+      data['likes'] = await FeedbackFolderUtils.readFeedbackFile(
+        entry.eventPath,
+        FeedbackFolderUtils.feedbackTypeLikes,
+        storage: storage,
+      );
+    } catch (_) {
+      data['likes'] = const <String>[];
+    }
+    try {
+      final comments = await FeedbackCommentUtils.loadComments(
+        entry.eventPath,
+        storage: storage,
+      );
+      data['comments'] = comments
+          .map((c) => {
+                'id': c.id,
+                'author': c.author,
+                'timestamp': c.created,
+                'content': c.content,
+                if (c.npub != null && c.npub!.isNotEmpty) 'npub': c.npub,
+                if (c.signature != null && c.signature!.isNotEmpty)
+                  'signature': c.signature,
+              })
+          .toList();
+    } catch (_) {
+      data['comments'] = const <Map<String, dynamic>>[];
+    }
     return data;
   }
 

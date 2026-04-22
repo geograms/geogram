@@ -122,6 +122,83 @@ class RemoteEventCache {
     }
   }
 
+  /// Persist the full likers list to feedback/likes.txt (one npub
+  /// per line). Replaces any existing file so the cache mirrors the
+  /// authoritative state on the source device. Empty list writes an
+  /// empty file rather than skipping — that\'s how "no likes after
+  /// previously having some" is represented.
+  static Future<void> writeLikes({
+    required String authorCallsign,
+    required String eventId,
+    required Iterable<String> npubs,
+  }) async {
+    try {
+      final file = io.File(p.join(
+          folderPath(authorCallsign, eventId), 'feedback', 'likes.txt'));
+      await file.parent.create(recursive: true);
+      final cleaned = npubs
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+      await file.writeAsString(
+          cleaned.isEmpty ? '' : '${cleaned.join('\n')}\n');
+    } catch (e) {
+      LogService().log(
+          'RemoteEventCache.writeLikes($authorCallsign/$eventId) failed: $e');
+    }
+  }
+
+  /// Persist comments under feedback/comments/{id}.txt using the
+  /// same format the local FeedbackCommentUtils writes — so the
+  /// cache walks identically to the local user\'s own events.
+  ///
+  /// [comments] is the list shape /api/content/events/{id} returns:
+  /// `[{id, author, timestamp, content, npub?, signature?}, …]`.
+  /// Existing comment files in the folder are NOT removed — the
+  /// caller is the source of truth, but we don\'t want to nuke a
+  /// comment that hasn\'t round-tripped yet through the cache write.
+  static Future<void> writeComments({
+    required String authorCallsign,
+    required String eventId,
+    required List<Map<String, dynamic>> comments,
+  }) async {
+    if (comments.isEmpty) return;
+    try {
+      final dir = io.Directory(p.join(
+          folderPath(authorCallsign, eventId), 'feedback', 'comments'));
+      await dir.create(recursive: true);
+      for (final c in comments) {
+        final id = (c['id'] as String?)?.trim();
+        if (id == null || id.isEmpty || _isUnsafePath(id)) continue;
+        final author = (c['author'] as String?) ?? '';
+        final timestamp = (c['timestamp'] as String?) ?? '';
+        final content = (c['content'] as String?) ?? '';
+        final npub = c['npub'] as String?;
+        final signature = c['signature'] as String?;
+        final body = StringBuffer()
+          ..writeln('AUTHOR: $author')
+          ..writeln('CREATED: $timestamp')
+          ..writeln()
+          ..writeln(content);
+        if (npub != null && npub.isNotEmpty) {
+          body
+            ..writeln()
+            ..writeln('--> npub: $npub');
+        }
+        if (signature != null && signature.isNotEmpty) {
+          body.writeln('--> signature: $signature');
+        }
+        final f = io.File(p.join(dir.path, '$id.txt'));
+        await f.writeAsString(body.toString());
+      }
+    } catch (e) {
+      LogService().log(
+          'RemoteEventCache.writeComments($authorCallsign/$eventId) failed: $e');
+    }
+  }
+
   static bool _isUnsafePath(String relativePath) {
     if (relativePath.isEmpty) return true;
     if (relativePath.startsWith('/') || relativePath.startsWith('\\')) {

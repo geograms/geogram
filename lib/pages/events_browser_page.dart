@@ -417,49 +417,102 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     }
   }
 
-  /// Persist event.txt + the primary flyer thumbnail for each remote
-  /// event under {baseDir}/devices/{author}/events/{year}/{id}/.
-  /// Comments / likes are intentionally skipped — they change too
-  /// often and are cheap to refetch.
+  /// Persist event.txt + primary thumbnail + likes + comments for
+  /// each remote event under {baseDir}/devices/{author}/events/.
+  /// This is an offgrid app — we want as much of the event
+  /// reachable offline as we can, then lazy-update on the next
+  /// online window. The gallery photos still cache lazily (only
+  /// what the user actually opens) since they\'re too big to fetch
+  /// upfront for events with hundreds of pictures.
   Future<void> _warmupRemoteEventCache(List<Event> events) async {
     for (final ev in events) {
       final source = ev.metadata['source_callsign'];
       if (source == null || source.isEmpty) continue;
       try {
-        // 1. event.txt — uses Event.exportAsText so the on-disk
-        //    format matches what the local EventService writes.
+        // 1. Pull the full detail so we get the canonical likes +
+        //    comments arrays (the list-summary endpoint only carries
+        //    counts). Skip the rest of this iteration if the device
+        //    is unreachable — the next visit retries.
+        final detail = await RemoteContent.get(
+          remoteCallsign: source,
+          appType: 'events',
+          itemId: ev.id,
+        );
+        if (!detail.success || detail.data == null) {
+          // Even when the detail fails, persist whatever we already
+          // have from the list (event.txt) so the cache isn\'t empty.
+          await RemoteEventCache.writeEvent(
+            authorCallsign: source,
+            event: ev,
+          );
+          continue;
+        }
+        Event fullEvent;
+        try {
+          fullEvent = Event.fromApiJson(detail.data!);
+        } catch (_) {
+          fullEvent = ev;
+        }
+        // 2. event.txt with the full payload (uses Event.exportAsText
+        //    so the on-disk format matches what the local
+        //    EventService writes).
         await RemoteEventCache.writeEvent(
           authorCallsign: source,
-          event: ev,
+          event: fullEvent,
         );
-        // 2. Primary flyer thumbnail (~50 KB), only when the author
+        // 3. Likes (one npub per line in feedback/likes.txt).
+        final likes = (detail.data!['likes'] as List?)
+                ?.whereType<String>()
+                .toList() ??
+            const <String>[];
+        await RemoteEventCache.writeLikes(
+          authorCallsign: source,
+          eventId: ev.id,
+          npubs: likes,
+        );
+        // 4. Comments (one signed file per id under
+        //    feedback/comments/) — same format the local
+        //    FeedbackCommentUtils writes.
+        final comments = (detail.data!['comments'] as List?)
+                ?.whereType<Map<String, dynamic>>()
+                .toList() ??
+            const <Map<String, dynamic>>[];
+        if (comments.isNotEmpty) {
+          await RemoteEventCache.writeComments(
+            authorCallsign: source,
+            eventId: ev.id,
+            comments: comments,
+          );
+        }
+        // 5. Primary flyer thumbnail (~50 KB), only when the author
         //    has chosen one. Other photos cache lazily as the user
         //    opens them via the lightbox.
-        final flyer = ev.flyer;
+        final flyer = fullEvent.flyer;
         if (flyer != null && flyer.isNotEmpty) {
-          // Skip if we already have the bytes on disk.
           final existing = await RemoteEventCache.readFile(
             authorCallsign: source,
             eventId: ev.id,
             relativePath: flyer,
           );
-          if (existing != null) continue;
-          final resp = await DevicesService().makeDeviceApiRequestBytes(
-            callsign: source,
-            method: 'GET',
-            path: '${RemoteContent.filePath(
-              appType: 'events',
-              itemId: ev.id,
-              relativePath: flyer,
-            )}?thumb=1',
-          );
-          if (resp != null && resp.statusCode == 200) {
-            await RemoteEventCache.writeFile(
-              authorCallsign: source,
-              eventId: ev.id,
-              relativePath: flyer,
-              bytes: resp.bytes,
+          if (existing == null) {
+            final resp =
+                await DevicesService().makeDeviceApiRequestBytes(
+              callsign: source,
+              method: 'GET',
+              path: '${RemoteContent.filePath(
+                appType: 'events',
+                itemId: ev.id,
+                relativePath: flyer,
+              )}?thumb=1',
             );
+            if (resp != null && resp.statusCode == 200) {
+              await RemoteEventCache.writeFile(
+                authorCallsign: source,
+                eventId: ev.id,
+                relativePath: flyer,
+                bytes: resp.bytes,
+              );
+            }
           }
         }
       } catch (_) {
