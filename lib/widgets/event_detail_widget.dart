@@ -100,6 +100,15 @@ class EventDetailWidget extends StatelessWidget {
           ] else
             const SizedBox(height: 16),
 
+          // Approved visitor contributions (new contributors/ layout
+          // populated from the editor's Contributions tab). Sits
+          // between the author's own gallery and the description so
+          // it reads as part of the event's media.
+          _ApprovedContributorsSection(
+            event: event,
+            appPath: appPath,
+          ),
+
           // Event content (only if not empty)
           if (event.content.trim().isNotEmpty) ...[
             _buildContent(theme, i18n),
@@ -1929,4 +1938,165 @@ class _SwipeableFlyerState extends State<_SwipeableFlyer> {
       ],
     );
   }
+}
+
+/// Renders one card per approved visitor contributor (the new
+/// `contributors/{CALLSIGN}/` layout populated from the editor's
+/// Contributions tab + the public-page upload flow). Pending
+/// folders and the `_pending` sentinel are excluded — only
+/// approved media surfaces here, matching the public web page.
+///
+/// Stateful so changes on disk (after the author taps Approve in
+/// the editor and pops back to the detail page) get picked up the
+/// next time this widget rebuilds.
+class _ApprovedContributorsSection extends StatefulWidget {
+  final Event event;
+  final String appPath;
+  const _ApprovedContributorsSection({
+    required this.event,
+    required this.appPath,
+  });
+
+  @override
+  State<_ApprovedContributorsSection> createState() =>
+      _ApprovedContributorsSectionState();
+}
+
+class _ApprovedContributorsSectionState
+    extends State<_ApprovedContributorsSection> {
+  late Future<List<_ContribFolder>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _scan();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ApprovedContributorsSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.event.id != widget.event.id ||
+        oldWidget.appPath != widget.appPath) {
+      _future = _scan();
+    }
+  }
+
+  Future<List<_ContribFolder>> _scan() async {
+    final out = <_ContribFolder>[];
+    if (widget.event.id.length < 4) return out;
+    final year = widget.event.id.substring(0, 4);
+    final root = io.Directory(
+        '${widget.appPath}/$year/${widget.event.id}/contributors');
+    if (!await root.exists()) return out;
+    const mediaExts = {
+      '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
+      '.mp4', '.mov', '.webm', '.mkv', '.avi', '.wmv', '.flv',
+    };
+    await for (final entry in root.list()) {
+      if (entry is! io.Directory) continue;
+      final name = entry.path.split(io.Platform.pathSeparator).last;
+      if (name == '_pending' || name.startsWith('.')) continue;
+      final files = <String>[];
+      await for (final f in entry.list()) {
+        if (f is! io.File) continue;
+        final fname = f.path.split(io.Platform.pathSeparator).last;
+        if (fname.startsWith('.') || fname == 'contributor.txt') continue;
+        final dot = fname.lastIndexOf('.');
+        final ext = dot >= 0 ? fname.substring(dot).toLowerCase() : '';
+        if (!mediaExts.contains(ext)) continue;
+        files.add(fname);
+      }
+      if (files.isEmpty) continue;
+      files.sort();
+      out.add(_ContribFolder(
+          callsign: name, folderPath: entry.path, files: files));
+    }
+    out.sort((a, b) => a.callsign.compareTo(b.callsign));
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final i18n = I18nService();
+    return FutureBuilder<List<_ContribFolder>>(
+      future: _future,
+      builder: (ctx, snap) {
+        final list = snap.data ?? const <_ContribFolder>[];
+        if (list.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Divider(),
+            const SizedBox(height: 8),
+            for (final c in list) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8, left: 4),
+                child: Text(
+                  i18n.t('contributed_by').replaceAll('{0}', c.callsign),
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ),
+              SizedBox(
+                height: 120,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: c.files.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (_, i) {
+                    final filePath = '${c.folderPath}/${c.files[i]}';
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => PhotoViewerPage(
+                            imagePaths: c.files
+                                .map((f) => '${c.folderPath}/$f')
+                                .toList(),
+                            initialIndex: i,
+                          ),
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: SizedBox(
+                          width: 160,
+                          height: 120,
+                          child: Image.file(
+                            io.File(filePath),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              color: theme.colorScheme.surfaceContainerHighest,
+                              alignment: Alignment.center,
+                              child: Icon(
+                                Icons.broken_image_outlined,
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ContribFolder {
+  final String callsign;
+  final String folderPath;
+  final List<String> files;
+  const _ContribFolder({
+    required this.callsign,
+    required this.folderPath,
+    required this.files,
+  });
 }

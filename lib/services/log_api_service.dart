@@ -2243,6 +2243,62 @@ class LogApiService
     }
     data['authenticated'] = userNpub != null;
 
+    // Approved contributor folders so the page template can render
+    // a "Contributed by" block per visitor whose photos the author
+    // approved. Mirrors EventContentProvider._scanApprovedContributors
+    // — same on-disk layout, same filtering — so the public HTML
+    // and the /api/content surface stay in lockstep.
+    if (vis == 'public' || (vis == 'request_access' && allowed)) {
+      try {
+        final ownerCs = event.author.isNotEmpty
+            ? event.author
+            : ProfileService().getProfile().callsign;
+        if (ownerCs.isNotEmpty && event.id.length >= 4) {
+          final year = event.id.substring(0, 4);
+          if (int.tryParse(year) != null) {
+            final cstorage = FilesystemProfileStorage(
+              '$dataDir/devices/$ownerCs',
+            );
+            final eventRel = 'events/$year/${event.id}';
+            final callsigns =
+                await ContributorFolderUtils.listApprovedCallsigns(
+              eventPath: eventRel,
+              storage: cstorage,
+            );
+            final out = <Map<String, dynamic>>[];
+            for (final cs in callsigns) {
+              final folder = ContributorFolderUtils.approvedFolder(
+                  eventRel, cs);
+              final files = await ContributorFolderUtils.listMediaFiles(
+                folderPath: folder,
+                storage: cstorage,
+              );
+              if (files.isEmpty) continue;
+              final meta = await ContributorFolderUtils.readMeta(
+                folderPath: folder,
+                storage: cstorage,
+              );
+              out.add({
+                'callsign': cs,
+                'files': files,
+                if (meta?.npub != null) 'npub': meta!.npub,
+                if (meta?.created.isNotEmpty == true)
+                  'created': meta!.created,
+                if (meta?.description.isNotEmpty == true)
+                  'description': meta!.description,
+              });
+            }
+            data['contributors'] = out;
+          }
+        }
+      } catch (e) {
+        LogService().log('EventDetail: contributor scan failed: $e');
+        data['contributors'] = const [];
+      }
+    } else {
+      data['contributors'] = const [];
+    }
+
     // 5. Render
     final menuItems =
         await AppService().generateDeviceMenu(activeApp: 'events');
