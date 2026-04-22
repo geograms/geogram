@@ -234,6 +234,33 @@ class EventActivityNotifier {
           count++;
         }
       }
+
+      // Pending contributor folders — status-based, like access
+      // requests: once the author approves or rejects, the folder
+      // moves or is deleted and the count drops naturally. One
+      // count per pending callsign with at least one media file.
+      final pendingDir = Directory('$eventPath/contributors/_pending');
+      if (await pendingDir.exists()) {
+        await for (final entry in pendingDir.list()) {
+          if (entry is! Directory) continue;
+          final name = entry.path.split(Platform.pathSeparator).last;
+          if (name.isEmpty || name.startsWith('.')) continue;
+          // Only count callsigns whose folder actually has media —
+          // an empty / metadata-only folder isn\'t something the
+          // author needs to act on yet.
+          var hasMedia = false;
+          await for (final f in entry.list()) {
+            if (f is! File) continue;
+            final fname = f.path.split(Platform.pathSeparator).last;
+            if (fname == 'contributor.txt' || fname.startsWith('.')) {
+              continue;
+            }
+            hasMedia = true;
+            break;
+          }
+          if (hasMedia) count++;
+        }
+      }
     } catch (e) {
       LogService().log(
         'EventActivityNotifier: countUnseenForEvent failed: $e',

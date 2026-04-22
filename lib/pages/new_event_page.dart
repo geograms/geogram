@@ -27,6 +27,7 @@ import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/log_api_service.dart';
 import '../util/event_activity_notifier.dart';
+import '../util/event_bus.dart';
 import '../services/location_service.dart';
 import '../widgets/file_folder_picker.dart';
 import '../widgets/transcribe_button_widget.dart';
@@ -388,6 +389,27 @@ class _NewEventPageState extends State<NewEventPage>
       final resp = await req.close();
       await resp.drain<void>();
       await _loadContributors();
+      // Drop any lingering Now-panel cards for this event\'s
+      // contributions. Subsequent scans (EventActivityNotifier) will
+      // re-fire entries for any callsign that\'s still pending, so
+      // the badge tracks the actual disk state.
+      EventBus().fire(NowGroupRemoveEvent(
+        appType: 'event_contribution',
+        sourceId: event.id,
+      ));
+      // Re-scan the event so still-pending contributors re-emit
+      // immediately and the events-list tile + apps-grid badge
+      // reflect the new count without waiting for the periodic scan.
+      if (widget.appPath != null) {
+        try {
+          final year = event.id.substring(0, 4);
+          await EventActivityNotifier.scanEvent(
+            eventPath: '${widget.appPath}/$year/${event.id}',
+            eventId: event.id,
+            eventTitle: event.title,
+          );
+        } catch (_) {}
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
