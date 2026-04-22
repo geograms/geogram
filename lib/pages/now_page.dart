@@ -438,7 +438,11 @@ class _NowPageState extends State<NowPage> {
             _buildPriorityDot(item.priority),
             const SizedBox(width: 8),
             Expanded(
-              child: SelectableText.rich(
+              // Plain Text.rich (not SelectableText.rich) so taps on
+              // the message text propagate to the InkWell above —
+              // SelectableText absorbs press events for its own
+              // selection gestures and breaks tap-to-navigate.
+              child: Text.rich(
                 TextSpan(
                   children: [
                     TextSpan(

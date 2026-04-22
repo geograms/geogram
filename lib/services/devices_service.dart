@@ -1386,7 +1386,7 @@ class DevicesService {
       device.folderId = folderAssignments[device.callsign];
     }
 
-    return _devices.values
+    final filtered = _devices.values
         .where((d) {
           // Exclude only this physical install. Other installs running the
           // same callsign (mirror peers) must remain in the list so the UI
@@ -1396,7 +1396,9 @@ class DevicesService {
               d.deviceId!.isNotEmpty &&
               d.deviceId != ownDeviceId;
         })
-        .toList()
+        .toList();
+
+    return _dedupeForDisplay(filtered)
       ..sort((a, b) {
         // Pinned devices first
         if (a.isPinned != b.isPinned) {
@@ -1415,6 +1417,116 @@ class DevicesService {
         // Then sort by display name
         return a.displayName.compareTo(b.displayName);
       });
+  }
+
+  /// Collapse entries that look like the same physical device under one
+  /// callsign so the UI doesn\'t list X1SU86 twice (once via LAN mirror
+  /// sync with a deviceId, once via station/cache discovery without
+  /// one).
+  ///
+  /// Rules:
+  /// - Entries sharing the same (callsign, deviceId) are folded into
+  ///   one — they describe the same physical device seen from multiple
+  ///   transports.
+  /// - Entries with the same callsign but DIFFERENT non-empty
+  ///   deviceIds stay separate (multiple physical devices sharing a
+  ///   callsign — e.g. desktop + Android of the same user).
+  /// - An entry with an empty / unknown deviceId is folded into a
+  ///   sibling entry of the same callsign that DOES have a deviceId,
+  ///   when one exists. When no sibling has a deviceId either, it
+  ///   stays as the sole entry for that callsign.
+  ///
+  /// The fold preserves the union of connection methods, the latest
+  /// `lastSeen`, and prefers any sibling that\'s online / has a URL.
+  List<RemoteDevice> _dedupeForDisplay(List<RemoteDevice> raw) {
+    if (raw.isEmpty) return raw;
+    final byCallsign = <String, List<RemoteDevice>>{};
+    for (final d in raw) {
+      byCallsign
+          .putIfAbsent(d.callsign.toUpperCase(), () => [])
+          .add(d);
+    }
+    final out = <RemoteDevice>[];
+    for (final entries in byCallsign.values) {
+      if (entries.length == 1) {
+        out.add(entries.single);
+        continue;
+      }
+      final knownById = <String, List<RemoteDevice>>{};
+      final unknowns = <RemoteDevice>[];
+      for (final d in entries) {
+        final id = d.deviceId;
+        if (id == null || id.isEmpty) {
+          unknowns.add(d);
+        } else {
+          knownById.putIfAbsent(id, () => []).add(d);
+        }
+      }
+      // Merge each known-deviceId group into one entry.
+      final knownMerged = <RemoteDevice>[];
+      for (final group in knownById.values) {
+        knownMerged.add(_foldEntries(group));
+      }
+      if (knownMerged.isEmpty) {
+        // Only unknowns — collapse them all into one.
+        out.add(_foldEntries(unknowns));
+      } else if (unknowns.isEmpty) {
+        out.addAll(knownMerged);
+      } else {
+        // Fold each unknown into the first known sibling. If there
+        // are multiple known devices for this callsign, the unknowns
+        // can\'t be attributed to a specific device, so we add them
+        // to the most-online one to surface their connection methods
+        // (e.g. an "internet" tag from a station-discovered entry).
+        knownMerged.sort((a, b) {
+          if (a.isOnline != b.isOnline) return a.isOnline ? -1 : 1;
+          return 0;
+        });
+        final target = knownMerged.first;
+        for (final u in unknowns) {
+          _mergeInto(target, u);
+        }
+        out.addAll(knownMerged);
+      }
+    }
+    return out;
+  }
+
+  /// Combine a non-empty list of duplicate entries into one. The first
+  /// entry is the base; subsequent entries contribute their connection
+  /// methods, online status, urls, and most-recent timestamps.
+  RemoteDevice _foldEntries(List<RemoteDevice> entries) {
+    final base = entries.first;
+    for (var i = 1; i < entries.length; i++) {
+      _mergeInto(base, entries[i]);
+    }
+    return base;
+  }
+
+  void _mergeInto(RemoteDevice target, RemoteDevice other) {
+    final union = {
+      ...target.connectionMethods,
+      ...other.connectionMethods,
+    };
+    target.connectionMethods = union.toList();
+    if (other.isOnline) target.isOnline = true;
+    if (target.url == null || target.url!.isEmpty) {
+      if (other.url != null && other.url!.isNotEmpty) {
+        target.url = other.url;
+      }
+    }
+    if (target.npub == null && other.npub != null) target.npub = other.npub;
+    if (target.nickname == null && other.nickname != null) {
+      target.nickname = other.nickname;
+    }
+    if (target.platform == null && other.platform != null) {
+      target.platform = other.platform;
+    }
+    if (other.lastSeen != null &&
+        (target.lastSeen == null ||
+            other.lastSeen!.isAfter(target.lastSeen!))) {
+      target.lastSeen = other.lastSeen;
+    }
   }
 
   /// Get a specific device by callsign
