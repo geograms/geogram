@@ -451,6 +451,17 @@ mixin DeviceProxyMixin {
     if (range != null) forwardedHeaders['range'] = range;
     final contentType = request.headers.value('content-type');
     if (contentType != null) forwardedHeaders['content-type'] = contentType;
+    // Forward any custom application headers (X-Nostr-Signature,
+    // X-Filename, X-Device-Callsign, etc.) so app-level auth + meta
+    // survive the relay → device hop. Hop-by-hop / infrastructure
+    // headers (host, connection, transfer-encoding, …) stay
+    // untouched on this side.
+    request.headers.forEach((name, values) {
+      final lower = name.toLowerCase();
+      if (!lower.startsWith('x-')) return;
+      if (values.isEmpty) return;
+      forwardedHeaders[lower] = values.first;
+    });
 
     // Read request body for POST/PUT/PATCH. Binary uploads (image /
     // video / octet-stream) are base64-encoded so the WebSocket
