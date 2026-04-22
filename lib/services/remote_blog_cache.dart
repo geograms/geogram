@@ -27,6 +27,7 @@
 
 import 'dart:typed_data';
 
+import '../models/blog_post.dart';
 import 'log_service.dart';
 import 'profile_storage.dart';
 import 'storage_config.dart';
@@ -88,10 +89,14 @@ class RemoteBlogCache {
 
   // ── Writes ────────────────────────────────────────────────────────
 
-  /// Persist post.md. The blog detail JSON returned by
-  /// /api/content/blog/{id} carries a fully-rendered `content`
-  /// field; this helper writes it in the canonical post.md layout
-  /// the local BlogService produces.
+  /// Persist post.md using the canonical [BlogPost.exportAsText]
+  /// format — same shape the local BlogService writes, so a future
+  /// read goes through the existing [BlogPost.fromText] parser
+  /// without any cache-specific conversion code.
+  ///
+  /// The blog detail JSON returned by /api/content/blog/{id}
+  /// already carries every field [BlogPost] needs (including the
+  /// fully-rendered `content`).
   static Future<void> writePost({
     required String authorCallsign,
     required Map<String, dynamic> detailJson,
@@ -100,44 +105,76 @@ class RemoteBlogCache {
     if (id.isEmpty) return;
     final timestamp = (detailJson['timestamp'] as String?) ?? '';
     try {
-      final body = StringBuffer();
-      // Header lines mirror BlogPost.exportAsText shape so a future
-      // local read parses cleanly.
-      body.writeln('# BLOG POST: ${detailJson['title'] ?? ''}');
-      body.writeln('AUTHOR: ${detailJson['author'] ?? ''}');
-      if (timestamp.isNotEmpty) body.writeln('CREATED: $timestamp');
-      final edited = detailJson['edited'] as String?;
-      if (edited != null && edited.isNotEmpty) {
-        body.writeln('EDITED: $edited');
+      final metadata = <String, String>{};
+      final npub = detailJson['npub'];
+      if (npub is String && npub.isNotEmpty) metadata['npub'] = npub;
+      final signature = detailJson['signature'];
+      if (signature is String && signature.isNotEmpty) {
+        metadata['signature'] = signature;
       }
-      final status = detailJson['status'];
-      if (status is String && status.isNotEmpty) {
-        body.writeln('STATUS: $status');
-      }
-      final desc = detailJson['description'] as String?;
-      if (desc != null && desc.isNotEmpty) {
-        body.writeln('DESCRIPTION: $desc');
-      }
-      final loc = detailJson['location'] as String?;
-      if (loc != null && loc.isNotEmpty) body.writeln('LOCATION: $loc');
-      final tags = detailJson['tags'];
-      if (tags is List && tags.isNotEmpty) {
-        body.writeln('TAGS: ${tags.join(', ')}');
-      }
-      final npub = detailJson['npub'] as String?;
-      if (npub != null && npub.isNotEmpty) body.writeln('--> npub: $npub');
-      final sig = detailJson['signature'] as String?;
-      if (sig != null && sig.isNotEmpty) body.writeln('--> signature: $sig');
-      body.writeln();
-      body.write((detailJson['content'] as String?) ?? '');
+      final post = BlogPost(
+        id: id,
+        author: (detailJson['author'] as String?) ?? '',
+        timestamp: timestamp,
+        edited: detailJson['edited'] as String?,
+        title: (detailJson['title'] as String?) ?? '',
+        description: detailJson['description'] as String?,
+        location: detailJson['location'] as String?,
+        status: BlogStatus.fromString(
+            (detailJson['status'] as String?) ?? 'published'),
+        tags: (detailJson['tags'] as List?)
+                ?.map((t) => t.toString())
+                .toList() ??
+            const [],
+        content: (detailJson['content'] as String?) ?? '',
+        comments: const [],
+        metadata: metadata,
+      );
       await _storageFor(authorCallsign).writeString(
         '${_postFolder(id, timestamp)}/post.md',
-        body.toString(),
+        post.exportAsText(),
       );
     } catch (e) {
       LogService().log(
           'RemoteBlogCache.writePost($authorCallsign/$id) failed: $e');
     }
+  }
+
+  /// Walk every cached post for [authorCallsign] and parse via
+  /// [BlogPost.fromText]. Used by the blog browser so a followed
+  /// author\'s posts stay visible after the device goes offline.
+  /// Tags each result with `source_callsign` metadata so taps can
+  /// route to the remote detail page (or fail gracefully when the
+  /// device is offline).
+  static Future<List<BlogPost>> readAllPosts(String authorCallsign) async {
+    final out = <BlogPost>[];
+    final storage = _storageFor(authorCallsign);
+    try {
+      if (!await storage.directoryExists('')) return out;
+      final years = await storage.listDirectory('');
+      for (final y in years) {
+        if (!y.isDirectory) continue;
+        if (int.tryParse(y.name) == null) continue;
+        final posts = await storage.listDirectory(y.name);
+        for (final p in posts) {
+          if (!p.isDirectory) continue;
+          final raw =
+              await storage.readString('${y.name}/${p.name}/post.md');
+          if (raw == null) continue;
+          try {
+            final post = BlogPost.fromText(raw, p.name);
+            // Tag with source callsign so the tile + tap handler
+            // treat it as remote.
+            final tagged = post.copyWith(metadata: {
+              ...post.metadata,
+              'source_callsign': authorCallsign.toUpperCase(),
+            });
+            out.add(tagged);
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+    return out;
   }
 
   static Future<void> writeFile({

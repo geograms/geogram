@@ -134,13 +134,18 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
 
     await _loadPosts();
 
+    // Always preload cached followed-author posts so the global
+    // view has something to show even without network. Cheap —
+    // disk reads only, no network.
+    await _loadCachedFollowedPosts();
+    if (!_showMineOnly) _filterPosts();
+
     // If the user left the page on the global scope last time,
-    // fetch remote posts now so it lands populated rather than
-    // empty waiting for a manual toggle.
+    // also kick off a network refresh so newly-published posts
+    // (or new followed authors) land too.
     if (!_showMineOnly) {
       // ignore: discarded_futures
       _loadGlobalPosts();
-      _filterPosts();
     }
 
     // Expand most recent year by default
@@ -280,9 +285,14 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
         _isLoadingRemote = false;
       });
       _filterPosts();
+      // Always merge the cached followed-author posts on top of
+      // the network fetch — covers offline / unreachable authors
+      // and surfaces freshly-followed but not-yet-fetched authors.
+      await _loadCachedFollowedPosts();
+      _filterPosts();
       // Auto-cache content from authors the user follows so they
-      // can read those offline. Fire-and-forget — already-cached
-      // posts overwrite cleanly (lazy refresh on every visit).
+      // can read those offline next time. Fire-and-forget —
+      // already-cached posts overwrite cleanly.
       final followed = FollowService.all();
       for (final author in followed) {
         // ignore: discarded_futures
@@ -323,6 +333,48 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     );
   }
 
+  /// Load every cached followed-author post from disk and merge
+  /// into [_remotePosts]. Called on init AND after every network
+  /// fetch so the global view always has the cached set as a
+  /// floor — newly-fetched posts overwrite their cached siblings
+  /// by id. Cheap, disk-only, no network.
+  Future<void> _loadCachedFollowedPosts() async {
+    final followed = FollowService.all();
+    if (followed.isEmpty) return;
+    final myNpub = _currentUserNpub;
+    final myCallsign = _currentCallsign?.toUpperCase();
+    final byKey = <String, BlogPost>{};
+    // Existing remote posts win over cached versions of the same
+    // (author, id) — they\'re fresher.
+    for (final p in _remotePosts) {
+      byKey['${p.npub ?? p.author}|${p.id}'] = p;
+    }
+    for (final author in followed) {
+      try {
+        final cached = await RemoteBlogCache.readAllPosts(author);
+        for (final p in cached) {
+          // Skip our own posts (mirror artefacts).
+          if (myNpub != null && myNpub.isNotEmpty && p.npub == myNpub) {
+            continue;
+          }
+          if (myCallsign != null &&
+              myCallsign.isNotEmpty &&
+              p.author.toUpperCase() == myCallsign) {
+            continue;
+          }
+          final key = '${p.npub ?? p.author}|${p.id}';
+          byKey.putIfAbsent(key, () => p);
+        }
+      } catch (_) {}
+    }
+    final merged = byKey.values.toList()
+      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    if (!mounted) return;
+    setState(() {
+      _remotePosts = merged;
+    });
+  }
+
   /// Flip the follow state for [post]\'s author. When following,
   /// kick off a cache warmup so all of that author\'s known posts
   /// land on disk and survive the author going offline.
@@ -348,8 +400,16 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
       );
     }
     if (nowFollowing) {
-      // ignore: discarded_futures
-      _warmupFollowedAuthor(post.author);
+      await _warmupFollowedAuthor(post.author);
+      // Re-load cache so the newly-cached posts appear in the
+      // global view immediately (and stay after exit/reopen).
+      await _loadCachedFollowedPosts();
+      _filterPosts();
+    } else {
+      // Drop any rows that came purely from the cache for this
+      // (now-unfollowed) author — they\'ll come back if the user
+      // re-follows. Keep network-fetched ones.
+      _filterPosts();
     }
   }
 
