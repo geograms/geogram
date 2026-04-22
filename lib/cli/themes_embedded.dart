@@ -1961,7 +1961,10 @@ class ThemesEmbedded {
         for (var i = 0; i < items.length; i++) {
           var item = items[i];
           if (item.eventId !== ev.id) continue;
-          if (item.status === 'failed') continue;
+          // 'delivered' = device accepted bytes, awaiting author
+          // approval. Skip — these don\'t need uploading anymore but
+          // stay in IDB so the user sees what they submitted.
+          if (item.status === 'failed' || item.status === 'delivered') continue;
           if (item.nextAttempt && item.nextAttempt > now) {
             if (nextWake === null || item.nextAttempt < nextWake) {
               nextWake = item.nextAttempt;
@@ -1972,7 +1975,15 @@ class ThemesEmbedded {
           renderQueueUI();
           var result = await tryUploadItem(item);
           if (result.done) {
-            await queueDelete(item.id);
+            // Don\'t delete — flip to 'delivered' and remember the
+            // delivery time. The next page load + reconciliation will
+            // remove it once the server confirms approval (file
+            // appears in contributors[CALLSIGN]).
+            await queueUpdate(item.id, {
+              status: 'delivered',
+              deliveredAt: Date.now(),
+              lastError: null,
+            });
             contributionsAccepted++;
           } else if (result.permanent) {
             await queueUpdate(item.id, {
@@ -2014,6 +2025,7 @@ class ThemesEmbedded {
     // hide banner. Keeps the message honest as items move.
     async function updateContributeStatus() {
       var pending = 0;
+      var delivered = 0;
       var failed = 0;
       try {
         var items = (await queueAll()).filter(function(i) {
@@ -2021,18 +2033,25 @@ class ThemesEmbedded {
         });
         for (var i = 0; i < items.length; i++) {
           if (items[i].status === 'failed') failed++;
+          else if (items[i].status === 'delivered') delivered++;
           else pending++;
         }
       } catch (_) {
         return;
       }
+      // Per-item state shows under the queue list; the banner just
+      // gives an at-a-glance summary so the user knows what is going
+      // on without parsing per-row status text.
       var msg = '';
       var isError = false;
-      if (pending > 0) {
+      if (pending > 0 && delivered > 0) {
+        msg = pending + ' upload(s) in progress, ' + delivered +
+              ' already with the device awaiting approval.';
+      } else if (pending > 0) {
         msg = pending + ' upload(s) in progress. They will keep ' +
               'retrying until the device receives them.';
-      } else if (contributionsAccepted > 0) {
-        msg = contributionsAccepted +
+      } else if (delivered > 0) {
+        msg = delivered +
               ' file(s) delivered to the device. ' +
               'Waiting for the event author to approve them. ' +
               'They will show up in the gallery once approved.';
@@ -2070,36 +2089,94 @@ class ThemesEmbedded {
         return;
       }
       items.sort(function(a, b) { return a.queuedAt - b.queuedAt; });
+      // Cache blob: URLs per-item so re-renders don\'t leak. We
+      // revoke the previous batch before creating new ones.
+      if (window._lastBlobUrls) {
+        window._lastBlobUrls.forEach(function(u) {
+          try { URL.revokeObjectURL(u); } catch (_) {}
+        });
+      }
+      window._lastBlobUrls = [];
+
       var rows = items.map(function(item) {
+        // Build a thumbnail from the in-memory Blob so the user can
+        // see WHICH photo is in flight / awaiting approval. Videos
+        // get a generic icon (browser <img> won\'t render mp4).
+        var ct = (item.contentType || '').toLowerCase();
+        var thumbHtml;
+        if (ct.startsWith('image/') && item.bytes) {
+          var url = URL.createObjectURL(item.bytes);
+          window._lastBlobUrls.push(url);
+          thumbHtml = '<img class="event-contribute-thumb" src="' + url + '" alt="">';
+        } else {
+          thumbHtml = '<div class="event-contribute-thumb event-contribute-thumb-placeholder">' +
+            (ct.startsWith('video/') ? '🎬' : '📄') + '</div>';
+        }
+
         var label;
+        var statusClass = '';
         if (item.status === 'uploading') {
-          label = 'Uploading…';
+          label = 'Uploading to the device…';
+        } else if (item.status === 'delivered') {
+          label = 'Delivered to the device. Waiting for the event author to approve.';
+          statusClass = ' event-contribute-item-delivered';
         } else if (item.status === 'failed') {
           label = 'Failed: ' + (item.lastError || 'unknown error');
+          statusClass = ' event-contribute-item-failed';
         } else if (item.attempts && item.attempts > 0) {
           var wait = Math.max(0, (item.nextAttempt || 0) - Date.now());
           var secs = Math.ceil(wait / 1000);
           label = 'Retrying in ' + secs + 's (attempt ' + (item.attempts + 1) + ')';
           if (item.lastError) label += ' — ' + item.lastError;
         } else {
-          label = 'Queued';
+          label = 'Queued — about to upload';
         }
+
         var actions = '';
-        if (item.status !== 'uploading') {
+        if (item.status === 'failed' || item.status === 'delivered') {
+          // Delivered → only Remove (retrying would re-submit a
+          // duplicate the author already sees). Failed → Retry to
+          // try again now.
+          if (item.status === 'failed') {
+            actions += '<button class="event-contribute-mini" data-act="retry" data-id="' +
+              esc(item.id) + '">Retry now</button>';
+          }
+          actions += '<button class="event-contribute-mini" data-act="remove" data-id="' +
+            esc(item.id) + '">Remove</button>';
+        } else if (item.status !== 'uploading') {
           actions += '<button class="event-contribute-mini" data-act="retry" data-id="' +
             esc(item.id) + '">Retry now</button>';
+          actions += '<button class="event-contribute-mini" data-act="remove" data-id="' +
+            esc(item.id) + '">Remove</button>';
         }
-        actions += '<button class="event-contribute-mini" data-act="remove" data-id="' +
-          esc(item.id) + '">Remove</button>';
-        return '<div class="event-contribute-item">' +
-          '<div class="event-contribute-item-name">' + esc(item.filename) + '</div>' +
-          '<div class="event-contribute-item-status">' + esc(label) + '</div>' +
+
+        return '<div class="event-contribute-item' + statusClass + '">' +
+          thumbHtml +
+          '<div class="event-contribute-item-body">' +
+            '<div class="event-contribute-item-name">' + esc(item.filename) + '</div>' +
+            '<div class="event-contribute-item-status">' + esc(label) + '</div>' +
+          '</div>' +
           '<div class="event-contribute-item-actions">' + actions + '</div>' +
         '</div>';
       });
+      // Summary line reflects what the user actually sees: how many
+      // are still being shipped vs. how many are already with the
+      // device awaiting approval.
+      var pending = 0;
+      var delivered = 0;
+      var failed = 0;
+      items.forEach(function(item) {
+        if (item.status === 'failed') failed++;
+        else if (item.status === 'delivered') delivered++;
+        else pending++;
+      });
+      var summaryParts = [];
+      if (pending > 0) summaryParts.push(pending + ' uploading');
+      if (delivered > 0) summaryParts.push(delivered + ' awaiting approval');
+      if (failed > 0) summaryParts.push(failed + ' failed');
       container.innerHTML =
-        '<div class="event-contribute-summary">' + items.length +
-          ' upload(s) waiting on the device</div>' +
+        '<div class="event-contribute-summary">Your submissions: ' +
+        summaryParts.join(' · ') + '</div>' +
         rows.join('');
       container.style.display = '';
 
@@ -2122,9 +2199,38 @@ class ThemesEmbedded {
               processQueue();
             }
             renderQueueUI();
+            updateContributeStatus();
           };
         })(btns[i]);
       }
+    }
+
+    /// Drop any 'delivered' items whose filename appears in the
+    /// server-supplied approved-contributors list for this visitor's
+    /// callsign — at that point the file is publicly visible in the
+    /// gallery above and there\'s nothing left for the user to track.
+    async function reconcileApprovedSubmissions(contributors) {
+      var nostr = window.GeogramNostr || {};
+      var myCallsign = (nostr.callsign || '').toUpperCase();
+      if (!myCallsign) return;
+      var mineApproved = (contributors || []).filter(function(c) {
+        return c && (c.callsign || '').toUpperCase() === myCallsign;
+      });
+      var approvedFiles = {};
+      mineApproved.forEach(function(c) {
+        (c.files || []).forEach(function(f) { approvedFiles[f] = true; });
+      });
+      try {
+        var items = await queueAll();
+        for (var i = 0; i < items.length; i++) {
+          var item = items[i];
+          if (item.eventId !== ev.id) continue;
+          if (item.status !== 'delivered') continue;
+          if (approvedFiles[item.filename]) {
+            await queueDelete(item.id);
+          }
+        }
+      } catch (_) {}
     }
 
     async function enqueueContribution(file, callsign) {
@@ -2218,17 +2324,22 @@ class ThemesEmbedded {
     }
     bindContributeUploader();
 
-    // Resume any uploads queued from a previous tab session.
-    renderQueueUI();
-    updateContributeStatus();
-    processQueue();
+    // Resume any uploads queued from a previous tab session, then
+    // reconcile against what the server already approved (initial
+    // ev payload). Items confirmed approved get cleared from IDB
+    // because the gallery above already shows them.
+    reconcileApprovedSubmissions(ev.contributors)
+      .then(renderQueueUI)
+      .then(updateContributeStatus)
+      .then(processQueue);
+
     window.addEventListener('online', function() {
       // Reset backoff so a returned connection retries immediately.
       queueAll().then(function(items) {
         var todo = [];
         items.forEach(function(item) {
           if (item.eventId !== ev.id) return;
-          if (item.status === 'failed') return;
+          if (item.status === 'failed' || item.status === 'delivered') return;
           todo.push(queueUpdate(item.id, { nextAttempt: 0 }));
         });
         return Promise.all(todo);
@@ -2237,6 +2348,24 @@ class ThemesEmbedded {
     // Safety-net periodic processor in case timers were missed (tab
     // backgrounded / throttled).
     setInterval(function() { processQueue(); }, 60000);
+
+    // Re-check approval state every 30 s so the user sees their
+    // submissions disappear from the "awaiting approval" list as
+    // soon as the author taps Approve — without a full page reload.
+    setInterval(async function() {
+      try {
+        var resp = await fetch(
+          '../api/content/events/' + encodeURIComponent(ev.id),
+          { cache: 'no-store' }
+        );
+        if (!resp.ok) return;
+        var fresh = await resp.json();
+        if (!fresh || !fresh.contributors) return;
+        await reconcileApprovedSubmissions(fresh.contributors);
+        renderQueueUI();
+        updateContributeStatus();
+      } catch (_) {}
+    }, 30000);
 
     // ── Request-access button ─────────────────────────────────────────
     // Only present when the server stripped this page to a teaser. POSTs
@@ -3427,8 +3556,8 @@ class ThemesEmbedded {
 
 .event-contribute-item {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px 12px;
+  grid-template-columns: 56px 1fr auto;
+  gap: 10px;
   padding: 8px 10px;
   background: var(--background);
   border: 1px solid var(--border-color);
@@ -3437,20 +3566,46 @@ class ThemesEmbedded {
   align-items: center;
 }
 
+.event-contribute-item-delivered {
+  border-left: 3px solid var(--accent);
+}
+
+.event-contribute-item-failed {
+  border-left: 3px solid #c33;
+}
+
+.event-contribute-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+}
+
+.event-contribute-thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-alpha-20);
+  font-size: 1.4rem;
+}
+
+.event-contribute-item-body {
+  min-width: 0;
+}
+
 .event-contribute-item-name {
   font-weight: 600;
   word-break: break-all;
 }
 
 .event-contribute-item-status {
-  grid-column: 1;
   opacity: 0.75;
   font-size: 0.8rem;
+  margin-top: 2px;
 }
 
 .event-contribute-item-actions {
-  grid-column: 2;
-  grid-row: 1 / span 2;
   display: flex;
   gap: 6px;
   align-self: center;
