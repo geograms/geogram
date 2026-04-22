@@ -42,6 +42,7 @@ import 'package:shelf/shelf.dart' as shelf;
 
 import '../../services/profile_storage.dart';
 import '../../util/contributor_folder_utils.dart';
+import '../../util/media_thumbnail_utils.dart';
 import '../../util/nostr_crypto.dart';
 import '../../util/nostr_event.dart';
 
@@ -85,12 +86,27 @@ mixin ContributorSubmitMixin {
   /// Returns true when the request matched and was handled (caller
   /// must return from its dispatcher afterwards); false otherwise.
   Future<bool> handleContributorRequest(HttpRequest request) async {
+    final headers = <String, String>{};
+    request.headers.forEach((name, values) {
+      headers[name.toLowerCase()] = values.isEmpty ? '' : values.first;
+    });
+
+    final mineFile = _parseMineFilePath(request.uri.path);
+    if (mineFile != null) {
+      final wantThumb = request.uri.queryParameters['thumb'] == '1';
+      final result = await _processMineFile(
+        eventId: mineFile.eventId,
+        filename: mineFile.filename,
+        method: request.method,
+        headers: headers,
+        thumbnail: wantThumb,
+      );
+      _writeMineFileResponse(request, result);
+      return true;
+    }
+
     final mineParsed = _parseMinePath(request.uri.path);
     if (mineParsed != null) {
-      final headers = <String, String>{};
-      request.headers.forEach((name, values) {
-        headers[name.toLowerCase()] = values.isEmpty ? '' : values.first;
-      });
       final result = await _processMineQuery(
         eventId: mineParsed,
         method: request.method,
@@ -144,16 +160,47 @@ mixin ContributorSubmitMixin {
   ) async {
     if (!urlPath.startsWith('api/events/')) return null;
 
+    final headers = <String, String>{};
+    request.headers.forEach((name, value) {
+      headers[name.toLowerCase()] = value;
+    });
+
+    // GET /api/events/{id}/contributors/mine/files/{filename} —
+    // signed file fetch so the visitor can render thumbnails of
+    // their pending submissions in the public page UI.
+    final mineFile = _parseMineFilePath('/$urlPath');
+    if (mineFile != null) {
+      final wantThumb = request.url.queryParameters['thumb'] == '1';
+      final result = await _processMineFile(
+        eventId: mineFile.eventId,
+        filename: mineFile.filename,
+        method: request.method,
+        headers: headers,
+        thumbnail: wantThumb,
+      );
+      if (result.bytes != null) {
+        return shelf.Response(
+          result.statusCode,
+          body: result.bytes,
+          headers: {
+            'Content-Type': result.contentType ?? 'application/octet-stream',
+            'Cache-Control': 'no-store',
+          },
+        );
+      }
+      return shelf.Response(
+        result.statusCode,
+        body: jsonEncode(result.errorBody ?? const {'error': 'Not found'}),
+        headers: const {'Content-Type': 'application/json'},
+      );
+    }
+
     // GET /api/events/{id}/contributors/mine — visitor inspects their
     // own submissions (pending + approved). NOSTR-signed query via
     // headers; server returns only folders whose contributor.txt npub
     // matches the signing npub.
     final mineEvent = _parseMinePath('/$urlPath');
     if (mineEvent != null) {
-      final headers = <String, String>{};
-      request.headers.forEach((name, value) {
-        headers[name.toLowerCase()] = value;
-      });
       final result = await _processMineQuery(
         eventId: mineEvent,
         method: request.method,
@@ -368,6 +415,197 @@ mixin ContributorSubmitMixin {
     return eventId;
   }
 
+  /// Parse `/api/events/{id}/contributors/mine/files/{filename}`.
+  _MineFilePath? _parseMineFilePath(String path) {
+    if (!path.startsWith('/api/events/')) return null;
+    final trimmed = path.substring('/api/events/'.length);
+    final parts = trimmed.split('/');
+    if (parts.length < 5) return null;
+    if (parts[1] != 'contributors') return null;
+    if (parts[2] != 'mine') return null;
+    if (parts[3] != 'files') return null;
+    final eventId = Uri.decodeComponent(parts[0]);
+    final filename = Uri.decodeComponent(parts.sublist(4).join('/'));
+    if (eventId.isEmpty || filename.isEmpty) return null;
+    return _MineFilePath(eventId: eventId, filename: filename);
+  }
+
+  /// Verify the same NOSTR query event used by /mine, then locate
+  /// [filename] inside any contributor folder belonging to the
+  /// signing npub (pending or approved). Optionally returns a
+  /// thumbnail instead of the original bytes.
+  Future<_MineFileResult> _processMineFile({
+    required String eventId,
+    required String filename,
+    required String method,
+    required Map<String, String> headers,
+    required bool thumbnail,
+  }) async {
+    if (method != 'GET') {
+      return _MineFileResult(
+          statusCode: 405,
+          errorBody: const {'error': 'Method not allowed'});
+    }
+    if (!_validFilename(filename)) {
+      return _MineFileResult(
+          statusCode: 400, errorBody: const {'error': 'Invalid filename'});
+    }
+    final npub = headers['x-nostr-npub'] ?? '';
+    final signature = headers['x-nostr-signature'] ?? '';
+    final tsStr = headers['x-nostr-timestamp'] ?? '';
+    if (npub.isEmpty || signature.isEmpty || tsStr.isEmpty) {
+      return _MineFileResult(
+          statusCode: 401,
+          errorBody: const {'error': 'Missing NOSTR signature headers'});
+    }
+    final createdAt = int.tryParse(tsStr);
+    if (createdAt == null) {
+      return _MineFileResult(
+          statusCode: 400, errorBody: const {'error': 'Invalid timestamp'});
+    }
+    try {
+      final pubkeyHex = NostrCrypto.decodeNpub(npub);
+      final ev = NostrEvent(
+        pubkey: pubkeyHex,
+        createdAt: createdAt,
+        kind: NostrEventKind.textNote,
+        tags: [
+          ['e', eventId],
+          ['kind', 'contributor_mine_query'],
+        ],
+        content: 'contributor_mine_query',
+      );
+      ev.calculateId();
+      ev.sig = signature;
+      if (!ev.verify()) {
+        return _MineFileResult(
+            statusCode: 403,
+            errorBody: const {'error': 'Signature verification failed'});
+      }
+    } catch (_) {
+      return _MineFileResult(
+          statusCode: 403,
+          errorBody: const {'error': 'Signature verification failed'});
+    }
+
+    final storage = contributorStorage;
+    final eventPath = await _resolveEventPath(storage, eventId);
+    if (eventPath == null) {
+      return _MineFileResult(
+          statusCode: 404, errorBody: const {'error': 'Event not found'});
+    }
+
+    // Look across pending + approved folders for any whose
+    // contributor.txt npub matches; first hit with the requested
+    // filename wins.
+    Future<String?> findOwningFolder(
+      Future<List<String>> Function() listCallsigns,
+      String Function(String callsign) folderFor,
+    ) async {
+      final callsigns = await listCallsigns();
+      for (final callsign in callsigns) {
+        final folder = folderFor(callsign);
+        final meta = await ContributorFolderUtils.readMeta(
+          folderPath: folder, storage: storage,
+        );
+        if (meta?.npub != npub) continue;
+        if (await storage.exists('$folder/$filename')) {
+          return folder;
+        }
+      }
+      return null;
+    }
+
+    var folder = await findOwningFolder(
+      () => ContributorFolderUtils.listPendingCallsigns(
+          eventPath: eventPath, storage: storage),
+      (c) => ContributorFolderUtils.pendingFolder(eventPath, c),
+    );
+    folder ??= await findOwningFolder(
+      () => ContributorFolderUtils.listApprovedCallsigns(
+          eventPath: eventPath, storage: storage),
+      (c) => ContributorFolderUtils.approvedFolder(eventPath, c),
+    );
+    if (folder == null) {
+      return _MineFileResult(
+          statusCode: 404, errorBody: const {'error': 'File not found'});
+    }
+
+    final relativeStoragePath = '$folder/$filename';
+    final ext = _extensionOf(filename);
+
+    if (thumbnail && MediaThumbnailUtils.isGalleryMedia(ext)) {
+      try {
+        final abs = storage.getAbsolutePath(relativeStoragePath);
+        final thumb =
+            await MediaThumbnailUtils.generateForPath(abs, ext);
+        if (thumb != null) {
+          return _MineFileResult(
+            statusCode: 200,
+            bytes: thumb.bytes,
+            contentType: thumb.contentType,
+          );
+        }
+      } catch (_) {
+        // Fall through to raw bytes if thumbnailing fails.
+      }
+    }
+
+    final bytes = await storage.readBytes(relativeStoragePath);
+    if (bytes == null) {
+      return _MineFileResult(
+          statusCode: 404, errorBody: const {'error': 'File not found'});
+    }
+    return _MineFileResult(
+      statusCode: 200,
+      bytes: bytes,
+      contentType: _guessContentType(ext),
+    );
+  }
+
+  void _writeMineFileResponse(HttpRequest request, _MineFileResult result) {
+    request.response.statusCode = result.statusCode;
+    if (result.bytes != null) {
+      request.response.headers
+          .set(HttpHeaders.contentTypeHeader,
+              result.contentType ?? 'application/octet-stream');
+      request.response.headers.set('Cache-Control', 'no-store');
+      request.response.add(result.bytes!);
+    } else {
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(
+          jsonEncode(result.errorBody ?? const {'error': 'Not found'}));
+    }
+  }
+
+  String _guessContentType(String ext) {
+    switch (ext.toLowerCase()) {
+      case '.jpg':
+      case '.jpeg':
+        return 'image/jpeg';
+      case '.png':
+        return 'image/png';
+      case '.gif':
+        return 'image/gif';
+      case '.webp':
+        return 'image/webp';
+      case '.bmp':
+        return 'image/bmp';
+      case '.mp4':
+        return 'video/mp4';
+      case '.mov':
+        return 'video/quicktime';
+      case '.webm':
+        return 'video/webm';
+      case '.mkv':
+        return 'video/x-matroska';
+      case '.avi':
+        return 'video/x-msvideo';
+      default:
+        return 'application/octet-stream';
+    }
+  }
+
   /// Visitor-side "what did I submit?" query. Verifies a NOSTR-
   /// signed kind-1 event passed in headers (X-Nostr-Npub /
   /// -Signature / -Timestamp), then enumerates every contributor
@@ -562,6 +800,25 @@ class _SubmitPath {
     required this.eventId,
     required this.callsign,
     required this.filename,
+  });
+}
+
+class _MineFilePath {
+  final String eventId;
+  final String filename;
+  _MineFilePath({required this.eventId, required this.filename});
+}
+
+class _MineFileResult {
+  final int statusCode;
+  final List<int>? bytes;
+  final String? contentType;
+  final Map<String, dynamic>? errorBody;
+  _MineFileResult({
+    required this.statusCode,
+    this.bytes,
+    this.contentType,
+    this.errorBody,
   });
 }
 

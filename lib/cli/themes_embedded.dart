@@ -1452,7 +1452,7 @@ class ThemesEmbedded {
       '<button class="event-contribute-btn" id="contribute-btn" type="button">' +
         ico.upload + ' <span>Contribute media</span>' +
       '</button>' +
-      '<div class="event-contribute-help">Photos and short videos sent here go to the event author for approval before they appear publicly. Uploads are kept in your browser until they reach the device, even if you close this tab.</div>' +
+      '<div class="event-contribute-help">Tap "Contribute media" to send more photos or short videos. They go to the event author for approval before they appear publicly, and stay in your browser until they reach the device — even if you close this tab.</div>' +
       '<div id="contribute-status" class="event-contribute-status" style="display:none"></div>' +
       '<div id="contribute-queue" class="event-contribute-queue" style="display:none"></div>' +
       '<input type="file" id="contribute-input" accept="image/*,video/*" multiple style="display:none">' +
@@ -2265,52 +2265,89 @@ class ThemesEmbedded {
       }
     }
 
+    /// Build a fresh signature for the kind-1 query event used by
+    /// /mine and /mine/files. Returns { npub, sig, createdAt } or
+    /// null when NOSTR isn\'t ready.
+    async function signMineQuery() {
+      var nostr = window.GeogramNostr || {};
+      if (!nostr.connected || !window.nostr ||
+          typeof window.nostr.signEvent !== 'function') {
+        return null;
+      }
+      var createdAt = Math.floor(Date.now() / 1000);
+      var signed = await window.nostr.signEvent({
+        kind: 1,
+        created_at: createdAt,
+        tags: [
+          ['e', ev.id],
+          ['kind', 'contributor_mine_query'],
+        ],
+        content: 'contributor_mine_query',
+      });
+      if (!signed || !signed.sig || !signed.pubkey) return null;
+      var npub = (window.NostrTools &&
+                  window.NostrTools.nip19 &&
+                  window.NostrTools.nip19.npubEncode)
+        ? window.NostrTools.nip19.npubEncode(signed.pubkey)
+        : signed.pubkey;
+      return { npub: npub, sig: signed.sig, createdAt: createdAt };
+    }
+
+    /// Fetch a per-visitor thumbnail (signed GET) and return as Blob.
+    /// Used the first time we see a server-only submission so the
+    /// thumbnail can be cached in IDB and rendered on later loads.
+    async function fetchMineThumbnail(filename) {
+      var token = await signMineQuery();
+      if (!token) return null;
+      try {
+        var url = '../api/events/' + encodeURIComponent(ev.id) +
+                  '/contributors/mine/files/' +
+                  encodeURIComponent(filename) + '?thumb=1';
+        var resp = await fetch(url, {
+          method: 'GET',
+          cache: 'no-store',
+          headers: {
+            'X-Nostr-Npub': token.npub,
+            'X-Nostr-Signature': token.sig,
+            'X-Nostr-Timestamp': String(token.createdAt),
+          },
+        });
+        if (!resp.ok) return null;
+        return await resp.blob();
+      } catch (_) {
+        return null;
+      }
+    }
+
     /// Sign a NOSTR query event and ask the device for any pending /
     /// approved submissions belonging to the visitor\'s npub. Updates
     /// the module-scoped serverSubmissions buffer, then re-renders.
     /// Tolerates 4xx (e.g. 403 if the signing identity isn\'t
     /// recognised) by simply leaving the buffer empty.
+    ///
+    /// For each pending submission we don\'t already have an IDB row
+    /// for, fetch the thumbnail and stash it as a 'delivered' IDB
+    /// item so subsequent renders draw from the local cache without
+    /// hitting the network.
     async function fetchMyServerSubmissions() {
-      var nostr = window.GeogramNostr || {};
-      if (!nostr.connected || !window.nostr ||
-          typeof window.nostr.signEvent !== 'function') {
-        return;
-      }
+      var token = await signMineQuery();
+      if (!token) return;
       try {
-        var createdAt = Math.floor(Date.now() / 1000);
-        var unsigned = {
-          kind: 1,
-          created_at: createdAt,
-          tags: [
-            ['e', ev.id],
-            ['kind', 'contributor_mine_query'],
-          ],
-          content: 'contributor_mine_query',
-        };
-        var signed = await window.nostr.signEvent(unsigned);
-        if (!signed || !signed.sig || !signed.pubkey) return;
-        var npub = (window.NostrTools &&
-                    window.NostrTools.nip19 &&
-                    window.NostrTools.nip19.npubEncode)
-          ? window.NostrTools.nip19.npubEncode(signed.pubkey)
-          : signed.pubkey;
         var resp = await fetch(
           '../api/events/' + encodeURIComponent(ev.id) + '/contributors/mine',
           {
             method: 'GET',
             cache: 'no-store',
             headers: {
-              'X-Nostr-Npub': npub,
-              'X-Nostr-Signature': signed.sig,
-              'X-Nostr-Timestamp': String(createdAt),
+              'X-Nostr-Npub': token.npub,
+              'X-Nostr-Signature': token.sig,
+              'X-Nostr-Timestamp': String(token.createdAt),
             },
           }
         );
         if (!resp.ok) return;
         var json = await resp.json();
         var submissions = (json && json.submissions) || [];
-        // Flatten { callsign, status, files: [...] } into per-file
-        // rows so renderQueueUI can dedupe by filename.
         var flat = [];
         submissions.forEach(function(s) {
           (s.files || []).forEach(function(f) {
@@ -2322,6 +2359,49 @@ class ThemesEmbedded {
           });
         });
         serverSubmissions = flat;
+
+        // Populate IDB cache for any pending submission we don\'t
+        // already have locally. After this pass, renderQueueUI will
+        // pick up the cached thumbnail without a placeholder. Done
+        // sequentially to keep memory pressure low if the user has
+        // many pending items.
+        var existing = {};
+        try {
+          (await queueAll()).forEach(function(it) {
+            if (it.eventId === ev.id) existing[it.filename] = true;
+          });
+        } catch (_) {}
+        for (var i = 0; i < flat.length; i++) {
+          var s = flat[i];
+          if (s.status !== 'pending') continue;
+          if (existing[s.filename]) continue;
+          var thumb = await fetchMineThumbnail(s.filename);
+          if (!thumb) continue;
+          try {
+            await queueAdd({
+              id: 'cache-' + Date.now() + '-' +
+                  Math.random().toString(36).slice(2, 8),
+              eventId: ev.id,
+              callsign: s.callsign,
+              filename: s.filename,
+              contentType: thumb.type || 'image/jpeg',
+              bytes: thumb,
+              npub: token.npub,
+              signature: '',
+              createdAt: 0,
+              queuedAt: Date.now(),
+              attempts: 0,
+              nextAttempt: 0,
+              lastError: null,
+              status: 'delivered',
+              deliveredAt: Date.now(),
+              cacheOnly: true, // marker: bytes are a thumbnail, not the original
+            });
+            existing[s.filename] = true;
+            renderQueueUI();
+          } catch (_) {}
+        }
+
         renderQueueUI();
         updateContributeStatus();
       } catch (e) {
