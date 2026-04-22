@@ -8,15 +8,19 @@ import '../models/blog_post.dart';
 import '../models/blog_comment.dart';
 import '../services/blog_service.dart';
 import '../services/app_service.dart';
+import '../services/config_service.dart';
+import '../services/devices_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
+import '../services/remote_content_client.dart';
 import '../services/station_service.dart';
 import '../services/i18n_service.dart';
 import '../widgets/blog_post_tile_widget.dart';
 import '../widgets/blog_post_detail_widget.dart';
 import '../widgets/blog_comment_widget.dart';
 import '../dialogs/new_blog_post_dialog.dart';
+import 'remote_blog_browser_page.dart' show RemoteBlogPostDetailPage;
 
 /// Blog browser page with 2-panel layout
 class BlogBrowserPage extends StatefulWidget {
@@ -51,6 +55,21 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   String? _profileIdentifier;
   Set<int> _expandedYears = {};
   String? _currentUserNpub;
+  String? _currentCallsign;
+
+  // Same scope-toggle pattern as the events browser: show events I
+  // authored vs everyone else\'s. Globe icon when viewing mine
+  // (telegraphs the next-tap state); person icon when viewing
+  // global. Last choice persists in ConfigService so the page
+  // re-opens on the same scope.
+  bool _showMineOnly = true;
+  static const String _scopePrefKey = 'blogBrowser.showMineOnly';
+  // Posts fetched from every reachable device when the user
+  // switches to global scope. Lazy-loaded once per session unless
+  // the user toggles back and forth.
+  List<BlogPost> _remotePosts = const [];
+  bool _isLoadingRemote = false;
+  bool _remoteLoadedOnce = false;
 
   @override
   void initState() {
@@ -71,6 +90,13 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     // Get current user npub and profile info for shareable URL
     final profile = _profileService.getProfile();
     _currentUserNpub = profile.npub;
+    _currentCallsign = profile.callsign;
+
+    // Restore the last scope choice (mine vs global). New installs
+    // default to "mine" — same as the previous behaviour.
+    final savedScope =
+        ConfigService().get(_scopePrefKey, true) as bool? ?? true;
+    _showMineOnly = savedScope;
 
     // Get station URL and profile identifier for shareable blog URLs
     final preferredStation = _stationService.getPreferredStation();
@@ -105,6 +131,15 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
 
     await _loadPosts();
 
+    // If the user left the page on the global scope last time,
+    // fetch remote posts now so it lands populated rather than
+    // empty waiting for a manual toggle.
+    if (!_showMineOnly) {
+      // ignore: discarded_futures
+      _loadGlobalPosts();
+      _filterPosts();
+    }
+
     // Expand most recent year by default
     if (_allPosts.isNotEmpty) {
       _expandedYears.add(_allPosts.first.year);
@@ -135,18 +170,135 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
 
   void _filterPosts() {
     final query = _searchController.text.toLowerCase();
+    final myNpub = _currentUserNpub;
+    final myCallsign = _currentCallsign?.toUpperCase();
+
+    bool isMine(BlogPost post) {
+      if (myNpub != null && myNpub.isNotEmpty && post.npub == myNpub) {
+        return true;
+      }
+      if (myCallsign != null && myCallsign.isNotEmpty &&
+          post.author.toUpperCase() == myCallsign) {
+        return true;
+      }
+      return false;
+    }
 
     setState(() {
+      // Scope picks which source list to draw from:
+      // - mine   → local posts filtered to "authored by me"
+      // - global → posts fetched from every reachable device,
+      //            already filtered to "not me" at fetch time
+      Iterable<BlogPost> scoped = _showMineOnly
+          ? _allPosts.where(isMine)
+          : _remotePosts;
       if (query.isEmpty) {
-        _filteredPosts = _allPosts;
+        _filteredPosts = scoped.toList();
       } else {
-        _filteredPosts = _allPosts.where((post) {
+        _filteredPosts = scoped.where((post) {
           return post.title.toLowerCase().contains(query) ||
                  post.tags.any((tag) => tag.toLowerCase().contains(query)) ||
                  (post.description?.toLowerCase().contains(query) ?? false);
         }).toList();
       }
     });
+  }
+
+  /// Fan out a /api/content/blog query to every device the local
+  /// app knows about (via DevicesService), drop anything authored
+  /// by the local user, then dedupe by author npub + post id.
+  /// Same universal RemoteContent.listAcrossDevices the events
+  /// browser uses — only the appType + model conversion differ.
+  Future<void> _loadGlobalPosts() async {
+    if (_isLoadingRemote) return;
+    setState(() => _isLoadingRemote = true);
+    try {
+      final myCallsign = _currentCallsign?.toUpperCase();
+      final myNpub = _currentUserNpub;
+      final callsigns = DevicesService()
+          .getAllDevices()
+          .map((d) => d.callsign.toUpperCase())
+          .where((cs) => cs.isNotEmpty && cs != myCallsign)
+          .toSet();
+      if (callsigns.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _remotePosts = const [];
+          _remoteLoadedOnce = true;
+          _isLoadingRemote = false;
+        });
+        _filterPosts();
+        return;
+      }
+      final items = await RemoteContent.listAcrossDevices(
+        callsigns: callsigns,
+        appType: 'blog',
+      );
+      final out = <BlogPost>[];
+      final dedup = <String>{};
+      for (final entry in items) {
+        try {
+          final post = _postFromApiJson(entry.item, entry.sourceCallsign);
+          // Skip posts authored by us (a mirror of our own data
+          // sitting on someone else's device).
+          if (myNpub != null && myNpub.isNotEmpty && post.npub == myNpub) {
+            continue;
+          }
+          if (myCallsign != null &&
+              myCallsign.isNotEmpty &&
+              post.author.toUpperCase() == myCallsign) {
+            continue;
+          }
+          // Author npub + post id is the strongest dedupe key —
+          // catches the same post served by multiple mirrors of
+          // the same user.
+          final key = '${post.npub ?? post.author}|${post.id}';
+          if (!dedup.add(key)) continue;
+          out.add(post);
+        } catch (_) {}
+      }
+      // Sort by timestamp descending (most recent first).
+      out.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      if (!mounted) return;
+      setState(() {
+        _remotePosts = out;
+        _remoteLoadedOnce = true;
+        _isLoadingRemote = false;
+      });
+      _filterPosts();
+    } catch (e) {
+      LogService().log('BlogBrowserPage: remote load failed: $e');
+      if (!mounted) return;
+      setState(() => _isLoadingRemote = false);
+    }
+  }
+
+  /// Build a [BlogPost] from one /api/content/blog list-row dict
+  /// and tag it with the source-device callsign so [_selectPost]
+  /// can route taps to the remote detail page. Mirrors the
+  /// converter used in remote_blog_browser_page.dart.
+  BlogPost _postFromApiJson(
+      Map<String, dynamic> json, String sourceCallsign) {
+    final metadata = <String, String>{};
+    final npub = json['npub'];
+    if (npub is String && npub.isNotEmpty) metadata['npub'] = npub;
+    metadata['source_callsign'] = sourceCallsign;
+    return BlogPost(
+      id: json['id'] as String? ?? '',
+      author: json['author'] as String? ?? 'Unknown',
+      timestamp: json['timestamp'] as String? ?? '',
+      edited: json['edited'] as String?,
+      title: json['title'] as String? ?? 'Untitled',
+      description: json['description'] as String?,
+      location: json['location'] as String?,
+      status: BlogStatus.fromString(
+          json['status'] as String? ?? 'draft'),
+      tags: (json['tags'] as List?)?.map((t) => t.toString()).toList() ??
+          const [],
+      content: json['content'] as String? ?? '',
+      comments: const [],
+      metadata: metadata,
+    );
   }
 
   /// Search for posts with the given tag
@@ -156,6 +308,11 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   }
 
   Future<void> _selectPost(BlogPost post) async {
+    // Remote posts (fetched via /api/content/blog from another
+    // device) carry the source callsign in metadata. Open them in
+    // the remote detail page rather than trying to load them from
+    // local storage.
+    if (await _maybeOpenRemote(post)) return;
     // Load full post with comments and feedback
     final fullPost = await _blogService.loadFullPostWithFeedback(post.id, userNpub: _currentUserNpub);
     setState(() {
@@ -163,7 +320,22 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     });
   }
 
+  Future<bool> _maybeOpenRemote(BlogPost post) async {
+    final source = post.metadata['source_callsign'];
+    if (source == null || source.isEmpty) return false;
+    final device = DevicesService().getDevice(source);
+    if (device == null || !mounted) return true;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => RemoteBlogPostDetailPage(
+        post: post,
+        device: device,
+      ),
+    ));
+    return true;
+  }
+
   Future<void> _selectPostMobile(BlogPost post) async {
+    if (await _maybeOpenRemote(post)) return;
     // Load full post with comments and feedback
     final fullPost = await _blogService.loadFullPostWithFeedback(post.id, userNpub: _currentUserNpub);
 
@@ -598,29 +770,61 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
       color: theme.colorScheme.surface,
       child: Column(
         children: [
-          // Search bar
+          // Search bar + scope toggle (mine vs everyone). Same
+          // icon convention as the events browser — globe means
+          // "tap to see everyone\'s", person means "tap to go back
+          // to mine". Last choice persists in ConfigService.
           Padding(
             padding: const EdgeInsets.all(16),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: _i18n.t('search_posts_tags'),
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchController.clear();
-                          _filterPosts();
-                        },
-                      )
-                    : null,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: _i18n.t('search_posts_tags'),
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                _searchController.clear();
+                                _filterPosts();
+                              },
+                            )
+                          : null,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      filled: true,
+                      contentPadding:
+                          const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
                 ),
-                filled: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 8),
-              ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  tooltip: _showMineOnly
+                      ? (_i18n.t('blog_show_global') ??
+                          'Show posts from everyone')
+                      : (_i18n.t('blog_show_mine') ?? 'Show my posts'),
+                  icon: _isLoadingRemote
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(_showMineOnly ? Icons.public : Icons.person),
+                  onPressed: () {
+                    setState(() => _showMineOnly = !_showMineOnly);
+                    ConfigService().set(_scopePrefKey, _showMineOnly);
+                    if (!_showMineOnly && !_remoteLoadedOnce) {
+                      _loadGlobalPosts();
+                    }
+                    _filterPosts();
+                  },
+                ),
+              ],
             ),
           ),
           const Divider(height: 1),
@@ -636,6 +840,23 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   }
 
   Widget _buildEmptyState(ThemeData theme) {
+    final hasQuery = _searchController.text.isNotEmpty;
+    final String titleKey;
+    final String subtitleKey;
+    final IconData icon;
+    if (hasQuery) {
+      titleKey = 'no_matching_posts';
+      subtitleKey = 'try_different_search_term';
+      icon = Icons.article_outlined;
+    } else if (!_showMineOnly) {
+      titleKey = 'no_global_posts_yet';
+      subtitleKey = 'no_global_posts_help';
+      icon = Icons.public;
+    } else {
+      titleKey = 'no_blog_posts_yet';
+      subtitleKey = 'create_first_post';
+      icon = Icons.article_outlined;
+    }
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -643,24 +864,20 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              Icons.article_outlined,
+              icon,
               size: 64,
               color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
             ),
             const SizedBox(height: 16),
             Text(
-              _searchController.text.isNotEmpty
-                  ? _i18n.t('no_matching_posts')
-                  : _i18n.t('no_blog_posts_yet'),
+              _i18n.t(titleKey),
               style: theme.textTheme.titleMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              _searchController.text.isNotEmpty
-                  ? _i18n.t('try_different_search_term')
-                  : _i18n.t('create_first_post'),
+              _i18n.t(subtitleKey),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
               ),

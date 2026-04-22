@@ -478,19 +478,26 @@ class _RemoteBlogBrowserPageState extends State<RemoteBlogBrowserPage> {
 /// a NOSTR event with the visitor's own keys and POST it to the
 /// selected device via the shared ConnectionManager. Comments are
 /// signed and posted the same way.
-class _RemoteBlogPostDetailPage extends StatefulWidget {
+/// Public route to a single remote blog post's detail page. Lets
+/// callers outside this file (e.g. the blog browser's global scope)
+/// jump straight to one post without going through the listing.
+class RemoteBlogPostDetailPage extends StatefulWidget {
   final models.BlogPost post;
   final RemoteDevice device;
 
-  const _RemoteBlogPostDetailPage({
+  const RemoteBlogPostDetailPage({
+    super.key,
     required this.post,
     required this.device,
   });
 
   @override
-  State<_RemoteBlogPostDetailPage> createState() =>
+  State<RemoteBlogPostDetailPage> createState() =>
       _RemoteBlogPostDetailPageState();
 }
+
+// In-file alias so existing private references compile unchanged.
+typedef _RemoteBlogPostDetailPage = RemoteBlogPostDetailPage;
 
 class _RemoteBlogPostDetailPageState extends State<_RemoteBlogPostDetailPage> {
   final DevicesService _devicesService = DevicesService();
