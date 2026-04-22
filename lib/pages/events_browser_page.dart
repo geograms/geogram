@@ -12,6 +12,7 @@ import '../models/event.dart';
 import '../models/event_link.dart';
 import '../models/event_registration.dart';
 import '../services/app_service.dart';
+import '../services/config_service.dart';
 import '../services/devices_service.dart';
 import '../services/event_pin_service.dart';
 import '../services/event_service.dart';
@@ -75,7 +76,10 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   // icon next to the search bar shows the OPPOSITE mode so the user
   // sees what they\'re about to switch to — globe to switch to
   // "events from everyone else", person to switch back to "mine".
+  // Last choice persists in ConfigService under the key below so a
+  // visitor who left the page on the global view returns to it.
   bool _showMineOnly = true;
+  static const String _scopePrefKey = 'eventsBrowser.showMineOnly';
 
   // Events fetched from every reachable device when the user
   // switches to the global scope. Lazy-loaded on first toggle and
@@ -104,6 +108,12 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     _currentUserNpub = profile.npub;
     _currentCallsign = profile.callsign;
 
+    // Restore the user\'s last scope choice (mine vs global). New
+    // installs default to "mine" — same as the previous behaviour.
+    final savedScope =
+        ConfigService().get(_scopePrefKey, true) as bool? ?? true;
+    _showMineOnly = savedScope;
+
     if (widget.isRemoteDevice) {
       // Remote device mode - load from API
       LogService().log('EventsBrowserPage: Remote device mode - loading from ${widget.remoteDeviceUrl}');
@@ -125,6 +135,15 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         await _eventService.initializeApp(widget.appPath!);
       }
       await _loadEvents();
+      // If the user left the page on the global scope last time,
+      // fetch remote events now so the UI lands populated rather
+      // than empty + needing a manual toggle.
+      if (!_showMineOnly && !widget.isRemoteDevice) {
+        // Fire-and-forget; the load updates state when it lands.
+        // ignore: discarded_futures
+        _loadGlobalEvents();
+        _filterEvents();
+      }
     }
 
     // Expand most recent year by default
@@ -1166,6 +1185,11 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
                       : Icon(_showMineOnly ? Icons.public : Icons.person),
                   onPressed: () {
                     setState(() => _showMineOnly = !_showMineOnly);
+                    // Persist so the next session opens on the same
+                    // scope. Fire-and-forget — write failures here
+                    // would only mean the next session opens on the
+                    // default, which is acceptable.
+                    ConfigService().set(_scopePrefKey, _showMineOnly);
                     if (!_showMineOnly && !_remoteLoadedOnce) {
                       _loadGlobalEvents();
                     }
