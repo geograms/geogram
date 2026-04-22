@@ -1341,7 +1341,18 @@ class EventService {
   ///
   /// This method searches all collections/apps of type 'events' for an event
   /// with the given ID. Returns null if not found.
-  Future<Event?> findEventByIdGlobal(String eventId, String dataDir) async {
+  ///
+  /// When [onlyCallsign] is set, only searches that callsign\'s
+  /// `devices/{CALLSIGN}/...` subtree (collections/ is skipped).
+  /// Used by the per-callsign web pages so a request to
+  /// `/X1FAEM/events/{id}` can\'t resolve to an event cached
+  /// under `devices/{otherCallsign}/events/{id}/`.
+  Future<Event?> findEventByIdGlobal(
+    String eventId,
+    String dataDir, {
+    String? onlyCallsign,
+  }) async {
+    final scopedCallsign = onlyCallsign?.toUpperCase();
     try {
       // Extract year from eventId (format: YYYY-MM-DD_title)
       if (eventId.length < 10 || !eventId.contains('_')) {
@@ -1393,9 +1404,12 @@ class EventService {
         return null;
       }
 
-      // Search collections directory
-      final result = await searchInDir(appsDir);
-      if (result != null) return result;
+      // Search collections directory — skipped when scoped to a
+      // specific callsign (collections/ isn\'t per-callsign).
+      if (scopedCallsign == null) {
+        final result = await searchInDir(appsDir);
+        if (result != null) return result;
+      }
 
       // Search devices directory
       final devicesDir = Directory('$dataDir/devices');
@@ -1403,6 +1417,13 @@ class EventService {
         final deviceEntities = await devicesDir.list().toList();
         for (var deviceEntity in deviceEntities) {
           if (deviceEntity is Directory) {
+            final folderName = deviceEntity.path
+                .split(Platform.pathSeparator)
+                .last
+                .toUpperCase();
+            if (scopedCallsign != null && folderName != scopedCallsign) {
+              continue;
+            }
             final deviceResult = await searchInDir(deviceEntity);
             if (deviceResult != null) return deviceResult;
           }
@@ -1421,8 +1442,21 @@ class EventService {
   ///
   /// Optionally filter by year. Returns events sorted by date (most recent first).
   /// Searches both $dataDir/collections/ and $dataDir/devices/{callsign}/ for events.
-  Future<List<Event>> getAllEventsGlobal(String dataDir, {int? year}) async {
+  ///
+  /// When [onlyCallsign] is set, scans only that callsign\'s
+  /// `devices/{CALLSIGN}/...` subtree (collections/ is also
+  /// skipped — that store isn\'t per-callsign in any meaningful
+  /// way). Used by the per-callsign listing / detail web pages so
+  /// `/X1FAEM/events/` doesn\'t accidentally surface events that
+  /// were cached from another author under
+  /// `devices/{otherCallsign}/events/`.
+  Future<List<Event>> getAllEventsGlobal(
+    String dataDir, {
+    int? year,
+    String? onlyCallsign,
+  }) async {
     final allEvents = <Event>[];
+    final scopedCallsign = onlyCallsign?.toUpperCase();
 
     Future<void> scanAppDir(Directory appDir) async {
       // Events can be stored in two layouts:
@@ -1453,13 +1487,17 @@ class EventService {
     }
 
     try {
-      // Search in collections directory
-      final appsDir = Directory('$dataDir/collections');
-      if (await appsDir.exists()) {
-        final entities = await appsDir.list().toList();
-        for (var entity in entities) {
-          if (entity is Directory) {
-            await scanAppDir(entity);
+      // Search in collections directory — only when not scoped to
+      // a specific callsign (collections/ is the per-app store, not
+      // per-callsign).
+      if (scopedCallsign == null) {
+        final appsDir = Directory('$dataDir/collections');
+        if (await appsDir.exists()) {
+          final entities = await appsDir.list().toList();
+          for (var entity in entities) {
+            if (entity is Directory) {
+              await scanAppDir(entity);
+            }
           }
         }
       }
@@ -1470,6 +1508,17 @@ class EventService {
         final deviceEntities = await devicesDir.list().toList();
         for (var deviceEntity in deviceEntities) {
           if (deviceEntity is Directory) {
+            final folderName = deviceEntity.path
+                .split(Platform.pathSeparator)
+                .last
+                .toUpperCase();
+            // Skip device folders that don\'t belong to the scoped
+            // callsign. Cached external events live under
+            // `devices/{otherCallsign}/...` and must not leak into
+            // `/X1FAEM/events/`.
+            if (scopedCallsign != null && folderName != scopedCallsign) {
+              continue;
+            }
             final deviceApps = await deviceEntity.list().toList();
             for (var appEntity in deviceApps) {
               if (appEntity is Directory) {

@@ -1750,7 +1750,18 @@ class LogApiService
       );
     }
     final eventService = EventService();
-    final allEvents = await eventService.getAllEventsGlobal(dataDir);
+    // Scope the listing to the callsign in the URL — relayed
+    // requests come in as /{CALLSIGN}/events/ and we forward the
+    // prefix from the proxy mixin. Direct hits fall back to the
+    // local profile so the page never accidentally surfaces
+    // events cached under another callsign.
+    final scopeCallsign =
+        _resolveOwnerCallsign(request) ??
+            ProfileService().getProfile().callsign;
+    final allEvents = await eventService.getAllEventsGlobal(
+      dataDir,
+      onlyCallsign: scopeCallsign.isEmpty ? null : scopeCallsign,
+    );
     final years = await eventService.getAvailableYearsGlobal(dataDir);
 
     // 3. Filter by visibility
@@ -1858,6 +1869,31 @@ class LogApiService
       }
     } catch (_) {}
     return null;
+  }
+
+  /// Pull the page-owner callsign out of an incoming web request.
+  /// Relayed pages arrive with `X-Forwarded-Prefix: /CALLSIGN`
+  /// (added by DeviceProxyMixin); direct hits return null and the
+  /// caller falls back to the local profile callsign. Used to scope
+  /// per-callsign event listings + detail lookups so cached external
+  /// events under devices/{otherCallsign}/ don\'t leak into pages
+  /// served as `/{callsign}/events/`.
+  String? _resolveOwnerCallsign(shelf.Request request) {
+    final prefix = request.headers['x-forwarded-prefix'];
+    if (prefix == null || prefix.isEmpty) return null;
+    var trimmed = prefix.trim();
+    while (trimmed.startsWith('/')) {
+      trimmed = trimmed.substring(1);
+    }
+    while (trimmed.endsWith('/')) {
+      trimmed = trimmed.substring(0, trimmed.length - 1);
+    }
+    if (trimmed.isEmpty) return null;
+    // Take only the first path segment; the relay\'s prefix is
+    // always a single segment (`/CALLSIGN`) but be defensive in
+    // case some downstream tacks more on.
+    final firstSeg = trimmed.split('/').first;
+    return firstSeg.toUpperCase();
   }
 
   /// Initialize the contact service singleton against the user's contacts
@@ -1987,11 +2023,25 @@ class LogApiService
         headers: headers,
       );
     }
+    // Scope the lookup to the callsign in the URL so a relayed
+    // request to /{CALLSIGN}/events/{id} can\'t resolve to an
+    // event cached under another callsign\'s folder.
+    final scopeCallsign =
+        _resolveOwnerCallsign(request) ??
+            ProfileService().getProfile().callsign;
+    final scope = scopeCallsign.isEmpty ? null : scopeCallsign;
     // Try full load by ID first (searches collections + devices)
-    var event = await EventService().findEventByIdGlobal(eventId, dataDir);
+    var event = await EventService().findEventByIdGlobal(
+      eventId,
+      dataDir,
+      onlyCallsign: scope,
+    );
     // Fall back to slug lookup
     if (event == null) {
-      final allEvents = await EventService().getAllEventsGlobal(dataDir);
+      final allEvents = await EventService().getAllEventsGlobal(
+        dataDir,
+        onlyCallsign: scope,
+      );
       final bySlug = allEvents.cast<Event?>().firstWhere(
         (e) => e?.slug == eventId,
         orElse: () => null,
