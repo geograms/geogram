@@ -1198,6 +1198,40 @@ class ThemesEmbedded {
 </div>
 
 <script>
+  // Client-side fallback for menu hrefs when this page is served
+  // through a station relay (e.g. https://p2p.radio/{callsign}/...).
+  // The device that generated this HTML doesn't see the relay's
+  // /{callsign}/ prefix and emits relative ../events/ links that
+  // lose the prefix on resolution. Detect a callsign-shaped first
+  // path segment in the actual browser URL and rewrite menu hrefs
+  // to absolute /{callsign}/X/ paths. No-op when there is no such
+  // prefix (direct device access).
+  (function(){
+    try {
+      var m = window.location.pathname.match(
+        /^\/([A-Z][0-9][A-Z0-9_-]+)(?:\/|$)/i
+      );
+      if (!m) return;
+      var prefix = '/' + m[1];
+      var links = document.querySelectorAll('nav.menu a[href]');
+      for (var i = 0; i < links.length; i++) {
+        var a = links[i];
+        var href = a.getAttribute('href') || '';
+        if (!href || href.indexOf('://') !== -1 || href.charAt(0) === '#') {
+          continue;
+        }
+        var resolved;
+        try { resolved = new URL(href, window.location.href); }
+        catch (e) { continue; }
+        if (resolved.origin !== window.location.origin) continue;
+        var path = resolved.pathname;
+        if (path === prefix || path.indexOf(prefix + '/') === 0) continue;
+        a.setAttribute('href',
+          prefix + path + resolved.search + resolved.hash);
+      }
+    } catch (e) {}
+  })();
+
   window.GEOGRAM_EVENT = {{DATA_JSON}};
   {{SCRIPTS}}
 
