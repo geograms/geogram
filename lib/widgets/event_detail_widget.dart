@@ -2052,15 +2052,26 @@ class _ApprovedContributorsSectionState
             for (final c in list) ...[
               Padding(
                 padding: const EdgeInsets.only(bottom: 8, left: 4),
-                child: Text(
-                  i18n.t('contributed_by').replaceAll('{0}', c.callsign),
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.bold),
+                child: Row(
+                  children: [
+                    Text(
+                      i18n.t('contributed_by').replaceAll('{0}', c.callsign),
+                      style: theme.textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '(${c.files.length})',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              // One-image-at-a-time swipe carousel (vs. the main
-              // gallery\'s strip) so a contributor with hundreds of
-              // photos doesn\'t flood the page. Tap to open the
+              // Horizontal thumbnail strip — multiple thumbs visible
+              // at once so a contributor with hundreds of photos
+              // doesn\'t flood the page vertically. Tap to open the
               // full-screen viewer.
               _ContributorCarousel(folder: c),
               const SizedBox(height: 16),
@@ -2083,33 +2094,20 @@ class _ContribFolder {
   });
 }
 
-/// Swipeable single-image carousel for one contributor. Keeps the
-/// page tidy when a contributor has dropped dozens or hundreds of
-/// photos — only one is on screen at a time. Tap to open the
-/// full-resolution viewer with all of them.
-class _ContributorCarousel extends StatefulWidget {
+/// Horizontal thumbnail strip for one contributor. Multiple
+/// thumbnails on screen at once so a contributor with hundreds of
+/// photos doesn\'t flood the page vertically; the strip scrolls
+/// horizontally. Tap a thumbnail to open the full-resolution
+/// viewer with all of that contributor\'s files.
+class _ContributorCarousel extends StatelessWidget {
   final _ContribFolder folder;
   const _ContributorCarousel({required this.folder});
 
-  @override
-  State<_ContributorCarousel> createState() => _ContributorCarouselState();
-}
-
-class _ContributorCarouselState extends State<_ContributorCarousel> {
-  final PageController _controller = PageController();
-  int _index = 0;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _open(int i) {
+  void _open(BuildContext context, int i) {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PhotoViewerPage(
-        imagePaths: widget.folder.files
-            .map((f) => '${widget.folder.folderPath}/$f')
+        imagePaths: folder.files
+            .map((f) => '${folder.folderPath}/$f')
             .toList(),
         initialIndex: i,
       ),
@@ -2119,74 +2117,40 @@ class _ContributorCarouselState extends State<_ContributorCarousel> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final files = widget.folder.files;
-    return Column(
-      children: [
-        AspectRatio(
-          aspectRatio: 16 / 10,
-          child: ClipRRect(
+    final files = folder.files;
+    return SizedBox(
+      height: 120,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: files.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final filePath = '${folder.folderPath}/${files[i]}';
+          return InkWell(
             borderRadius: BorderRadius.circular(8),
-            child: PageView.builder(
-              controller: _controller,
-              itemCount: files.length,
-              onPageChanged: (i) => setState(() => _index = i),
-              itemBuilder: (_, i) {
-                final filePath = '${widget.folder.folderPath}/${files[i]}';
-                return GestureDetector(
-                  onTap: () => _open(i),
-                  child: Image.file(
-                    io.File(filePath),
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                      color: theme.colorScheme.surfaceContainerHighest,
-                      alignment: Alignment.center,
-                      child: Icon(
-                        Icons.broken_image_outlined,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
+            onTap: () => _open(context, i),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                width: 120,
+                height: 120,
+                child: Image.file(
+                  io.File(filePath),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    alignment: Alignment.center,
+                    child: Icon(
+                      Icons.broken_image_outlined,
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                );
-              },
+                ),
+              ),
             ),
-          ),
-        ),
-        if (files.length > 1)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  iconSize: 20,
-                  onPressed: _index > 0
-                      ? () => _controller.previousPage(
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.easeOut)
-                      : null,
-                  icon: const Icon(Icons.chevron_left),
-                ),
-                Text(
-                  '${_index + 1} / ${files.length}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  iconSize: 20,
-                  onPressed: _index < files.length - 1
-                      ? () => _controller.nextPage(
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.easeOut)
-                      : null,
-                  icon: const Icon(Icons.chevron_right),
-                ),
-              ],
-            ),
-          ),
-      ],
+          );
+        },
+      ),
     );
   }
 }

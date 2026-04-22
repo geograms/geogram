@@ -1406,29 +1406,33 @@ class ThemesEmbedded {
     }
 
     // --- Contributed by (visitor submissions, approved) ---
-    // One swipe-carousel per contributor (one image at a time, with
-    // counter + prev/next) so a contributor with hundreds of photos
-    // doesn\'t flood the page. CSS scroll-snap drives the swipe;
-    // narrow JS keeps the counter and arrow-button state in sync.
-    // Files live at `contributors/{CALLSIGN}/<file>` inside the
-    // event folder so fileUrl()/thumbUrl() work without changes.
+    // Horizontal thumbnail strip — multiple small thumbnails
+    // visible at once so a contributor with hundreds of photos
+    // doesn\'t flood the page vertically. CSS scroll-snap gives
+    // native swipe on touch; the prev/next buttons paginate by
+    // visible viewport width for desktop / non-touch mice.
     var contributors = (ev.contributors && ev.contributors.length > 0)
                        ? ev.contributors : [];
     if (contributors.length > 0) {
       contributors.forEach(function(c, ci) {
         if (!c || !c.callsign || !c.files || c.files.length === 0) return;
-        var sliderId = 'contrib-slider-' + ci;
+        var stripId = 'contrib-strip-' + ci;
         html += '<div class="event-section event-contributor">';
-        html += '<h3 class="event-contributor-title">Contributed by ' + esc(c.callsign) + '</h3>';
+        html += '<h3 class="event-contributor-title">Contributed by ' + esc(c.callsign) +
+          ' <span class="event-contributor-count">(' + c.files.length + ')</span></h3>';
         if (c.description) {
           html += '<p class="event-contributor-desc">' + esc(c.description) + '</p>';
         }
-        html += '<div class="contrib-slider" id="' + sliderId + '">';
+        html += '<div class="contrib-strip-wrap">';
+        if (c.files.length > 4) {
+          html += '<button class="contrib-nav contrib-nav-left" data-strip="' + stripId + '" data-dir="-1" type="button" aria-label="Previous">‹</button>';
+        }
+        html += '<div class="contrib-strip" id="' + stripId + '">';
         c.files.forEach(function(f, i) {
           var rel = 'contributors/' + c.callsign + '/' + f;
           var lbIdx = (lbImagesAccum.length);
           lbImagesAccum.push(rel);
-          html += '<div class="contrib-slide" onclick="openLightbox(' + lbIdx + ')">' +
+          html += '<div class="contrib-thumb" onclick="openLightbox(' + lbIdx + ')">' +
             '<img src="' + thumbUrl(rel) + '" ' +
               'data-full="' + fileUrl(rel) + '" ' +
               'data-thumb="' + thumbUrl(rel) + '" ' +
@@ -1438,14 +1442,10 @@ class ThemesEmbedded {
           '</div>';
         });
         html += '</div>';
-        if (c.files.length > 1) {
-          html += '<div class="contrib-controls">' +
-            '<button class="contrib-nav" data-slider="' + sliderId + '" data-dir="-1" type="button">‹</button>' +
-            '<span class="contrib-counter" data-slider="' + sliderId + '">1 / ' + c.files.length + '</span>' +
-            '<button class="contrib-nav" data-slider="' + sliderId + '" data-dir="1" type="button">›</button>' +
-          '</div>';
+        if (c.files.length > 4) {
+          html += '<button class="contrib-nav contrib-nav-right" data-strip="' + stripId + '" data-dir="1" type="button" aria-label="Next">›</button>';
         }
-        html += '</div>';
+        html += '</div></div>';
       });
     }
 
@@ -1607,38 +1607,34 @@ class ThemesEmbedded {
 
     detailEl.innerHTML = html;
 
-    // ── Contributor sliders: counter + arrow buttons ───────────────
-    // Each .contrib-slider is a CSS scroll-snap container, one
-    // image per page. We wire prev/next buttons and update the
-    // "i / N" counter on scroll. Scroll-snap handles the swipe
-    // gesture natively on touch devices.
-    Array.from(document.querySelectorAll('.contrib-slider')).forEach(function(slider) {
-      var counter = document.querySelector(
-        '.contrib-counter[data-slider="' + slider.id + '"]'
-      );
+    // ── Contributor strips: arrow buttons paginate by viewport ─────
+    // Each .contrib-strip scrolls horizontally. Touch devices scroll
+    // with a swipe natively; the prev/next buttons on desktop scroll
+    // by (roughly) one viewport width so a visitor can walk through
+    // a long set without fiddling with a scrollbar.
+    Array.from(document.querySelectorAll('.contrib-strip')).forEach(function(strip) {
       var navs = Array.from(document.querySelectorAll(
-        '.contrib-nav[data-slider="' + slider.id + '"]'
+        '.contrib-nav[data-strip="' + strip.id + '"]'
       ));
-      var slides = slider.children;
       function refresh() {
-        if (!slides.length) return;
-        var w = slider.clientWidth || 1;
-        var idx = Math.round(slider.scrollLeft / w);
-        if (idx < 0) idx = 0;
-        if (idx > slides.length - 1) idx = slides.length - 1;
-        if (counter) counter.textContent = (idx + 1) + ' / ' + slides.length;
+        var atStart = strip.scrollLeft <= 4;
+        var atEnd = (strip.scrollLeft + strip.clientWidth) >=
+                    (strip.scrollWidth - 4);
         navs.forEach(function(b) {
           var dir = parseInt(b.getAttribute('data-dir'), 10);
-          var disabled = (dir < 0 && idx === 0) ||
-                         (dir > 0 && idx === slides.length - 1);
-          b.disabled = disabled;
+          b.disabled = (dir < 0 && atStart) || (dir > 0 && atEnd);
         });
       }
-      slider.addEventListener('scroll', refresh, { passive: true });
+      strip.addEventListener('scroll', refresh, { passive: true });
       navs.forEach(function(b) {
         b.addEventListener('click', function() {
           var dir = parseInt(b.getAttribute('data-dir'), 10);
-          slider.scrollBy({ left: dir * slider.clientWidth, behavior: 'smooth' });
+          // Scroll by ~90% of the visible width so the edge thumbs
+          // provide continuity between "pages".
+          strip.scrollBy({
+            left: dir * Math.round(strip.clientWidth * 0.9),
+            behavior: 'smooth',
+          });
         });
       });
       refresh();
@@ -3760,71 +3756,85 @@ class ThemesEmbedded {
   opacity: 0.75;
 }
 
-/* One-image-at-a-time swipe carousel (used per contributor only —
-   the main author gallery keeps its grid layout). CSS scroll-snap
-   gives native touch swipe on mobile; the JS-wired buttons cover
-   desktop without a mouse-drag gesture. */
-.contrib-slider {
-  display: flex;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-  border-radius: 8px;
+/* Horizontal thumbnail strip per contributor (used only for
+   contributor blocks — the author's own gallery keeps its grid).
+   Multiple thumbnails visible at once; CSS scroll-snap aligns to
+   thumbnail boundaries on touch swipe. */
+.event-contributor-count {
+  font-weight: 400;
+  opacity: 0.6;
+  font-size: 0.85em;
 }
-.contrib-slider::-webkit-scrollbar { display: none; }
 
-.contrib-slide {
-  flex: 0 0 100%;
+.contrib-strip-wrap {
+  position: relative;
+}
+
+.contrib-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding-bottom: 4px;
+}
+
+.contrib-thumb {
+  flex: 0 0 auto;
+  width: 120px;
+  height: 120px;
   scroll-snap-align: start;
   cursor: zoom-in;
-  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--accent-alpha-20);
 }
 
-.contrib-slide img {
+.contrib-thumb img {
   display: block;
   width: 100%;
-  max-height: 60vh;
-  object-fit: contain;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.15s;
 }
 
-.contrib-controls {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 6px;
-  font-size: 0.85rem;
-  opacity: 0.8;
+.contrib-thumb:hover img {
+  transform: scale(1.05);
 }
 
-.contrib-counter {
-  min-width: 60px;
-  text-align: center;
-}
-
+/* Prev / next overlay buttons sit on the strip edges and only
+   appear when the contributor has more than a viewport's worth of
+   thumbs (the template skips them otherwise). */
 .contrib-nav {
-  background: transparent;
-  color: var(--color);
-  border: 1px solid var(--border-color);
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.55);
+  color: white;
+  border: none;
   border-radius: 50%;
-  width: 28px;
-  height: 28px;
-  font-size: 1.2rem;
+  width: 32px;
+  height: 32px;
+  font-size: 1.4rem;
   line-height: 1;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  z-index: 1;
+  opacity: 0.8;
 }
 .contrib-nav:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--accent);
+  opacity: 1;
 }
 .contrib-nav:disabled {
-  opacity: 0.3;
+  opacity: 0.2;
   cursor: not-allowed;
 }
+.contrib-nav-left { left: 4px; }
+.contrib-nav-right { right: 4px; }
 
 /* Contribute media CTA */
 .event-contribute {
