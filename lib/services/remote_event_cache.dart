@@ -7,80 +7,79 @@
  *
  *   {baseDir}/devices/{AUTHOR_CALLSIGN}/events/{YEAR}/{eventId}/
  *     ├── event.txt
+ *     ├── feedback/
+ *     │   ├── likes.txt
+ *     │   └── comments/{id}.txt
  *     └── <media files>          ← populated lazily as the user
  *                                   opens thumbnails / full photos
  *
+ * All I/O goes through the [ProfileStorage] abstraction so an
+ * encrypted-archive future doesn\'t bypass the cipher. External
+ * cache folders (`devices/{otherCallsign}/`) are non-profile data,
+ * so a [FilesystemProfileStorage] rooted at that path is the right
+ * fit — same pattern EventService.getAllEventsGlobal already uses
+ * when it walks other-device subtrees.
+ *
  * The cache is best-effort: failures are silently ignored so a
  * read-only filesystem or a quota error never breaks the live UI.
- * Reads always check the cache first, falling back to the network;
- * writes happen in the background so the UI never blocks on them.
- *
- * Comments / likes are intentionally NOT cached here yet — they
- * change frequently enough that a cached copy would be misleading,
- * and they\'re cheap to refetch.
  */
 
-import 'dart:io' as io;
 import 'dart:typed_data';
-
-import 'package:path/path.dart' as p;
 
 import '../models/event.dart';
 import 'log_service.dart';
+import 'profile_storage.dart';
 import 'storage_config.dart';
 
 class RemoteEventCache {
   RemoteEventCache._();
 
-  /// Absolute disk folder for one cached event:
-  /// `{baseDir}/devices/{CALLSIGN}/events/{YYYY}/{eventId}`.
-  /// Year is derived from the first four chars of [eventId] (the
-  /// canonical YYYY-MM-DD_… format the rest of the codebase uses);
-  /// falls back to "0000" for misshapen ids.
-  static String folderPath(String callsign, String eventId) {
+  /// Base path on disk for `{baseDir}/devices/{CALLSIGN}`. The
+  /// per-event ProfileStorage is rooted here so relative paths
+  /// like `events/{year}/{id}/event.txt` resolve correctly.
+  static String _devicePath(String callsign) {
     final base = StorageConfig().baseDir;
-    final year =
-        (eventId.length >= 4 && int.tryParse(eventId.substring(0, 4)) != null)
-            ? eventId.substring(0, 4)
-            : '0000';
-    return p.join(base, 'devices', callsign.toUpperCase(), 'events', year,
-        eventId);
+    return '$base/devices/${callsign.toUpperCase()}';
   }
 
-  /// Persist the event.txt for [event] under [authorCallsign]\'s
-  /// folder. Uses [Event.exportAsText] so the cached file matches
-  /// the format the local EventService writes for the user\'s own
-  /// events — opening the cache later goes through the exact same
-  /// parser.
-  static Future<void> writeEvent({
-    required String authorCallsign,
-    required Event event,
-  }) async {
-    try {
-      final folder = io.Directory(folderPath(authorCallsign, event.id));
-      await folder.create(recursive: true);
-      final file = io.File(p.join(folder.path, 'event.txt'));
-      await file.writeAsString(event.exportAsText());
-    } catch (e) {
-      LogService().log('RemoteEventCache.writeEvent($authorCallsign/${event.id}) failed: $e');
+  /// Storage instance for one cached author. External cache folders
+  /// are plain filesystem (they\'re not profiles) — same as how
+  /// EventService.getAllEventsGlobal builds storages for other
+  /// devices when it walks them.
+  static ProfileStorage _storageFor(String authorCallsign) {
+    return FilesystemProfileStorage(_devicePath(authorCallsign));
+  }
+
+  /// Year derived from the canonical YYYY-MM-DD_… event id; falls
+  /// back to "0000" so a malformed id still maps somewhere
+  /// deterministic.
+  static String _yearFor(String eventId) {
+    if (eventId.length >= 4 &&
+        int.tryParse(eventId.substring(0, 4)) != null) {
+      return eventId.substring(0, 4);
     }
+    return '0000';
   }
 
-  /// True when an `event.txt` for this (callsign, eventId) exists
-  /// on disk.
+  /// Folder path relative to the storage root for this event.
+  static String _eventFolder(String eventId) =>
+      'events/${_yearFor(eventId)}/$eventId';
+
+  // ── Reads ─────────────────────────────────────────────────────────
+
+  /// True when an `event.txt` for this (callsign, eventId) exists.
   static Future<bool> hasEvent(String authorCallsign, String eventId) async {
     try {
-      return io.File(
-              p.join(folderPath(authorCallsign, eventId), 'event.txt'))
-          .exists();
+      return await _storageFor(authorCallsign)
+          .exists('${_eventFolder(eventId)}/event.txt');
     } catch (_) {
       return false;
     }
   }
 
-  /// Read previously-cached file bytes (thumbnail, full photo,
-  /// trailer, …). Returns null when the file is missing or unreadable
-  /// — caller falls back to a network fetch.
+  /// Read previously-cached file bytes. Returns null when the file
+  /// is missing or unreadable — caller falls back to a network
+  /// fetch.
   ///
   /// [relativePath] may include subdirectories (e.g.
   /// `contributors/X1HFG3/photo.jpg`). Path-traversal is rejected.
@@ -91,17 +90,34 @@ class RemoteEventCache {
   }) async {
     if (_isUnsafePath(relativePath)) return null;
     try {
-      final f = io.File(
-          p.join(folderPath(authorCallsign, eventId), relativePath));
-      if (!await f.exists()) return null;
-      return await f.readAsBytes();
+      return await _storageFor(authorCallsign)
+          .readBytes('${_eventFolder(eventId)}/$relativePath');
     } catch (_) {
       return null;
     }
   }
 
+  // ── Writes ────────────────────────────────────────────────────────
+
+  /// Persist the event.txt for [event] under [authorCallsign]\'s
+  /// folder via [Event.exportAsText].
+  static Future<void> writeEvent({
+    required String authorCallsign,
+    required Event event,
+  }) async {
+    try {
+      await _storageFor(authorCallsign).writeString(
+        '${_eventFolder(event.id)}/event.txt',
+        event.exportAsText(),
+      );
+    } catch (e) {
+      LogService().log(
+          'RemoteEventCache.writeEvent($authorCallsign/${event.id}) failed: $e');
+    }
+  }
+
   /// Persist file bytes the user just downloaded so a future view
-  /// hits disk instead of the network. Used both for thumbnails
+  /// hits storage instead of the network. Used both for thumbnails
   /// (eagerly cached as the gallery loads) and full-res photos
   /// (lazily cached when the user opens the lightbox).
   static Future<void> writeFile({
@@ -112,10 +128,10 @@ class RemoteEventCache {
   }) async {
     if (_isUnsafePath(relativePath)) return;
     try {
-      final target = io.File(
-          p.join(folderPath(authorCallsign, eventId), relativePath));
-      await target.parent.create(recursive: true);
-      await target.writeAsBytes(bytes);
+      await _storageFor(authorCallsign).writeBytes(
+        '${_eventFolder(eventId)}/$relativePath',
+        bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
+      );
     } catch (e) {
       LogService().log(
           'RemoteEventCache.writeFile($authorCallsign/$eventId/$relativePath) failed: $e');
@@ -123,27 +139,26 @@ class RemoteEventCache {
   }
 
   /// Persist the full likers list to feedback/likes.txt (one npub
-  /// per line). Replaces any existing file so the cache mirrors the
-  /// authoritative state on the source device. Empty list writes an
-  /// empty file rather than skipping — that\'s how "no likes after
-  /// previously having some" is represented.
+  /// per line, sorted, deduped). Replaces any existing file so the
+  /// cache mirrors the authoritative state on the source device.
+  /// Empty list writes an empty file so a removed-all-likes state
+  /// still round-trips.
   static Future<void> writeLikes({
     required String authorCallsign,
     required String eventId,
     required Iterable<String> npubs,
   }) async {
     try {
-      final file = io.File(p.join(
-          folderPath(authorCallsign, eventId), 'feedback', 'likes.txt'));
-      await file.parent.create(recursive: true);
       final cleaned = npubs
           .map((s) => s.trim())
           .where((s) => s.isNotEmpty)
           .toSet()
           .toList()
         ..sort();
-      await file.writeAsString(
-          cleaned.isEmpty ? '' : '${cleaned.join('\n')}\n');
+      await _storageFor(authorCallsign).writeString(
+        '${_eventFolder(eventId)}/feedback/likes.txt',
+        cleaned.isEmpty ? '' : '${cleaned.join('\n')}\n',
+      );
     } catch (e) {
       LogService().log(
           'RemoteEventCache.writeLikes($authorCallsign/$eventId) failed: $e');
@@ -166,9 +181,7 @@ class RemoteEventCache {
   }) async {
     if (comments.isEmpty) return;
     try {
-      final dir = io.Directory(p.join(
-          folderPath(authorCallsign, eventId), 'feedback', 'comments'));
-      await dir.create(recursive: true);
+      final storage = _storageFor(authorCallsign);
       for (final c in comments) {
         final id = (c['id'] as String?)?.trim();
         if (id == null || id.isEmpty || _isUnsafePath(id)) continue;
@@ -190,8 +203,10 @@ class RemoteEventCache {
         if (signature != null && signature.isNotEmpty) {
           body.writeln('--> signature: $signature');
         }
-        final f = io.File(p.join(dir.path, '$id.txt'));
-        await f.writeAsString(body.toString());
+        await storage.writeString(
+          '${_eventFolder(eventId)}/feedback/comments/$id.txt',
+          body.toString(),
+        );
       }
     } catch (e) {
       LogService().log(
