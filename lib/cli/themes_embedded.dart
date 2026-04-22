@@ -1808,6 +1808,7 @@ class ThemesEmbedded {
     document.addEventListener('nostr-connected', showContributeIfReady);
     showContributeIfReady();
 
+
     async function sha256Hex(bytes) {
       var buf = await crypto.subtle.digest('SHA-256', bytes);
       var arr = Array.from(new Uint8Array(buf));
@@ -2027,11 +2028,13 @@ class ThemesEmbedded {
       var pending = 0;
       var delivered = 0;
       var failed = 0;
+      var localFiles = {};
       try {
         var items = (await queueAll()).filter(function(i) {
           return i.eventId === ev.id;
         });
         for (var i = 0; i < items.length; i++) {
+          localFiles[items[i].filename] = true;
           if (items[i].status === 'failed') failed++;
           else if (items[i].status === 'delivered') delivered++;
           else pending++;
@@ -2039,6 +2042,15 @@ class ThemesEmbedded {
       } catch (_) {
         return;
       }
+      // Also count server-known pending submissions that we don\'t
+      // have a local row for — e.g. uploaded from a different
+      // browser, or from a session before the IDB-keep-on-success
+      // change was deployed.
+      serverSubmissions.forEach(function(s) {
+        if (s.status === 'pending' && !localFiles[s.filename]) {
+          delivered++;
+        }
+      });
       // Per-item state shows under the queue list; the banner just
       // gives an at-a-glance summary so the user knows what is going
       // on without parsing per-row status text.
@@ -2071,6 +2083,12 @@ class ThemesEmbedded {
       status.style.color = isError ? '#c33' : '';
     }
 
+    // Submissions reported by the device for this visitor's npub
+    // (filled by fetchMyServerSubmissions). Lives in module scope so
+    // renderQueueUI can merge with IDB on every render. Keyed by
+    // filename to dedupe with anything we know locally.
+    var serverSubmissions = [];
+
     async function renderQueueUI() {
       var container = document.getElementById('contribute-queue');
       if (!container) return;
@@ -2080,14 +2098,38 @@ class ThemesEmbedded {
           return i.eventId === ev.id;
         });
       } catch (_) {
-        container.style.display = 'none';
-        return;
+        items = [];
       }
-      if (items.length === 0) {
+      // Merge in server-known submissions that we don\'t have a
+      // local IDB row for (e.g. uploaded from another browser, or
+      // before the IDB-keep-after-success change). They render with
+      // a placeholder thumbnail since we don\'t have the bytes.
+      var localFiles = {};
+      items.forEach(function(it) { localFiles[it.filename] = true; });
+      var serverPlaceholders = serverSubmissions.filter(function(s) {
+        return s.status === 'pending' && !localFiles[s.filename];
+      });
+      if (items.length === 0 && serverPlaceholders.length === 0) {
         container.style.display = 'none';
         container.innerHTML = '';
         return;
       }
+      // Synthesise a row for each server-only pending submission so
+      // the user sees what the device is holding. Marked with a
+      // sentinel id so the action handlers know not to touch IDB.
+      serverPlaceholders.forEach(function(s) {
+        items.push({
+          id: 'server:' + s.callsign + ':' + s.filename,
+          eventId: ev.id,
+          callsign: s.callsign,
+          filename: s.filename,
+          contentType: 'image/*',
+          bytes: null,
+          status: 'delivered',
+          queuedAt: 0,
+          serverOnly: true,
+        });
+      });
       items.sort(function(a, b) { return a.queuedAt - b.queuedAt; });
       // Cache blob: URLs per-item so re-renders don\'t leak. We
       // revoke the previous batch before creating new ones.
@@ -2179,6 +2221,11 @@ class ThemesEmbedded {
         summaryParts.join(' · ') + '</div>' +
         rows.join('');
       container.style.display = '';
+      // Reveal the parent section even if NOSTR isn\'t fully
+      // connected yet — having visible queued / delivered items
+      // takes precedence over the connect-required gate.
+      var section = document.getElementById('event-contribute');
+      if (section) section.style.display = '';
 
       // Wire per-item buttons.
       var btns = container.querySelectorAll('button[data-act]');
@@ -2187,6 +2234,19 @@ class ThemesEmbedded {
           btn.onclick = async function() {
             var id = btn.getAttribute('data-id');
             var act = btn.getAttribute('data-act');
+            // Server-only rows have no IDB row to mutate; the only
+            // action that makes sense is "remove" which just hides
+            // the row from this session (server still has the file).
+            if (id && id.indexOf('server:') === 0) {
+              if (act === 'remove') {
+                serverSubmissions = serverSubmissions.filter(function(s) {
+                  return ('server:' + s.callsign + ':' + s.filename) !== id;
+                });
+              }
+              renderQueueUI();
+              updateContributeStatus();
+              return;
+            }
             if (act === 'remove') {
               await queueDelete(id);
             } else if (act === 'retry') {
@@ -2202,6 +2262,70 @@ class ThemesEmbedded {
             updateContributeStatus();
           };
         })(btns[i]);
+      }
+    }
+
+    /// Sign a NOSTR query event and ask the device for any pending /
+    /// approved submissions belonging to the visitor\'s npub. Updates
+    /// the module-scoped serverSubmissions buffer, then re-renders.
+    /// Tolerates 4xx (e.g. 403 if the signing identity isn\'t
+    /// recognised) by simply leaving the buffer empty.
+    async function fetchMyServerSubmissions() {
+      var nostr = window.GeogramNostr || {};
+      if (!nostr.connected || !window.nostr ||
+          typeof window.nostr.signEvent !== 'function') {
+        return;
+      }
+      try {
+        var createdAt = Math.floor(Date.now() / 1000);
+        var unsigned = {
+          kind: 1,
+          created_at: createdAt,
+          tags: [
+            ['e', ev.id],
+            ['kind', 'contributor_mine_query'],
+          ],
+          content: 'contributor_mine_query',
+        };
+        var signed = await window.nostr.signEvent(unsigned);
+        if (!signed || !signed.sig || !signed.pubkey) return;
+        var npub = (window.NostrTools &&
+                    window.NostrTools.nip19 &&
+                    window.NostrTools.nip19.npubEncode)
+          ? window.NostrTools.nip19.npubEncode(signed.pubkey)
+          : signed.pubkey;
+        var resp = await fetch(
+          '../api/events/' + encodeURIComponent(ev.id) + '/contributors/mine',
+          {
+            method: 'GET',
+            cache: 'no-store',
+            headers: {
+              'X-Nostr-Npub': npub,
+              'X-Nostr-Signature': signed.sig,
+              'X-Nostr-Timestamp': String(createdAt),
+            },
+          }
+        );
+        if (!resp.ok) return;
+        var json = await resp.json();
+        var submissions = (json && json.submissions) || [];
+        // Flatten { callsign, status, files: [...] } into per-file
+        // rows so renderQueueUI can dedupe by filename.
+        var flat = [];
+        submissions.forEach(function(s) {
+          (s.files || []).forEach(function(f) {
+            flat.push({
+              callsign: s.callsign,
+              status: s.status,
+              filename: f,
+            });
+          });
+        });
+        serverSubmissions = flat;
+        renderQueueUI();
+        updateContributeStatus();
+      } catch (e) {
+        console.warn('fetchMyServerSubmissions failed:', e);
       }
     }
 
@@ -2333,6 +2457,15 @@ class ThemesEmbedded {
       .then(updateContributeStatus)
       .then(processQueue);
 
+    // After NOSTR is ready, ask the device which of our submissions
+    // are still pending — covers the case where the visitor cleared
+    // browser data, switched browsers, or uploaded from a session
+    // before this view persisted things in IDB.
+    document.addEventListener('nostr-connected', fetchMyServerSubmissions);
+    if (window.GeogramNostr && window.GeogramNostr.connected) {
+      fetchMyServerSubmissions();
+    }
+
     window.addEventListener('online', function() {
       // Reset backoff so a returned connection retries immediately.
       queueAll().then(function(items) {
@@ -2365,6 +2498,9 @@ class ThemesEmbedded {
         renderQueueUI();
         updateContributeStatus();
       } catch (_) {}
+      // Also refresh the per-visitor pending list so newly-arrived
+      // (or just-rejected) submissions reflect promptly.
+      fetchMyServerSubmissions();
     }, 30000);
 
     // ── Request-access button ─────────────────────────────────────────

@@ -42,6 +42,8 @@ import 'package:shelf/shelf.dart' as shelf;
 
 import '../../services/profile_storage.dart';
 import '../../util/contributor_folder_utils.dart';
+import '../../util/nostr_crypto.dart';
+import '../../util/nostr_event.dart';
 
 /// Per-file size limit. 50 MB is generous enough for any modern
 /// phone photo and short video clips, and bounds the blast radius
@@ -83,6 +85,21 @@ mixin ContributorSubmitMixin {
   /// Returns true when the request matched and was handled (caller
   /// must return from its dispatcher afterwards); false otherwise.
   Future<bool> handleContributorRequest(HttpRequest request) async {
+    final mineParsed = _parseMinePath(request.uri.path);
+    if (mineParsed != null) {
+      final headers = <String, String>{};
+      request.headers.forEach((name, values) {
+        headers[name.toLowerCase()] = values.isEmpty ? '' : values.first;
+      });
+      final result = await _processMineQuery(
+        eventId: mineParsed,
+        method: request.method,
+        headers: headers,
+      );
+      _writeHttpJson(request, result.statusCode, result.body);
+      return true;
+    }
+
     final parsed = _parsePath(request.uri.path);
     if (parsed == null) return false;
 
@@ -126,6 +143,29 @@ mixin ContributorSubmitMixin {
     String urlPath,
   ) async {
     if (!urlPath.startsWith('api/events/')) return null;
+
+    // GET /api/events/{id}/contributors/mine — visitor inspects their
+    // own submissions (pending + approved). NOSTR-signed query via
+    // headers; server returns only folders whose contributor.txt npub
+    // matches the signing npub.
+    final mineEvent = _parseMinePath('/$urlPath');
+    if (mineEvent != null) {
+      final headers = <String, String>{};
+      request.headers.forEach((name, value) {
+        headers[name.toLowerCase()] = value;
+      });
+      final result = await _processMineQuery(
+        eventId: mineEvent,
+        method: request.method,
+        headers: headers,
+      );
+      return shelf.Response(
+        result.statusCode,
+        body: jsonEncode(result.body),
+        headers: const {'Content-Type': 'application/json'},
+      );
+    }
+
     final parsed = _parsePath('/$urlPath');
     if (parsed == null) return null;
 
@@ -313,6 +353,138 @@ mixin ContributorSubmitMixin {
     }
     return _SubmitPath(
         eventId: eventId, callsign: callsign, filename: filename);
+  }
+
+  /// Parse `/api/events/{id}/contributors/mine` → eventId, or null.
+  String? _parseMinePath(String path) {
+    if (!path.startsWith('/api/events/')) return null;
+    final trimmed = path.substring('/api/events/'.length);
+    final parts = trimmed.split('/');
+    if (parts.length != 3) return null;
+    if (parts[1] != 'contributors') return null;
+    if (parts[2] != 'mine') return null;
+    final eventId = Uri.decodeComponent(parts[0]);
+    if (eventId.isEmpty) return null;
+    return eventId;
+  }
+
+  /// Visitor-side "what did I submit?" query. Verifies a NOSTR-
+  /// signed kind-1 event passed in headers (X-Nostr-Npub /
+  /// -Signature / -Timestamp), then enumerates every contributor
+  /// folder for this event whose contributor.txt npub matches.
+  ///
+  /// Used by the public event page so a visitor reloading the
+  /// browser still sees what they previously submitted, even when
+  /// IndexedDB has been cleared or they're on a different machine.
+  /// Approved entries are also returned so the page can stop
+  /// showing "awaiting approval" rows that have since been approved.
+  Future<ContributorSubmitResult> _processMineQuery({
+    required String eventId,
+    required String method,
+    required Map<String, String> headers,
+  }) async {
+    if (method != 'GET') {
+      return ContributorSubmitResult(405, {'error': 'Method not allowed'});
+    }
+    final npub = headers['x-nostr-npub'] ?? '';
+    final signature = headers['x-nostr-signature'] ?? '';
+    final tsStr = headers['x-nostr-timestamp'] ?? '';
+    if (npub.isEmpty || signature.isEmpty || tsStr.isEmpty) {
+      return ContributorSubmitResult(401, {
+        'error': 'Missing NOSTR signature headers',
+      });
+    }
+    final createdAt = int.tryParse(tsStr);
+    if (createdAt == null) {
+      return ContributorSubmitResult(400, {'error': 'Invalid timestamp'});
+    }
+
+    // Verify a kind-1 event whose tags lock it to this event id +
+    // this query intent. Fixed `content` so the signing payload is
+    // deterministic.
+    try {
+      final pubkeyHex = NostrCrypto.decodeNpub(npub);
+      final ev = NostrEvent(
+        pubkey: pubkeyHex,
+        createdAt: createdAt,
+        kind: NostrEventKind.textNote,
+        tags: [
+          ['e', eventId],
+          ['kind', 'contributor_mine_query'],
+        ],
+        content: 'contributor_mine_query',
+      );
+      ev.calculateId();
+      ev.sig = signature;
+      if (!ev.verify()) {
+        return ContributorSubmitResult(403, {
+          'error': 'Signature verification failed',
+        });
+      }
+    } catch (_) {
+      return ContributorSubmitResult(403, {
+        'error': 'Signature verification failed',
+      });
+    }
+
+    final storage = contributorStorage;
+    final eventPath = await _resolveEventPath(storage, eventId);
+    if (eventPath == null) {
+      return ContributorSubmitResult(404, {'error': 'Event not found'});
+    }
+
+    Future<List<Map<String, dynamic>>> scan({
+      required Future<List<String>> Function() listCallsigns,
+      required String Function(String callsign) folderFor,
+      required String status,
+    }) async {
+      final callsigns = await listCallsigns();
+      final out = <Map<String, dynamic>>[];
+      for (final callsign in callsigns) {
+        final folder = folderFor(callsign);
+        final meta = await ContributorFolderUtils.readMeta(
+          folderPath: folder,
+          storage: storage,
+        );
+        if (meta?.npub != npub) continue; // not this visitor
+        final files = await ContributorFolderUtils.listMediaFiles(
+          folderPath: folder,
+          storage: storage,
+        );
+        if (files.isEmpty) continue;
+        out.add({
+          'callsign': callsign,
+          'status': status,
+          'files': files,
+          if (meta?.created.isNotEmpty == true) 'created': meta!.created,
+        });
+      }
+      return out;
+    }
+
+    final pending = await scan(
+      listCallsigns: () => ContributorFolderUtils.listPendingCallsigns(
+        eventPath: eventPath, storage: storage,
+      ),
+      folderFor: (c) =>
+          ContributorFolderUtils.pendingFolder(eventPath, c),
+      status: 'pending',
+    );
+    final approved = await scan(
+      listCallsigns: () => ContributorFolderUtils.listApprovedCallsigns(
+        eventPath: eventPath, storage: storage,
+      ),
+      folderFor: (c) =>
+          ContributorFolderUtils.approvedFolder(eventPath, c),
+      status: 'approved',
+    );
+
+    return ContributorSubmitResult(200, {
+      'success': true,
+      'event_id': eventId,
+      'npub': npub,
+      'submissions': [...pending, ...approved],
+    });
   }
 
   /// Locate the event folder relative to the storage root (e.g.
