@@ -679,38 +679,41 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
   /// approved (because the contributor is already approved) shows
   /// up immediately.
   Widget _buildContributeButton(ThemeData theme) {
+    // Vertical layout — title + help text get the full width on
+    // narrow screens (mobile, USB-AOA tethered Android) and the
+    // upload button sits underneath instead of squeezing the text.
     return Card(
       margin: EdgeInsets.zero,
       color: theme.colorScheme.primaryContainer.withOpacity(0.4),
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Icon(Icons.add_a_photo_outlined,
-                color: theme.colorScheme.onPrimaryContainer),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
+            Row(
+              children: [
+                Icon(Icons.add_a_photo_outlined,
+                    color: theme.colorScheme.onPrimaryContainer),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
                     _i18n.t('contribute_media'),
                     style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.bold,
                       color: theme.colorScheme.onPrimaryContainer,
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _i18n.t('contribute_media_help'),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onPrimaryContainer,
-                    ),
-                  ),
-                ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _i18n.t('contribute_media_help'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onPrimaryContainer,
               ),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(height: 12),
             FilledButton.tonalIcon(
               onPressed: _isUploading ? null : _pickAndSubmitContributions,
               icon: _isUploading
