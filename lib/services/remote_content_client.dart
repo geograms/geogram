@@ -38,6 +38,18 @@ class RemoteContentResponse {
       };
 }
 
+/// One item returned by [RemoteContent.listAcrossDevices], tagged
+/// with the device callsign that served it. Lets the UI dedupe
+/// (same item id served by mirrored devices) and attribute.
+class RemoteContentItem {
+  final String sourceCallsign;
+  final Map<String, dynamic> item;
+  const RemoteContentItem({
+    required this.sourceCallsign,
+    required this.item,
+  });
+}
+
 class RemoteContent {
   RemoteContent._();
 
@@ -84,6 +96,61 @@ class RemoteContent {
   }) =>
       '/api/content/${Uri.encodeComponent(appType)}/'
       '${Uri.encodeComponent(itemId)}/files/$relativePath';
+
+  /// Fan-out helper: ask every callsign in [callsigns] for its
+  /// `appType` items in parallel, return the merged + de-duplicated
+  /// list with each item tagged by the source callsign.
+  ///
+  /// Dedupe is by (callsign, item id) — a callsign mirroring its
+  /// own data across multiple physical devices still produces one
+  /// row per item per callsign. Items without an `id` field skip
+  /// dedupe and keep all copies (so non-keyed payloads aren\'t
+  /// silently dropped).
+  ///
+  /// Failures from individual devices are silently ignored — they
+  /// just contribute zero items. The caller can\'t distinguish "no
+  /// items" from "device offline" here; that\'s by design for the
+  /// aggregated view (a separate per-device call surfaces errors).
+  static Future<List<RemoteContentItem>> listAcrossDevices({
+    required Iterable<String> callsigns,
+    required String appType,
+    Map<String, String>? query,
+  }) async {
+    final results = await Future.wait(
+      callsigns.map((cs) async {
+        try {
+          final r = await list(
+            remoteCallsign: cs,
+            appType: appType,
+            query: query,
+          );
+          if (!r.success || r.data == null) return <RemoteContentItem>[];
+          final items = r.data!['items'];
+          if (items is! List) return <RemoteContentItem>[];
+          return items
+              .whereType<Map<String, dynamic>>()
+              .map((m) => RemoteContentItem(sourceCallsign: cs, item: m))
+              .toList();
+        } catch (_) {
+          return <RemoteContentItem>[];
+        }
+      }),
+      eagerError: false,
+    );
+    final out = <RemoteContentItem>[];
+    final seen = <String>{};
+    for (final batch in results) {
+      for (final r in batch) {
+        final id = r.item['id'];
+        if (id is String && id.isNotEmpty) {
+          final dedupKey = '${r.sourceCallsign}|$id';
+          if (!seen.add(dedupKey)) continue;
+        }
+        out.add(r);
+      }
+    }
+    return out;
+  }
 
   // ──────────────────────────────────────────────────────────────
 

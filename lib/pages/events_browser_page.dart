@@ -12,17 +12,20 @@ import '../models/event.dart';
 import '../models/event_link.dart';
 import '../models/event_registration.dart';
 import '../services/app_service.dart';
+import '../services/devices_service.dart';
 import '../services/event_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/remote_content_client.dart';
 import '../util/event_activity_notifier.dart';
 import '../widgets/event_tile_widget.dart';
 import '../widgets/event_detail_widget.dart';
 import '../widgets/file_folder_picker.dart';
 import 'event_detail_page.dart';
 import 'new_event_page.dart';
+import 'remote_events_browser_page.dart' show RemoteEventDetailPage;
 import '../dialogs/new_update_dialog.dart';
 
 /// Events browser page with 2-panel layout
@@ -70,9 +73,15 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   // icon next to the search bar shows the OPPOSITE mode so the user
   // sees what they\'re about to switch to — globe to switch to
   // "events from everyone else", person to switch back to "mine".
-  // Filter wiring lands in a later iteration; the toggle right now
-  // just flips this flag and the icon.
   bool _showMineOnly = true;
+
+  // Events fetched from every reachable device when the user
+  // switches to the global scope. Lazy-loaded on first toggle and
+  // refreshed on demand. Kept separate from _allEvents so flipping
+  // back to "mine" is instant — no need to re-scan local storage.
+  List<Event> _remoteEvents = const [];
+  bool _isLoadingRemote = false;
+  bool _remoteLoadedOnce = false;
 
   @override
   void initState() {
@@ -292,17 +301,13 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     }
 
     setState(() {
-      // Scope filter first: "mine" keeps only events I authored;
-      // "global" keeps only events from anyone else. _allEvents is
-      // currently the local store (events on this device); discovery
-      // of remote events lands in a follow-up, so the global view
-      // shows an empty list for now.
-      Iterable<Event> scoped = _allEvents;
-      if (_showMineOnly) {
-        scoped = scoped.where(isMine);
-      } else {
-        scoped = scoped.where((e) => !isMine(e));
-      }
+      // Scope picks which source list to draw from:
+      // - mine   → local events filtered to "authored by me"
+      // - global → events fetched from every reachable device,
+      //            already filtered to "not me" at fetch time
+      Iterable<Event> scoped = _showMineOnly
+          ? _allEvents.where(isMine)
+          : _remoteEvents;
       if (query.isEmpty) {
         _filteredEvents = scoped.toList();
       } else {
@@ -316,7 +321,101 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     });
   }
 
+  /// Fan out an /api/content/events query to every device the local
+  /// app knows about (via DevicesService), drop anything authored by
+  /// the local user, then dedupe by author npub + event id so a
+  /// callsign mirrored across two devices doesn\'t show twice.
+  ///
+  /// Uses the shared RemoteContent.listAcrossDevices helper — same
+  /// universal surface that drives the remote-device browse pages,
+  /// so a new app type just needs its own list call.
+  Future<void> _loadGlobalEvents() async {
+    if (_isLoadingRemote) return;
+    setState(() => _isLoadingRemote = true);
+    try {
+      final myCallsign = _currentCallsign?.toUpperCase();
+      final myNpub = _currentUserNpub;
+      final callsigns = DevicesService()
+          .getAllDevices()
+          .map((d) => d.callsign.toUpperCase())
+          .where((cs) => cs.isNotEmpty && cs != myCallsign)
+          .toSet();
+      if (callsigns.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _remoteEvents = const [];
+          _remoteLoadedOnce = true;
+          _isLoadingRemote = false;
+        });
+        _filterEvents();
+        return;
+      }
+      final items = await RemoteContent.listAcrossDevices(
+        callsigns: callsigns,
+        appType: 'events',
+      );
+      final out = <Event>[];
+      final dedup = <String>{};
+      for (final entry in items) {
+        try {
+          final raw = Event.fromApiJson(entry.item);
+          // Skip events authored by us (a mirror of our own data
+          // sitting on someone else\'s device).
+          if (myNpub != null && myNpub.isNotEmpty && raw.npub == myNpub) {
+            continue;
+          }
+          if (myCallsign != null &&
+              myCallsign.isNotEmpty &&
+              raw.author.toUpperCase() == myCallsign) {
+            continue;
+          }
+          // Tag the event with the device callsign that served it so
+          // the tap handler can open the remote detail page.
+          final ev = raw.copyWith(metadata: {
+            ...raw.metadata,
+            'source_callsign': entry.sourceCallsign,
+          });
+          // Author npub + event id is the strongest dedupe key —
+          // catches the same event served by multiple mirrors of
+          // the same user.
+          final key = '${ev.npub ?? ev.author}|${ev.id}';
+          if (!dedup.add(key)) continue;
+          out.add(ev);
+        } catch (_) {}
+      }
+      out.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+      if (!mounted) return;
+      setState(() {
+        _remoteEvents = out;
+        _remoteLoadedOnce = true;
+        _isLoadingRemote = false;
+      });
+      _filterEvents();
+    } catch (e) {
+      LogService().log('EventsBrowserPage: remote load failed: $e');
+      if (!mounted) return;
+      setState(() => _isLoadingRemote = false);
+    }
+  }
+
   Future<void> _selectEvent(Event event) async {
+    // Remote events (fetched from another device's /api/content)
+    // carry the source callsign in metadata. Open them in the
+    // already-existing remote detail page rather than trying to
+    // load them from local storage.
+    final sourceCallsign = event.metadata['source_callsign'];
+    if (sourceCallsign != null && sourceCallsign.isNotEmpty) {
+      final device = DevicesService().getDevice(sourceCallsign);
+      if (device != null && mounted) {
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => RemoteEventDetailPage(
+            device: device,
+            eventId: event.id,
+          ),
+        ));
+      }
+      return;
+    }
     // Load full event with all features
     final fullEvent = await _eventService.loadEvent(event.id);
     setState(() {
@@ -935,9 +1034,18 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
                       ? (_i18n.t('events_show_global') ??
                           'Show events from everyone')
                       : (_i18n.t('events_show_mine') ?? 'Show my events'),
-                  icon: Icon(_showMineOnly ? Icons.public : Icons.person),
+                  icon: _isLoadingRemote
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(_showMineOnly ? Icons.public : Icons.person),
                   onPressed: () {
                     setState(() => _showMineOnly = !_showMineOnly);
+                    if (!_showMineOnly && !_remoteLoadedOnce) {
+                      _loadGlobalEvents();
+                    }
                     _filterEvents();
                   },
                 ),

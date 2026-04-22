@@ -276,19 +276,26 @@ class _RemoteEventsBrowserPageState extends State<RemoteEventsBrowserPage> {
 
 // ─────────────────── detail page ───────────────────
 
-class _RemoteEventDetailPage extends StatefulWidget {
+/// Public route to a single remote event's detail page. Lets callers
+/// outside this file (e.g. the global-scope events list) jump
+/// straight to one event without going through the listing page.
+class RemoteEventDetailPage extends StatefulWidget {
   final RemoteDevice device;
   final String eventId;
 
-  const _RemoteEventDetailPage({
+  const RemoteEventDetailPage({
+    super.key,
     required this.device,
     required this.eventId,
   });
 
   @override
-  State<_RemoteEventDetailPage> createState() =>
-      _RemoteEventDetailPageState();
+  State<RemoteEventDetailPage> createState() => _RemoteEventDetailPageState();
 }
+
+// Internal alias kept for the in-file Navigator pushes that already
+// reference the old private name.
+typedef _RemoteEventDetailPage = RemoteEventDetailPage;
 
 class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
   final I18nService _i18n = I18nService();
