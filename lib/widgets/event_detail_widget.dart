@@ -1992,10 +1992,30 @@ class _ApprovedContributorsSectionState
       '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
       '.mp4', '.mov', '.webm', '.mkv', '.avi', '.wmv', '.flv',
     };
+    final authorNpub = widget.event.npub ?? '';
     await for (final entry in root.list()) {
       if (entry is! io.Directory) continue;
       final name = entry.path.split(io.Platform.pathSeparator).last;
       if (name == '_pending' || name.startsWith('.')) continue;
+      // Skip contributor folders belonging to the event author —
+      // their photos appear in the main gallery already.
+      if (authorNpub.isNotEmpty) {
+        final metaFile = io.File(
+            '${entry.path}${io.Platform.pathSeparator}contributor.txt');
+        if (await metaFile.exists()) {
+          try {
+            final raw = await metaFile.readAsString();
+            String? folderNpub;
+            for (final line in raw.split('\n')) {
+              if (line.startsWith('--> npub: ')) {
+                folderNpub = line.substring(10).trim();
+                break;
+              }
+            }
+            if (folderNpub == authorNpub) continue;
+          } catch (_) {}
+        }
+      }
       final files = <String>[];
       await for (final f in entry.list()) {
         if (f is! io.File) continue;
@@ -2038,49 +2058,11 @@ class _ApprovedContributorsSectionState
                       ?.copyWith(fontWeight: FontWeight.bold),
                 ),
               ),
-              SizedBox(
-                height: 120,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: c.files.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 8),
-                  itemBuilder: (_, i) {
-                    final filePath = '${c.folderPath}/${c.files[i]}';
-                    return InkWell(
-                      borderRadius: BorderRadius.circular(8),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => PhotoViewerPage(
-                            imagePaths: c.files
-                                .map((f) => '${c.folderPath}/$f')
-                                .toList(),
-                            initialIndex: i,
-                          ),
-                        ),
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: SizedBox(
-                          width: 160,
-                          height: 120,
-                          child: Image.file(
-                            io.File(filePath),
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
-                              color: theme.colorScheme.surfaceContainerHighest,
-                              alignment: Alignment.center,
-                              child: Icon(
-                                Icons.broken_image_outlined,
-                                color: theme.colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
+              // One-image-at-a-time swipe carousel (vs. the main
+              // gallery\'s strip) so a contributor with hundreds of
+              // photos doesn\'t flood the page. Tap to open the
+              // full-screen viewer.
+              _ContributorCarousel(folder: c),
               const SizedBox(height: 16),
             ],
           ],
@@ -2099,4 +2081,112 @@ class _ContribFolder {
     required this.folderPath,
     required this.files,
   });
+}
+
+/// Swipeable single-image carousel for one contributor. Keeps the
+/// page tidy when a contributor has dropped dozens or hundreds of
+/// photos — only one is on screen at a time. Tap to open the
+/// full-resolution viewer with all of them.
+class _ContributorCarousel extends StatefulWidget {
+  final _ContribFolder folder;
+  const _ContributorCarousel({required this.folder});
+
+  @override
+  State<_ContributorCarousel> createState() => _ContributorCarouselState();
+}
+
+class _ContributorCarouselState extends State<_ContributorCarousel> {
+  final PageController _controller = PageController();
+  int _index = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _open(int i) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => PhotoViewerPage(
+        imagePaths: widget.folder.files
+            .map((f) => '${widget.folder.folderPath}/$f')
+            .toList(),
+        initialIndex: i,
+      ),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final files = widget.folder.files;
+    return Column(
+      children: [
+        AspectRatio(
+          aspectRatio: 16 / 10,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: PageView.builder(
+              controller: _controller,
+              itemCount: files.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (_, i) {
+                final filePath = '${widget.folder.folderPath}/${files[i]}';
+                return GestureDetector(
+                  onTap: () => _open(i),
+                  child: Image.file(
+                    io.File(filePath),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      alignment: Alignment.center,
+                      child: Icon(
+                        Icons.broken_image_outlined,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        if (files.length > 1)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 20,
+                  onPressed: _index > 0
+                      ? () => _controller.previousPage(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeOut)
+                      : null,
+                  icon: const Icon(Icons.chevron_left),
+                ),
+                Text(
+                  '${_index + 1} / ${files.length}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 20,
+                  onPressed: _index < files.length - 1
+                      ? () => _controller.nextPage(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeOut)
+                      : null,
+                  icon: const Icon(Icons.chevron_right),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
 }

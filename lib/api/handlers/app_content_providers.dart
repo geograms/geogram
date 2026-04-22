@@ -202,9 +202,14 @@ class EventContentProvider extends AppContentProvider {
       data['access_request_required'] = false;
       // Approved visitor contributions (docs/apps/events-format-
       // specification.md §Contributors). Pending submissions stay
-      // quarantined in `_pending/` and never appear publicly.
-      data['contributors'] =
-          await _scanApprovedContributors(storage, entry.eventPath);
+      // quarantined in `_pending/` and never appear publicly. The
+      // event author themselves is filtered out — their photos
+      // already appear in the main gallery; surfacing them again
+      // under "Contributed by" would double-list them.
+      data['contributors'] = await _scanApprovedContributors(
+        storage, entry.eventPath,
+        excludeNpub: entry.event.npub,
+      );
     }
 
     final counts = await _engagementCounts(storage, entry.eventPath);
@@ -215,7 +220,8 @@ class EventContentProvider extends AppContentProvider {
   }
 
   Future<List<Map<String, dynamic>>> _scanApprovedContributors(
-      ProfileStorage storage, String eventPath) async {
+      ProfileStorage storage, String eventPath,
+      {String? excludeNpub}) async {
     final out = <Map<String, dynamic>>[];
     final callsigns = await ContributorFolderUtils.listApprovedCallsigns(
       eventPath: eventPath,
@@ -233,6 +239,13 @@ class EventContentProvider extends AppContentProvider {
         folderPath: folder,
         storage: storage,
       );
+      // Skip the event author so their photos don\'t appear twice
+      // (already in the main gallery above).
+      if (excludeNpub != null &&
+          excludeNpub.isNotEmpty &&
+          meta?.npub == excludeNpub) {
+        continue;
+      }
       out.add({
         'callsign': callsign,
         'files': files,

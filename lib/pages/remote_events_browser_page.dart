@@ -687,31 +687,18 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
                   ?.copyWith(fontWeight: FontWeight.bold),
             ),
           ),
-          SizedBox(
-            height: 120,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: files.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (_, i) => InkWell(
-                onTap: () => _openLightbox(
-                  files
-                      .map((name) => 'contributors/$callsign/$name')
-                      .toList(),
-                  i,
-                ),
-                borderRadius: BorderRadius.circular(12),
-                child: RemoteContentImage(
-                  remoteCallsign: widget.device.callsign,
-                  appType: 'events',
-                  itemId: widget.eventId,
-                  relativePath: 'contributors/$callsign/${files[i]}',
-                  width: 160,
-                  height: 120,
-                  fit: BoxFit.cover,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
+          // Single-image swipe carousel — caps the page real estate
+          // a contributor with hundreds of photos can take, while
+          // still letting the visitor flip through them all before
+          // opening the full-screen lightbox.
+          _RemoteContributorCarousel(
+            remoteCallsign: widget.device.callsign,
+            eventId: widget.eventId,
+            contributorCallsign: callsign,
+            files: files,
+            onOpen: (i) => _openLightbox(
+              files.map((n) => 'contributors/$callsign/$n').toList(),
+              i,
             ),
           ),
         ],
@@ -1235,6 +1222,109 @@ class _LightboxPageState extends State<_LightboxPage> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Single-image swipe carousel for one remote contributor's photos.
+/// Mirrors _ContributorCarousel in event_detail_widget.dart but
+/// fetches bytes via RemoteContentImage so it works through every
+/// transport ConnectionManager supports.
+class _RemoteContributorCarousel extends StatefulWidget {
+  final String remoteCallsign;
+  final String eventId;
+  final String contributorCallsign;
+  final List<String> files;
+  final void Function(int index) onOpen;
+
+  const _RemoteContributorCarousel({
+    required this.remoteCallsign,
+    required this.eventId,
+    required this.contributorCallsign,
+    required this.files,
+    required this.onOpen,
+  });
+
+  @override
+  State<_RemoteContributorCarousel> createState() =>
+      _RemoteContributorCarouselState();
+}
+
+class _RemoteContributorCarouselState
+    extends State<_RemoteContributorCarousel> {
+  final PageController _controller = PageController();
+  int _index = 0;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final files = widget.files;
+    return Column(
+      children: [
+        AspectRatio(
+          aspectRatio: 16 / 10,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: PageView.builder(
+              controller: _controller,
+              itemCount: files.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (_, i) => GestureDetector(
+                onTap: () => widget.onOpen(i),
+                child: RemoteContentImage(
+                  remoteCallsign: widget.remoteCallsign,
+                  appType: 'events',
+                  itemId: widget.eventId,
+                  relativePath:
+                      'contributors/${widget.contributorCallsign}/${files[i]}',
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (files.length > 1)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 20,
+                  onPressed: _index > 0
+                      ? () => _controller.previousPage(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeOut)
+                      : null,
+                  icon: const Icon(Icons.chevron_left),
+                ),
+                Text(
+                  '${_index + 1} / ${files.length}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                IconButton(
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 20,
+                  onPressed: _index < files.length - 1
+                      ? () => _controller.nextPage(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeOut)
+                      : null,
+                  icon: const Icon(Icons.chevron_right),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

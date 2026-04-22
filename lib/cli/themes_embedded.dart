@@ -1406,28 +1406,29 @@ class ThemesEmbedded {
     }
 
     // --- Contributed by (visitor submissions, approved) ---
-    // Renders one block per contributor with their thumbnail strip.
+    // One swipe-carousel per contributor (one image at a time, with
+    // counter + prev/next) so a contributor with hundreds of photos
+    // doesn\'t flood the page. CSS scroll-snap drives the swipe;
+    // narrow JS keeps the counter and arrow-button state in sync.
     // Files live at `contributors/{CALLSIGN}/<file>` inside the
     // event folder so fileUrl()/thumbUrl() work without changes.
     var contributors = (ev.contributors && ev.contributors.length > 0)
                        ? ev.contributors : [];
     if (contributors.length > 0) {
-      contributors.forEach(function(c) {
+      contributors.forEach(function(c, ci) {
         if (!c || !c.callsign || !c.files || c.files.length === 0) return;
+        var sliderId = 'contrib-slider-' + ci;
         html += '<div class="event-section event-contributor">';
         html += '<h3 class="event-contributor-title">Contributed by ' + esc(c.callsign) + '</h3>';
         if (c.description) {
           html += '<p class="event-contributor-desc">' + esc(c.description) + '</p>';
         }
-        html += '<div class="event-gallery">';
+        html += '<div class="contrib-slider" id="' + sliderId + '">';
         c.files.forEach(function(f, i) {
           var rel = 'contributors/' + c.callsign + '/' + f;
-          // Track the per-contributor index in a data-attribute so
-          // openLightbox can include these in the same lightbox
-          // sequence after the main photos.
           var lbIdx = (lbImagesAccum.length);
           lbImagesAccum.push(rel);
-          html += '<div class="event-gallery-item" onclick="openLightbox(' + lbIdx + ')">' +
+          html += '<div class="contrib-slide" onclick="openLightbox(' + lbIdx + ')">' +
             '<img src="' + thumbUrl(rel) + '" ' +
               'data-full="' + fileUrl(rel) + '" ' +
               'data-thumb="' + thumbUrl(rel) + '" ' +
@@ -1436,7 +1437,15 @@ class ThemesEmbedded {
               'onerror="retryGalleryImg(this)">' +
           '</div>';
         });
-        html += '</div></div>';
+        html += '</div>';
+        if (c.files.length > 1) {
+          html += '<div class="contrib-controls">' +
+            '<button class="contrib-nav" data-slider="' + sliderId + '" data-dir="-1" type="button">‹</button>' +
+            '<span class="contrib-counter" data-slider="' + sliderId + '">1 / ' + c.files.length + '</span>' +
+            '<button class="contrib-nav" data-slider="' + sliderId + '" data-dir="1" type="button">›</button>' +
+          '</div>';
+        }
+        html += '</div>';
       });
     }
 
@@ -1597,6 +1606,43 @@ class ThemesEmbedded {
     }
 
     detailEl.innerHTML = html;
+
+    // ── Contributor sliders: counter + arrow buttons ───────────────
+    // Each .contrib-slider is a CSS scroll-snap container, one
+    // image per page. We wire prev/next buttons and update the
+    // "i / N" counter on scroll. Scroll-snap handles the swipe
+    // gesture natively on touch devices.
+    Array.from(document.querySelectorAll('.contrib-slider')).forEach(function(slider) {
+      var counter = document.querySelector(
+        '.contrib-counter[data-slider="' + slider.id + '"]'
+      );
+      var navs = Array.from(document.querySelectorAll(
+        '.contrib-nav[data-slider="' + slider.id + '"]'
+      ));
+      var slides = slider.children;
+      function refresh() {
+        if (!slides.length) return;
+        var w = slider.clientWidth || 1;
+        var idx = Math.round(slider.scrollLeft / w);
+        if (idx < 0) idx = 0;
+        if (idx > slides.length - 1) idx = slides.length - 1;
+        if (counter) counter.textContent = (idx + 1) + ' / ' + slides.length;
+        navs.forEach(function(b) {
+          var dir = parseInt(b.getAttribute('data-dir'), 10);
+          var disabled = (dir < 0 && idx === 0) ||
+                         (dir > 0 && idx === slides.length - 1);
+          b.disabled = disabled;
+        });
+      }
+      slider.addEventListener('scroll', refresh, { passive: true });
+      navs.forEach(function(b) {
+        b.addEventListener('click', function() {
+          var dir = parseInt(b.getAttribute('data-dir'), 10);
+          slider.scrollBy({ left: dir * slider.clientWidth, behavior: 'smooth' });
+        });
+      });
+      refresh();
+    });
 
     // === Lightbox ===
     // lbImagesAccum was populated above (event photos first, then
@@ -3712,6 +3758,72 @@ class ThemesEmbedded {
   margin: 0 0 8px 0;
   font-size: 0.9rem;
   opacity: 0.75;
+}
+
+/* One-image-at-a-time swipe carousel (used per contributor only —
+   the main author gallery keeps its grid layout). CSS scroll-snap
+   gives native touch swipe on mobile; the JS-wired buttons cover
+   desktop without a mouse-drag gesture. */
+.contrib-slider {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  border-radius: 8px;
+}
+.contrib-slider::-webkit-scrollbar { display: none; }
+
+.contrib-slide {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  cursor: zoom-in;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.contrib-slide img {
+  display: block;
+  width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+}
+
+.contrib-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.contrib-counter {
+  min-width: 60px;
+  text-align: center;
+}
+
+.contrib-nav {
+  background: transparent;
+  color: var(--color);
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.contrib-nav:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.contrib-nav:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }
 
 /* Contribute media CTA */

@@ -2266,6 +2266,7 @@ class LogApiService
               storage: cstorage,
             );
             final out = <Map<String, dynamic>>[];
+            final authorNpub = event.npub ?? '';
             for (final cs in callsigns) {
               final folder = ContributorFolderUtils.approvedFolder(
                   eventRel, cs);
@@ -2278,6 +2279,12 @@ class LogApiService
                 folderPath: folder,
                 storage: cstorage,
               );
+              // Skip the author — their photos already render in
+              // the main gallery; surfacing them under
+              // "Contributed by" would double-list them.
+              if (authorNpub.isNotEmpty && meta?.npub == authorNpub) {
+                continue;
+              }
               out.add({
                 'callsign': cs,
                 'files': files,
