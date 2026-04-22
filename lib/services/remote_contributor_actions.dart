@@ -48,6 +48,19 @@ class RemoteContributorSubmitResult {
   });
 }
 
+/// One file the visitor has submitted to the event, as reported by
+/// the device's signed `/api/events/{id}/contributors/mine` endpoint.
+class RemoteMineSubmission {
+  final String callsign;
+  final String filename;
+  final String status; // 'pending' or 'approved'
+  const RemoteMineSubmission({
+    required this.callsign,
+    required this.filename,
+    required this.status,
+  });
+}
+
 class RemoteContributorActions {
   RemoteContributorActions._();
 
@@ -147,4 +160,125 @@ class RemoteContributorActions {
       );
     }
   }
+
+  /// Sign a contributor_mine_query event and ask the remote device
+  /// which submissions belong to the local profile's npub on this
+  /// event. Used by the remote event detail page so the visitor sees
+  /// their pending uploads even after closing/reopening the app.
+  /// Returns an empty list on any failure (no NOSTR identity, server
+  /// rejection, transport unavailable).
+  static Future<List<RemoteMineSubmission>> fetchMine({
+    required String remoteCallsign,
+    required String eventId,
+  }) async {
+    final token = _signMineQuery(eventId);
+    if (token == null) return const [];
+    try {
+      final resp = await DevicesService().makeDeviceApiRequest(
+        callsign: remoteCallsign,
+        method: 'GET',
+        path: '/api/events/${Uri.encodeComponent(eventId)}/contributors/mine',
+        headers: {
+          'X-Nostr-Npub': token.npub,
+          'X-Nostr-Signature': token.signature,
+          'X-Nostr-Timestamp': token.createdAt.toString(),
+        },
+      );
+      if (resp == null || resp.statusCode != 200) return const [];
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      final list = body['submissions'] as List<dynamic>? ?? const [];
+      final out = <RemoteMineSubmission>[];
+      for (final entry in list.whereType<Map<String, dynamic>>()) {
+        final callsign = entry['callsign'] as String? ?? '';
+        final status = entry['status'] as String? ?? '';
+        final files = (entry['files'] as List<dynamic>?) ?? const [];
+        for (final f in files) {
+          if (f is String && f.isNotEmpty) {
+            out.add(RemoteMineSubmission(
+              callsign: callsign,
+              filename: f,
+              status: status,
+            ));
+          }
+        }
+      }
+      return out;
+    } catch (e) {
+      LogService().log('RemoteContributorActions.fetchMine: $e');
+      return const [];
+    }
+  }
+
+  /// Signed thumbnail fetch (~480 px JPEG) for a submission belonging
+  /// to the local profile's npub. The browser side caches results in
+  /// IndexedDB; on Flutter the caller is expected to keep the bytes
+  /// in widget state for the session.
+  static Future<Uint8List?> fetchMineThumbnail({
+    required String remoteCallsign,
+    required String eventId,
+    required String filename,
+  }) async {
+    final token = _signMineQuery(eventId);
+    if (token == null) return null;
+    try {
+      final resp = await DevicesService().makeDeviceApiRequestBytes(
+        callsign: remoteCallsign,
+        method: 'GET',
+        path: '/api/events/${Uri.encodeComponent(eventId)}'
+            '/contributors/mine/files/${Uri.encodeComponent(filename)}'
+            '?thumb=1',
+        headers: {
+          'X-Nostr-Npub': token.npub,
+          'X-Nostr-Signature': token.signature,
+          'X-Nostr-Timestamp': token.createdAt.toString(),
+        },
+      );
+      if (resp == null || resp.statusCode != 200) return null;
+      return resp.bytes;
+    } catch (e) {
+      LogService().log('RemoteContributorActions.fetchMineThumbnail: $e');
+      return null;
+    }
+  }
+
+  /// Build + sign the contributor_mine_query event used by both
+  /// `fetchMine` and `fetchMineThumbnail`. Same shape the public web
+  /// page uses so server verification is identical.
+  static _MineToken? _signMineQuery(String eventId) {
+    final profile = ProfileService().getProfile();
+    final nsec = profile.nsec;
+    final npub = profile.npub;
+    if (nsec.isEmpty || npub.isEmpty) return null;
+    try {
+      final pubkeyHex = NostrCrypto.decodeNpub(npub);
+      final createdAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final ev = NostrEvent(
+        pubkey: pubkeyHex,
+        createdAt: createdAt,
+        kind: NostrEventKind.textNote,
+        tags: [
+          ['e', eventId],
+          ['kind', 'contributor_mine_query'],
+        ],
+        content: 'contributor_mine_query',
+      );
+      ev.calculateId();
+      final sig = ev.signWithNsec(nsec);
+      return _MineToken(
+          npub: npub, signature: sig, createdAt: createdAt);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+class _MineToken {
+  final String npub;
+  final String signature;
+  final int createdAt;
+  _MineToken({
+    required this.npub,
+    required this.signature,
+    required this.createdAt,
+  });
 }

@@ -11,6 +11,7 @@
  */
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as path;
@@ -301,6 +302,19 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
   bool _isUploading = false;
   String? _error;
 
+  // Visitor's own submissions on this event (pending + approved),
+  // fetched from the device via the signed /contributors/mine
+  // endpoint so the user sees what they\'ve sent across sessions /
+  // browsers / devices, not just what's local to this app install.
+  // Approved entries also live in `_event['contributors']` and are
+  // shown in the main "Contributed by" gallery — we still keep them
+  // here so any pending → approved transition is observable.
+  List<RemoteMineSubmission> _mySubmissions = const [];
+  // In-memory thumbnail cache: filename → JPEG bytes. One round-trip
+  // per file per session; never persisted (mobile RAM > disk for
+  // ephemeral previews).
+  final Map<String, Uint8List> _mineThumbs = {};
+
   @override
   void initState() {
     super.initState();
@@ -338,6 +352,7 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
         _isLoading = false;
       });
       _recordView();
+      _loadMySubmissions();
     } catch (e) {
       LogService().log('RemoteEventDetail: load error: $e');
       if (!mounted) return;
@@ -345,6 +360,37 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
         _error = e.toString();
         _isLoading = false;
       });
+    }
+  }
+
+  /// Ask the device which submissions belong to the local profile,
+  /// then warm the in-memory thumbnail cache for any new pending
+  /// entry. Drops cache entries for filenames the server no longer
+  /// reports (rejected by the author) so memory doesn\'t leak across
+  /// repeated reloads.
+  Future<void> _loadMySubmissions() async {
+    final mine = await RemoteContributorActions.fetchMine(
+      remoteCallsign: widget.device.callsign,
+      eventId: widget.eventId,
+    );
+    if (!mounted) return;
+    setState(() => _mySubmissions = mine);
+
+    final keep = mine.map((m) => m.filename).toSet();
+    _mineThumbs.removeWhere((name, _) => !keep.contains(name));
+
+    for (final m in mine) {
+      if (m.status != 'pending') continue;
+      if (_mineThumbs.containsKey(m.filename)) continue;
+      final bytes = await RemoteContributorActions.fetchMineThumbnail(
+        remoteCallsign: widget.device.callsign,
+        eventId: widget.eventId,
+        filename: m.filename,
+      );
+      if (!mounted) return;
+      if (bytes != null) {
+        setState(() => _mineThumbs[m.filename] = bytes);
+      }
     }
   }
 
@@ -505,6 +551,7 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
           const SizedBox(height: 16),
           _buildContributorsSection(theme, ev),
           const SizedBox(height: 12),
+          _buildMySubmissionsSection(theme),
           _buildContributeButton(theme),
         ],
         const SizedBox(height: 16),
@@ -678,6 +725,113 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
   /// success we refresh the event detail so anything that landed in
   /// approved (because the contributor is already approved) shows
   /// up immediately.
+  /// "Your submissions" section — pending entries get a thumbnail
+  /// row each so the visitor can see which photo is awaiting
+  /// approval. Approved entries already appear in the main
+  /// "Contributed by" gallery so we omit them here to avoid a
+  /// duplicate display. Hidden entirely when the visitor has no
+  /// pending entries on this event.
+  Widget _buildMySubmissionsSection(ThemeData theme) {
+    final pending = _mySubmissions
+        .where((m) => m.status == 'pending')
+        .toList(growable: false);
+    if (pending.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.hourglass_top_outlined,
+                      color: theme.colorScheme.primary, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    _i18n.t('your_submissions') ?? 'Your submissions',
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '(${pending.length})',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _i18n.t('your_submissions_help') ??
+                    'Waiting for the event author to approve. They will appear in the gallery once approved.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ...pending.map((m) => Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: SizedBox(
+                            width: 56,
+                            height: 56,
+                            child: _mineThumbs[m.filename] != null
+                                ? Image.memory(
+                                    _mineThumbs[m.filename]!,
+                                    fit: BoxFit.cover,
+                                  )
+                                : Container(
+                                    color: theme.colorScheme
+                                        .surfaceContainerHighest,
+                                    alignment: Alignment.center,
+                                    child: const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    ),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                m.filename,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodyMedium,
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                _i18n.t('submission_pending') ??
+                                    'Awaiting approval',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildContributeButton(ThemeData theme) {
     // Vertical layout — title + help text get the full width on
     // narrow screens (mobile, USB-AOA tethered Android) and the
