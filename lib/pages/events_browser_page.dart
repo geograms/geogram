@@ -20,6 +20,7 @@ import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../services/remote_content_client.dart';
+import '../services/remote_event_cache.dart';
 import '../util/event_activity_notifier.dart';
 import '../widgets/event_tile_widget.dart';
 import '../widgets/event_detail_widget.dart';
@@ -405,10 +406,65 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
         _isLoadingRemote = false;
       });
       _filterEvents();
+      // Fire-and-forget cache warmup so re-opening the same events
+      // is fast next time (and works at all when the device drops
+      // off the network). Doesn\'t block the UI.
+      _warmupRemoteEventCache(out);
     } catch (e) {
       LogService().log('EventsBrowserPage: remote load failed: $e');
       if (!mounted) return;
       setState(() => _isLoadingRemote = false);
+    }
+  }
+
+  /// Persist event.txt + the primary flyer thumbnail for each remote
+  /// event under {baseDir}/devices/{author}/events/{year}/{id}/.
+  /// Comments / likes are intentionally skipped — they change too
+  /// often and are cheap to refetch.
+  Future<void> _warmupRemoteEventCache(List<Event> events) async {
+    for (final ev in events) {
+      final source = ev.metadata['source_callsign'];
+      if (source == null || source.isEmpty) continue;
+      try {
+        // 1. event.txt — uses Event.exportAsText so the on-disk
+        //    format matches what the local EventService writes.
+        await RemoteEventCache.writeEvent(
+          authorCallsign: source,
+          event: ev,
+        );
+        // 2. Primary flyer thumbnail (~50 KB), only when the author
+        //    has chosen one. Other photos cache lazily as the user
+        //    opens them via the lightbox.
+        final flyer = ev.flyer;
+        if (flyer != null && flyer.isNotEmpty) {
+          // Skip if we already have the bytes on disk.
+          final existing = await RemoteEventCache.readFile(
+            authorCallsign: source,
+            eventId: ev.id,
+            relativePath: flyer,
+          );
+          if (existing != null) continue;
+          final resp = await DevicesService().makeDeviceApiRequestBytes(
+            callsign: source,
+            method: 'GET',
+            path: '${RemoteContent.filePath(
+              appType: 'events',
+              itemId: ev.id,
+              relativePath: flyer,
+            )}?thumb=1',
+          );
+          if (resp != null && resp.statusCode == 200) {
+            await RemoteEventCache.writeFile(
+              authorCallsign: source,
+              eventId: ev.id,
+              relativePath: flyer,
+              bytes: resp.bytes,
+            );
+          }
+        }
+      } catch (_) {
+        // Cache warmup is best-effort; never poison the live load.
+      }
     }
   }
 

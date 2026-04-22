@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 
 import '../services/devices_service.dart';
 import '../services/remote_content_client.dart';
+import '../services/remote_event_cache.dart';
 
 /// Tiny in-memory LRU of image bytes keyed by the full request URL
 /// (callsign + app + item + path + thumb flag). Lets the lightbox
@@ -146,6 +147,25 @@ class RemoteContentImage extends StatefulWidget {
     if (cached != null) return cached;
     final existing = _RemoteImageCache.inFlight(key);
     if (existing != null) return existing;
+
+    // Disk cache for events: thumbnails and full-res photos belong
+    // to the author's events folder under {baseDir}/devices/.
+    // Thumbnails get a `.thumb` suffix so they coexist with the
+    // full-res original of the same filename in the cache.
+    final cacheable = appType == 'events';
+    final cachePath =
+        thumbnail ? '$relativePath.thumb' : relativePath;
+    if (cacheable) {
+      final disk = await RemoteEventCache.readFile(
+        authorCallsign: remoteCallsign,
+        eventId: itemId,
+        relativePath: cachePath,
+      );
+      if (disk != null) {
+        _RemoteImageCache.put(key, disk);
+        return disk;
+      }
+    }
     try {
       var path = RemoteContent.filePath(
         appType: appType,
@@ -160,6 +180,17 @@ class RemoteContentImage extends StatefulWidget {
       );
       if (resp == null || resp.statusCode != 200) return null;
       _RemoteImageCache.put(key, resp.bytes);
+      if (cacheable) {
+        // Best-effort disk write, fire-and-forget — never blocks
+        // the image from rendering.
+        // ignore: discarded_futures
+        RemoteEventCache.writeFile(
+          authorCallsign: remoteCallsign,
+          eventId: itemId,
+          relativePath: cachePath,
+          bytes: resp.bytes,
+        );
+      }
       return resp.bytes;
     } catch (_) {
       return null;
