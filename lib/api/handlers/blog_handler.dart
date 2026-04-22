@@ -158,6 +158,29 @@ class BlogHandler {
 
       _log('INFO', 'Post details: found ${comments.length} comments, ${files.length} files, $likes likes, $views views');
 
+      // Canonical likers / pointers / dislikers / subscribers as
+      // npub lists so a follower can cache the full state offline
+      // (counts alone aren\'t enough). Same pattern the events
+      // detail endpoint uses.
+      Future<List<String>> readNpubList(String type) async {
+        try {
+          return await FeedbackFolderUtils.readFeedbackFile(
+            postPath, type,
+            storage: storage,
+          );
+        } catch (_) {
+          return const <String>[];
+        }
+      }
+      final likersNpubs = await readNpubList(
+          FeedbackFolderUtils.feedbackTypeLikes);
+      final dislikersNpubs = await readNpubList(
+          FeedbackFolderUtils.feedbackTypeDislikes);
+      final pointersNpubs = await readNpubList(
+          FeedbackFolderUtils.feedbackTypePoints);
+      final subscribersNpubs = await readNpubList(
+          FeedbackFolderUtils.feedbackTypeSubscribe);
+
       return {
         'success': true,
         'id': postId,
@@ -173,6 +196,10 @@ class BlogHandler {
         'files': files,
         'comments': commentsList,
         'comment_count': comments.length,
+        'likes': likersNpubs,
+        'dislikes': dislikersNpubs,
+        'points': pointersNpubs,
+        'subscribe': subscribersNpubs,
         'likes_count': likes,
         'dislikes_count': dislikes,
         'points_count': points,
