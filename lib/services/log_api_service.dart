@@ -1801,9 +1801,15 @@ class LogApiService
       'authenticated': userNpub != null,
     };
 
-    // 5. Render
-    final menuItems =
-        await AppService().generateDeviceMenu(activeApp: 'events');
+    // 5. Render. Use the relay's forwarded path prefix when present
+    // so the menu emits absolute hrefs like /{callsign}/events/
+    // — relative ../events/ links break depending on whether the
+    // page URL has a trailing slash.
+    final urlPrefix = request.headers['x-forwarded-prefix'];
+    final menuItems = await AppService().generateDeviceMenu(
+      activeApp: 'events',
+      urlPrefix: urlPrefix,
+    );
     final assets = await EventWebPageService().buildListingPage(
       data: data,
       logoText: 'Events',
@@ -2306,9 +2312,15 @@ class LogApiService
       data['contributors'] = const [];
     }
 
-    // 5. Render
-    final menuItems =
-        await AppService().generateDeviceMenu(activeApp: 'events');
+    // 5. Render. Use the relay's forwarded path prefix when present
+    // so the menu emits absolute hrefs like /{callsign}/events/
+    // — relative ../events/ links break depending on whether the
+    // page URL has a trailing slash.
+    final urlPrefix = request.headers['x-forwarded-prefix'];
+    final menuItems = await AppService().generateDeviceMenu(
+      activeApp: 'events',
+      urlPrefix: urlPrefix,
+    );
     final assets = await EventWebPageService().buildEventPage(
       data: data,
       logoText: 'Events',

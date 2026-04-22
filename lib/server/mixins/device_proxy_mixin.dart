@@ -462,6 +462,12 @@ mixin DeviceProxyMixin {
       if (values.isEmpty) return;
       forwardedHeaders[lower] = values.first;
     });
+    // Tell the device which path prefix the browser actually sees
+    // (the relay strips /{identifier} before forwarding the
+    // sub-path). HTML page builders use this to emit absolute hrefs
+    // that survive trailing-slash variations and arbitrary URL
+    // depths — relative `../` paths break for both.
+    forwardedHeaders['x-forwarded-prefix'] = '/$identifier';
 
     // Read request body for POST/PUT/PATCH. Binary uploads (image /
     // video / octet-stream) are base64-encoded so the WebSocket

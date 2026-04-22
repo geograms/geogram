@@ -33,6 +33,7 @@ class WebNavigation {
     bool isRootLevel = false,
     int depth = 1,
     String? prefix,
+    String? urlPrefix,
   }) {
     final buffer = StringBuffer();
 
@@ -41,13 +42,30 @@ class WebNavigation {
       buffer.writeln('<li>$prefix &gt;</li>');
     }
 
+    // Strip any trailing slash on the URL prefix so we don\'t emit
+    // double slashes. Empty / null falls back to the legacy
+    // relative-URL scheme.
+    final normalizedUrlPrefix = (urlPrefix == null || urlPrefix.isEmpty)
+        ? null
+        : (urlPrefix.endsWith('/')
+            ? urlPrefix.substring(0, urlPrefix.length - 1)
+            : urlPrefix);
+
     final items = <String>[];
     for (final appId in availableApps) {
       final item = _navItems[appId];
       if (item == null) continue;
 
       String href;
-      if (isStationPage) {
+      if (normalizedUrlPrefix != null) {
+        // Absolute hrefs anchored to the relay-supplied prefix
+        // (X-Forwarded-Prefix). Survives trailing-slash variants
+        // and arbitrary URL depths — which the relative fallback
+        // below cannot.
+        href = item.path == '/'
+            ? '$normalizedUrlPrefix/'
+            : '$normalizedUrlPrefix${item.path}';
+      } else if (isStationPage) {
         href = item.path;
       } else if (isRootLevel) {
         // Root-level device pages (e.g., /{callsign}/)
@@ -124,6 +142,7 @@ class WebNavigation {
     bool hasDownload = false,
     bool isRootLevel = false,
     int depth = 1,
+    String? urlPrefix,
   }) {
     final apps = <String>['home'];
     if (hasBlog) apps.add('blog');
@@ -144,6 +163,7 @@ class WebNavigation {
       isStationPage: false,
       isRootLevel: isRootLevel,
       depth: depth,
+      urlPrefix: urlPrefix,
     );
   }
 

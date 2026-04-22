@@ -1012,6 +1012,7 @@ class AppService {
     ProfileStorage? storage,
     bool isRootLevel = false,
     int depth = 1,
+    String? urlPrefix,
   }) async {
     final apps = await getPublicApps(appsPath: appsPath, storage: storage);
 
@@ -1047,6 +1048,7 @@ class AppService {
       hasDownload: hasDownload,
       isRootLevel: isRootLevel,
       depth: depth,
+      urlPrefix: urlPrefix,
     );
   }
 
