@@ -8,11 +8,14 @@ import '../models/blog_post.dart';
 import '../models/blog_comment.dart';
 import '../services/blog_service.dart';
 import '../services/app_service.dart';
+import '../services/blog_pin_service.dart';
 import '../services/config_service.dart';
 import '../services/devices_service.dart';
+import '../services/follow_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
+import '../services/remote_blog_cache.dart';
 import '../services/remote_content_client.dart';
 import '../services/station_service.dart';
 import '../services/i18n_service.dart';
@@ -192,15 +195,26 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
       Iterable<BlogPost> scoped = _showMineOnly
           ? _allPosts.where(isMine)
           : _remotePosts;
+      List<BlogPost> result;
       if (query.isEmpty) {
-        _filteredPosts = scoped.toList();
+        result = scoped.toList();
       } else {
-        _filteredPosts = scoped.where((post) {
+        result = scoped.where((post) {
           return post.title.toLowerCase().contains(query) ||
                  post.tags.any((tag) => tag.toLowerCase().contains(query)) ||
                  (post.description?.toLowerCase().contains(query) ?? false);
         }).toList();
       }
+      // Pinned posts float to the top; within each group keep the
+      // existing date order (most recent first).
+      final pinnedKeys = BlogPinService.all();
+      result.sort((a, b) {
+        final aPinned = pinnedKeys.contains(BlogPinService.keyFor(a));
+        final bPinned = pinnedKeys.contains(BlogPinService.keyFor(b));
+        if (aPinned != bPinned) return aPinned ? -1 : 1;
+        return b.timestamp.compareTo(a.timestamp);
+      });
+      _filteredPosts = result;
     });
   }
 
@@ -266,6 +280,14 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
         _isLoadingRemote = false;
       });
       _filterPosts();
+      // Auto-cache content from authors the user follows so they
+      // can read those offline. Fire-and-forget — already-cached
+      // posts overwrite cleanly (lazy refresh on every visit).
+      final followed = FollowService.all();
+      for (final author in followed) {
+        // ignore: discarded_futures
+        _warmupFollowedAuthor(author);
+      }
     } catch (e) {
       LogService().log('BlogBrowserPage: remote load failed: $e');
       if (!mounted) return;
@@ -299,6 +321,94 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
       comments: const [],
       metadata: metadata,
     );
+  }
+
+  /// Flip the follow state for [post]\'s author. When following,
+  /// kick off a cache warmup so all of that author\'s known posts
+  /// land on disk and survive the author going offline.
+  Future<void> _toggleFollowAuthor(BlogPost post) async {
+    final author = post.author.trim();
+    if (author.isEmpty) return;
+    final nowFollowing = FollowService.toggle(author);
+    if (!mounted) return;
+    setState(() {});
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text(
+            (nowFollowing
+                    ? (_i18n.t('now_following_author') ??
+                        'Following {0} — caching their posts for offline reading')
+                    : (_i18n.t('unfollowed_author') ??
+                        'Unfollowed {0}'))
+                .replaceAll('{0}', author),
+          ),
+        ),
+      );
+    }
+    if (nowFollowing) {
+      // ignore: discarded_futures
+      _warmupFollowedAuthor(post.author);
+    }
+  }
+
+  /// Pull every known remote post for [authorCallsign] and persist
+  /// the full detail (post.md + likes/points/dislikes lists +
+  /// signed comments) under {baseDir}/devices/{author}/blog/. So
+  /// the user can read the followed author offline.
+  Future<void> _warmupFollowedAuthor(String authorCallsign) async {
+    final source = authorCallsign.trim();
+    if (source.isEmpty) return;
+    // Pick out every remote post we already know about for this
+    // author. Avoids a second list call.
+    final mine = _remotePosts.where((p) =>
+        p.author.toUpperCase() == source.toUpperCase());
+    for (final post in mine) {
+      try {
+        final detail = await RemoteContent.get(
+          remoteCallsign: source,
+          appType: 'blog',
+          itemId: post.id,
+        );
+        if (!detail.success || detail.data == null) continue;
+        final data = detail.data!;
+        await RemoteBlogCache.writePost(
+          authorCallsign: source,
+          detailJson: data,
+        );
+        // Likes / points / dislikes — the detail JSON exposes
+        // counts but the api/feedback endpoints have the lists.
+        // For now we cache whatever the detail JSON ships.
+        for (final entry in const [
+          ('likes', 'likes.txt'),
+          ('points', 'points.txt'),
+          ('dislikes', 'dislikes.txt'),
+        ]) {
+          final list = data[entry.$1];
+          if (list is List) {
+            await RemoteBlogCache.writeFeedbackList(
+              authorCallsign: source,
+              postId: post.id,
+              timestamp: post.timestamp,
+              filename: entry.$2,
+              npubs: list.whereType<String>(),
+            );
+          }
+        }
+        final comments = data['comments'];
+        if (comments is List) {
+          await RemoteBlogCache.writeComments(
+            authorCallsign: source,
+            postId: post.id,
+            timestamp: post.timestamp,
+            comments: comments
+                .whereType<Map<String, dynamic>>()
+                .toList(),
+          );
+        }
+      } catch (_) {}
+    }
   }
 
   /// Search for posts with the given tag
@@ -947,13 +1057,29 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
             ),
             // Posts for this year
             if (isExpanded)
-              ...posts.map((post) => BlogPostTileWidget(
-                    post: post,
-                    isSelected: _selectedPost?.id == post.id,
-                    onTap: () => isMobileView
-                        ? _selectPostMobile(post)
-                        : _selectPost(post),
-                  )),
+              ...posts.map((post) {
+                final isRemote =
+                    (post.metadata['source_callsign'] ?? '').isNotEmpty;
+                return BlogPostTileWidget(
+                  post: post,
+                  isSelected: _selectedPost?.id == post.id,
+                  isPinned: BlogPinService.isPinned(post),
+                  onTogglePin: () {
+                    BlogPinService.toggle(post);
+                    _filterPosts();
+                  },
+                  // Follow only makes sense for remote posts (we
+                  // already see all of our own).
+                  isFollowing: isRemote &&
+                      FollowService.isFollowing(post.author),
+                  onToggleFollow: !isRemote
+                      ? null
+                      : () => _toggleFollowAuthor(post),
+                  onTap: () => isMobileView
+                      ? _selectPostMobile(post)
+                      : _selectPost(post),
+                );
+              }),
           ],
         );
       },

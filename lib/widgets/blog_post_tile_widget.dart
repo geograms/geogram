@@ -12,12 +12,25 @@ class BlogPostTileWidget extends StatelessWidget {
   final BlogPost post;
   final bool isSelected;
   final VoidCallback onTap;
+  /// Pin state for this post (parent owns the storage so it can
+  /// re-sort the list after toggle). Null hides the icon.
+  final bool isPinned;
+  final VoidCallback? onTogglePin;
+  /// Follow state for this post's author. Null hides the icon —
+  /// only meaningful for posts authored by someone other than the
+  /// local user (parent decides).
+  final bool isFollowing;
+  final VoidCallback? onToggleFollow;
 
   const BlogPostTileWidget({
     Key? key,
     required this.post,
     required this.isSelected,
     required this.onTap,
+    this.isPinned = false,
+    this.onTogglePin,
+    this.isFollowing = false,
+    this.onToggleFollow,
   }) : super(key: key);
 
   @override
@@ -54,7 +67,56 @@ class BlogPostTileWidget extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 4),
+                  // Pin / unpin toggle. Tap is captured here so the
+                  // parent ListTile.onTap doesn't also fire.
+                  if (onTogglePin != null)
+                    SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        iconSize: 18,
+                        tooltip:
+                            isPinned ? i18n.t('unpin') : i18n.t('pin'),
+                        icon: Icon(
+                          isPinned
+                              ? Icons.push_pin
+                              : Icons.push_pin_outlined,
+                          color: isPinned
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurfaceVariant,
+                        ),
+                        onPressed: onTogglePin,
+                      ),
+                    ),
+                  // Follow / unfollow this author. Only present for
+                  // remote posts (parent passes a non-null callback
+                  // when in global scope on someone else's post).
+                  if (onToggleFollow != null)
+                    SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: IconButton(
+                        padding: EdgeInsets.zero,
+                        iconSize: 18,
+                        tooltip: isFollowing
+                            ? (i18n.t('unfollow_author') ??
+                                'Unfollow this author')
+                            : (i18n.t('follow_author') ??
+                                'Follow this author'),
+                        icon: Icon(
+                          isFollowing
+                              ? Icons.bookmark
+                              : Icons.bookmark_outline,
+                          color: isFollowing
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurfaceVariant,
+                        ),
+                        onPressed: onToggleFollow,
+                      ),
+                    ),
+                  const SizedBox(width: 4),
                   // Draft badge
                   if (post.isDraft)
                     Container(
