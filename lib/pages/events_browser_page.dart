@@ -277,12 +277,36 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
   void _filterEvents() {
     final query = _searchController.text.toLowerCase();
+    final myNpub = _currentUserNpub;
+    final myCallsign = _currentCallsign?.toUpperCase();
+
+    bool isMine(Event event) {
+      if (myNpub != null && myNpub.isNotEmpty && event.npub == myNpub) {
+        return true;
+      }
+      if (myCallsign != null && myCallsign.isNotEmpty &&
+          event.author.toUpperCase() == myCallsign) {
+        return true;
+      }
+      return false;
+    }
 
     setState(() {
-      if (query.isEmpty) {
-        _filteredEvents = _allEvents;
+      // Scope filter first: "mine" keeps only events I authored;
+      // "global" keeps only events from anyone else. _allEvents is
+      // currently the local store (events on this device); discovery
+      // of remote events lands in a follow-up, so the global view
+      // shows an empty list for now.
+      Iterable<Event> scoped = _allEvents;
+      if (_showMineOnly) {
+        scoped = scoped.where(isMine);
       } else {
-        _filteredEvents = _allEvents.where((event) {
+        scoped = scoped.where((e) => !isMine(e));
+      }
+      if (query.isEmpty) {
+        _filteredEvents = scoped.toList();
+      } else {
+        _filteredEvents = scoped.where((event) {
           return event.title.toLowerCase().contains(query) ||
                  event.location.toLowerCase().contains(query) ||
                  (event.locationName?.toLowerCase().contains(query) ?? false) ||
@@ -961,28 +985,47 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   }
 
   Widget _buildEmptyStateContent(ThemeData theme) {
+    final hasQuery = _searchController.text.isNotEmpty;
+    // Three flavours of empty state:
+    // 1. user is searching → "no match / try different search"
+    // 2. global scope (no events from others discovered yet) →
+    //    explain that remote-event discovery isn\'t hooked up yet
+    //    so they don\'t mistake an empty list for a bug.
+    // 3. mine scope → the existing "no events yet / create one"
+    final String titleKey;
+    final String subtitleKey;
+    final IconData icon;
+    if (hasQuery) {
+      titleKey = 'no_matching_events';
+      subtitleKey = 'try_different_search';
+      icon = Icons.event_outlined;
+    } else if (!_showMineOnly) {
+      titleKey = 'no_global_events_yet';
+      subtitleKey = 'no_global_events_help';
+      icon = Icons.public;
+    } else {
+      titleKey = 'no_events_yet';
+      subtitleKey = 'create_first_event';
+      icon = Icons.event_outlined;
+    }
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Icon(
-          Icons.event_outlined,
+          icon,
           size: 64,
           color: theme.colorScheme.onSurfaceVariant.withOpacity(0.5),
         ),
         const SizedBox(height: 16),
         Text(
-          _searchController.text.isNotEmpty
-              ? _i18n.t('no_matching_events')
-              : _i18n.t('no_events_yet'),
+          _i18n.t(titleKey),
           style: theme.textTheme.titleMedium?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),
         ),
         const SizedBox(height: 8),
         Text(
-          _searchController.text.isNotEmpty
-              ? _i18n.t('try_different_search')
-              : _i18n.t('create_first_event'),
+          _i18n.t(subtitleKey),
           style: theme.textTheme.bodySmall?.copyWith(
             color: theme.colorScheme.onSurfaceVariant.withOpacity(0.7),
           ),

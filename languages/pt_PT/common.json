@@ -441,6 +441,8 @@
   "reject": "Rejeitar",
   "events_show_mine": "Mostrar os meus eventos",
   "events_show_global": "Mostrar eventos de todos",
+  "no_global_events_yet": "Ainda não há eventos de outras pessoas",
+  "no_global_events_help": "Eventos criados por outras pessoas aparecem aqui assim que forem descobertos.",
   "contributions": "Contribuições",
   "allow_contributions": "Permitir contribuições",
   "allow_contributions_help": "Quando ativado, os visitantes podem enviar fotos ou vídeos curtos para a tua aprovação. Só aparecem publicamente depois de aprovados.",

@@ -456,6 +456,8 @@
   "interactions": "Interactions",
   "events_show_mine": "Show my events",
   "events_show_global": "Show events from everyone",
+  "no_global_events_yet": "No events from others yet",
+  "no_global_events_help": "Events authored by other people will appear here once they are discovered.",
   "contributions": "Contributions",
   "allow_contributions": "Allow contributions",
   "allow_contributions_help": "When on, visitors can submit photos or short videos for your approval. They appear publicly only after you approve them.",
