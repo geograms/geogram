@@ -484,6 +484,8 @@
   "review_application": "Überprüfung Antrag",
   "approve": "Genehmigen",
   "reject": "Ablehnen",
+  "events_show_mine": "Meine Veranstaltungen anzeigen",
+  "events_show_global": "Veranstaltungen von allen anzeigen",
   "contributions": "Beiträge",
   "allow_contributions": "Beiträge erlauben",
   "allow_contributions_help": "Wenn aktiviert können Besucher Fotos oder kurze Videos zur Genehmigung einreichen. Sie erscheinen erst öffentlich, nachdem du sie genehmigst.",

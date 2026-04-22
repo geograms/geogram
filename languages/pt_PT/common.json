@@ -439,6 +439,8 @@
   "review_application": "Rever Candidatura",
   "approve": "Aprovar",
   "reject": "Rejeitar",
+  "events_show_mine": "Mostrar os meus eventos",
+  "events_show_global": "Mostrar eventos de todos",
   "contributions": "Contribuições",
   "allow_contributions": "Permitir contribuições",
   "allow_contributions_help": "Quando ativado, os visitantes podem enviar fotos ou vídeos curtos para a tua aprovação. Só aparecem publicamente depois de aprovados.",

@@ -66,6 +66,14 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   String? _currentUserNpub;
   String? _currentCallsign;
 
+  // Default: showing my own events (the ones I authored). The toggle
+  // icon next to the search bar shows the OPPOSITE mode so the user
+  // sees what they\'re about to switch to — globe to switch to
+  // "events from everyone else", person to switch back to "mine".
+  // Filter wiring lands in a later iteration; the toggle right now
+  // just flips this flag and the icon.
+  bool _showMineOnly = true;
+
   @override
   void initState() {
     super.initState();
@@ -864,29 +872,52 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       color: theme.colorScheme.surface,
       child: Column(
         children: [
-          // Search bar
+          // Search bar + scope toggle. The icon to the right of the
+          // search field flips the visible scope between the user\'s
+          // own events and everyone else\'s. We show the icon for the
+          // OTHER scope (globe when viewing mine, person when viewing
+          // everyone\'s) so it telegraphs what tapping does next.
           Padding(
             padding: const EdgeInsets.all(16),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: _i18n.t('search_events'),
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchController.clear();
-                          _filterEvents();
-                        },
-                      )
-                    : null,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: _i18n.t('search_events'),
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear),
+                              onPressed: () {
+                                _searchController.clear();
+                                _filterEvents();
+                              },
+                            )
+                          : null,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      filled: true,
+                      contentPadding:
+                          const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
                 ),
-                filled: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 8),
-              ),
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  tooltip: _showMineOnly
+                      ? (_i18n.t('events_show_global') ??
+                          'Show events from everyone')
+                      : (_i18n.t('events_show_mine') ?? 'Show my events'),
+                  icon: Icon(_showMineOnly ? Icons.public : Icons.person),
+                  onPressed: () {
+                    setState(() => _showMineOnly = !_showMineOnly);
+                    _filterEvents();
+                  },
+                ),
+              ],
             ),
           ),
           const Divider(height: 1),
