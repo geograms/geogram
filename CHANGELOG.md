@@ -1,5 +1,53 @@
 # Geogram Desktop Changelog
 
+## 2026-04-22 - v1.39.0-beta.1
+
+### Changes
+- Blog tile: replace inline pin icon with three-dot overflow menu
+- Blog detail API: expose likers / pointers / dislikers / subscribers as npub lists
+- Followed authors: read cached posts back so they survive offline
+- Blog: pin + follow controls on every post tile, plus author cache
+- Blog browser: same mine/global scope toggle as the events browser
+- Events browser: persist the mine/global scope choice across sessions
+- Encrypted-profile compliance: route this-week's event scanners through ProfileStorage
+- RemoteEventCache: route all I/O through ProfileStorage
+- SECURITY: scope per-callsign event listing to that callsign only
+- External events cache: also persist likes + comments
+- External events: disk cache so re-opens are fast (and offline-friendly)
+- Events: pin / unpin any event (local or remote) and float to top
+- Events browser: aggregate global events from every reachable device
+- Events browser: wire the scope toggle + tailored empty state
+- Events browser: scope-toggle icon next to the search field
+- Now panel + Devices list: tappable text + dedupe duplicate entries
+- Events: author opt-in toggle for visitor contributions (default off)
+- Events list: include pending contributions in the per-event badge
+- Public event page: client-side menu-href rewriter for relayed URLs
+- Forward relay prefix to device so menu hrefs survive the proxy hop
+- Contributors: thumbnail strip, not full-size carousel
+- Events: filter author from contributors + swipe carousel per contributor
+- Events: render approved contributors on the public page + author detail
+- Remote events: show "Your submissions" panel on the Flutter detail page
+- Remote events: stack the Contribute panel vertically
+- Public uploader: cache thumbnails of server-known submissions in IDB
+- Public uploader: ask the device for "my submissions" on every load
+- Public uploader: keep submissions visible until they're approved
+- Public uploader: refresh status banner as items actually land
+- Forward X-* headers through the device proxy
+- Public event uploads: persistent IndexedDB queue + retry-with-backoff
+- Carry binary uploads through the station→device proxy chain
+- Events: visitor contributor UI + author approval + public display
+- Events: visitor contributor submissions (server side + approval gate)
+- Event gallery: prefetch neighbouring photos so the lightbox feels instant
+- Events: photos are photos; only the chosen cover is the flyer
+- Thumbnail reliability: offload resize to isolates + in-flight dedup + retry
+- Gallery thumbnails on /api/content + station event files + lightbox
+- Generic /api/content/{appType} — one browse surface for every app
+- Speed up app comparison and fix sync wording
+- Fix lazy hash diff tracking in mirror sync
+- Speed up mirror diffing and surface sync failures
+- Preserve recovered profiles on reinstall
+
+
 ## 2026-04-21 - v1.38.1
 
 ### Changes
