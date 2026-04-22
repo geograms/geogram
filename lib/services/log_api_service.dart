@@ -347,6 +347,7 @@ class LogApiService
     required String path,
     Map<String, String>? headers,
     String? body,
+    List<int>? bodyBytes,
   }) async {
     try {
       // Create a mock shelf.Request
@@ -354,12 +355,15 @@ class LogApiService
       final normalizedPath = path.startsWith('/') ? path.substring(1) : path;
       final uri = Uri.parse('http://localhost:$port/$normalizedPath');
 
-      // For POST/PUT requests with body, we need to include it
+      // For POST/PUT requests with body, we need to include it.
+      // shelf.Request body accepts String OR List<int> — bodyBytes
+      // wins for binary uploads (proxied images/video) so we don't
+      // round-trip through utf8 and corrupt bytes.
       final request = shelf.Request(
         method,
         uri,
         headers: headers,
-        body: body,
+        body: bodyBytes ?? body,
       );
 
       // Call the existing handler

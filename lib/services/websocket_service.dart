@@ -317,6 +317,7 @@ class WebSocketService {
                 data['path'] as String?,
                 data['headers'] as String?,
                 data['body'] as String?,
+                bodyIsBase64: data['bodyIsBase64'] == true,
               );
             } else if (data['type'] == 'OK') {
               // NOSTR OK response: {"type": "OK", "event_id": "...", "success": true/false, "message": "..."}
@@ -857,8 +858,9 @@ class WebSocketService {
     String? method,
     String? path,
     String? headersJson,
-    String? body,
-  ) async {
+    String? body, {
+    bool bodyIsBase64 = false,
+  }) async {
     if (requestId == null || method == null || path == null) {
       LogService().log('Invalid HTTP request: missing parameters');
       return;
@@ -876,7 +878,14 @@ class WebSocketService {
       // Forward ALL proxied requests to LogApiService pipeline.
       // The device handles its own routing — blog, meet, API, static files,
       // downloads, themes — all go through the same path.
-      await _forwardToLocalApi(requestId, method, path, headersJson, body);
+      await _forwardToLocalApi(
+        requestId,
+        method,
+        path,
+        headersJson,
+        body,
+        bodyIsBase64: bodyIsBase64,
+      );
     } catch (e) {
       LogService().log('Error handling HTTP request: $e');
       _sendHttpResponse(requestId, 500, {'Content-Type': 'text/plain'}, 'Internal Server Error: $e');
@@ -1825,8 +1834,9 @@ class WebSocketService {
     String method,
     String path,
     String? headersJson,
-    String? body,
-  ) async {
+    String? body, {
+    bool bodyIsBase64 = false,
+  }) async {
     try {
       LogService().log('HTTP_REQUEST: Direct call to API: $method $path');
 
@@ -1841,12 +1851,27 @@ class WebSocketService {
         }
       }
 
+      // Decode binary upload bodies (image/video) back to raw bytes
+      // before handing to the local API — they were base64-encoded
+      // for the WebSocket hop.
+      List<int>? bodyBytes;
+      String? bodyString = body;
+      if (bodyIsBase64 && body != null && body.isNotEmpty) {
+        try {
+          bodyBytes = base64Decode(body);
+          bodyString = null;
+        } catch (e) {
+          LogService().log('HTTP_REQUEST: base64 decode failed: $e');
+        }
+      }
+
       // Call LogApiService directly (no HTTP connection needed)
       final response = await LogApiService().handleRequestDirect(
         method: method.toUpperCase(),
         path: path,
         headers: headers,
-        body: body,
+        body: bodyString,
+        bodyBytes: bodyBytes,
       );
 
       // Send response back through WebSocket to station (preserve all headers)

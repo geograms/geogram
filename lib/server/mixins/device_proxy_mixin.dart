@@ -111,13 +111,18 @@ mixin DeviceProxyMixin {
 
   /// Proxy a request to a single device. Returns the response map.
   /// Updates successCount/failCount on the client.
+  ///
+  /// Set [bodyIsBase64] when [body] is a base64-encoded binary
+  /// payload (image/video upload) — the device side will decode it
+  /// back to raw bytes before handing to its local API.
   Future<Map<String, dynamic>?> proxySingleDevice(
     DeviceProxyClient client,
     String method,
     String path,
     String headers,
-    String body,
-  ) async {
+    String body, {
+    bool bodyIsBase64 = false,
+  }) async {
     final requestId = '${DateTime.now().millisecondsSinceEpoch}_${client.id}';
     final proxyRequest = {
       'type': 'HTTP_REQUEST',
@@ -126,6 +131,7 @@ mixin DeviceProxyMixin {
       'path': path,
       'headers': headers,
       'body': body,
+      if (bodyIsBase64) 'bodyIsBase64': true,
     };
 
     final completer = Completer<Map<String, dynamic>>();
@@ -164,13 +170,21 @@ mixin DeviceProxyMixin {
     String path, {
     String headers = '',
     String body = '',
+    bool bodyIsBase64 = false,
   }) async {
     final clients = findAllClientsByIdentifier(identifier);
     if (clients.isEmpty) return null;
 
     Map<String, dynamic>? lastResponse;
     for (final client in clients) {
-      final response = await proxySingleDevice(client, method, path, headers, body);
+      final response = await proxySingleDevice(
+        client,
+        method,
+        path,
+        headers,
+        body,
+        bodyIsBase64: bodyIsBase64,
+      );
       if (response != null) {
         lastResponse = response;
         final statusCode = response['statusCode'] as int? ?? 500;
@@ -438,10 +452,35 @@ mixin DeviceProxyMixin {
     final contentType = request.headers.value('content-type');
     if (contentType != null) forwardedHeaders['content-type'] = contentType;
 
-    // Read request body for POST/PUT/PATCH
+    // Read request body for POST/PUT/PATCH. Binary uploads (image /
+    // video / octet-stream) are base64-encoded so the WebSocket
+    // proxy chain (JSON-only) preserves bytes; the device side
+    // decodes back to raw before handing to its local API.
     String requestBody = '';
+    bool bodyIsBase64 = false;
     if (request.contentLength > 0) {
-      requestBody = await utf8.decodeStream(request);
+      final bytes = <int>[];
+      await for (final chunk in request) {
+        bytes.addAll(chunk);
+      }
+      final ct = (contentType ?? '').toLowerCase();
+      final binaryByContentType = ct.startsWith('image/') ||
+          ct.startsWith('video/') ||
+          ct.startsWith('audio/') ||
+          ct.startsWith('application/octet-stream');
+      if (binaryByContentType) {
+        requestBody = base64Encode(bytes);
+        bodyIsBase64 = true;
+      } else {
+        try {
+          requestBody = utf8.decode(bytes);
+        } on FormatException {
+          // Content-Type lied (or wasn't set) — fall back to base64
+          // so a misdeclared upload still goes through.
+          requestBody = base64Encode(bytes);
+          bodyIsBase64 = true;
+        }
+      }
     }
 
     // Multi-device failover (5s per device, sorted by priority+successRate)
@@ -451,6 +490,7 @@ mixin DeviceProxyMixin {
       devicePath,
       headers: jsonEncode(forwardedHeaders),
       body: requestBody,
+      bodyIsBase64: bodyIsBase64,
     );
 
     if (response == null) {
