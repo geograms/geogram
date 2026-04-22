@@ -8,7 +8,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/event.dart';
+import '../services/app_service.dart';
 import '../services/log_service.dart';
+import '../services/profile_storage.dart';
 import 'event_bus.dart';
 
 /// Reusable notifier for any activity on an event the local user authored
@@ -191,42 +193,46 @@ class EventActivityNotifier {
   /// map once, then scans the comment/like sources. Used by the event
   /// tile so the badge covers all activity, not just access requests.
   static Future<int> countUnseenForEvent(String eventPath) async {
+    final base = AppService().profileStorage;
+    if (base == null) return 0;
+    final storage =
+        ScopedProfileStorage.fromAbsolutePath(base, eventPath);
     int count = 0;
     try {
       // Pending access requests (status-based — no seen.json involvement).
-      final ar = File('$eventPath/feedback/access_requests.json');
-      if (await ar.exists()) {
+      final arRaw =
+          await storage.readString('feedback/access_requests.json');
+      if (arRaw != null && arRaw.trim().isNotEmpty) {
         try {
-          final content = await ar.readAsString();
-          if (content.trim().isNotEmpty) {
-            final list = jsonDecode(content) as List<dynamic>;
-            count += list.whereType<Map<String, dynamic>>().where((e) {
-              final s = (e['status'] as String?) ?? 'pending';
-              return s == 'pending';
-            }).length;
-          }
+          final list = jsonDecode(arRaw) as List<dynamic>;
+          count += list.whereType<Map<String, dynamic>>().where((e) {
+            final s = (e['status'] as String?) ?? 'pending';
+            return s == 'pending';
+          }).length;
         } catch (_) {}
       }
 
       final seen = await _loadSeen(eventPath);
 
       // Unseen comments (skip ones authored by the event owner).
-      final commentsDir = Directory('$eventPath/feedback/comments');
-      if (await commentsDir.exists()) {
-        await for (final f in commentsDir.list()) {
-          if (f is! File || !f.path.endsWith('.txt')) continue;
-          final commentId = f.path.split(Platform.pathSeparator).last
-              .replaceAll('.txt', '');
+      if (await storage.directoryExists('feedback/comments')) {
+        final entries =
+            await storage.listDirectory('feedback/comments');
+        for (final f in entries) {
+          if (f.isDirectory || !f.name.endsWith('.txt')) continue;
+          final commentId = f.name.replaceAll('.txt', '');
           if (seen.containsKey(_commentId(eventPath, commentId))) continue;
-          if (await _commentBelongsToOwner(f)) continue;
+          final body =
+              await storage.readString('feedback/comments/${f.name}');
+          if (body != null && _commentBodyBelongsToOwner(body)) continue;
           count++;
         }
       }
 
       // Unseen likes (skip the owner's own like).
-      final likesFile = File('$eventPath/feedback/likes.txt');
-      if (await likesFile.exists()) {
-        for (final line in await likesFile.readAsLines()) {
+      final likesText = await storage.readString('feedback/likes.txt');
+      if (likesText != null) {
+        for (final line in likesText.split('\n')) {
           final npub = line.trim();
           if (npub.isEmpty) continue;
           if (_isOwnerNpub(npub)) continue;
@@ -239,20 +245,19 @@ class EventActivityNotifier {
       // requests: once the author approves or rejects, the folder
       // moves or is deleted and the count drops naturally. One
       // count per pending callsign with at least one media file.
-      final pendingDir = Directory('$eventPath/contributors/_pending');
-      if (await pendingDir.exists()) {
-        await for (final entry in pendingDir.list()) {
-          if (entry is! Directory) continue;
-          final name = entry.path.split(Platform.pathSeparator).last;
+      if (await storage.directoryExists('contributors/_pending')) {
+        final pendingDirs =
+            await storage.listDirectory('contributors/_pending');
+        for (final entry in pendingDirs) {
+          if (!entry.isDirectory) continue;
+          final name = entry.name;
           if (name.isEmpty || name.startsWith('.')) continue;
-          // Only count callsigns whose folder actually has media —
-          // an empty / metadata-only folder isn\'t something the
-          // author needs to act on yet.
           var hasMedia = false;
-          await for (final f in entry.list()) {
-            if (f is! File) continue;
-            final fname = f.path.split(Platform.pathSeparator).last;
-            if (fname == 'contributor.txt' || fname.startsWith('.')) {
+          final files = await storage
+              .listDirectory('contributors/_pending/$name');
+          for (final f in files) {
+            if (f.isDirectory) continue;
+            if (f.name == 'contributor.txt' || f.name.startsWith('.')) {
               continue;
             }
             hasMedia = true;
@@ -322,26 +327,37 @@ class EventActivityNotifier {
   /// callsign — re-firing on every scan is cheap because the Now
   /// panel deduplicates by id, and the badge clears as soon as the
   /// author opens the Contributions tab and approves / rejects.
+  ///
+  /// Uses ProfileStorage so the scan still works when the local
+  /// profile lives in encrypted-archive storage (raw Directory
+  /// access would silently see no folders).
   static Future<int> _scanPendingContributors({
     required String eventPath,
     required String eventId,
     required String eventTitle,
   }) async {
-    final dir = Directory('$eventPath/contributors/_pending');
-    if (!await dir.exists()) return 0;
+    final base = AppService().profileStorage;
+    if (base == null) return 0;
+    final storage =
+        ScopedProfileStorage.fromAbsolutePath(base, eventPath);
+    if (!await storage.directoryExists('contributors/_pending')) return 0;
     int emitted = 0;
     try {
-      await for (final entry in dir.list()) {
-        if (entry is! Directory) continue;
-        final callsign = entry.path.split(Platform.pathSeparator).last;
+      final pendingDirs =
+          await storage.listDirectory('contributors/_pending');
+      for (final entry in pendingDirs) {
+        if (!entry.isDirectory) continue;
+        final callsign = entry.name;
         if (callsign.isEmpty || callsign.startsWith('.')) continue;
         // Count submitted media files so the summary tells the
         // author how much they need to look at.
         var fileCount = 0;
-        await for (final f in entry.list()) {
-          if (f is File &&
-              !f.path.endsWith('contributor.txt') &&
-              !f.path.contains('${Platform.pathSeparator}.meta${Platform.pathSeparator}')) {
+        final files = await storage
+            .listDirectory('contributors/_pending/$callsign');
+        for (final f in files) {
+          if (!f.isDirectory &&
+              f.name != 'contributor.txt' &&
+              !f.name.startsWith('.')) {
             fileCount++;
           }
         }
@@ -469,6 +485,21 @@ class EventActivityNotifier {
     } catch (_) {
       return false;
     }
+  }
+
+  /// String-body variant of [_commentBelongsToOwner] for callers
+  /// that already loaded the comment via ProfileStorage and don\'t
+  /// have a File handle. Reads only the `--> npub:` footer.
+  static bool _commentBodyBelongsToOwner(String body) {
+    if (_ownerNpub.isEmpty) return false;
+    try {
+      for (final line in body.split('\n')) {
+        if (line.startsWith('--> npub: ')) {
+          return line.substring(10).trim() == _ownerNpub;
+        }
+      }
+    } catch (_) {}
+    return false;
   }
 
   static Future<String> _readEventTitle(

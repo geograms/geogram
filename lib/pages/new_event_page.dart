@@ -258,23 +258,28 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   /// Scan visitor contributor folders so the Contributions tab can
-  /// list them. Direct filesystem read — same pattern as
-  /// [_loadAccessRequests] / [_loadComments]. Quiet on error so a
-  /// fresh event with no folders shows the empty state.
+  /// list them. Goes through ProfileStorage so encrypted-archive
+  /// profiles still see their folders — same pattern the other
+  /// editor loaders are migrating toward.
   Future<void> _loadContributors() async {
     final event = widget.event;
     final appPath = widget.appPath;
     if (event == null || appPath == null || appPath.isEmpty) return;
     if (event.id.length < 4) return;
+    final base = AppService().profileStorage;
+    if (base == null) return;
     try {
       final year = event.id.substring(0, 4);
-      final eventPath = '$appPath/$year/${event.id}';
+      final eventScope = ScopedProfileStorage.fromAbsolutePath(
+        base, '$appPath/$year/${event.id}');
       final pending = await _scanContributorFolder(
-        '$eventPath/contributors/_pending',
+        eventScope,
+        'contributors/_pending',
         skipNamesStartingWithDot: true,
       );
       final approved = await _scanContributorFolder(
-        '$eventPath/contributors',
+        eventScope,
+        'contributors',
         excludeNames: const {'_pending'},
       );
       if (!mounted) return;
@@ -290,28 +295,32 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<List<Map<String, dynamic>>> _scanContributorFolder(
-    String parentPath, {
+    ProfileStorage eventScope,
+    String parentRelative, {
     Set<String> excludeNames = const {},
     bool skipNamesStartingWithDot = false,
   }) async {
     final out = <Map<String, dynamic>>[];
-    final dir = Directory(parentPath);
-    if (!await dir.exists()) return out;
-    await for (final entry in dir.list()) {
-      if (entry is! Directory) continue;
-      final name = entry.path.split(Platform.pathSeparator).last;
+    if (!await eventScope.directoryExists(parentRelative)) return out;
+    final entries = await eventScope.listDirectory(parentRelative);
+    for (final entry in entries) {
+      if (!entry.isDirectory) continue;
+      final name = entry.name;
       if (excludeNames.contains(name)) continue;
       if (skipNamesStartingWithDot && name.startsWith('.')) continue;
       final files = <String>[];
       String? npub;
       String? created;
       String? description;
-      await for (final f in entry.list()) {
-        if (f is! File) continue;
-        final filename = f.path.split(Platform.pathSeparator).last;
+      final inner =
+          await eventScope.listDirectory('$parentRelative/$name');
+      for (final f in inner) {
+        if (f.isDirectory) continue;
+        final filename = f.name;
         if (filename == 'contributor.txt') {
-          try {
-            final raw = await f.readAsString();
+          final raw = await eventScope
+              .readString('$parentRelative/$name/contributor.txt');
+          if (raw != null) {
             for (final line in raw.split('\n')) {
               if (line.startsWith('CREATED: ')) {
                 created = line.substring(9).trim();
@@ -326,7 +335,7 @@ class _NewEventPageState extends State<NewEventPage>
                     line.trim();
               }
             }
-          } catch (_) {}
+          }
           continue;
         }
         if (filename.startsWith('.')) continue;

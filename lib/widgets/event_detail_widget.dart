@@ -16,6 +16,7 @@ import '../models/event_link.dart';
 import '../models/event_update.dart';
 import '../models/event_registration.dart';
 import '../services/app_service.dart';
+import '../services/profile_storage.dart';
 import '../services/event_service.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
@@ -1984,42 +1985,52 @@ class _ApprovedContributorsSectionState
   Future<List<_ContribFolder>> _scan() async {
     final out = <_ContribFolder>[];
     if (widget.event.id.length < 4) return out;
+    // Route directory enumeration + meta reads through ProfileStorage
+    // so an encrypted-archive profile sees its folders. The
+    // downstream thumbnail render still uses Image.file via the
+    // absolute path getAbsolutePath() returns — that part needs
+    // Image.memory + storage.readBytes for true encrypted-profile
+    // support, tracked separately.
+    final base = AppService().profileStorage;
+    if (base == null) return out;
     final year = widget.event.id.substring(0, 4);
-    final root = io.Directory(
-        '${widget.appPath}/$year/${widget.event.id}/contributors');
-    if (!await root.exists()) return out;
+    final eventScope = ScopedProfileStorage.fromAbsolutePath(
+      base,
+      '${widget.appPath}/$year/${widget.event.id}',
+    );
+    if (!await eventScope.directoryExists('contributors')) return out;
     const mediaExts = {
       '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp',
       '.mp4', '.mov', '.webm', '.mkv', '.avi', '.wmv', '.flv',
     };
     final authorNpub = widget.event.npub ?? '';
-    await for (final entry in root.list()) {
-      if (entry is! io.Directory) continue;
-      final name = entry.path.split(io.Platform.pathSeparator).last;
+    final entries = await eventScope.listDirectory('contributors');
+    for (final entry in entries) {
+      if (!entry.isDirectory) continue;
+      final name = entry.name;
       if (name == '_pending' || name.startsWith('.')) continue;
       // Skip contributor folders belonging to the event author —
       // their photos appear in the main gallery already.
       if (authorNpub.isNotEmpty) {
-        final metaFile = io.File(
-            '${entry.path}${io.Platform.pathSeparator}contributor.txt');
-        if (await metaFile.exists()) {
-          try {
-            final raw = await metaFile.readAsString();
-            String? folderNpub;
-            for (final line in raw.split('\n')) {
-              if (line.startsWith('--> npub: ')) {
-                folderNpub = line.substring(10).trim();
-                break;
-              }
+        final raw = await eventScope
+            .readString('contributors/$name/contributor.txt');
+        if (raw != null) {
+          String? folderNpub;
+          for (final line in raw.split('\n')) {
+            if (line.startsWith('--> npub: ')) {
+              folderNpub = line.substring(10).trim();
+              break;
             }
-            if (folderNpub == authorNpub) continue;
-          } catch (_) {}
+          }
+          if (folderNpub == authorNpub) continue;
         }
       }
       final files = <String>[];
-      await for (final f in entry.list()) {
-        if (f is! io.File) continue;
-        final fname = f.path.split(io.Platform.pathSeparator).last;
+      final inner =
+          await eventScope.listDirectory('contributors/$name');
+      for (final f in inner) {
+        if (f.isDirectory) continue;
+        final fname = f.name;
         if (fname.startsWith('.') || fname == 'contributor.txt') continue;
         final dot = fname.lastIndexOf('.');
         final ext = dot >= 0 ? fname.substring(dot).toLowerCase() : '';
@@ -2029,7 +2040,11 @@ class _ApprovedContributorsSectionState
       if (files.isEmpty) continue;
       files.sort();
       out.add(_ContribFolder(
-          callsign: name, folderPath: entry.path, files: files));
+        callsign: name,
+        folderPath:
+            eventScope.getAbsolutePath('contributors/$name'),
+        files: files,
+      ));
     }
     out.sort((a, b) => a.callsign.compareTo(b.callsign));
     return out;
