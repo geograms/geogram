@@ -1491,15 +1491,22 @@ class ThemesEmbedded {
     // backoff. The contributing device often goes offline for
     // minutes (mobile / weak link) so we keep retrying — closing
     // the tab and reopening it later resumes any queued uploads.
-    html += '<div class="event-section event-contribute" id="event-contribute" style="display:none">' +
-      '<button class="event-contribute-btn" id="contribute-btn" type="button">' +
-        ico.upload + ' <span>Contribute media</span>' +
-      '</button>' +
-      '<div class="event-contribute-help">Tap "Contribute media" to send more photos or short videos. They go to the event author for approval before they appear publicly, and stay in your browser until they reach the device — even if you close this tab.</div>' +
-      '<div id="contribute-status" class="event-contribute-status" style="display:none"></div>' +
-      '<div id="contribute-queue" class="event-contribute-queue" style="display:none"></div>' +
-      '<input type="file" id="contribute-input" accept="image/*,video/*" multiple style="display:none">' +
-    '</div>';
+    //
+    // Skip the entire CTA when the author hasn\'t enabled
+    // contributions on this event. The server enforces it too (any
+    // submit returns 403) — this just avoids inviting visitors to
+    // queue uploads that would never be accepted.
+    if (ev.contributions_enabled === true) {
+      html += '<div class="event-section event-contribute" id="event-contribute" style="display:none">' +
+        '<button class="event-contribute-btn" id="contribute-btn" type="button">' +
+          ico.upload + ' <span>Contribute media</span>' +
+        '</button>' +
+        '<div class="event-contribute-help">Tap "Contribute media" to send more photos or short videos. They go to the event author for approval before they appear publicly, and stay in your browser until they reach the device — even if you close this tab.</div>' +
+        '<div id="contribute-status" class="event-contribute-status" style="display:none"></div>' +
+        '<div id="contribute-queue" class="event-contribute-queue" style="display:none"></div>' +
+        '<input type="file" id="contribute-input" accept="image/*,video/*" multiple style="display:none">' +
+      '</div>';
+    }
 
     // --- Registration Stats (going/interested only) ---
     var likeCount = ev.feedback_like_count || (ev.likes ? ev.likes.length : 0);

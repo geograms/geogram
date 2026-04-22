@@ -155,6 +155,10 @@ class _NewEventPageState extends State<NewEventPage>
   // Whether visitors can post NOSTR-signed comments on the public event
   // page. Default true so the toggle starts in the "permissive" position.
   bool _commentsEnabled = true;
+  // Whether visitors can submit media (photos / videos) for the
+  // author to approve. Default false — contributions stay off
+  // until the author opts in via the Contributions tab.
+  bool _contributionsEnabled = false;
   bool _registrationEnabled = false;
 
   final Map<String, TextEditingController> _agendaByDate = {};
@@ -668,6 +672,7 @@ class _NewEventPageState extends State<NewEventPage>
       _accessRequestPromptController.text = event.accessRequestPrompt!;
     }
     _commentsEnabled = event.commentsEnabled;
+    _contributionsEnabled = event.contributionsEnabled;
     // Note: registrationEnabled not yet stored in Event model
 
     // Links
@@ -1287,6 +1292,7 @@ class _NewEventPageState extends State<NewEventPage>
           ? null
           : _accessRequestPromptController.text.trim(),
       'commentsEnabled': _commentsEnabled,
+      'contributionsEnabled': _contributionsEnabled,
       'links': _links,
       'updates': _updates.map((update) => update.toMap()).toList(),
       'photos': _photos.map((file) => file.toMap()).toList(),
@@ -2891,6 +2897,20 @@ class _NewEventPageState extends State<NewEventPage>
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Master switch — visitors can only submit media when the
+          // author has explicitly opted in. Default off so a brand
+          // new event isn\'t exposed to public uploads by accident.
+          Card(
+            margin: EdgeInsets.zero,
+            child: SwitchListTile(
+              value: _contributionsEnabled,
+              onChanged: (v) => setState(() => _contributionsEnabled = v),
+              title: Text(_i18n.t('allow_contributions')),
+              subtitle: Text(_i18n.t('allow_contributions_help')),
+              secondary: const Icon(Icons.add_a_photo_outlined),
+            ),
+          ),
+          const SizedBox(height: 16),
           if (_pendingContributors.isEmpty && _approvedContributors.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 48),
@@ -2903,7 +2923,9 @@ class _NewEventPageState extends State<NewEventPage>
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    _i18n.t('contributions_empty'),
+                    _contributionsEnabled
+                        ? _i18n.t('contributions_empty')
+                        : _i18n.t('contributions_disabled_empty'),
                     textAlign: TextAlign.center,
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,

@@ -48,6 +48,10 @@ class Event {
   /// page. Defaults to true — the event.txt only persists the field when
   /// the author has *disabled* it, so older event files keep working.
   final bool commentsEnabled;
+  /// Whether visitors can submit media (photos / short videos) to the
+  /// event for author approval. Default is FALSE — contributions are
+  /// off until the author opts in via the editor's Contributions tab.
+  final bool contributionsEnabled;
   final List<String> likes; // List of npubs (feedback)
   final List<EventComment> comments;
   final Map<String, String> metadata;
@@ -87,6 +91,7 @@ class Event {
     this.accessCallsigns = const [],
     this.accessRequestPrompt,
     this.commentsEnabled = true,
+    this.contributionsEnabled = false,
     this.likes = const [],
     this.comments = const [],
     this.metadata = const {},
@@ -208,6 +213,9 @@ class Event {
       commentsEnabled: (json['comments_enabled'] as bool?) ??
           (json['commentsEnabled'] as bool?) ??
           true,
+      contributionsEnabled: (json['contributions_enabled'] as bool?) ??
+          (json['contributionsEnabled'] as bool?) ??
+          false,
       likes: (json['likes'] as List<dynamic>?)?.cast<String>() ?? [],
       comments: comments,
       photos: (json['photos'] as List<dynamic>?)?.cast<String>() ??
@@ -433,6 +441,11 @@ class Event {
     if (!commentsEnabled) {
       buffer.writeln('COMMENTS_ENABLED: false');
     }
+    // Contributions-enabled is the inverse — default is OFF, so we
+    // only persist when the author has opted in.
+    if (contributionsEnabled) {
+      buffer.writeln('CONTRIBUTIONS_ENABLED: true');
+    }
 
     // Contacts (optional)
     if (contacts.isNotEmpty) {
@@ -514,6 +527,7 @@ class Event {
     List<String> accessCallsigns = [];
     String? accessRequestPrompt;
     bool commentsEnabled = true;
+    bool contributionsEnabled = false;
 
     int currentLine = 3;
 
@@ -560,6 +574,9 @@ class Event {
       } else if (line.startsWith('COMMENTS_ENABLED: ')) {
         final v = line.substring(18).trim().toLowerCase();
         commentsEnabled = !(v == 'false' || v == '0' || v == 'no');
+      } else if (line.startsWith('CONTRIBUTIONS_ENABLED: ')) {
+        final v = line.substring(23).trim().toLowerCase();
+        contributionsEnabled = (v == 'true' || v == '1' || v == 'yes');
       } else if (line.startsWith('CONTACTS: ')) {
         final contactsStr = line.substring(10).trim();
         contacts = contactsStr.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
@@ -628,6 +645,7 @@ class Event {
       accessCallsigns: accessCallsigns,
       accessRequestPrompt: accessRequestPrompt,
       commentsEnabled: commentsEnabled,
+      contributionsEnabled: contributionsEnabled,
       contacts: contacts,
       slug: slug,
       metadata: metadata,
@@ -698,6 +716,7 @@ class Event {
     List<String>? accessCallsigns,
     String? accessRequestPrompt,
     bool? commentsEnabled,
+    bool? contributionsEnabled,
     List<String>? likes,
     List<EventComment>? comments,
     Map<String, String>? metadata,
@@ -729,6 +748,8 @@ class Event {
       accessCallsigns: accessCallsigns ?? this.accessCallsigns,
       accessRequestPrompt: accessRequestPrompt ?? this.accessRequestPrompt,
       commentsEnabled: commentsEnabled ?? this.commentsEnabled,
+      contributionsEnabled:
+          contributionsEnabled ?? this.contributionsEnabled,
       likes: likes ?? this.likes,
       comments: comments ?? this.comments,
       metadata: metadata ?? this.metadata,
@@ -798,6 +819,7 @@ class Event {
         if (accessRequestPrompt != null && accessRequestPrompt!.isNotEmpty)
           'access_request_prompt': accessRequestPrompt,
         'comments_enabled': commentsEnabled,
+        'contributions_enabled': contributionsEnabled,
         'likes': likes,
         'comments': comments.map((c) => {
           'author': c.author,

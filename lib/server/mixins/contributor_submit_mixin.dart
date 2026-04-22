@@ -40,6 +40,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:shelf/shelf.dart' as shelf;
 
+import '../../models/event.dart';
 import '../../services/profile_storage.dart';
 import '../../util/contributor_folder_utils.dart';
 import '../../util/media_thumbnail_utils.dart';
@@ -314,6 +315,31 @@ mixin ContributorSubmitMixin {
     final eventPath = await _resolveEventPath(storage, eventId);
     if (eventPath == null) {
       return ContributorSubmitResult(404, {'error': 'Event not found'});
+    }
+
+    // Visitor contributions are off by default — the author must
+    // explicitly enable them in the editor's Contributions tab. The
+    // event.txt for a brand new event has no CONTRIBUTIONS_ENABLED
+    // line at all (Event.fromText defaults to false), so anything
+    // before the author opts in returns 403.
+    try {
+      final eventTxt = await storage.readString('$eventPath/event.txt');
+      if (eventTxt != null) {
+        final parts = eventPath.split('/');
+        final id = parts.isNotEmpty ? parts.last : eventId;
+        final ev = Event.fromText(eventTxt, id);
+        if (!ev.contributionsEnabled) {
+          return ContributorSubmitResult(403, {
+            'error': 'Contributions are disabled by the event author',
+          });
+        }
+      }
+    } catch (_) {
+      // If event.txt can\'t be read for any reason, keep the default
+      // behaviour (block the upload) rather than silently accept.
+      return ContributorSubmitResult(403, {
+        'error': 'Contributions are disabled by the event author',
+      });
     }
 
     final ok = ContributorFolderUtils.verifySubmissionSignature(

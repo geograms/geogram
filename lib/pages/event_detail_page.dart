@@ -106,6 +106,7 @@ class _EventDetailPageState extends State<EventDetailPage> {
             (result['accessCallsigns'] as List<dynamic>?)?.cast<String>(),
         accessRequestPrompt: result['accessRequestPrompt'] as String?,
         commentsEnabled: result['commentsEnabled'] as bool?,
+        contributionsEnabled: result['contributionsEnabled'] as bool?,
         eventDateTime: result['eventDateTime'] as DateTime?,
         startDate: result['startDate'] as String?,
         endDate: result['endDate'] as String?,

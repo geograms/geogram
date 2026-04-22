@@ -552,7 +552,12 @@ class _RemoteEventDetailPageState extends State<_RemoteEventDetailPage> {
           _buildContributorsSection(theme, ev),
           const SizedBox(height: 12),
           _buildMySubmissionsSection(theme),
-          _buildContributeButton(theme),
+          // Hide the upload CTA when the author has not opted in.
+          // Older events without the flag default to false (the
+          // model serializer emits "contributions_enabled":false in
+          // that case) so existing events stay closed by default.
+          if (ev['contributions_enabled'] == true)
+            _buildContributeButton(theme),
         ],
         const SizedBox(height: 16),
         _buildEngagementRow(theme, viewCount, likeCount, commentCount),
