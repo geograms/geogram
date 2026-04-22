@@ -375,6 +375,88 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
     });
   }
 
+  /// Toggle the post between published + draft. Authors call this
+  /// from the tile overflow menu to retract a post (no public
+  /// listing) without deleting the content.
+  Future<void> _togglePostPublish(BlogPost post) async {
+    final published = post.status == BlogStatus.published;
+    final ok = await _blogService.updatePost(
+      postId: post.id,
+      status: published ? BlogStatus.draft : BlogStatus.published,
+      userNpub: _currentUserNpub,
+    );
+    if (!mounted) return;
+    if (ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text(published
+              ? (_i18n.t('post_unpublished') ?? 'Post unpublished')
+              : (_i18n.t('post_published') ?? 'Post published')),
+        ),
+      );
+      await _loadPosts();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Theme.of(context).colorScheme.error,
+          content: Text(_i18n.t('post_update_failed') ??
+              'Could not update the post'),
+        ),
+      );
+    }
+  }
+
+  /// Confirmation + delete for an author-owned post. Drops the
+  /// entire folder (post.md + comments + attachments).
+  Future<void> _deletePostFromTile(BlogPost post) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(_i18n.t('delete_post')),
+        content: Text(_i18n.t('delete_post_confirm')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(_i18n.t('cancel')),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+              foregroundColor: Theme.of(ctx).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(_i18n.t('delete')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final ok = await _blogService.deletePost(post.id, _currentUserNpub);
+    if (!mounted) return;
+    if (ok) {
+      // If the deleted post was open in the right pane, clear it.
+      if (_selectedPost?.id == post.id) {
+        setState(() => _selectedPost = null);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          content: Text(_i18n.t('post_deleted') ?? 'Post deleted'),
+        ),
+      );
+      await _loadPosts();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: Theme.of(context).colorScheme.error,
+          content: Text(_i18n.t('post_delete_failed') ??
+              'Could not delete the post'),
+        ),
+      );
+    }
+  }
+
   /// Flip the follow state for [post]\'s author. When following,
   /// kick off a cache warmup so all of that author\'s known posts
   /// land on disk and survive the author going offline.
@@ -1120,6 +1202,8 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
               ...posts.map((post) {
                 final isRemote =
                     (post.metadata['source_callsign'] ?? '').isNotEmpty;
+                final canEdit =
+                    !isRemote && post.isOwnPost(_currentUserNpub);
                 return BlogPostTileWidget(
                   post: post,
                   isSelected: _selectedPost?.id == post.id,
@@ -1128,6 +1212,14 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
                     BlogPinService.toggle(post);
                     _filterPosts();
                   },
+                  // Publish/unpublish + delete are author-only
+                  // affordances; the parent leaves them null on
+                  // remote posts so the menu hides them.
+                  onTogglePublish: canEdit
+                      ? () => _togglePostPublish(post)
+                      : null,
+                  onDelete:
+                      canEdit ? () => _deletePostFromTile(post) : null,
                   // Follow only makes sense for remote posts (we
                   // already see all of our own).
                   isFollowing: isRemote &&

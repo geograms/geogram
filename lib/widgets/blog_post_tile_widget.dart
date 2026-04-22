@@ -13,7 +13,8 @@ class BlogPostTileWidget extends StatelessWidget {
   final bool isSelected;
   final VoidCallback onTap;
   /// Pin state for this post (parent owns the storage so it can
-  /// re-sort the list after toggle). Null hides the icon.
+  /// re-sort the list after toggle). When [onTogglePin] is null
+  /// the pin entry is hidden from the menu.
   final bool isPinned;
   final VoidCallback? onTogglePin;
   /// Follow state for this post's author. Null hides the icon —
@@ -21,6 +22,12 @@ class BlogPostTileWidget extends StatelessWidget {
   /// local user (parent decides).
   final bool isFollowing;
   final VoidCallback? onToggleFollow;
+  /// Publish/unpublish + delete entries appear in the overflow
+  /// menu only when the parent supplies the callbacks (i.e. this
+  /// is a local post the current user owns). Remote posts get
+  /// just the pin entry.
+  final VoidCallback? onTogglePublish;
+  final VoidCallback? onDelete;
 
   const BlogPostTileWidget({
     Key? key,
@@ -31,6 +38,8 @@ class BlogPostTileWidget extends StatelessWidget {
     this.onTogglePin,
     this.isFollowing = false,
     this.onToggleFollow,
+    this.onTogglePublish,
+    this.onDelete,
   }) : super(key: key);
 
   @override
@@ -68,31 +77,10 @@ class BlogPostTileWidget extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 4),
-                  // Pin / unpin toggle. Tap is captured here so the
-                  // parent ListTile.onTap doesn't also fire.
-                  if (onTogglePin != null)
-                    SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: IconButton(
-                        padding: EdgeInsets.zero,
-                        iconSize: 18,
-                        tooltip:
-                            isPinned ? i18n.t('unpin') : i18n.t('pin'),
-                        icon: Icon(
-                          isPinned
-                              ? Icons.push_pin
-                              : Icons.push_pin_outlined,
-                          color: isPinned
-                              ? theme.colorScheme.primary
-                              : theme.colorScheme.onSurfaceVariant,
-                        ),
-                        onPressed: onTogglePin,
-                      ),
-                    ),
-                  // Follow / unfollow this author. Only present for
-                  // remote posts (parent passes a non-null callback
-                  // when in global scope on someone else's post).
+                  // Follow / unfollow this author. Standalone icon
+                  // (only on remote posts) — separate from the
+                  // overflow menu because it acts on the AUTHOR,
+                  // not the post.
                   if (onToggleFollow != null)
                     SizedBox(
                       width: 32,
@@ -116,6 +104,13 @@ class BlogPostTileWidget extends StatelessWidget {
                         onPressed: onToggleFollow,
                       ),
                     ),
+                  // Overflow menu: pin/unpin + (for local-author
+                  // posts) publish/unpublish + delete. Hidden when
+                  // none of the three callbacks are wired.
+                  if (onTogglePin != null ||
+                      onTogglePublish != null ||
+                      onDelete != null)
+                    _buildOverflowMenu(context, theme, i18n),
                   const SizedBox(width: 4),
                   // Draft badge
                   if (post.isDraft)
@@ -230,6 +225,101 @@ class BlogPostTileWidget extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildOverflowMenu(
+      BuildContext context, ThemeData theme, I18nService i18n) {
+    final isPublished = post.status == BlogStatus.published;
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: PopupMenuButton<String>(
+        padding: EdgeInsets.zero,
+        iconSize: 20,
+        tooltip: i18n.t('more_options') ?? 'More options',
+        icon: Icon(
+          Icons.more_vert,
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
+        onSelected: (value) {
+          switch (value) {
+            case 'pin':
+              onTogglePin?.call();
+              break;
+            case 'toggle_publish':
+              onTogglePublish?.call();
+              break;
+            case 'delete':
+              onDelete?.call();
+              break;
+          }
+        },
+        itemBuilder: (context) {
+          final entries = <PopupMenuEntry<String>>[];
+          if (onTogglePin != null) {
+            entries.add(PopupMenuItem<String>(
+              value: 'pin',
+              child: Row(
+                children: [
+                  Icon(
+                    isPinned ? Icons.push_pin : Icons.push_pin_outlined,
+                    size: 18,
+                    color: isPinned
+                        ? theme.colorScheme.primary
+                        : theme.colorScheme.onSurface,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(isPinned ? i18n.t('unpin') : i18n.t('pin')),
+                ],
+              ),
+            ));
+          }
+          if (onTogglePublish != null) {
+            entries.add(PopupMenuItem<String>(
+              value: 'toggle_publish',
+              child: Row(
+                children: [
+                  Icon(
+                    isPublished
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                    size: 18,
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(isPublished
+                      ? (i18n.t('unpublish') ?? 'Unpublish')
+                      : (i18n.t('publish') ?? 'Publish')),
+                ],
+              ),
+            ));
+          }
+          if (onDelete != null) {
+            if (entries.isNotEmpty) {
+              entries.add(const PopupMenuDivider());
+            }
+            entries.add(PopupMenuItem<String>(
+              value: 'delete',
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.delete_outline,
+                    size: 18,
+                    color: theme.colorScheme.error,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    i18n.t('delete'),
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
+                ],
+              ),
+            ));
+          }
+          return entries;
+        },
       ),
     );
   }
