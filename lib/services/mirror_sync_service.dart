@@ -29,6 +29,15 @@ import 'profile_storage.dart';
 import 'storage_config.dart';
 import '../models/mirror_config.dart';
 
+/// When true, diffManifest / generateManifest emit "SyncPerf:" log lines with
+/// per-folder timing breakdowns (hits, misses, ms spent hashing, ms total).
+/// Flip to false to silence.
+const bool kSyncPerfLogging = true;
+
+/// Concurrency used when batch-hashing local cache-miss files during
+/// diffManifest and generateManifest.
+const int _kHashConcurrency = 8;
+
 /// Check if a relative path matches a single ignore pattern.
 /// Supports `*` (any non-slash chars), `**` (recursive/any path), `?` (single char).
 bool matchesIgnorePattern(String path, String pattern) {
@@ -626,27 +635,40 @@ class MirrorSyncService {
     ProfileStorage? storage,
     FileIndexService? fileIndex,
   }) async {
+    final sw = kSyncPerfLogging ? (Stopwatch()..start()) : null;
     final files = <MirrorFileEntry>[];
     var totalBytes = 0;
     final folder = path.basename(folderPath);
+    var hits = 0;
+    var misses = 0;
+    var hashMs = 0;
+
+    // Metadata-only entry gathered in the first pass. For cache hits, sha1 is
+    // set; for cache misses, sha1 stays null and gets filled by the batch-hash
+    // pass. fullRelPath is the path understood by ProfileStorage.readBytes.
+    final pending = <
+      ({
+        String relativePath,
+        String fullRelPath,
+        int size,
+        int mtime,
+        String? sha1,
+      })
+    >[];
+    final currentPaths = <String>{};
+    final cachedIndex = fileIndex?.getFolderIndex(folder) ?? {};
+    final cacheMisses =
+        <({String path, int size, int mtime, String sha1, String? tlsh})>[];
 
     if (storage != null) {
-      // Use ProfileStorage (works with both encrypted and filesystem)
       final exists = await storage.directoryExists(folder);
       if (!exists) {
         throw StateError('Folder does not exist: $folder');
       }
 
       final entries = await storage.listDirectory(folder, recursive: true);
-      final currentPaths = <String>{};
-      final cachedIndex = fileIndex?.getFolderIndex(folder) ?? {};
-      final cacheMisses =
-          <({String path, int size, int mtime, String sha1, String? tlsh})>[];
-
       for (final entry in entries) {
         if (entry.isDirectory) continue;
-        // entry.path is relative to storage base, e.g. "blog-xxx/2024/post.md"
-        // We need path relative to the folder
         final fullRelPath = entry.path;
         final relativePath = fullRelPath.startsWith('$folder/')
             ? fullRelPath.substring(folder.length + 1)
@@ -657,131 +679,150 @@ class MirrorSyncService {
 
         currentPaths.add(relativePath);
 
-        try {
-          final entryMtime =
-              (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000;
-          final entrySize = entry.size ?? 0;
+        final entryMtime =
+            (entry.modified?.millisecondsSinceEpoch ?? 0) ~/ 1000;
+        final entrySize = entry.size ?? 0;
 
-          // Try bulk-loaded cache first
-          final cached = cachedIndex[relativePath];
-          final cachedHash =
-              (cached != null &&
-                  cached.size == entrySize &&
-                  cached.mtime == entryMtime)
-              ? cached.sha1
-              : null;
-          String sha1Hash;
-
-          if (cachedHash != null) {
-            sha1Hash = cachedHash;
-          } else {
-            final bytes = await storage.readBytes(fullRelPath);
-            if (bytes == null) continue;
-            sha1Hash = sha1.convert(bytes).toString();
-            cacheMisses.add((
-              path: relativePath,
-              size: entrySize,
-              mtime: entryMtime,
-              sha1: sha1Hash,
-              tlsh: null,
-            ));
-          }
-
-          files.add(
-            MirrorFileEntry(
-              path: relativePath,
-              sha1: sha1Hash,
-              mtime: entryMtime,
-              size: entrySize,
-              tlsh: null,
-            ),
-          );
-
-          totalBytes += entrySize;
-        } catch (e) {
-          LogService().log('MirrorSync: Error reading file $relativePath: $e');
+        final cached = cachedIndex[relativePath];
+        final cachedHash =
+            (cached != null &&
+                cached.size == entrySize &&
+                cached.mtime == entryMtime)
+            ? cached.sha1
+            : null;
+        if (cachedHash != null) {
+          hits++;
+        } else {
+          misses++;
         }
-      }
 
-      fileIndex?.batchPutHashes(folder, cacheMisses);
-      fileIndex?.pruneFolder(folder, currentPaths);
+        pending.add((
+          relativePath: relativePath,
+          fullRelPath: fullRelPath,
+          size: entrySize,
+          mtime: entryMtime,
+          sha1: cachedHash,
+        ));
+      }
     } else {
-      // Fallback: raw filesystem
       final dir = Directory(folderPath);
       if (!await dir.exists()) {
         throw StateError('Folder does not exist: $folderPath');
       }
 
-      final currentPaths = <String>{};
-      final cachedIndex = fileIndex?.getFolderIndex(folder) ?? {};
-      final cacheMisses =
-          <({String path, int size, int mtime, String sha1, String? tlsh})>[];
-
       await for (final entity in dir.list(recursive: true)) {
-        if (entity is File) {
-          final relativePath = path.relative(entity.path, from: folderPath);
+        if (entity is! File) continue;
+        final relativePath = path.relative(entity.path, from: folderPath);
 
-          if (relativePath.startsWith('.')) continue;
-          if (relativePath == 'log' || relativePath.startsWith('log/')) {
-            continue;
+        if (relativePath.startsWith('.')) continue;
+        if (relativePath == 'log' || relativePath.startsWith('log/')) continue;
+
+        currentPaths.add(relativePath);
+
+        final stat = await entity.stat();
+        final entryMtime = stat.modified.millisecondsSinceEpoch ~/ 1000;
+        final entrySize = stat.size;
+
+        final cached = cachedIndex[relativePath];
+        final cachedHash =
+            (cached != null &&
+                cached.size == entrySize &&
+                cached.mtime == entryMtime)
+            ? cached.sha1
+            : null;
+        if (cachedHash != null) {
+          hits++;
+        } else {
+          misses++;
+        }
+
+        pending.add((
+          relativePath: relativePath,
+          fullRelPath: entity.path,
+          size: entrySize,
+          mtime: entryMtime,
+          sha1: cachedHash,
+        ));
+      }
+    }
+
+    // Batch-hash cache misses in parallel chunks. Populates the resolvedHash
+    // map so the final manifest build can read from it in O(1).
+    final toHash = pending.where((p) => p.sha1 == null).toList();
+    final resolvedHash = <String, String>{};
+    if (toHash.isNotEmpty) {
+      final hashSw = kSyncPerfLogging ? (Stopwatch()..start()) : null;
+      Future<void> hashOne(
+        ({
+          String relativePath,
+          String fullRelPath,
+          int size,
+          int mtime,
+          String? sha1,
+        }) p,
+      ) async {
+        try {
+          Uint8List? bytes;
+          if (storage != null) {
+            bytes = await storage.readBytes(p.fullRelPath);
+          } else {
+            bytes = await File(p.fullRelPath).readAsBytes();
           }
-
-          currentPaths.add(relativePath);
-
-          try {
-            final stat = await entity.stat();
-            final entryMtime = stat.modified.millisecondsSinceEpoch ~/ 1000;
-            final entrySize = stat.size;
-
-            // Try bulk-loaded cache first
-            final cached = cachedIndex[relativePath];
-            final cachedHash =
-                (cached != null &&
-                    cached.size == entrySize &&
-                    cached.mtime == entryMtime)
-                ? cached.sha1
-                : null;
-            String sha1Hash;
-
-            if (cachedHash != null) {
-              sha1Hash = cachedHash;
-            } else {
-              final bytes = await entity.readAsBytes();
-              sha1Hash = sha1.convert(bytes).toString();
-              cacheMisses.add((
-                path: relativePath,
-                size: entrySize,
-                mtime: entryMtime,
-                sha1: sha1Hash,
-                tlsh: null,
-              ));
-            }
-
-            files.add(
-              MirrorFileEntry(
-                path: relativePath,
-                sha1: sha1Hash,
-                mtime: entryMtime,
-                size: entrySize,
-                tlsh: null,
-              ),
-            );
-
-            totalBytes += entrySize;
-          } catch (e) {
-            LogService().log(
-              'MirrorSync: Error reading file $relativePath: $e',
-            );
-          }
+          if (bytes == null) return;
+          final hash = sha1.convert(bytes).toString();
+          resolvedHash[p.relativePath] = hash;
+          cacheMisses.add((
+            path: p.relativePath,
+            size: p.size,
+            mtime: p.mtime,
+            sha1: hash,
+            tlsh: null,
+          ));
+        } catch (e) {
+          LogService().log(
+            'MirrorSync: Error reading file ${p.relativePath}: $e',
+          );
         }
       }
 
-      fileIndex?.batchPutHashes(folder, cacheMisses);
-      fileIndex?.pruneFolder(folder, currentPaths);
+      for (var i = 0; i < toHash.length; i += _kHashConcurrency) {
+        final end = (i + _kHashConcurrency < toHash.length)
+            ? i + _kHashConcurrency
+            : toHash.length;
+        await Future.wait(toHash.sublist(i, end).map(hashOne));
+      }
+      hashMs = hashSw?.elapsedMilliseconds ?? 0;
     }
+
+    // Build the final manifest in one pass.
+    for (final p in pending) {
+      final sha1Hash = p.sha1 ?? resolvedHash[p.relativePath];
+      if (sha1Hash == null) continue; // unreadable file — already logged
+      files.add(
+        MirrorFileEntry(
+          path: p.relativePath,
+          sha1: sha1Hash,
+          mtime: p.mtime,
+          size: p.size,
+          tlsh: null,
+        ),
+      );
+      totalBytes += p.size;
+    }
+
+    fileIndex?.batchPutHashes(folder, cacheMisses);
+    fileIndex?.pruneFolder(folder, currentPaths);
 
     // Sort files by path for consistent ordering
     files.sort((a, b) => a.path.compareTo(b.path));
+
+    if (kSyncPerfLogging) {
+      LogService().log(
+        'SyncPerf: generateManifest $folder '
+        'files=${files.length} hits=$hits misses=$misses '
+        'hashMs=$hashMs totalMs=${sw?.elapsedMilliseconds ?? 0}',
+      );
+    }
 
     return MirrorManifest(
       folder: folder,
@@ -1021,12 +1062,16 @@ class MirrorSyncService {
     FileIndexService? fileIndex,
     void Function(int done, int total)? onProgress,
   }) async {
+    final sw = kSyncPerfLogging ? (Stopwatch()..start()) : null;
     final changes = <FileChange>[];
     final localFiles = <String, LocalDiffEntry>{};
     final resolvedLocalSha1s = <String, String>{};
     final folder = path.basename(localPath);
     final cacheMisses =
         <({String path, int size, int mtime, String sha1, String? tlsh})>[];
+    int hits = 0;
+    int misses = 0;
+    int hashMs = 0;
 
     // Merge per-app ignorePatterns with global "always" exclude rules.
     // Exclude-rule patterns may be folder-scoped (e.g. "blog/file.json")
@@ -1137,6 +1182,11 @@ class MirrorSyncService {
                   cached.mtime == entryMtime)
               ? cached.sha1
               : null;
+          if (cachedHash != null) {
+            hits++;
+          } else {
+            misses++;
+          }
           localFiles[relativePath] = (
             size: entrySize,
             mtime: entryMtime,
@@ -1147,7 +1197,6 @@ class MirrorSyncService {
           onProgress?.call(filesProcessed, totalEntries);
         }
 
-        fileIndex?.batchPutHashes(folder, cacheMisses);
         fileIndex?.pruneFolder(folder, currentPaths);
       }
     } else {
@@ -1193,6 +1242,11 @@ class MirrorSyncService {
                   cached.mtime == entryMtime)
               ? cached.sha1
               : null;
+          if (cachedHash != null) {
+            hits++;
+          } else {
+            misses++;
+          }
           localFiles[relativePath] = (
             size: entrySize,
             mtime: entryMtime,
@@ -1203,9 +1257,37 @@ class MirrorSyncService {
           onProgress?.call(filesProcessed, totalEntries);
         }
 
-        fileIndex?.batchPutHashes(folder, cacheMisses);
         fileIndex?.pruneFolder(folder, currentPaths);
       }
+    }
+
+    // Pre-hash local files whose remote counterpart will force a hash anyway.
+    // Runs concurrently at _kHashConcurrency so the comparison loop below does
+    // not re-enter ensureLocalSha1 one await at a time. Populating the cache
+    // here also means a later sync where mtime drifts but content is unchanged
+    // still hits the sha1 == remoteFile.sha1 short-circuit at line ~1300.
+    final remotesByPath = {for (final r in remote.files) r.path: r};
+    final toHash = <String>[];
+    for (final e in localFiles.entries) {
+      final rel = e.key;
+      final local = e.value;
+      if (local.sha1 != null && local.sha1!.isNotEmpty) continue;
+      final rf = remotesByPath[rel];
+      if (rf == null) continue;
+      if (local.size == rf.size && local.mtime == rf.mtime) continue;
+      toHash.add(rel);
+    }
+    if (toHash.isNotEmpty) {
+      final hashSw = kSyncPerfLogging ? (Stopwatch()..start()) : null;
+      for (var i = 0; i < toHash.length; i += _kHashConcurrency) {
+        final end = (i + _kHashConcurrency < toHash.length)
+            ? i + _kHashConcurrency
+            : toHash.length;
+        await Future.wait(
+          toHash.sublist(i, end).map((rp) => ensureLocalSha1(rp, localFiles[rp]!)),
+        );
+      }
+      hashMs = hashSw?.elapsedMilliseconds ?? 0;
     }
 
     // Check remote files against local
@@ -1326,6 +1408,16 @@ class MirrorSyncService {
     }
 
     fileIndex?.batchPutHashes(folder, cacheMisses);
+    if (kSyncPerfLogging) {
+      final localCount = hits + misses;
+      LogService().log(
+        'SyncPerf: diffManifest $folder '
+        'local=$localCount remote=${remote.files.length} '
+        'hits=$hits misses=$misses prehashed=${toHash.length} '
+        'hashMs=$hashMs totalMs=${sw?.elapsedMilliseconds ?? 0} '
+        'changes=${changes.length}',
+      );
+    }
     return changes;
   }
 
