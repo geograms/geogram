@@ -386,7 +386,8 @@ class DevicesService {
         .where(
           (d) =>
               (d.folderId == null || d.folderId == defaultFolderId) &&
-              !d.isOnline,
+              !d.isOnline &&
+              !_isLocalProfileCallsign(d.callsign.toUpperCase()),
         )
         .toList();
 
@@ -3544,8 +3545,31 @@ class DevicesService {
       );
     }
     _devices.remove(normalizedCallsign);
-    await _cacheService.clearCache(normalizedCallsign);
+    // Never wipe a local profile's folder. RelayCacheService stores remote
+    // device caches under devices/{callsign}, which collides with the local
+    // profile folder when a discovered peer happens to share our callsign
+    // (e.g. the same NOSTR identity running on two devices). Without this
+    // guard the periodic cleanup tick would erase the user's own data.
+    if (_isLocalProfileCallsign(normalizedCallsign)) {
+      LogService().log(
+        'DevicesService: Skipping cache clear for $normalizedCallsign — matches a local profile',
+      );
+    } else {
+      await _cacheService.clearCache(normalizedCallsign);
+    }
     _notifyListeners();
+  }
+
+  bool _isLocalProfileCallsign(String normalizedCallsign) {
+    try {
+      final profiles = ProfileService().getAllStoredProfiles();
+      return profiles.any(
+        (p) => p.callsign.toUpperCase() == normalizedCallsign,
+      );
+    } catch (_) {
+      // If ProfileService is not initialized, fail safe and assume local.
+      return true;
+    }
   }
 
   /// Notify listeners of changes

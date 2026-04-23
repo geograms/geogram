@@ -1,5 +1,10 @@
 # Geogram Desktop Changelog
 
+## Unreleased
+
+### Fixes
+- DATA LOSS: device cleanup no longer wipes the local profile folder when a discovered peer happens to share the local callsign (e.g. the same NOSTR identity running on two devices)
+
 ## 2026-04-22 - v1.39.0-beta.1
 
 ### Changes
