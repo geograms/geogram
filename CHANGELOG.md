@@ -2,21 +2,15 @@
 
 ## 2026-04-23 - v1.39.0-beta.4
 
+### Fixes
+- DATA LOSS: device cleanup no longer wipes the local profile folder when a discovered peer happens to share the local callsign (e.g. the same NOSTR identity running on two devices)
+
 ### Changes
-- Devices cleanup: never wipe local profile folder
-- Release v1.39.0-beta.3
 - Update check: compare prerelease suffixes so beta.N → beta.N+1 updates
-- Release v1.39.0-beta.2
 - Sync comparison: one auth + one manifest for the whole session
 - Sync comparison: parallelize folders, pre-hash cache misses, dedup manifests
 - Sync comparison: clarify labels using local/remote
 - Sync comparison panel: folder-based tree navigation
-
-
-## Unreleased
-
-### Fixes
-- DATA LOSS: device cleanup no longer wipes the local profile folder when a discovered peer happens to share the local callsign (e.g. the same NOSTR identity running on two devices)
 
 ## 2026-04-22 - v1.39.0-beta.1
 
