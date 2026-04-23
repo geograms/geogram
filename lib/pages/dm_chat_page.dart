@@ -11,6 +11,8 @@ import '../models/dm_conversation.dart';
 import '../services/direct_message_service.dart';
 import '../services/dm_queue_service.dart';
 import '../services/devices_service.dart';
+import '../services/webrtc_peer_manager.dart';
+import '../services/log_service.dart';
 import '../services/i18n_service.dart';
 import '../services/profile_service.dart';
 import '../services/chat_file_download_manager.dart';
@@ -61,15 +63,23 @@ class _DMChatPageState extends State<DMChatPage> {
   EventSubscription<ChatUploadProgressEvent>? _uploadSubscription;
   EventSubscription<DMRetentionChangedEvent>? _retentionSubscription;
 
+  bool _disposed = false;
+
   @override
   void initState() {
     super.initState();
     _initializeChat();
     _subscribeToEvents();
+    // Open a WebRTC connection to the peer in the background while the user
+    // reads history and composes their first message. The cached peer in
+    // WebRTCPeerManager means every subsequent send reuses this handshake
+    // instead of paying ~15 s per message.
+    unawaited(_prewarmConnection());
   }
 
   @override
   void dispose() {
+    _disposed = true;
     // Clear current conversation to resume tracking unread
     _dmService.setCurrentConversation(null);
     _messageSubscription?.cancel();
@@ -80,6 +90,28 @@ class _DMChatPageState extends State<DMChatPage> {
     _uploadSubscription?.cancel();
     _retentionSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _prewarmConnection() async {
+    final peerManager = WebRTCPeerManager();
+    final callsign = widget.otherCallsign.toUpperCase();
+    if (peerManager.hasHealthyConnection(callsign)) {
+      LogService().log('ChatPerf: prewarm $callsign skipped (already healthy)');
+      return;
+    }
+    final sw = Stopwatch()..start();
+    try {
+      final connected = await peerManager.ensureConnection(callsign);
+      if (_disposed) return;
+      LogService().log(
+        'ChatPerf: prewarm $callsign connected=$connected ms=${sw.elapsedMilliseconds}',
+      );
+    } catch (e) {
+      if (_disposed) return;
+      LogService().log(
+        'ChatPerf: prewarm $callsign failed after ${sw.elapsedMilliseconds}ms: $e',
+      );
+    }
   }
 
   void _subscribeToEvents() {
