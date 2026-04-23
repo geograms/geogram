@@ -1042,6 +1042,12 @@ class DebugController {
         'params': {},
       },
       {
+        'action': 'www_set_custom_homepage',
+        'description':
+            'Toggle the www app custom-homepage switch. true writes the "It works!" starter and stops auto-regeneration; false restores the auto-generated homepage on next request.',
+        'params': {'enabled': 'true | false'},
+      },
+      {
         'action': 'select_chat_room',
         'description':
             'Select a chat room by ID in the currently open chat browser',
@@ -2032,6 +2038,24 @@ class DebugController {
 
       case 'welcome_finalize':
         return await _handleWelcomeFinalize();
+
+      case 'www_set_custom_homepage':
+        final enabled = params['enabled'];
+        if (enabled is! bool) {
+          return {
+            'success': false,
+            'error': 'Missing or invalid "enabled" parameter (bool required)',
+          };
+        }
+        await AppService().setWwwUseCustomHomepage(enabled);
+        final active = await AppService().isWwwUsingCustomHomepage();
+        return {
+          'success': true,
+          'use_custom_homepage': active,
+          'message': active
+              ? 'Custom "It works!" homepage is now active'
+              : 'Auto-generated homepage will be regenerated on next request',
+        };
 
       case 'select_chat_room':
         final roomId = params['room_id'] as String?;

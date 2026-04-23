@@ -1010,9 +1010,13 @@ class WebSocketService {
       return WebSocketService()._handleSharedFolderRequestLocal(filePath, storagePath, headersJson);
     }
 
-    // For www collection requesting index.html, regenerate only if content changed
+    // For www collection requesting index.html, regenerate only if content
+    // changed — unless the user has opted into a custom homepage, in which
+    // case their hand-written index.html is served as-is.
     if (appName == 'www' && (filePath == '/' || filePath == '/index.html')) {
-      if (appService.isWwwIndexDirty) {
+      if (await appService.isWwwUsingCustomHomepage()) {
+        // Custom homepage: serve the user's index.html unchanged.
+      } else if (appService.isWwwIndexDirty) {
         LogService().log('Regenerating www index.html dynamically...');
         await appService.generateDefaultWwwIndex(app);
       }

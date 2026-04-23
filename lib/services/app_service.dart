@@ -252,7 +252,10 @@ class AppService {
           );
           stderr.writeln('Created default app: $type');
           if (type == 'www' && app.storagePath != null) {
-            await generateDefaultWwwIndex(app);
+            // Fresh installs ship with a static "It works!" starter that the
+            // user owns and edits — the dynamic generator only kicks back in
+            // if they explicitly disable the custom-homepage switch.
+            await setWwwUseCustomHomepage(true);
           }
         } catch (e) {
           stderr.writeln('Error creating default app $type: $e');
@@ -269,6 +272,125 @@ class AppService {
 
   /// Whether the www index.html needs regeneration.
   bool get isWwwIndexDirty => _wwwIndexDirty;
+
+  /// Per-app settings for the www app live in `extra/settings.json`.
+  static const String _wwwSettingsRelativePath = 'extra/settings.json';
+
+  /// Read the www app's per-app settings (returns empty map when missing).
+  Future<Map<String, dynamic>> _readWwwSettings(App app) async {
+    if (kIsWeb || _profileStorage == null || app.storagePath == null) {
+      return {};
+    }
+    final appStorage = ScopedProfileStorage.fromAbsolutePath(
+      _profileStorage!,
+      app.storagePath!,
+    );
+    final raw = await appStorage.readString(_wwwSettingsRelativePath);
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } catch (_) {}
+    return {};
+  }
+
+  Future<void> _writeWwwSettings(
+    App app,
+    Map<String, dynamic> settings,
+  ) async {
+    if (kIsWeb || _profileStorage == null || app.storagePath == null) return;
+    final appStorage = ScopedProfileStorage.fromAbsolutePath(
+      _profileStorage!,
+      app.storagePath!,
+    );
+    await appStorage.createDirectory('extra');
+    await appStorage.writeString(
+      _wwwSettingsRelativePath,
+      const JsonEncoder.withIndent('  ').convert(settings),
+    );
+  }
+
+  /// True when the user has opted to keep their own index.html — the HTTP
+  /// surface must not regenerate it on each request.
+  Future<bool> isWwwUsingCustomHomepage() async {
+    final app = getAppByType('www');
+    if (app == null) return false;
+    final settings = await _readWwwSettings(app);
+    return settings['useCustomHomepage'] == true;
+  }
+
+  /// Set the "use custom homepage" flag. When turning it on, write a starter
+  /// "It works!" page so the user has something concrete to edit; when
+  /// turning it off, mark the dynamic index dirty so the auto-generated
+  /// homepage comes back on the next request.
+  Future<void> setWwwUseCustomHomepage(bool value) async {
+    final app = getAppByType('www');
+    if (app == null) return;
+    final settings = await _readWwwSettings(app);
+    settings['useCustomHomepage'] = value;
+    await _writeWwwSettings(app, settings);
+
+    if (value) {
+      await _writeItWorksStarter(app);
+      _wwwIndexDirty = false;
+    } else {
+      invalidateWwwIndex();
+    }
+  }
+
+  /// Write a minimal "It works!" homepage using the default theme so a user
+  /// who just enabled custom homepages has a real file to edit instead of
+  /// the auto-generated one.
+  Future<void> _writeItWorksStarter(App app) async {
+    if (kIsWeb || _profileStorage == null || app.storagePath == null) return;
+
+    final themeService = WebThemeService();
+    await themeService.init();
+    final template = await themeService.getTemplate('www');
+    if (template == null) return;
+    final combinedStyles = await themeService.getAppStyles('www') ?? '';
+
+    final profile = ProfileService().getProfile();
+    final displayName = profile.displayName.isNotEmpty
+        ? profile.displayName
+        : (_currentCallsign ?? 'My Website');
+    final callsign = _currentCallsign ?? 'YOURCALLSIGN';
+
+    final body = '''
+<div class="posts">
+  <div class="post">
+    <h1 class="post-title" style="font-size:4rem;text-align:center;margin:1.5rem 0;">It works!</h1>
+    <div class="post-content">
+      <p>This page is served from your website's <code>index.html</code>.</p>
+      <p>Edit <code>index.html</code> in the <strong>Web</strong> app to customise the homepage that visitors see at <code>/$callsign</code>.</p>
+      <p>To go back to the auto-generated homepage, switch off <em>Use custom homepage</em> in the Web app.</p>
+    </div>
+  </div>
+</div>
+''';
+
+    final html = themeService.processTemplate(template, {
+      'TITLE': displayName,
+      'COLLECTION_NAME': displayName,
+      'APP_NAME': displayName,
+      'APP_DESCRIPTION': 'A personal website published via geogram',
+      'CONTENT': body,
+      'MENU_ITEMS': '',
+      'DATA_JSON': '{"files": []}',
+      'SCRIPTS': '',
+      'NOSTR_STYLES': '',
+      'NOSTR_HEADER': '',
+      'NOSTR_SCRIPTS': '',
+      'GENERATED_DATE': DateTime.now().toIso8601String(),
+    });
+
+    final appStorage = ScopedProfileStorage.fromAbsolutePath(
+      _profileStorage!,
+      app.storagePath!,
+    );
+    await appStorage.writeString('index.html', html);
+    await appStorage.writeString('styles.css', combinedStyles);
+  }
 
   /// Generate default index.html for www app using the default theme
   /// This is public so it can be called from WebsocketService for on-demand creation

@@ -69,6 +69,12 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
   String? _htmlContent;
   bool _previewLoading = false;
 
+  // --- Custom homepage toggle ---
+  /// Default true so the UI mirrors the new install default (static
+  /// "It works!" page) until the real value is loaded from disk.
+  bool _useCustomHomepage = true;
+  bool _customHomepageBusy = false;
+
   // --- WebView state (platform-adaptive) ---
   /// Directory from which WebView loads index.html.
   /// For encrypted storage this is a temp extraction dir; otherwise widget.appPath.
@@ -112,10 +118,68 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(_onTabChanged);
+    _loadCustomHomepageSetting();
     // Rebuild after first frame so _pickerKey.currentState is available.
     SchedulerBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() {});
     });
+  }
+
+  Future<void> _loadCustomHomepageSetting() async {
+    final value = await AppService().isWwwUsingCustomHomepage();
+    if (!mounted) return;
+    setState(() => _useCustomHomepage = value);
+  }
+
+  Future<void> _toggleCustomHomepage(bool value) async {
+    if (_customHomepageBusy) return;
+    if (value) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Use custom homepage?'),
+          content: const Text(
+            'Your index.html will be replaced with a starter "It works!" page '
+            'that you can edit freely. The auto-generated homepage will no '
+            'longer overwrite your changes. Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Replace and enable'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+
+    setState(() => _customHomepageBusy = true);
+    try {
+      await AppService().setWwwUseCustomHomepage(value);
+      if (!mounted) return;
+      setState(() => _useCustomHomepage = value);
+      _pickerKey.currentState?.refresh();
+      if (_tabController.index == 1) _loadPreview();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(value
+              ? 'Custom homepage enabled — edit index.html to customise'
+              : 'Auto-generated homepage restored'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update setting: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _customHomepageBusy = false);
+    }
   }
 
   @override
@@ -606,6 +670,7 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
       body: Column(
         children: [
           _buildUrlBar(),
+          _buildHomepageToggle(),
           Expanded(
             child: TabBarView(
               controller: _tabController,
@@ -676,6 +741,61 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Custom-homepage toggle
+  // ---------------------------------------------------------------------------
+
+  Widget _buildHomepageToggle() {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        border: Border(bottom: BorderSide(color: theme.dividerColor)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            _useCustomHomepage ? Icons.edit_document : Icons.auto_awesome,
+            size: 18,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Use custom homepage',
+                  style: theme.textTheme.bodyMedium,
+                ),
+                Text(
+                  _useCustomHomepage
+                      ? 'Visitors see your edited index.html'
+                      : 'Visitors see an auto-generated page',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (_customHomepageBusy)
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            Switch(
+              value: _useCustomHomepage,
+              onChanged: _toggleCustomHomepage,
+            ),
+        ],
       ),
     );
   }
