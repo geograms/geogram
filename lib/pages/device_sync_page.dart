@@ -58,6 +58,10 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
   // Stage 2: expansion state
   final Set<String> _expandedFolders = {};
+  // Stage 2: subfolder expansion state — key is "$appFolder|$subPath"
+  final Set<String> _expandedSubtree = {};
+  // Stage 2: cached diff tree per app folder; invalidated on _diffs mutation
+  final Map<String, _DiffNode> _treeCache = {};
 
   // Stage 2: direction filter — null=show all, true=pull only, false=push only
   bool? _directionFilter;
@@ -206,6 +210,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           _multiTokens.clear();
           _multiDeviceNeeds.clear();
           _diffs.clear();
+          _treeCache.clear();
+          _expandedSubtree.clear();
           _tokens.clear();
           _diffError = null;
           _expandedFolders.clear();
@@ -543,6 +549,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     final storage = AppService().profileStorage;
     _diffs.clear();
     _tokens.clear();
+    _treeCache.clear();
+    _expandedSubtree.clear();
 
     final profile = ProfileService().getProfile();
     final indexPath = StorageConfig().getFileIndexPath(profile.callsign);
@@ -654,6 +662,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
     _diffs.clear();
     _tokens.clear();
+    _treeCache.clear();
+    _expandedSubtree.clear();
     _selectedFiles.clear();
     _fileDirections.clear();
     _multiDeviceNeeds.clear();
@@ -1070,84 +1080,228 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
               ],
             ),
           ),
-          // File list — shown when expanded
+          // File list — shown when expanded, as a folder-based tree
           if (isExpanded)
-            ...changes.map((change) {
-              final key = '$folder:${change.path}';
-              final isSelected = selected.contains(change.path);
-              final isPull = _fileDirections[key] ?? true;
-
-              return ListTile(
-                dense: true,
-                onTap: () {
-                  setState(() {
-                    if (isSelected) {
-                      _selectedFiles[folder]?.remove(change.path);
-                    } else {
-                      _selectedFiles
-                          .putIfAbsent(folder, () => {})
-                          .add(change.path);
-                    }
-                  });
-                },
-                leading: IgnorePointer(
-                  child: Checkbox(value: isSelected, onChanged: (_) {}),
-                ),
-                title: Text(
-                  change.path,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: _changeColor(change.type),
-                  ),
-                ),
-                subtitle: Text(
-                  _isMultiMode
-                      ? _multiPushLabel(folder, change.path)
-                      : _changeLabel(change.type),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: _changeColor(change.type),
-                  ),
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // In multi-mode, direction is always push — no toggle
-                    if (!_isMultiMode && isSelected)
-                      IconButton(
-                        icon: Icon(
-                          isPull ? Icons.arrow_back : Icons.arrow_forward,
-                          color: isPull ? Colors.green : Colors.blue,
-                        ),
-                        tooltip: isPull ? 'Pull from mirror' : 'Push to mirror',
-                        onPressed: () {
-                          setState(() {
-                            _fileDirections[key] = !isPull;
-                          });
-                        },
-                      ),
-                    PopupMenuButton<String>(
-                      icon: const Icon(Icons.more_vert, size: 20),
-                      padding: EdgeInsets.zero,
-                      itemBuilder: (_) => [
-                        const PopupMenuItem(
-                          value: 'exclude',
-                          child: Text('Exclude from sync'),
-                        ),
-                      ],
-                      onSelected: (value) {
-                        if (value == 'exclude') {
-                          _excludeFile(folder, change);
-                        }
-                      },
-                    ),
-                  ],
-                ),
-              );
-            }),
+            ..._buildTreeRows(
+              folder,
+              (_treeCache[folder] ??= _buildDiffTree(changes)).children,
+              0,
+            ),
         ],
       ),
     );
+  }
+
+  /// Recursively render tree rows for the given sibling nodes at `depth`.
+  List<Widget> _buildTreeRows(
+    String appFolder,
+    List<_DiffNode> nodes,
+    int depth,
+  ) {
+    final rows = <Widget>[];
+    for (final node in nodes) {
+      if (node.isFolder) {
+        rows.add(_buildFolderRow(appFolder, node, depth));
+        final key = '$appFolder|${node.fullPath}';
+        if (_expandedSubtree.contains(key)) {
+          rows.addAll(_buildTreeRows(appFolder, node.children, depth + 1));
+        }
+      } else {
+        rows.add(_buildFileRow(appFolder, node, depth));
+      }
+    }
+    return rows;
+  }
+
+  Widget _buildFolderRow(String appFolder, _DiffNode node, int depth) {
+    final key = '$appFolder|${node.fullPath}';
+    final expanded = _expandedSubtree.contains(key);
+    final tri = _subtreeSelection(appFolder, node);
+    final leftPad = 8.0 + 16.0 * depth;
+
+    return InkWell(
+      onTap: () {
+        setState(() {
+          if (expanded) {
+            _expandedSubtree.remove(key);
+          } else {
+            _expandedSubtree.add(key);
+          }
+        });
+      },
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(leftPad, 2, 8, 2),
+        child: Row(
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                setState(() {
+                  _toggleSubtreeSelection(appFolder, node);
+                });
+              },
+              child: IgnorePointer(
+                child: Checkbox(
+                  value: tri == true
+                      ? true
+                      : tri == false
+                      ? false
+                      : null,
+                  tristate: true,
+                  onChanged: (_) {},
+                ),
+              ),
+            ),
+            Icon(
+              expanded ? Icons.folder_open : Icons.folder,
+              size: 18,
+              color: Colors.amber.shade700,
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                node.name,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (node.adds > 0) _changeChip('+${node.adds}', Colors.green),
+            if (node.mods > 0) _changeChip('~${node.mods}', Colors.amber),
+            if (node.dels > 0) _changeChip('-${node.dels}', Colors.red),
+            if (node.ups > 0) _changeChip('^${node.ups}', Colors.blue),
+            Icon(
+              expanded ? Icons.expand_less : Icons.expand_more,
+              size: 18,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFileRow(String appFolder, _DiffNode node, int depth) {
+    final change = node.change!;
+    final selected = _selectedFiles[appFolder] ?? const <String>{};
+    final isSelected = selected.contains(change.path);
+    final key = '$appFolder:${change.path}';
+    final isPull = _fileDirections[key] ?? true;
+    final leftPad = 8.0 + 16.0 * depth;
+
+    return InkWell(
+      onTap: () {
+        setState(() {
+          if (isSelected) {
+            _selectedFiles[appFolder]?.remove(change.path);
+          } else {
+            _selectedFiles
+                .putIfAbsent(appFolder, () => <String>{})
+                .add(change.path);
+          }
+        });
+      },
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(leftPad, 2, 8, 2),
+        child: Row(
+          children: [
+            IgnorePointer(
+              child: Checkbox(value: isSelected, onChanged: (_) {}),
+            ),
+            Icon(
+              Icons.insert_drive_file_outlined,
+              size: 16,
+              color: _changeColor(change.type),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    node.name,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: _changeColor(change.type),
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    _isMultiMode
+                        ? _multiPushLabel(appFolder, change.path)
+                        : _changeLabel(change.type),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: _changeColor(change.type),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (!_isMultiMode && isSelected)
+              IconButton(
+                icon: Icon(
+                  isPull ? Icons.arrow_back : Icons.arrow_forward,
+                  color: isPull ? Colors.green : Colors.blue,
+                  size: 18,
+                ),
+                tooltip: isPull ? 'Pull from mirror' : 'Push to mirror',
+                constraints: const BoxConstraints(),
+                padding: const EdgeInsets.all(4),
+                onPressed: () {
+                  setState(() {
+                    _fileDirections[key] = !isPull;
+                  });
+                },
+              ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.more_vert, size: 18),
+              padding: EdgeInsets.zero,
+              itemBuilder: (_) => [
+                const PopupMenuItem(
+                  value: 'exclude',
+                  child: Text('Exclude from sync'),
+                ),
+              ],
+              onSelected: (value) {
+                if (value == 'exclude') {
+                  _excludeFile(appFolder, change);
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Tristate selection for the given subtree. true = all selected,
+  /// false = none selected, null = partial.
+  bool? _subtreeSelection(String appFolder, _DiffNode node) {
+    final selected = _selectedFiles[appFolder] ?? const <String>{};
+    int total = 0;
+    int count = 0;
+    node.collectFilePaths((path) {
+      total++;
+      if (selected.contains(path)) count++;
+    });
+    if (total == 0 || count == 0) return false;
+    if (count == total) return true;
+    return null;
+  }
+
+  void _toggleSubtreeSelection(String appFolder, _DiffNode node) {
+    final current = _subtreeSelection(appFolder, node);
+    final paths = <String>[];
+    node.collectFilePaths(paths.add);
+    final selSet = _selectedFiles.putIfAbsent(appFolder, () => <String>{});
+    if (current == true) {
+      selSet.removeAll(paths);
+    } else {
+      selSet.addAll(paths);
+    }
   }
 
   /// Exclude a file from future syncs and remove it from the current diff.
@@ -1167,6 +1321,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     setState(() {
       _diffs[folder]?.removeWhere((c) => c.path == change.path);
       _selectedFiles[folder]?.remove(change.path);
+      _treeCache.remove(folder);
     });
 
     final messenger = ScaffoldMessenger.of(context);
@@ -1194,6 +1349,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             setState(() {
               _diffs[folder] ??= [];
               _diffs[folder]!.add(removedChange);
+              _treeCache.remove(folder);
               if (wasSelected) {
                 _selectedFiles.putIfAbsent(folder, () => {}).add(change.path);
               }
@@ -1485,4 +1641,120 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       ),
     );
   }
+}
+
+/// Node in the per-app diff tree used by the comparison panel.
+/// Folder nodes have children and aggregate change counts from descendants;
+/// file nodes carry a single FileChange.
+class _DiffNode {
+  final String name;
+  final String fullPath; // relative path within the app folder; '' for root
+  final bool isFolder;
+  final List<_DiffNode> children;
+  final FileChange? change;
+  int adds = 0;
+  int mods = 0;
+  int dels = 0;
+  int ups = 0;
+
+  _DiffNode._({
+    required this.name,
+    required this.fullPath,
+    required this.isFolder,
+    required this.children,
+    required this.change,
+  });
+
+  factory _DiffNode.folder(String name, String fullPath) => _DiffNode._(
+    name: name,
+    fullPath: fullPath,
+    isFolder: true,
+    children: <_DiffNode>[],
+    change: null,
+  );
+
+  factory _DiffNode.file(FileChange change) => _DiffNode._(
+    name: change.path.split('/').last,
+    fullPath: change.path,
+    isFolder: false,
+    children: const [],
+    change: change,
+  );
+
+  void aggregate() {
+    if (!isFolder) {
+      switch (change!.type) {
+        case FileChangeType.add:
+          adds = 1;
+          break;
+        case FileChangeType.modify:
+          mods = 1;
+          break;
+        case FileChangeType.delete:
+          dels = 1;
+          break;
+        case FileChangeType.upload:
+          ups = 1;
+          break;
+      }
+      return;
+    }
+    for (final c in children) {
+      c.aggregate();
+      adds += c.adds;
+      mods += c.mods;
+      dels += c.dels;
+      ups += c.ups;
+    }
+  }
+
+  void sortRecursive() {
+    if (!isFolder) return;
+    children.sort((a, b) {
+      if (a.isFolder != b.isFolder) return a.isFolder ? -1 : 1;
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    for (final c in children) {
+      c.sortRecursive();
+    }
+  }
+
+  void collectFilePaths(void Function(String path) visit) {
+    if (!isFolder) {
+      visit(change!.path);
+      return;
+    }
+    for (final c in children) {
+      c.collectFilePaths(visit);
+    }
+  }
+}
+
+_DiffNode _buildDiffTree(List<FileChange> changes) {
+  final root = _DiffNode.folder('', '');
+  for (final change in changes) {
+    final parts = change.path.split('/');
+    _DiffNode node = root;
+    final acc = <String>[];
+    for (var i = 0; i < parts.length - 1; i++) {
+      acc.add(parts[i]);
+      final subPath = acc.join('/');
+      _DiffNode? existing;
+      for (final c in node.children) {
+        if (c.isFolder && c.name == parts[i]) {
+          existing = c;
+          break;
+        }
+      }
+      if (existing == null) {
+        existing = _DiffNode.folder(parts[i], subPath);
+        node.children.add(existing);
+      }
+      node = existing;
+    }
+    node.children.add(_DiffNode.file(change));
+  }
+  root.aggregate();
+  root.sortRecursive();
+  return root;
 }
