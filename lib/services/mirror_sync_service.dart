@@ -358,6 +358,13 @@ class MirrorSyncService {
 
   MirrorSyncService._();
 
+  /// Sentinel folder name used when a single auth handshake should cover
+  /// every syncable folder for the session. The server treats a token with
+  /// [folder] == [sessionFolder] as valid for any subsequent folder-scoped
+  /// request (/api/mirror/manifest, /file, /upload) and for the aggregated
+  /// /api/mirror/manifest_all endpoint.
+  static const String sessionFolder = '*';
+
   /// Active sync tokens (issued by us as source)
   final Map<String, MirrorAccessToken> _activeTokens = {};
 
@@ -1050,6 +1057,47 @@ class MirrorSyncService {
     }
   }
 
+  /// Fetch manifests for every syncable folder in a single HTTP call.
+  /// Requires a session token obtained via [requestSync] with
+  /// [sessionFolder]. Returns a map keyed by folder name; folders the
+  /// server didn't report are absent from the map.
+  Future<Map<String, MirrorManifest>?> fetchAllManifests(
+    String peerUrl,
+    String token,
+  ) async {
+    _updateStatus(const SyncStatus(state: 'fetching_manifest'));
+    try {
+      final url = _buildPeerUri(peerUrl, '/api/mirror/manifest_all', {
+        'token': token,
+      });
+      final response = await http.get(url);
+      if (response.statusCode != 200) {
+        LogService().log(
+          'MirrorSync: manifest_all request failed: ${response.statusCode}',
+        );
+        return null;
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      if (body['success'] != true) {
+        LogService().log(
+          'MirrorSync: manifest_all request failed: ${body['error']}',
+        );
+        return null;
+      }
+      final raw = body['manifests'] as Map<String, dynamic>? ?? const {};
+      final out = <String, MirrorManifest>{};
+      for (final entry in raw.entries) {
+        out[entry.key] = MirrorManifest.fromJson(
+          entry.value as Map<String, dynamic>,
+        );
+      }
+      return out;
+    } catch (e) {
+      LogService().log('MirrorSync: manifest_all fetch failed: $e');
+      return null;
+    }
+  }
+
   /// Compare remote manifest against local folder
   Future<List<FileChange>> diffManifest(
     MirrorManifest remote,
@@ -1446,6 +1494,7 @@ class MirrorSyncService {
       final url = _buildPeerUri(peerUrl, '/api/mirror/file', {
         'path': filePath,
         'token': token,
+        'folder': folder,
       });
 
       if (storage != null) {
@@ -1592,6 +1641,7 @@ class MirrorSyncService {
         'path': filePath,
         'token': token,
         'sha1': hash,
+        'folder': folder,
       });
 
       final response = await http.post(

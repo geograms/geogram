@@ -561,35 +561,58 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
     _diffFoldersTotal = _appFolders.length;
     int foldersCompared = 0;
-    int foldersAuthFailed = 0;
-    int foldersFetchFailed = 0;
     int foldersErrored = 0;
     int done = 0;
 
-    Future<void> compareOne(String folder) async {
+    // One auth handshake for the whole sync session (instead of one per
+    // folder). The session token is valid for every folder so the subsequent
+    // transfer phase can reuse it without a second handshake.
+    final session = await mirror.requestSync(
+      _peerUrl!,
+      MirrorSyncService.sessionFolder,
+    );
+    if (!session.allowed || session.token == null) {
+      LogService().log(
+        'DeviceSync: Session auth failed: ${session.error}',
+      );
+      fileIndex.close();
+      if (mounted) {
+        setState(() {
+          _loadingDiffs = false;
+          _diffError =
+              'Could not authenticate with peer (${session.error ?? 'unknown'}). '
+              'Check that mirror sync is enabled on the peer device.';
+        });
+      }
+      return;
+    }
+    final sessionToken = session.token!;
+    for (final folder in _appFolders) {
+      _tokens[folder] = sessionToken;
+    }
+
+    // One HTTP call fetches every folder's manifest.
+    final allManifests = await mirror.fetchAllManifests(_peerUrl!, sessionToken);
+    if (allManifests == null) {
+      LogService().log('DeviceSync: manifest_all fetch failed');
+      fileIndex.close();
+      if (mounted) {
+        setState(() {
+          _loadingDiffs = false;
+          _diffError =
+              'Could not fetch file lists from peer. '
+              'Check that mirror sync is enabled on the peer device.';
+        });
+      }
+      return;
+    }
+
+    // Local diff per folder in parallel — no network from here on.
+    Future<void> diffOne(String folder) async {
       try {
-        final syncResult = await mirror.requestSync(_peerUrl!, folder);
-        if (!syncResult.allowed || syncResult.token == null) {
-          LogService().log(
-            'DeviceSync: Auth failed for $folder: ${syncResult.error}',
-          );
-          foldersAuthFailed++;
-          return;
-        }
-        _tokens[folder] = syncResult.token!;
-
-        final manifest = await mirror.fetchManifest(
-          _peerUrl!,
-          folder,
-          syncResult.token!,
-        );
-        if (manifest == null) {
-          foldersFetchFailed++;
-          return;
-        }
-
+        final manifest = allManifests[folder];
+        if (manifest == null) return;
         foldersCompared++;
-
         final localPath = '${profile.callsign}/$folder';
         final changes = await mirror.diffManifest(
           manifest,
@@ -600,7 +623,6 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           storage: storage,
           fileIndex: fileIndex,
         );
-
         if (changes.isNotEmpty) {
           _diffs[folder] = changes;
           _selectedFiles[folder] = changes.map((c) => c.path).toSet();
@@ -610,7 +632,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           }
         }
       } catch (e) {
-        LogService().log('DeviceSync: Error loading diff for $folder: $e');
+        LogService().log('DeviceSync: Error diffing $folder: $e');
         foldersErrored++;
       } finally {
         done++;
@@ -627,7 +649,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       final end = (i + _kFolderConcurrency < _appFolders.length)
           ? i + _kFolderConcurrency
           : _appFolders.length;
-      await Future.wait(_appFolders.sublist(i, end).map(compareOne));
+      await Future.wait(_appFolders.sublist(i, end).map(diffOne));
     }
 
     fileIndex.close();
@@ -639,18 +661,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         _diffFoldersDone = _diffFoldersTotal;
         _currentDiffFolder = null;
         if (_diffs.isEmpty) {
-          if (foldersCompared == 0) {
-            // No folders were actually compared — report the real problem
-            final issues = <String>[];
-            if (foldersAuthFailed > 0) {
-              issues.add('$foldersAuthFailed auth failed');
-            }
-            if (foldersFetchFailed > 0) {
-              issues.add('$foldersFetchFailed manifest fetch failed');
-            }
-            if (foldersErrored > 0) issues.add('$foldersErrored errored');
+          if (foldersErrored > 0 && foldersCompared == 0) {
             _diffError =
-                'Could not compare any apps (${issues.join(', ')}). '
+                'Could not compare any apps ($foldersErrored errored). '
                 'Check that the peer device is online and mirror sync is enabled on both devices.';
           } else {
             _diffError = 'Devices are in sync — no differences found.';
@@ -678,50 +691,62 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
 
     _diffFoldersTotal = _appFolders.length;
     int foldersCompared = 0;
-    int foldersDone = 0;
     final sw = Stopwatch()..start();
 
     // Per-folder aggregation of push-able files (local-only or local-newer)
-    // across every selected device. Populated concurrently from multiple
-    // (folder, device) tasks — safe because Dart mutations are atomic between
-    // awaits.
+    // across every selected device.
     final pushEntriesPerFolder = <String, Map<String, MirrorFileEntry>>{
       for (final f in _appFolders) f: <String, MirrorFileEntry>{},
     };
 
-    // Share in-flight manifest fetches across devices that point at the same
-    // peer URL (Phase 4 dedup). Keyed by "$peerUrl|$folder".
-    final manifestFetches = <String, Future<MirrorManifest?>>{};
+    // One auth + one manifest_all per device (was: 3 × folders × devices).
+    // Cache manifests by peerUrl so devices that share a peer only fetch once.
+    final manifestsByPeer = <String, Map<String, MirrorManifest>>{};
+    for (final entry in _multiPeerUrls.entries) {
+      final deviceId = entry.key;
+      final peerUrl = entry.value;
+      try {
+        final session = await mirrorService.requestSync(
+          peerUrl,
+          MirrorSyncService.sessionFolder,
+        );
+        if (!session.allowed || session.token == null) {
+          LogService().log(
+            'DeviceSync: Session auth failed for $deviceId: ${session.error}',
+          );
+          continue;
+        }
+        final sessionToken = session.token!;
+        _multiTokens.putIfAbsent(deviceId, () => {});
+        for (final folder in _appFolders) {
+          _multiTokens[deviceId]![folder] = sessionToken;
+        }
+        manifestsByPeer[peerUrl] ??=
+            (await mirrorService.fetchAllManifests(peerUrl, sessionToken)) ??
+                const {};
+      } catch (e) {
+        LogService().log(
+          'DeviceSync: Multi-diff setup error for $deviceId: $e',
+        );
+      }
+    }
 
-    // Flatten (folder, device) work so folder and device parallelize together.
+    // Local diff per (folder, device) tuple. No network from here on.
     final work = <({String folder, String deviceId, String peerUrl})>[];
     for (final folder in _appFolders) {
       for (final e in _multiPeerUrls.entries) {
         work.add((folder: folder, deviceId: e.key, peerUrl: e.value));
       }
     }
+    int workDone = 0;
 
-    Future<void> doOne(({String folder, String deviceId, String peerUrl}) w) async {
+    Future<void> diffOne(({String folder, String deviceId, String peerUrl}) w) async {
       try {
-        final syncResult = await mirrorService.requestSync(w.peerUrl, w.folder);
-        if (!syncResult.allowed || syncResult.token == null) return;
-
-        _multiTokens.putIfAbsent(w.deviceId, () => {})[w.folder] =
-            syncResult.token!;
-
-        final manifestKey = '${w.peerUrl}|${w.folder}';
-        final manifest = await manifestFetches.putIfAbsent(
-          manifestKey,
-          () => mirrorService.fetchManifest(
-            w.peerUrl,
-            w.folder,
-            syncResult.token!,
-          ),
-        );
+        final peerManifests = manifestsByPeer[w.peerUrl];
+        if (peerManifests == null) return;
+        final manifest = peerManifests[w.folder];
         if (manifest == null) return;
-
         foldersCompared++;
-
         final localPath = '${profile.callsign}/${w.folder}';
         final changes = await mirrorService.diffManifest(
           manifest,
@@ -732,7 +757,6 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           storage: storage,
           fileIndex: fileIndex,
         );
-
         final pushEntries = pushEntriesPerFolder[w.folder]!;
         for (final change in changes) {
           if (change.type == FileChangeType.upload) {
@@ -758,11 +782,11 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           'DeviceSync: Multi-diff error for ${w.folder} on ${w.deviceId}: $e',
         );
       } finally {
-        foldersDone++;
-        if (mounted && foldersDone % _multiPeerUrls.length == 0) {
+        workDone++;
+        if (mounted && workDone % _multiPeerUrls.length == 0) {
           setState(() {
             _currentDiffFolder = kFolderLabels[w.folder]?.$1 ?? w.folder;
-            _diffFoldersDone = foldersDone ~/ _multiPeerUrls.length;
+            _diffFoldersDone = workDone ~/ _multiPeerUrls.length;
           });
         }
       }
@@ -772,7 +796,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       final end = (i + _kFolderConcurrency < work.length)
           ? i + _kFolderConcurrency
           : work.length;
-      await Future.wait(work.sublist(i, end).map(doOne));
+      await Future.wait(work.sublist(i, end).map(diffOne));
     }
 
     // Build the unified per-folder diff from the aggregated push entries.

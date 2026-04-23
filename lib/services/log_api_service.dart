@@ -962,6 +962,7 @@ class LogApiService
           '/api/mirror/challenge': 'GET authentication challenge (prevents replay attacks)',
           '/api/mirror/request': 'POST request simple mirror sync (with signed challenge)',
           '/api/mirror/manifest': 'GET folder manifest for sync',
+          '/api/mirror/manifest_all': 'GET all syncable folders in one response (requires session token)',
           '/api/mirror/file': 'GET file content for sync',
           '/api/mirror/upload': 'POST upload a file to peer',
           '/api/mirror/pair': 'POST reciprocal pairing (registers both devices as peers)',
@@ -19655,6 +19656,11 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       return await _handleMirrorManifest(request, headers);
     }
 
+    // GET /api/mirror/manifest_all - Get all syncable folders in one response
+    if (urlPath == 'api/mirror/manifest_all' && request.method == 'GET') {
+      return await _handleMirrorManifestAll(request, headers);
+    }
+
     // GET /api/mirror/file - Download a file
     if (urlPath == 'api/mirror/file' && request.method == 'GET') {
       return await _handleMirrorFile(request, headers);
@@ -19865,8 +19871,10 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         );
       }
 
-      // Verify requested folder matches token's folder
-      if (tokenData.folder != folder) {
+      // Verify requested folder matches token's folder. A session token
+      // (folder == MirrorSyncService.sessionFolder) is valid for any folder.
+      if (tokenData.folder != MirrorSyncService.sessionFolder &&
+          tokenData.folder != folder) {
         return shelf.Response(
           403,
           body: jsonEncode({
@@ -19935,6 +19943,108 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
     }
   }
 
+  /// Handle GET /api/mirror/manifest_all - Generate manifests for every
+  /// syncable folder in a single response. Requires a session token
+  /// (tokenData.folder == MirrorSyncService.sessionFolder). Folders are
+  /// generated concurrently to keep wall-clock time down on the peer.
+  Future<shelf.Response> _handleMirrorManifestAll(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final token = request.url.queryParameters['token'];
+      if (token == null || token.isEmpty) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      final mirrorService = MirrorSyncService.instance;
+      final tokenData = mirrorService.validateToken(token);
+      if (tokenData == null) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Invalid or expired token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+      if (tokenData.folder != MirrorSyncService.sessionFolder) {
+        return shelf.Response(
+          403,
+          body: jsonEncode({
+            'success': false,
+            'error': 'manifest_all requires a session token',
+            'code': 'FOLDER_MISMATCH',
+          }),
+          headers: headers,
+        );
+      }
+
+      final callsignDir = StorageConfig().getCallsignDir(tokenData.peerCallsign);
+      final indexPath = StorageConfig().getFileIndexPath(tokenData.peerCallsign);
+      final fileIndex = FileIndexService(indexPath);
+      final storage = AppService().profileStorage;
+
+      // Build one manifest per syncable folder. Run serially to avoid
+      // saturating the SQLite handle; generateManifest already parallelizes
+      // per-file hashing inside the folder.
+      final result = <String, Map<String, dynamic>>{};
+      try {
+        for (final folder in kSyncableFolders) {
+          final folderPath = '$callsignDir/$folder';
+          final exists = await io.Directory(folderPath).exists();
+          MirrorManifest manifest;
+          if (!exists) {
+            manifest = MirrorManifest(
+              folder: folder,
+              totalFiles: 0,
+              totalBytes: 0,
+              files: const [],
+              generatedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            );
+          } else {
+            manifest = await mirrorService.generateManifest(
+              storage != null ? '${tokenData.peerCallsign}/$folder' : folderPath,
+              storage: storage,
+              fileIndex: fileIndex,
+            );
+          }
+          result[folder] = {
+            'folder': manifest.folder,
+            'total_files': manifest.totalFiles,
+            'total_bytes': manifest.totalBytes,
+            'files': manifest.files.map((f) => f.toJson()).toList(),
+            'generated_at': manifest.generatedAt,
+          };
+        }
+      } finally {
+        fileIndex.close();
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({'success': true, 'manifests': result}),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror manifest_all error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
   /// Handle GET /api/mirror/file - Download a file
   Future<shelf.Response> _handleMirrorFile(
     shelf.Request request,
@@ -19982,7 +20092,22 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         );
       }
 
-      final folder = tokenData.folder;
+      // Session tokens (folder == sessionFolder) require an explicit folder
+      // query param. Folder-scoped tokens fall back to the token's folder.
+      final folderParam = request.url.queryParameters['folder'];
+      final folder = tokenData.folder == MirrorSyncService.sessionFolder
+          ? folderParam
+          : tokenData.folder;
+      if (folder == null || folder.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing folder parameter for session token',
+            'code': 'INVALID_REQUEST',
+          }),
+          headers: headers,
+        );
+      }
 
       // Use the shared callsign from the token — NOT the active profile.
       final callsignDir = StorageConfig().getCallsignDir(tokenData.peerCallsign);
@@ -20131,7 +20256,22 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         );
       }
 
-      final folder = tokenData.folder;
+      // Session tokens (folder == sessionFolder) require an explicit folder
+      // query param. Folder-scoped tokens fall back to the token's folder.
+      final folderParam = request.url.queryParameters['folder'];
+      final folder = tokenData.folder == MirrorSyncService.sessionFolder
+          ? folderParam
+          : tokenData.folder;
+      if (folder == null || folder.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing folder parameter for session token',
+            'code': 'INVALID_REQUEST',
+          }),
+          headers: headers,
+        );
+      }
 
       // Use the shared callsign from the token — NOT the active profile.
       final callsignDir = StorageConfig().getCallsignDir(tokenData.peerCallsign);
