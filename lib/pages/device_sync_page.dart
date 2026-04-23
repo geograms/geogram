@@ -1247,7 +1247,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
                   color: isPull ? Colors.green : Colors.blue,
                   size: 18,
                 ),
-                tooltip: isPull ? 'Pull from mirror' : 'Push to mirror',
+                tooltip: isPull
+                    ? 'Copy from remote to local'
+                    : 'Copy from local to remote',
                 constraints: const BoxConstraints(),
                 padding: const EdgeInsets.all(4),
                 onPressed: () {
@@ -1412,13 +1414,13 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
   String _changeLabel(FileChangeType type) {
     switch (type) {
       case FileChangeType.add:
-        return 'New on mirror';
+        return 'Only on remote';
       case FileChangeType.modify:
-        return 'Modified';
+        return 'Differs between local and remote';
       case FileChangeType.delete:
-        return 'Deleted on mirror';
+        return 'Deleted on remote, still on local';
       case FileChangeType.upload:
-        return 'New locally';
+        return 'Only on local';
     }
   }
 
@@ -1515,8 +1517,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         builder: (ctx) => AlertDialog(
           title: const Text('Confirm Sync'),
           content: Text(
-            'Pull $pullCount file(s) from mirror\n'
-            'Push $pushCount file(s) to mirror\n\n'
+            'Remote → Local: $pullCount file(s)\n'
+            'Local → Remote: $pushCount file(s)\n\n'
             'Proceed?',
           ),
           actions: [
