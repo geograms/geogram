@@ -691,14 +691,46 @@ class UpdateService {
         if (n < c) return false;
       }
 
-      // Same base version: stable (no pre-release) is newer than pre-release
-      // e.g. 1.37.0 is newer than 1.37.0-beta.3
+      // Same base version. Apply semver §11 prerelease ordering:
+      //   1.0.0-alpha < 1.0.0-alpha.1 < 1.0.0-beta < 1.0.0-beta.2 < 1.0.0
+      if (!currentHasPreRelease && !newHasPreRelease) return false;
       if (currentHasPreRelease && !newHasPreRelease) return true;
+      if (!currentHasPreRelease && newHasPreRelease) return false;
+      final currentPre = currentClean.substring(currentBase.length + 1);
+      final newPre = newClean.substring(newBase.length + 1);
+      return _isPrereleaseNewer(currentPre, newPre);
     } catch (e) {
       LogService().log('Version comparison failed: $currentVersion vs $newVersion');
     }
 
     return false;
+  }
+
+  /// Compare two semver prerelease suffixes (the part after "-"). Returns
+  /// true if [newPre] is ordered higher than [currentPre].
+  ///
+  /// Semver §11.4: identifiers compared left-to-right — numeric compared
+  /// numerically, alphanumeric compared lexically in ASCII order, numeric
+  /// identifiers always have lower precedence than alphanumeric ones, and
+  /// a longer set of identifiers is higher than a shorter prefix-matching
+  /// set (e.g. "beta" < "beta.1").
+  bool _isPrereleaseNewer(String currentPre, String newPre) {
+    if (currentPre == newPre) return false;
+    final cur = currentPre.split('.');
+    final nw = newPre.split('.');
+    final shared = cur.length < nw.length ? cur.length : nw.length;
+    for (var i = 0; i < shared; i++) {
+      final c = cur[i];
+      final n = nw[i];
+      if (c == n) continue;
+      final cNum = int.tryParse(c);
+      final nNum = int.tryParse(n);
+      if (cNum != null && nNum != null) return nNum > cNum;
+      if (cNum != null) return true; // numeric < alphanumeric
+      if (nNum != null) return false;
+      return n.compareTo(c) > 0;
+    }
+    return nw.length > cur.length;
   }
 
   /// Get download URL for current platform
