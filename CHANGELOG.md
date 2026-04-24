@@ -1,5 +1,15 @@
 # Geogram Desktop Changelog
 
+## 2026-04-24 - v1.39.0-beta.5
+
+### Changes
+- DM chat: prewarm the WebRTC connection when the page opens so the first message no longer waits ~15 s for a fresh handshake
+- Devices list: keep offline peers visible when we have chat history with them so the DM entry point stays reachable for recap
+- Web app: custom homepage switch + "It works!" starter as default
+- Web app preview: load via local HTTP server
+- Web app: split toggle from "Reset to It works!" action
+- launch-android.sh: cap gradle workers and nice the build so the desktop stays usable
+
 ## 2026-04-23 - v1.39.0-beta.4
 
 ### Fixes
