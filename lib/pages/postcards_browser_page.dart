@@ -179,7 +179,6 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
         content: result['content'] as String,
         ttl: result['ttl'] as int?,
         priority: result['priority'] as String? ?? 'normal',
-        paymentRequested: result['paymentRequested'] as bool? ?? false,
       );
 
       if (postcard != null && mounted) {

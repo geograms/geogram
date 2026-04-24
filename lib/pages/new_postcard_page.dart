@@ -47,7 +47,6 @@ class _NewPostcardPageState extends State<NewPostcardPage> {
   bool _encrypted = false;
   bool _showAdvancedRecipient = false;
   String _priority = 'normal';
-  bool _paymentRequested = false;
   final List<RecipientLocation> _recipientLocations = [];
 
   @override
@@ -239,7 +238,6 @@ class _NewPostcardPageState extends State<NewPostcardPage> {
       'content': _contentController.text.trim(),
       'ttl': ttlText.isNotEmpty ? int.tryParse(ttlText) : null,
       'priority': _priority,
-      'paymentRequested': _paymentRequested,
     });
   }
 
@@ -503,18 +501,6 @@ class _NewPostcardPageState extends State<NewPostcardPage> {
               }
               return null;
             },
-          ),
-          const SizedBox(height: 4),
-          SwitchListTile(
-            title: Text(_i18n.t('payment_requested')),
-            subtitle: Text(
-              _i18n.t('request_payment_for_delivery'),
-              style: theme.textTheme.bodySmall,
-            ),
-            value: _paymentRequested,
-            onChanged: (value) => setState(() => _paymentRequested = value),
-            contentPadding: EdgeInsets.zero,
-            dense: true,
           ),
         ],
       ),

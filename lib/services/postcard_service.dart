@@ -213,7 +213,6 @@ class PostcardService {
     required String content,
     int? ttl,
     String priority = 'normal',
-    bool paymentRequested = false,
     String? messageId,
   }) async {
     if (_appPath == null) return null;
@@ -256,7 +255,6 @@ class PostcardService {
         status: 'in-transit',
         ttl: ttl,
         priority: priority,
-        paymentRequested: paymentRequested,
         content: content,
         stamps: [],
         returnStamps: [],

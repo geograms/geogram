@@ -245,7 +245,6 @@ class Postcard {
   final String status; // "in-transit", "delivered", "acknowledged", "expired"
   final int? ttl; // Time-to-live in days (optional)
   final String priority; // "emergency", "urgent", "normal", "low"
-  final bool paymentRequested;
   final String content; // Plain text or encrypted content
   final Map<String, String> metadata; // npub, signature
 
@@ -272,7 +271,6 @@ class Postcard {
     this.status = 'in-transit',
     this.ttl,
     this.priority = 'normal',
-    this.paymentRequested = false,
     required this.content,
     this.metadata = const {},
     this.stamps = const [],
@@ -420,7 +418,6 @@ class Postcard {
     String? status,
     int? ttl,
     String? priority,
-    bool? paymentRequested,
     String? content,
     Map<String, String>? metadata,
     List<PostcardStamp>? stamps,
@@ -443,7 +440,6 @@ class Postcard {
       status: status ?? this.status,
       ttl: ttl ?? this.ttl,
       priority: priority ?? this.priority,
-      paymentRequested: paymentRequested ?? this.paymentRequested,
       content: content ?? this.content,
       metadata: metadata ?? this.metadata,
       stamps: stamps ?? this.stamps,
@@ -476,7 +472,6 @@ class Postcard {
       buffer.writeln('TTL: $ttl');
     }
     buffer.writeln('PRIORITY: $priority');
-    buffer.writeln('PAYMENT_REQUESTED: $paymentRequested');
     buffer.writeln();
 
     // Content
@@ -581,7 +576,6 @@ class Postcard {
         'status': status,
         if (ttl != null) 'ttl': ttl,
         'priority': priority,
-        'paymentRequested': paymentRequested,
         'content': content,
         'metadata': metadata,
         'stamps': stamps.map((s) => s.toJson()).toList(),
@@ -611,7 +605,6 @@ class Postcard {
       status: json['status'] as String? ?? 'in-transit',
       ttl: json['ttl'] as int?,
       priority: json['priority'] as String? ?? 'normal',
-      paymentRequested: json['paymentRequested'] as bool? ?? false,
       content: json['content'] as String,
       metadata: Map<String, String>.from(json['metadata'] as Map? ?? {}),
       stamps: (json['stamps'] as List<dynamic>?)

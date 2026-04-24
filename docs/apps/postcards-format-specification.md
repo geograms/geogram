@@ -1,8 +1,21 @@
 # Postcards Format Specification
 
-**Version**: 1.0
-**Last Updated**: 2025-11-21
+**Version**: 2.0
+**Last Updated**: 2026-04-24
 **Status**: Active
+
+> **v2.0 key rule — SINGLE FILE.** A postcard is exactly one UTF-8 text
+> file (`postcard.txt`). Header, body, stamps, receipt, return stamps,
+> acknowledgment, AND attachments (base64) all live inside it. No
+> sidecar JSON, no sibling image files, no `contributors/` subfolder. A
+> postcard is fully self-contained so it can be copied over any
+> transport (BLE frame, LoRa packet, USB drive, pasted into a chat) as
+> a single blob.
+>
+> Every transfer appends a new NOSTR-signed block at the bottom:
+> STAMP N (outbound), DELIVERY_RECEIPT, RETURN_STAMP N, or
+> SENDER_ACKNOWLEDGMENT. Existing bytes are never rewritten, so the
+> earlier signatures keep verifying against the content they signed.
 
 ## Table of Contents
 
@@ -10,6 +23,7 @@
 - [File Organization](#file-organization)
 - [Postcard Format](#postcard-format)
 - [Content Types](#content-types)
+- [Attachments](#attachments)
 - [Stamps System](#stamps-system)
 - [Delivery Receipt](#delivery-receipt)
 - [Return Journey](#return-journey)
@@ -77,29 +91,24 @@ Each stamp is cryptographically signed, creating an unbreakable chain of custody
 ```
 collection_name/
 └── postcards/
-    ├── 2025/
-    │   ├── 2025-11-21_msg-abc123/
-    │   │   ├── postcard.txt
-    │   │   ├── photo.jpg               # Optional attachment
-    │   │   ├── contributors/
-    │   │   │   ├── BRAVO2/            # First carrier
-    │   │   │   │   ├── contributor.txt
-    │   │   │   │   └── transit-proof.jpg
-    │   │   │   └── ALPHA1/            # Second carrier
-    │   │   │       ├── contributor.txt
-    │   │   │       └── delivery-photo.jpg
-    │   │   └── .reactions/
-    │   │       └── postcard.txt
-    │   ├── 2025-11-21_msg-def456/
-    │   │   ├── postcard.txt
-    │   │   └── .reactions/
-    │   │       └── postcard.txt
-    │   └── 2025-11-22_msg-ghi789/
+    ├── 2026/
+    │   ├── 2026-04-24_msg-a7c5b1/
+    │   │   └── postcard.txt      # Self-contained: header, body,
+    │   │                         # stamps, receipt, ack, and every
+    │   │                         # attachment as inline base64.
+    │   ├── 2026-04-24_msg-3d8f2e/
+    │   │   └── postcard.txt
+    │   └── 2026-04-25_msg-9b4e6a/
     │       └── postcard.txt
-    └── 2024/
-        └── 2024-12-25_msg-jkl012/
+    └── 2025/
+        └── 2025-12-25_msg-jkl012/
             └── postcard.txt
 ```
+
+Every postcard is exactly one file. The folder only exists so the
+filesystem gives us a per-postcard container (for future artifacts like
+thumbnails or moderation state), not so we can scatter pieces of a
+single postcard across siblings.
 
 ### Postcard Folder Naming
 
@@ -125,22 +134,23 @@ collection_name/
 - **Creation**: Automatically created when first postcard for that year is added
 - **Benefits**: Easy year-based browsing, archival, and cleanup
 
-### Special Directories
+### Legacy sibling folders (removed in v2.0)
 
-**`.reactions/` Directory**:
-- Hidden directory (starts with dot)
-- Contains reaction files for postcard
-- Filename: `postcard.txt`
+Earlier drafts of this spec placed attachments in sibling files,
+`contributors/` folders for each carrier, and a `.reactions/` directory
+alongside `postcard.txt`. v2.0 collapses everything into the postcard
+file itself:
 
-**`contributors/` Directory**:
-- Contains folders for each carrier who contributed
-- Carrier folders named by CALLSIGN
-- Each carrier can add photos/notes proving transit
+- Attachments → inline base64 ATTACHMENT blocks (see [Attachments](#attachments)).
+- Carrier narrative → the STAMP itself carries the stamper's callsign,
+  coordinates, timestamp, and transmission method; richer narrative
+  lives in future reactions on the postcard as a whole.
+- Reactions → will be carried in reaction postcards referencing the
+  parent by its message ID; not a sidecar of this file.
 
-**`.hidden/` Directory** (see Moderation System):
-- Hidden directory for moderated content
-- Contains files/comments hidden by moderators
-- Not visible in standard UI
+If you find an on-disk postcard with the old layout, read
+`postcard.txt` as the authoritative source — the sidecar files are
+ignored.
 
 ## Postcard Format
 
@@ -162,7 +172,6 @@ TYPE: open|encrypted
 STATUS: in-transit|delivered|acknowledged|expired
 TTL: 604800
 PRIORITY: normal|urgent|emergency|low
-PAYMENT_REQUESTED: true|false
 
 Message content goes here.
 This is the actual postcard message.
@@ -291,13 +300,7 @@ ACKNOWLEDGED_AT: 2025-11-24 15:30_00
     - **Purpose**: Helps carriers prioritize
     - **Default**: `normal`
 
-13. **Payment Requested** (optional)
-    - **Format**: `PAYMENT_REQUESTED: true|false`
-    - **Example**: `PAYMENT_REQUESTED: true`
-    - **Purpose**: Indicates sender will pay for delivery
-    - **Note**: Payment handled externally to Geogram
-
-14. **Blank Line** (required)
+13. **Blank Line** (required)
     - Separates header from content
 
 ### Content Section
@@ -405,6 +408,84 @@ TYPE: encrypted
 AAAAt2VuY3J5cHRlZCBjb250ZW50IGhlcmU...
 </NIP-04>
 ```
+
+## Attachments
+
+### Overview
+
+Attachments (photos, audio clips, small PDFs, route-proof selfies)
+travel **inline** inside `postcard.txt` as base64 blocks. This keeps
+the single-file invariant: you can copy the postcard over any transport
+without worrying about sibling files getting separated.
+
+### ATTACHMENT Block Format
+
+```
+## ATTACHMENT: <filename>
+CONTENT_TYPE: <mime-type>
+SIZE: <byte-count-before-base64>
+SHA256: <hex-sha256-of-raw-bytes>
+ADDED_BY: <npub>
+ADDED_AT: YYYY-MM-DD HH:MM_ss
+-->
+<base64-encoded-bytes, wrapped to 76 columns>
+<base64-encoded-bytes, wrapped to 76 columns>
+...
+<-- end attachment
+```
+
+### Fields
+
+1. **Filename** (header line) — descriptive, e.g. `transit-selfie.jpg`.
+   Must not contain `/` or `\`. Readers should display it; it does
+   not have to be unique across the postcard.
+
+2. **CONTENT_TYPE** — IANA media type, e.g. `image/jpeg`, `image/png`,
+   `audio/ogg`, `application/pdf`.
+
+3. **SIZE** — byte count of the *decoded* (raw) content. Useful for
+   quick sanity checks before decoding.
+
+4. **SHA256** — lowercase hex SHA-256 of the raw bytes, used as an
+   integrity check independent of the NOSTR signature chain.
+
+5. **ADDED_BY** — npub of the participant who attached this. Usually
+   the sender for the original postcard body, or a carrier's npub for
+   proof-of-transit photos attached when they stamped.
+
+6. **ADDED_AT** — timestamp when this attachment was appended.
+
+7. **`-->`** — literal three-character separator on its own line.
+   Everything after it, up to the terminator, is the base64 payload.
+
+8. **Base64 payload** — MIME-style base64 (RFC 4648). Wrap at 76
+   columns. Decoders must ignore whitespace.
+
+9. **`<-- end attachment`** — literal terminator on its own line.
+
+### Where attachments appear
+
+- **Sender attachments** sit directly after the sender's
+  `--> signature:` line and before `## STAMP: 1`.
+- **Carrier attachments** sit directly after their own stamp's
+  signature line and before the next stamp. This ties the attachment
+  to a specific hop in the chain.
+
+Each attachment is covered by every signature that comes after it:
+adding an attachment between existing blocks is not allowed, because
+it would invalidate the later stamp signatures (which is the point).
+New attachments are always appended at the tail together with a new
+signed block.
+
+### Size guidance
+
+- Keep any single attachment under ~1 MB when possible — base64 grows
+  the encoded size by ~33%, and a postcard passes through narrow
+  links (BLE, LoRa) where each kilobyte hurts.
+- Prefer WebP or JPEG for photos; re-encode at ≤1600 px longest edge
+  before attaching.
+- If you truly need large binaries, consider whether this should be a
+  different app (files / videos) rather than a postcard.
 
 ## Stamps System
 
@@ -769,6 +850,13 @@ After sender acknowledgment:
 - Payment can be settled based on stamps
 
 ## Contributor System
+
+> **v2.0 note.** The sibling `contributors/<CALLSIGN>/` folders
+> described below are gone. A carrier who wants to prove they
+> physically handled the postcard attaches their photo/note as an
+> `## ATTACHMENT:` block right after their own `## STAMP:` — see
+> [Attachments](#attachments). The rest of this section is kept for
+> historical reference and will be removed in a future revision.
 
 ### Overview
 
@@ -1281,19 +1369,30 @@ REASON: Inappropriate content
 
 ## Complete Examples
 
-### Example 1: Simple Open Postcard
+The samples below use fictional but plausible npubs and signatures.
+They are meant for reading — every signature here is a hand-crafted
+placeholder, not a real Schnorr signature. Copy their shape, not their
+bytes.
+
+### Stage 1 — In transit (freshly signed, one carrier)
+
+Sender CR7BBQ has just handed the postcard to their first carrier
+BRAVO2 via BLE. Two signed blocks: the sender's signature covering
+header + content, and BRAVO2's stamp signature covering everything
+above its `--> signature:` line.
 
 ```
 # POSTCARD: Greetings from Lisbon
 
-CREATED: 2025-11-21 10:00_00
+CREATED: 2026-04-24 10:00_00
 SENDER_CALLSIGN: CR7BBQ
-SENDER_NPUB: npub1abc123...
+SENDER_NPUB: npub1cr7bbq0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q7t3ku9
 RECIPIENT_CALLSIGN: X135AS
-RECIPIENT_NPUB: npub1xyz789...
-RECIPIENT_LOCATIONS: 40.7128,-74.0060
+RECIPIENT_NPUB: npub1x135asd9a8s7d6f5g4h3j2k1l0z9x8c7v6b5n4m3q2w1e0r9t8y7u
+RECIPIENT_LOCATIONS: 40.7128,-74.0060; 40.7589,-73.9851
 TYPE: open
 STATUS: in-transit
+TTL: 604800
 PRIORITY: normal
 
 Hello from Lisbon!
@@ -1306,162 +1405,249 @@ Hope this finds you well.
 Best regards,
 CR7BBQ
 
---> npub: npub1abc123...
---> signature: sender_sig_hex...
+--> npub: npub1cr7bbq0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q7t3ku9
+--> signature: 9f2c7b4a1e3d5f6a8b9c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c
 
 ## STAMP: 1
 STAMPER_CALLSIGN: BRAVO2
-STAMPER_NPUB: npub1bravo...
-TIMESTAMP: 2025-11-21 14:30_00
+STAMPER_NPUB: npub1bravo2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxkp4j2h
+TIMESTAMP: 2026-04-24 14:30_00
 COORDINATES: 38.7223,-9.1393
-LOCATION_NAME: Lisbon Airport
+LOCATION_NAME: Lisbon Central Cafe
 RECEIVED_FROM: sender
 RECEIVED_VIA: BLE
 HOP_NUMBER: 1
---> signature: stamp1_sig_hex...
+--> signature: 7a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7
 ```
 
-### Example 2: Complete Journey with Delivery
+### Stage 2 — Still in transit (two hops, attachment added)
+
+BRAVO2 has handed the postcard on to ALPHA1 over satellite, and ALPHA1
+added a proof-of-transit photo inline. Notice the attachment sits
+*between* ALPHA1's stamp and any later block: ALPHA1's signature covers
+it, and any future stamp will also sign over it.
 
 ```
-# POSTCARD: Important Message
+# POSTCARD: Greetings from Lisbon
 
-CREATED: 2025-11-21 08:00_00
+CREATED: 2026-04-24 10:00_00
 SENDER_CALLSIGN: CR7BBQ
-SENDER_NPUB: npub1abc123...
+SENDER_NPUB: npub1cr7bbq0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q7t3ku9
 RECIPIENT_CALLSIGN: X135AS
-RECIPIENT_NPUB: npub1xyz789...
-RECIPIENT_LOCATIONS: 40.7128,-74.0060; 41.8781,-87.6298
-TYPE: encrypted
-STATUS: delivered
+RECIPIENT_NPUB: npub1x135asd9a8s7d6f5g4h3j2k1l0z9x8c7v6b5n4m3q2w1e0r9t8y7u
+RECIPIENT_LOCATIONS: 40.7128,-74.0060; 40.7589,-73.9851
+TYPE: open
+STATUS: in-transit
 TTL: 604800
-PRIORITY: urgent
-PAYMENT_REQUESTED: true
+PRIORITY: normal
 
-<NIP-04 encrypted content>
-AAAAt2VuY3J5cHRlZCBjb250ZW50IGhlcmU...
-</NIP-04>
+Hello from Lisbon!
 
---> npub: npub1abc123...
---> signature: sender_sig...
+Having a wonderful time exploring the historic city.
+The weather is perfect and the pastries are amazing.
+
+Hope this finds you well.
+
+Best regards,
+CR7BBQ
+
+--> npub: npub1cr7bbq0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q7t3ku9
+--> signature: 9f2c7b4a1e3d5f6a8b9c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c
 
 ## STAMP: 1
 STAMPER_CALLSIGN: BRAVO2
-STAMPER_NPUB: npub1bravo...
-TIMESTAMP: 2025-11-21 14:30_00
+STAMPER_NPUB: npub1bravo2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxkp4j2h
+TIMESTAMP: 2026-04-24 14:30_00
 COORDINATES: 38.7223,-9.1393
-LOCATION_NAME: Lisbon Central Station
+LOCATION_NAME: Lisbon Central Cafe
 RECEIVED_FROM: sender
-RECEIVED_VIA: WiFi-LAN
+RECEIVED_VIA: BLE
 HOP_NUMBER: 1
---> signature: stamp1_sig...
+--> signature: 7a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7
 
 ## STAMP: 2
 STAMPER_CALLSIGN: ALPHA1
-STAMPER_NPUB: npub1alpha...
-TIMESTAMP: 2025-11-22 10:15_00
+STAMPER_NPUB: npub1alpha1yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyhm5x8g
+TIMESTAMP: 2026-04-25 10:15_00
 COORDINATES: 40.7128,-74.0060
 LOCATION_NAME: NYC Penn Station
-RECEIVED_FROM: npub1bravo...
+RECEIVED_FROM: npub1bravo2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxkp4j2h
 RECEIVED_VIA: Satellite
 HOP_NUMBER: 2
---> signature: stamp2_sig...
+--> signature: c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9
 
-## DELIVERY_RECEIPT
-RECIPIENT_NPUB: npub1xyz789...
-DELIVERED_AT: 2025-11-22 18:45_00
-DELIVERED_BY: npub1alpha...
-COORDINATES: 40.7589,-73.9851
-LOCATION_NAME: NYC Upper East Side
---> signature: recipient_sig...
+## ATTACHMENT: transit-selfie.jpg
+CONTENT_TYPE: image/jpeg
+SIZE: 842
+SHA256: 3b5c2e87f4a91d76e8c3a0b5d2e7f91c8a4b6d3e5f7a8b9c0d1e2f3a4b5c6d7e
+ADDED_BY: npub1alpha1yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyhm5x8g
+ADDED_AT: 2026-04-25 10:16_00
+-->
+/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkS
+Ew8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJ
+CQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy
+MjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEA
+(truncated for brevity — real payloads wrap to 76 columns
+ and continue until the terminator below)
+<-- end attachment
 ```
 
-### Example 3: Full Cycle with Return Journey
+### Stage 3 — Delivered (recipient signed the receipt)
+
+Recipient X135AS met ALPHA1 in New York, read the postcard, and
+stamped the delivery receipt. Status in the header is bumped to
+`delivered` and the receipt block is the tail of the file. No new
+outbound stamps get added after this on the outbound leg.
 
 ```
-# POSTCARD: Contract Delivery
+# POSTCARD: Greetings from Lisbon
 
-CREATED: 2025-11-20 09:00_00
+CREATED: 2026-04-24 10:00_00
 SENDER_CALLSIGN: CR7BBQ
-SENDER_NPUB: npub1abc123...
+SENDER_NPUB: npub1cr7bbq0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q7t3ku9
 RECIPIENT_CALLSIGN: X135AS
-RECIPIENT_NPUB: npub1xyz789...
-RECIPIENT_LOCATIONS: 51.5074,-0.1278
+RECIPIENT_NPUB: npub1x135asd9a8s7d6f5g4h3j2k1l0z9x8c7v6b5n4m3q2w1e0r9t8y7u
+RECIPIENT_LOCATIONS: 40.7128,-74.0060; 40.7589,-73.9851
 TYPE: open
-STATUS: acknowledged
+STATUS: delivered
+TTL: 604800
 PRIORITY: normal
-PAYMENT_REQUESTED: true
 
-Delivering signed contract as discussed.
-Please review and confirm receipt.
+Hello from Lisbon!
 
---> npub: npub1abc123...
---> signature: sender_sig...
+Having a wonderful time exploring the historic city.
+The weather is perfect and the pastries are amazing.
+
+Hope this finds you well.
+
+Best regards,
+CR7BBQ
+
+--> npub: npub1cr7bbq0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q7t3ku9
+--> signature: 9f2c7b4a1e3d5f6a8b9c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c
 
 ## STAMP: 1
 STAMPER_CALLSIGN: BRAVO2
-STAMPER_NPUB: npub1bravo...
-TIMESTAMP: 2025-11-20 15:00_00
+STAMPER_NPUB: npub1bravo2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxkp4j2h
+TIMESTAMP: 2026-04-24 14:30_00
 COORDINATES: 38.7223,-9.1393
+LOCATION_NAME: Lisbon Central Cafe
 RECEIVED_FROM: sender
-RECEIVED_VIA: In-Person
+RECEIVED_VIA: BLE
 HOP_NUMBER: 1
---> signature: stamp1_sig...
+--> signature: 7a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7
 
 ## STAMP: 2
 STAMPER_CALLSIGN: ALPHA1
-STAMPER_NPUB: npub1alpha...
-TIMESTAMP: 2025-11-21 11:30_00
-COORDINATES: 48.8566,2.3522
-LOCATION_NAME: Paris Gare du Nord
-RECEIVED_FROM: npub1bravo...
-RECEIVED_VIA: LoRa
+STAMPER_NPUB: npub1alpha1yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyhm5x8g
+TIMESTAMP: 2026-04-25 10:15_00
+COORDINATES: 40.7128,-74.0060
+LOCATION_NAME: NYC Penn Station
+RECEIVED_FROM: npub1bravo2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxkp4j2h
+RECEIVED_VIA: Satellite
 HOP_NUMBER: 2
---> signature: stamp2_sig...
-
-## STAMP: 3
-STAMPER_CALLSIGN: CHARLIE3
-STAMPER_NPUB: npub1charlie...
-TIMESTAMP: 2025-11-21 19:00_00
-COORDINATES: 51.5074,-0.1278
-LOCATION_NAME: London King's Cross
-RECEIVED_FROM: npub1alpha...
-RECEIVED_VIA: BLE
-HOP_NUMBER: 3
---> signature: stamp3_sig...
+--> signature: c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9
 
 ## DELIVERY_RECEIPT
-RECIPIENT_NPUB: npub1xyz789...
-DELIVERED_AT: 2025-11-21 20:15_00
-DELIVERED_BY: npub1charlie...
-COORDINATES: 51.5074,-0.1278
-LOCATION_NAME: London Office
---> signature: recipient_sig...
+RECIPIENT_NPUB: npub1x135asd9a8s7d6f5g4h3j2k1l0z9x8c7v6b5n4m3q2w1e0r9t8y7u
+DELIVERED_AT: 2026-04-25 18:45_00
+DELIVERED_BY: npub1alpha1yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyhm5x8g
+COORDINATES: 40.7589,-73.9851
+LOCATION_NAME: NYC Upper East Side
+--> signature: d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2
+```
+
+### Stage 4 — Acknowledged (full cycle)
+
+The receipt made it back to the sender via DELTA4, and CR7BBQ stamped
+the acknowledgment. Status is `acknowledged`; the file contains the
+outbound chain, the receipt, the return stamps, and the sender
+acknowledgment — every block still signed by someone who was in
+physical possession of the earlier bytes.
+
+```
+# POSTCARD: Greetings from Lisbon
+
+CREATED: 2026-04-24 10:00_00
+SENDER_CALLSIGN: CR7BBQ
+SENDER_NPUB: npub1cr7bbq0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q7t3ku9
+RECIPIENT_CALLSIGN: X135AS
+RECIPIENT_NPUB: npub1x135asd9a8s7d6f5g4h3j2k1l0z9x8c7v6b5n4m3q2w1e0r9t8y7u
+RECIPIENT_LOCATIONS: 40.7128,-74.0060; 40.7589,-73.9851
+TYPE: open
+STATUS: acknowledged
+TTL: 604800
+PRIORITY: normal
+
+Hello from Lisbon!
+
+Having a wonderful time exploring the historic city.
+The weather is perfect and the pastries are amazing.
+
+Hope this finds you well.
+
+Best regards,
+CR7BBQ
+
+--> npub: npub1cr7bbq0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q7t3ku9
+--> signature: 9f2c7b4a1e3d5f6a8b9c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c
+
+## STAMP: 1
+STAMPER_CALLSIGN: BRAVO2
+STAMPER_NPUB: npub1bravo2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxkp4j2h
+TIMESTAMP: 2026-04-24 14:30_00
+COORDINATES: 38.7223,-9.1393
+LOCATION_NAME: Lisbon Central Cafe
+RECEIVED_FROM: sender
+RECEIVED_VIA: BLE
+HOP_NUMBER: 1
+--> signature: 7a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7
+
+## STAMP: 2
+STAMPER_CALLSIGN: ALPHA1
+STAMPER_NPUB: npub1alpha1yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyhm5x8g
+TIMESTAMP: 2026-04-25 10:15_00
+COORDINATES: 40.7128,-74.0060
+LOCATION_NAME: NYC Penn Station
+RECEIVED_FROM: npub1bravo2xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxkp4j2h
+RECEIVED_VIA: Satellite
+HOP_NUMBER: 2
+--> signature: c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9
+
+## DELIVERY_RECEIPT
+RECIPIENT_NPUB: npub1x135asd9a8s7d6f5g4h3j2k1l0z9x8c7v6b5n4m3q2w1e0r9t8y7u
+DELIVERED_AT: 2026-04-25 18:45_00
+DELIVERED_BY: npub1alpha1yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyhm5x8g
+COORDINATES: 40.7589,-73.9851
+LOCATION_NAME: NYC Upper East Side
+--> signature: d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2
 
 ## RETURN_STAMP: 1
 STAMPER_CALLSIGN: DELTA4
-STAMPER_NPUB: npub1delta...
-TIMESTAMP: 2025-11-22 10:00_00
-COORDINATES: 48.8566,2.3522
-LOCATION_NAME: Paris Charles de Gaulle Airport
+STAMPER_NPUB: npub1delta4zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzqr9w2v
+TIMESTAMP: 2026-04-26 09:00_00
+COORDINATES: 40.7128,-74.0060
+LOCATION_NAME: NYC Central Station
 RECEIVED_FROM: recipient
+RECEIVED_VIA: Meshtastic
 HOP_NUMBER: 1
---> signature: return_stamp1_sig...
+--> signature: a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6
 
 ## RETURN_STAMP: 2
 STAMPER_CALLSIGN: ECHO5
-STAMPER_NPUB: npub1echo...
-TIMESTAMP: 2025-11-22 16:30_00
+STAMPER_NPUB: npub1echo5wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwcn8t1u
+TIMESTAMP: 2026-04-27 12:30_00
 COORDINATES: 38.7223,-9.1393
 LOCATION_NAME: Lisbon Airport
-RECEIVED_FROM: npub1delta...
+RECEIVED_FROM: npub1delta4zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzqr9w2v
+RECEIVED_VIA: LoRa
 HOP_NUMBER: 2
---> signature: return_stamp2_sig...
+--> signature: b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8
 
 ## SENDER_ACKNOWLEDGMENT
-SENDER_NPUB: npub1abc123...
-ACKNOWLEDGED_AT: 2025-11-22 18:00_00
---> signature: sender_ack_sig...
+SENDER_NPUB: npub1cr7bbq0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q0q7t3ku9
+ACKNOWLEDGED_AT: 2026-04-27 15:30_00
+--> signature: e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4
 ```
 
 ## Parsing Implementation
@@ -1476,7 +1662,7 @@ ACKNOWLEDGED_AT: 2025-11-22 18:00_00
    - CREATED, SENDER_CALLSIGN, SENDER_NPUB (required)
    - RECIPIENT_CALLSIGN, RECIPIENT_NPUB, RECIPIENT_LOCATIONS (required)
    - TYPE, STATUS (required)
-   - TTL, PRIORITY, PAYMENT_REQUESTED (optional)
+   - TTL, PRIORITY (optional)
 5. Find content section (after header blank line)
 6. Parse content until metadata
 7. Parse sender metadata (npub, signature)
@@ -1662,10 +1848,8 @@ ACKNOWLEDGED_AT: 2025-11-22 18:00_00
 1. **Accurate recipient info**: Provide correct npub and multiple locations
 2. **Choose type wisely**: Use encrypted for sensitive content
 3. **Set reasonable TTL**: Give enough time for delivery (e.g., 7-30 days)
-4. **Indicate payment**: Set PAYMENT_REQUESTED if you'll pay carriers
-5. **Request return**: Ask carriers to return postcard if you need proof
-6. **Monitor status**: Check if delivered, acknowledge receipt
-7. **Moderate contributors**: Review and hide inappropriate content
+4. **Request return**: Ask carriers to return postcard if you need proof
+5. **Monitor status**: Check if delivered, acknowledge receipt
 
 ### For Carriers
 
@@ -1856,6 +2040,27 @@ Postcards are built on top of the existing relay message system:
 - [NIP-04: Encrypted Direct Messages](https://github.com/nostr-protocol/nips/blob/master/04.md)
 
 ## Change Log
+
+### Version 2.0 (2026-04-24)
+
+Breaking format changes:
+
+- **Single-file rule**: a postcard is exactly one `postcard.txt`.
+  Sibling artifacts — `photo.jpg`, `contributors/`, `.reactions/` —
+  are removed. A postcard you receive over BLE, LoRa, or a USB stick
+  is now always one file, nothing else.
+- **Inline attachments**: binaries ride inside `postcard.txt` as
+  base64 blocks between `## ATTACHMENT:` and `<-- end attachment`.
+  Each attachment carries its own content-type, size, SHA-256, and
+  ADDED_BY npub. Later signatures cover earlier attachments.
+- **Removed field**: `PAYMENT_REQUESTED` in the header. Payment intent
+  was never implemented in the app; the field only added noise.
+- Each transfer still appends one more NOSTR-signed block
+  (STAMP / DELIVERY_RECEIPT / RETURN_STAMP / SENDER_ACKNOWLEDGMENT)
+  at the bottom, covering everything above it — unchanged.
+- Complete Examples rewritten around four stages: in-transit,
+  in-transit-with-attachment, delivered, acknowledged, so readers
+  can see how the file grows at each hop.
 
 ### Version 1.0 (2025-11-21)
 
