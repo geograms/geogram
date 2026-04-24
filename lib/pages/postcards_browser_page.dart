@@ -12,7 +12,7 @@ import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../widgets/postcard_tile_widget.dart';
 import '../widgets/postcard_detail_widget.dart';
-import '../dialogs/new_postcard_dialog.dart';
+import 'new_postcard_page.dart';
 
 /// Postcards browser page with 2-panel layout
 class PostcardsBrowserPage extends StatefulWidget {
@@ -161,9 +161,9 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
   }
 
   Future<void> _createNewPostcard() async {
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => const NewPostcardDialog(),
+    final result = await Navigator.push<Map<String, dynamic>>(
+      context,
+      MaterialPageRoute(builder: (_) => const NewPostcardPage()),
     );
 
     if (result != null && mounted) {
