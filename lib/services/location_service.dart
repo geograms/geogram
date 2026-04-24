@@ -396,6 +396,78 @@ class LocationService {
     return null;
   }
 
+  /// Search the full cities database and return up to [limit] matches
+  /// ordered by how strongly they match [query], most relevant first.
+  ///
+  /// Ranking (higher beats lower):
+  ///   1. Exact city-name match (case-insensitive, on either `city` or
+  ///      `cityAscii`).
+  ///   2. City name starts with the query.
+  ///   3. City name contains the query anywhere.
+  ///   4. Country / region contains the query.
+  ///
+  /// Within the same rank, cities with a larger population come first
+  /// — users almost always mean the bigger city when typing a short
+  /// prefix.
+  ///
+  /// An empty or whitespace-only query returns the top [limit] most
+  /// populous cities, so the picker has something to show on open.
+  Future<List<CityEntry>> searchCitiesByName(
+    String query, {
+    int limit = 50,
+  }) async {
+    if (!_isLoaded) {
+      await init();
+    }
+    final cities = _cities;
+    if (cities == null || cities.isEmpty) return const [];
+
+    int popOf(CityEntry c) => int.tryParse(c.population) ?? 0;
+
+    final trimmed = query.trim().toLowerCase();
+    if (trimmed.isEmpty) {
+      final sorted = [...cities]..sort((a, b) => popOf(b).compareTo(popOf(a)));
+      return sorted.take(limit).toList();
+    }
+
+    final exact = <CityEntry>[];
+    final prefix = <CityEntry>[];
+    final contains = <CityEntry>[];
+    final regional = <CityEntry>[];
+
+    for (final c in cities) {
+      final name = c.city.toLowerCase();
+      final ascii = c.cityAscii.toLowerCase();
+      if (name == trimmed || ascii == trimmed) {
+        exact.add(c);
+      } else if (name.startsWith(trimmed) || ascii.startsWith(trimmed)) {
+        prefix.add(c);
+      } else if (name.contains(trimmed) || ascii.contains(trimmed)) {
+        contains.add(c);
+      } else if (c.country.toLowerCase().contains(trimmed) ||
+          c.adminName.toLowerCase().contains(trimmed)) {
+        regional.add(c);
+      }
+      // Early exit if we've already found far more than we need across
+      // all buckets (bounded pre-sort cost for a very common query).
+      if (exact.length +
+              prefix.length +
+              contains.length +
+              regional.length >
+          limit * 20) {
+        break;
+      }
+    }
+
+    int byPop(CityEntry a, CityEntry b) => popOf(b).compareTo(popOf(a));
+    exact.sort(byPop);
+    prefix.sort(byPop);
+    contains.sort(byPop);
+    regional.sort(byPop);
+
+    return [...exact, ...prefix, ...contains, ...regional].take(limit).toList();
+  }
+
   /// Get the full CityEntry for the nearest city
   Future<CityEntry?> getNearestCityEntry(double lat, double lng) async {
     if (!_isLoaded) {

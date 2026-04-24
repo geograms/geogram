@@ -8,9 +8,10 @@ import 'package:latlong2/latlong.dart';
 
 import '../models/postcard.dart';
 import '../services/i18n_service.dart';
+import '../services/location_service.dart';
+import 'city_picker_page.dart';
 import 'contact_picker_page.dart';
 import 'location_picker_page.dart';
-import 'place_picker_page.dart';
 
 /// Full-screen "new postcard" composer.
 ///
@@ -163,18 +164,20 @@ class _NewPostcardPageState extends State<NewPostcardPage> {
   }
 
   Future<void> _addLocationFromCity() async {
-    final result = await Navigator.push<PlacePickerResult>(
+    final picked = await Navigator.push<CityEntry>(
       context,
-      MaterialPageRoute(builder: (_) => PlacePickerPage(i18n: _i18n)),
+      MaterialPageRoute(builder: (_) => const CityPickerPage()),
     );
-    if (result == null || !mounted) return;
-    final p = result.place;
+    if (picked == null || !mounted) return;
+    // Prefer the localised city name when present, fall back to ASCII.
+    final name = picked.city.isNotEmpty ? picked.city : picked.cityAscii;
+    final countryBit = picked.country.isNotEmpty ? ', ${picked.country}' : '';
     setState(() {
       _recipientLocations.add(
         RecipientLocation(
-          latitude: p.latitude,
-          longitude: p.longitude,
-          locationName: p.getName('EN'),
+          latitude: picked.lat,
+          longitude: picked.lng,
+          locationName: '$name$countryBit',
         ),
       );
     });

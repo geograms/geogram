@@ -957,6 +957,8 @@
   "add_area": "Add area",
   "pick_on_map": "Pick on map",
   "pick_a_city": "Pick a city",
+  "city_search_hint": "Start typing a city name",
+  "no_cities_found": "No matching city",
   "enter_coordinates": "Enter coordinates",
   "more_options": "More options",
   "open_postcard_toast": "Open — anyone along the route can read it",
