@@ -166,7 +166,23 @@ if [ "$GRADLE_OFFLINE" = "true" ]; then
 else
     echo "Building APK..."
 fi
-"$FLUTTER_BIN" build apk --debug --no-pub
+
+# ── Resource throttling ─────────────────────────────────────────────
+# Even with gradle.properties caps (org.gradle.workers.max=4,
+# kotlin.daemon.jvmargs=-Xmx1536m, -XX:ActiveProcessorCount=4), a fresh
+# build can still saturate CPU/IO and make the desktop unresponsive.
+# Run gradle/flutter at the lowest CPU priority and in the idle I/O class
+# so the interactive session keeps a clear line to the kernel. Override
+# by setting GEOGRAM_NICE=0 before running this script.
+NICE_CMD=()
+if [ "${GEOGRAM_NICE:-1}" != "0" ]; then
+    NICE_CMD+=("nice" "-n" "19")
+    if command -v ionice >/dev/null 2>&1; then
+        NICE_CMD+=("ionice" "-c" "3")
+    fi
+fi
+
+"${NICE_CMD[@]}" "$FLUTTER_BIN" build apk --debug --no-pub
 
 APK_PATH="$SCRIPT_DIR/build/app/outputs/flutter-apk/app-debug.apk"
 
