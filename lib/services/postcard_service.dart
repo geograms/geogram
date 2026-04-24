@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'dart:convert';
+
 import '../models/postcard.dart';
 import 'profile_storage.dart';
 
@@ -101,7 +103,11 @@ class PostcardService {
     return postcards;
   }
 
-  /// Load full postcard with stamps, delivery receipt, and acknowledgment
+  /// Load full postcard with stamps, delivery receipt, and acknowledgment.
+  ///
+  /// Reads postcard.json, which is written in lockstep with the
+  /// human-readable postcard.txt artifact by [_persistPostcard]. The JSON
+  /// sidecar avoids having to hand-parse the verbose exportAsText format.
   Future<Postcard?> loadPostcard(String postcardId) async {
     if (_appPath == null) return null;
 
@@ -114,21 +120,34 @@ class PostcardService {
       return null;
     }
 
-    // Load postcard.txt
-    final postcardFile = '$postcardPath/postcard.txt';
-    final content = await _storage.readString(postcardFile);
-    if (content == null) {
-      print('PostcardService: postcard.txt not found in $postcardPath');
+    final jsonFile = '$postcardPath/postcard.json';
+    final jsonContent = await _storage.readString(jsonFile);
+    if (jsonContent == null) {
+      print('PostcardService: postcard.json not found in $postcardPath');
       return null;
     }
 
     try {
-      final postcard = Postcard.fromText(content, postcardId);
-      return postcard;
+      final data = jsonDecode(jsonContent) as Map<String, dynamic>;
+      return Postcard.fromJson(data);
     } catch (e) {
       print('PostcardService: Error loading postcard: $e');
       return null;
     }
+  }
+
+  /// Write both the canonical JSON record (source of truth for in-app loads)
+  /// and the human-readable postcard.txt artifact (the sneakernet export
+  /// format signed and carried between devices).
+  Future<void> _persistPostcard(String postcardPath, Postcard postcard) async {
+    await _storage.writeString(
+      '$postcardPath/postcard.json',
+      jsonEncode(postcard.toJson()),
+    );
+    await _storage.writeString(
+      '$postcardPath/postcard.txt',
+      postcard.exportAsText(),
+    );
   }
 
   /// Sanitize message ID to create valid folder name
@@ -243,8 +262,7 @@ class PostcardService {
         returnStamps: [],
       );
 
-      // Write postcard.txt using storage
-      await _storage.writeString('$postcardPath/postcard.txt', postcard.exportAsText());
+      await _persistPostcard(postcardPath, postcard);
 
       print('PostcardService: Created postcard: $folderName');
       return postcard;
@@ -299,7 +317,7 @@ class PostcardService {
       final updatedPostcard = postcard.copyWith(stamps: updatedStamps);
 
       // Write updated postcard using storage
-      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
+      await _persistPostcard(postcardPath, updatedPostcard);
 
       print('PostcardService: Added stamp #${stamp.number} to $postcardId');
       return true;
@@ -353,7 +371,7 @@ class PostcardService {
       );
 
       // Write updated postcard using storage
-      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
+      await _persistPostcard(postcardPath, updatedPostcard);
 
       print('PostcardService: Delivered postcard: $postcardId');
       return true;
@@ -408,7 +426,7 @@ class PostcardService {
       final updatedPostcard = postcard.copyWith(returnStamps: updatedReturnStamps);
 
       // Write updated postcard using storage
-      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
+      await _persistPostcard(postcardPath, updatedPostcard);
 
       print('PostcardService: Added return stamp #${stamp.number} to $postcardId');
       return true;
@@ -452,7 +470,7 @@ class PostcardService {
       );
 
       // Write updated postcard using storage
-      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
+      await _persistPostcard(postcardPath, updatedPostcard);
 
       print('PostcardService: Acknowledged postcard: $postcardId');
       return true;
@@ -545,7 +563,7 @@ class PostcardService {
       final updatedPostcard = postcard.copyWith(status: 'expired');
 
       // Write updated postcard using storage
-      await _storage.writeString('$postcardPath/postcard.txt', updatedPostcard.exportAsText());
+      await _persistPostcard(postcardPath, updatedPostcard);
 
       print('PostcardService: Marked postcard as expired: $postcardId');
       return true;

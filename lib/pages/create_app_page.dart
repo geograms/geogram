@@ -61,7 +61,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
   }
 
   // App types with their icons (ordered by relevance)
-  // Hidden types (not ready): forum, bot, postcards, market, www, news
+  // Hidden types (not ready): forum, bot, market, www, news
   static const List<_AppTypeInfo> _appTypes = [
     _AppTypeInfo('places', Icons.place),
     _AppTypeInfo('blog', Icons.article),
@@ -79,7 +79,7 @@ class _CreateAppPageState extends State<CreateAppPage> {
     _AppTypeInfo('backup', Icons.backup),
     _AppTypeInfo('transfer', Icons.swap_horiz),
     _AppTypeInfo('shared', Icons.folder_shared),
-    // _AppTypeInfo('postcards', Icons.mail),  // Hidden: not ready
+    _AppTypeInfo('postcards', Icons.mail),
     // _AppTypeInfo('market', Icons.storefront),  // Hidden: not ready
     _AppTypeInfo('groups', Icons.groups),
     _AppTypeInfo('console', Icons.terminal),

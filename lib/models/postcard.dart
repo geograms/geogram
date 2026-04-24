@@ -562,13 +562,9 @@ class Postcard {
     return buffer.toString();
   }
 
-  /// Parse postcard from postcard.txt file text
-  static Postcard fromText(String text, String postcardId) {
-    // Stub implementation - full parser would be more complex
-    // For now, return a basic postcard
-    throw UnimplementedError(
-        'Postcard.fromText parsing not yet implemented');
-  }
+  // Parsing postcard.txt directly is not supported — PostcardService
+  // writes a postcard.json sidecar and loads via Postcard.fromJson. The
+  // .txt is kept as the human-readable / signed sneakernet artifact.
 
   /// Convert to JSON
   Map<String, dynamic> toJson() => {
