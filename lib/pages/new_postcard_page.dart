@@ -257,7 +257,7 @@ class _NewPostcardPageState extends State<NewPostcardPage> {
           TextButton(
             onPressed: _send,
             child: Text(
-              _i18n.t('send'),
+              _i18n.t('create'),
               style: TextStyle(
                 color: theme.colorScheme.onPrimary,
                 fontWeight: FontWeight.w600,
