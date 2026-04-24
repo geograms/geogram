@@ -380,14 +380,24 @@ class DevicesService {
     );
   }
 
-  /// Remove offline devices from the "Discovered" folder
+  /// Remove offline devices from the "Discovered" folder.
+  ///
+  /// Devices the user has chatted with are kept in the list even when
+  /// offline so the DM entry point stays visible for recap. The device
+  /// row will still render as "offline"; only the discovery-only rows
+  /// (never messaged) are pruned.
   Future<void> _cleanupInactiveDiscoveredDevices() async {
+    final conversationCallsigns = DirectMessageService().conversationCallsigns
+        .map((c) => c.toUpperCase())
+        .toSet();
+
     final offlineDevices = _devices.values
         .where(
           (d) =>
               (d.folderId == null || d.folderId == defaultFolderId) &&
               !d.isOnline &&
-              !_isLocalProfileCallsign(d.callsign.toUpperCase()),
+              !_isLocalProfileCallsign(d.callsign.toUpperCase()) &&
+              !conversationCallsigns.contains(d.callsign.toUpperCase()),
         )
         .toList();
 

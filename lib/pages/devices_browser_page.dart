@@ -470,15 +470,34 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   /// the LAN) must remain visible — they are distinguished by deviceId.
   List<RemoteDevice> _filterRemoteDevices(List<RemoteDevice> devices) {
     final myCallsign = _myCallsign.toUpperCase();
-    return _normalizeDevicesForDisplay(
-      devices.where((d) {
-        if (d.callsign.toUpperCase() != myCallsign) return true;
-        // Same callsign as us: keep only when it's clearly a different install.
-        return d.deviceId != null &&
-            d.deviceId!.isNotEmpty &&
-            d.deviceId != _myDeviceId;
-      }).toList(),
-    );
+    final filtered = devices.where((d) {
+      if (d.callsign.toUpperCase() != myCallsign) return true;
+      // Same callsign as us: keep only when it's clearly a different install.
+      return d.deviceId != null &&
+          d.deviceId!.isNotEmpty &&
+          d.deviceId != _myDeviceId;
+    }).toList();
+
+    // Augment with synthetic offline rows for any callsign we have chat
+    // history with but that is no longer in the discovered list (e.g. it
+    // was pruned by an older build before the cleanup exemption landed).
+    // Without this, the DM entry point disappears for offline contacts.
+    final present = filtered.map((d) => d.callsign.toUpperCase()).toSet();
+    for (final callsign in _dmService.conversationCallsigns) {
+      final upper = callsign.toUpperCase();
+      if (upper == myCallsign) continue;
+      if (present.contains(upper)) continue;
+      filtered.add(
+        RemoteDevice(
+          callsign: callsign,
+          name: callsign,
+          isOnline: false,
+          apps: const [],
+        ),
+      );
+    }
+
+    return _normalizeDevicesForDisplay(filtered);
   }
 
   List<RemoteDevice> _getDisplayDevicesInFolder(String? folderId) {
