@@ -15,6 +15,7 @@ import '../services/log_service.dart';
 import '../services/i18n_service.dart';
 import '../services/config_service.dart';
 import '../services/location_provider_service.dart';
+import '../services/location_service.dart';
 import '../services/user_location_service.dart';
 import '../services/map_tile_service.dart' show MapTileService, MapLayerType;
 
@@ -50,6 +51,13 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
   double? _pendingMapZoom;
   double _currentZoom = 18.0; // Default zoom level - maximum zoom for precise location selection
   VoidCallback? _disposeLocationConsumer;
+
+  // Nearest city preview — refreshed on every tap / programmatic move.
+  // Shown as a small pill overlay on the map so the user knows where
+  // they are aiming before confirming.
+  String? _nearestCityLabel;
+  bool _nearestCityLoading = false;
+  int _nearestCitySeq = 0;
 
   // Default to central Europe (Munich/Vienna area)
   static const LatLng _defaultPosition = LatLng(48.0, 10.0);
@@ -126,6 +134,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
     _selectedPosition = _resolveInitialPosition();
 
     _initializeControllers();
+    _refreshNearestCity(_selectedPosition);
 
     // ALWAYS try to detect GPS location (unless view-only mode)
     // This will update the map to current position if GPS is available
@@ -251,8 +260,37 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
       _pendingMapZoom = zoomToUse;
     }
 
+    _refreshNearestCity(_selectedPosition);
+
     // Trigger offline tile pre-download for this area (in background)
     _triggerOfflineTileDownload(lat, lon);
+  }
+
+  /// Look up the nearest city to [pos] in the bundled worldcities
+  /// database and update the pill overlay. Uses a monotonic sequence
+  /// number so a burst of taps doesn't surface a stale older result.
+  Future<void> _refreshNearestCity(LatLng pos) async {
+    final seq = ++_nearestCitySeq;
+    setState(() => _nearestCityLoading = true);
+    try {
+      final result = await LocationService()
+          .findNearestCity(pos.latitude, pos.longitude);
+      if (!mounted || seq != _nearestCitySeq) return;
+      setState(() {
+        _nearestCityLoading = false;
+        _nearestCityLabel = result == null
+            ? null
+            : (result.country.isNotEmpty
+                ? '${result.city}, ${result.country}'
+                : result.city);
+      });
+    } catch (e) {
+      if (!mounted || seq != _nearestCitySeq) return;
+      setState(() {
+        _nearestCityLoading = false;
+        _nearestCityLabel = null;
+      });
+    }
   }
 
   /// Pre-download tiles for offline use around the current position
@@ -384,6 +422,7 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
       _latController.text = position.latitude.toStringAsFixed(6);
       _lonController.text = position.longitude.toStringAsFixed(6);
     });
+    _refreshNearestCity(position);
   }
 
   void _confirmSelection() {
@@ -535,6 +574,22 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
                               ],
                             )
                           : const Center(child: CircularProgressIndicator()),
+                      // Nearest-city pill, shown above the FAB so the
+                      // user sees "Coimbra, Portugal" before tapping
+                      // "Confirm location".
+                      if (_mapInitialized)
+                        Positioned(
+                          left: 16,
+                          right: 92,
+                          bottom: 16,
+                          child: IgnorePointer(
+                            child: _NearestCityPill(
+                              label: _nearestCityLabel,
+                              loading: _nearestCityLoading,
+                              i18n: _i18n,
+                            ),
+                          ),
+                        ),
                       // Map controls (same layout as main map)
                       if (_mapInitialized)
                         Positioned(
@@ -628,6 +683,69 @@ class _LocationPickerPageState extends State<LocationPickerPage> {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+/// Floating pill that shows the nearest city to the current
+/// selection, e.g. "Coimbra, Portugal". Used as an overlay inside the
+/// LocationPickerPage map stack. Intentionally a thin stateless widget
+/// so flyover updates from the parent's setState ripple in instantly.
+class _NearestCityPill extends StatelessWidget {
+  final String? label;
+  final bool loading;
+  final I18nService i18n;
+
+  const _NearestCityPill({
+    required this.label,
+    required this.loading,
+    required this.i18n,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final text = loading && label == null
+        ? i18n.t('looking_up_nearest_city')
+        : (label ?? i18n.t('no_city_nearby'));
+    final theme = Theme.of(context);
+    return Align(
+      alignment: Alignment.bottomLeft,
+      child: Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(20),
+        color: theme.colorScheme.surface.withValues(alpha: 0.92),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.location_city,
+                size: 16,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 6),
+              if (loading && label == null)
+                const SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                ),
+              if (loading && label == null) const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  text,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

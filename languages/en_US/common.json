@@ -959,6 +959,8 @@
   "pick_a_city": "Pick a city",
   "city_search_hint": "Start typing a city name",
   "no_cities_found": "No matching city",
+  "looking_up_nearest_city": "Looking up nearest city…",
+  "no_city_nearby": "No nearby city",
   "enter_coordinates": "Enter coordinates",
   "more_options": "More options",
   "open_postcard_toast": "Open — anyone along the route can read it",
