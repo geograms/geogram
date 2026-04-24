@@ -255,6 +255,7 @@ class AppService {
             // Fresh installs ship with a static "It works!" starter that the
             // user owns and edits — the dynamic generator only kicks back in
             // if they explicitly disable the custom-homepage switch.
+            await _writeItWorksStarter(app);
             await setWwwUseCustomHomepage(true);
           }
         } catch (e) {
@@ -319,10 +320,9 @@ class AppService {
     return settings['useCustomHomepage'] == true;
   }
 
-  /// Set the "use custom homepage" flag. When turning it on, write a starter
-  /// "It works!" page so the user has something concrete to edit; when
-  /// turning it off, mark the dynamic index dirty so the auto-generated
-  /// homepage comes back on the next request.
+  /// Flip the "use custom homepage" flag. Pure setting — never overwrites
+  /// the user's index.html. Turning it off marks the dynamic index dirty
+  /// so the auto-generated homepage is rebuilt on the next request.
   Future<void> setWwwUseCustomHomepage(bool value) async {
     final app = getAppByType('www');
     if (app == null) return;
@@ -331,16 +331,23 @@ class AppService {
     await _writeWwwSettings(app, settings);
 
     if (value) {
-      await _writeItWorksStarter(app);
       _wwwIndexDirty = false;
     } else {
       invalidateWwwIndex();
     }
   }
 
-  /// Write a minimal "It works!" homepage using the default theme so a user
-  /// who just enabled custom homepages has a real file to edit instead of
-  /// the auto-generated one.
+  /// Public entry point for explicit "reset to the It works! starter"
+  /// actions. Overwrites index.html and styles.css — caller must confirm.
+  Future<void> writeItWorksStarter() async {
+    final app = getAppByType('www');
+    if (app == null) return;
+    await _writeItWorksStarter(app);
+  }
+
+  /// Write a minimal "It works!" homepage using the default theme. Used by
+  /// fresh-install seeding and the explicit reset button — never called as
+  /// a side effect of toggling the custom-homepage switch.
   Future<void> _writeItWorksStarter(App app) async {
     if (kIsWeb || _profileStorage == null || app.storagePath == null) return;
 

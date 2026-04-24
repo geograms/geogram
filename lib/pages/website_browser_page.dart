@@ -130,43 +130,17 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
 
   Future<void> _toggleCustomHomepage(bool value) async {
     if (_customHomepageBusy) return;
-    if (value) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Use custom homepage?'),
-          content: const Text(
-            'Your index.html will be replaced with a starter "It works!" page '
-            'that you can edit freely. The auto-generated homepage will no '
-            'longer overwrite your changes. Continue?',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Replace and enable'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true || !mounted) return;
-    }
-
     setState(() => _customHomepageBusy = true);
     try {
       await AppService().setWwwUseCustomHomepage(value);
       if (!mounted) return;
       setState(() => _useCustomHomepage = value);
-      _pickerKey.currentState?.refresh();
       if (_tabController.index == 1) _loadPreview();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(value
-              ? 'Custom homepage enabled — edit index.html to customise'
-              : 'Auto-generated homepage restored'),
+              ? 'Visitors will see your index.html'
+              : 'Visitors will see the auto-generated homepage'),
         ),
       );
     } catch (e) {
@@ -176,6 +150,46 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
       );
     } finally {
       if (mounted) setState(() => _customHomepageBusy = false);
+    }
+  }
+
+  Future<void> _resetToItWorksStarter() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset to "It works!" starter?'),
+        content: const Text(
+          'This will overwrite index.html and styles.css with the simple '
+          '"It works!" starter page. Any manual edits to those files will '
+          'be lost.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reset'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await AppService().writeItWorksStarter();
+      _pickerKey.currentState?.refresh();
+      if (_tabController.index == 1) _loadPreview();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reset to "It works!" starter')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to reset: $e')),
+      );
     }
   }
 
@@ -583,8 +597,13 @@ class _WebsiteBrowserPageState extends State<WebsiteBrowserPage>
         actions: isFilesTab
             ? [
                 IconButton(
+                  icon: const Icon(Icons.flag_outlined),
+                  tooltip: 'Reset to "It works!" starter',
+                  onPressed: _resetToItWorksStarter,
+                ),
+                IconButton(
                   icon: const Icon(Icons.restart_alt),
-                  tooltip: 'Regenerate template',
+                  tooltip: 'Regenerate auto-template (overwrites index.html)',
                   onPressed: _regenerateTemplate,
                 ),
                 ...?_pickerKey.currentState?.buildActions(),

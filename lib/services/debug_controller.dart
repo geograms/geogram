@@ -2053,7 +2053,7 @@ class DebugController {
           'success': true,
           'use_custom_homepage': active,
           'message': active
-              ? 'Custom "It works!" homepage is now active'
+              ? 'Visitors will see your edited index.html as-is'
               : 'Auto-generated homepage will be regenerated on next request',
         };
 
