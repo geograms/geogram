@@ -113,20 +113,55 @@ mixin BlogHandlerMixin {
         return;
       }
 
+      await serveBlogFromDisk(
+        request: request,
+        devicesDir: blogDevicesDir,
+        callsign: callsign,
+        filename: filename,
+        identifier: identifier,
+        log: blogLog,
+      );
+    } catch (e) {
+      blogLog('ERROR', 'Error serving blog post: $e');
+      request.response.statusCode = 500;
+      request.response.write('Internal server error');
+    }
+  }
+
+  /// Serve a single blog post from the station's local disk.
+  ///
+  /// Reads `{devicesDir}/{callsign}/{collection}/{year}/{filename}/post.md`
+  /// (scanning every collection folder whose app.js declares type=="blog"),
+  /// renders the markdown to HTML, and writes the full blog-post page
+  /// (using StationHtmlTemplates) to the response.
+  ///
+  /// Returns the HTTP status code that was written so callers can log /
+  /// chain on it. All I/O and templating errors are caught and turned into
+  /// 5xx responses.
+  ///
+  /// Exposed as a static helper so station implementations that do not use
+  /// [BlogHandlerMixin] (currently PureStationServer) can still fall back
+  /// to local-disk serving for requests targeting their own callsign.
+  static Future<int> serveBlogFromDisk({
+    required HttpRequest request,
+    required String devicesDir,
+    required String callsign,
+    required String filename,
+    required String identifier,
+    required void Function(String level, String message) log,
+  }) async {
+    try {
       // Extract year from filename (format: YYYY-MM-DD_title)
       final yearMatch = RegExp(r'^(\d{4})-').firstMatch(filename);
       if (yearMatch == null) {
         request.response.statusCode = 400;
         request.response.write('Invalid blog filename format');
-        return;
+        return 400;
       }
       final year = yearMatch.group(1)!;
 
-      // Build path to the blog markdown file
-      final devicesDir = blogDevicesDir;
       final blogDir = Directory('$devicesDir/$callsign');
 
-      // Find blog post in any collection
       BlogPost? foundPost;
       String? appFolderName;
 
@@ -155,7 +190,7 @@ mixin BlogHandlerMixin {
                 appFolderName = entity.path.split('/').last;
                 break;
               } catch (e) {
-                blogLog('ERROR', 'Error parsing blog file: $e');
+                log('ERROR', 'Error parsing blog file: $e');
               }
             }
           }
@@ -165,14 +200,13 @@ mixin BlogHandlerMixin {
       if (foundPost == null) {
         request.response.statusCode = 404;
         request.response.write('Blog post not found');
-        return;
+        return 404;
       }
 
-      // Only serve published posts
       if (foundPost.isDraft) {
         request.response.statusCode = 403;
         request.response.write('This post is not published');
-        return;
+        return 403;
       }
 
       // Load feedback counts
@@ -201,13 +235,11 @@ mixin BlogHandlerMixin {
         } catch (_) {}
       }
 
-      // Convert markdown content to HTML
       final htmlContent = md.markdownToHtml(
         foundPost.content,
         extensionSet: md.ExtensionSet.gitHubWeb,
       );
 
-      // Build full HTML page
       final html = StationHtmlTemplates.buildBlogPostPage(
         postTitle: foundPost.title,
         postDate: foundPost.displayDate,
@@ -227,10 +259,12 @@ mixin BlogHandlerMixin {
 
       request.response.headers.contentType = ContentType.html;
       request.response.write(html);
+      return 200;
     } catch (e) {
-      blogLog('ERROR', 'Error serving blog post: $e');
+      log('ERROR', 'Error serving blog post from disk: $e');
       request.response.statusCode = 500;
       request.response.write('Internal server error');
+      return 500;
     }
   }
 
