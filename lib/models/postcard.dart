@@ -3,6 +3,13 @@
  * License: Apache-2.0
  */
 
+/// Internal helper returned by [Postcard._readBlock].
+class _BlockRead {
+  final Map<String, String> fields;
+  final int nextIndex;
+  const _BlockRead({required this.fields, required this.nextIndex});
+}
+
 /// Model representing a postcard stamp added by a carrier
 class PostcardStamp {
   final int number; // Stamp number (1, 2, 3...)
@@ -451,6 +458,33 @@ class Postcard {
     );
   }
 
+  /// The bytes that the sender's first signature must cover: title,
+  /// header fields, blank line, and content. Does not include the
+  /// `--> npub:` / `--> signature:` metadata lines that ARE the
+  /// signature.
+  String signableHeaderAndContent() {
+    final buffer = StringBuffer();
+    buffer.writeln('# POSTCARD: $title');
+    buffer.writeln();
+    buffer.writeln('CREATED: $createdTimestamp');
+    buffer.writeln('SENDER_CALLSIGN: $senderCallsign');
+    buffer.writeln('SENDER_NPUB: $senderNpub');
+    if (recipientCallsign != null) {
+      buffer.writeln('RECIPIENT_CALLSIGN: $recipientCallsign');
+    }
+    buffer.writeln('RECIPIENT_NPUB: $recipientNpub');
+    buffer.writeln('RECIPIENT_LOCATIONS: $recipientLocationsString');
+    buffer.writeln('TYPE: $type');
+    buffer.writeln('STATUS: $status');
+    if (ttl != null) {
+      buffer.writeln('TTL: $ttl');
+    }
+    buffer.writeln('PRIORITY: $priority');
+    buffer.writeln();
+    buffer.writeln(content);
+    return buffer.toString();
+  }
+
   /// Export postcard as text format for file storage
   String exportAsText() {
     final buffer = StringBuffer();
@@ -557,9 +591,260 @@ class Postcard {
     return buffer.toString();
   }
 
-  // Parsing postcard.txt directly is not supported — PostcardService
-  // writes a postcard.json sidecar and loads via Postcard.fromJson. The
-  // .txt is kept as the human-readable / signed sneakernet artifact.
+  /// Parse a postcard.txt file back into a Postcard.
+  ///
+  /// Inverse of [exportAsText]. The parser is line-based and tolerant of
+  /// extra blank lines but strict about the section markers:
+  ///   # POSTCARD:                     — title line (line 1)
+  ///   KEY: VALUE                      — header fields
+  ///   <blank line>                    — header/content separator
+  ///   ... content lines ...
+  ///   --> npub: …                     — sender metadata
+  ///   --> signature: …
+  ///   ## STAMP: N                     — outbound stamps
+  ///   ## DELIVERY_RECEIPT             — recipient's delivery proof
+  ///   ## RETURN_STAMP: N              — return-leg stamps
+  ///   ## SENDER_ACKNOWLEDGMENT        — sender's final ack
+  ///
+  /// [postcardId] is the filename stem (without the .txt extension) —
+  /// the Postcard.id field.
+  static Postcard fromText(String text, String postcardId) {
+    final lines = text.split(RegExp(r'\r?\n'));
+    int i = 0;
+
+    // Title line.
+    if (i >= lines.length || !lines[i].startsWith('# POSTCARD:')) {
+      throw FormatException('Missing "# POSTCARD:" title line');
+    }
+    final title = lines[i].substring('# POSTCARD:'.length).trim();
+    i++;
+
+    // Skip blank lines after the title.
+    while (i < lines.length && lines[i].trim().isEmpty) {
+      i++;
+    }
+
+    // Header KEY: VALUE lines, until blank.
+    final header = <String, String>{};
+    while (i < lines.length && lines[i].trim().isNotEmpty) {
+      final line = lines[i];
+      final colon = line.indexOf(':');
+      if (colon > 0) {
+        final key = line.substring(0, colon).trim();
+        final value = line.substring(colon + 1).trim();
+        header[key] = value;
+      }
+      i++;
+    }
+
+    // Skip blank lines after the header.
+    while (i < lines.length && lines[i].trim().isEmpty) {
+      i++;
+    }
+
+    // Content, until either "--> npub:" metadata or a "## " section marker.
+    final contentLines = <String>[];
+    while (i < lines.length) {
+      final line = lines[i];
+      if (line.startsWith('--> npub:') ||
+          line.startsWith('--> signature:') ||
+          line.startsWith('## ')) {
+        break;
+      }
+      contentLines.add(line);
+      i++;
+    }
+    // Trim the trailing blank line that exportAsText always writes.
+    while (contentLines.isNotEmpty && contentLines.last.trim().isEmpty) {
+      contentLines.removeLast();
+    }
+
+    // Sender metadata.
+    final metadata = <String, String>{};
+    while (i < lines.length && lines[i].startsWith('--> ')) {
+      final line = lines[i].substring(4);
+      final colon = line.indexOf(':');
+      if (colon > 0) {
+        metadata[line.substring(0, colon).trim()] =
+            line.substring(colon + 1).trim();
+      }
+      i++;
+    }
+
+    // Walk remaining sections.
+    final stamps = <PostcardStamp>[];
+    final returnStamps = <PostcardStamp>[];
+    PostcardDeliveryReceipt? deliveryReceipt;
+    PostcardAcknowledgment? acknowledgment;
+
+    while (i < lines.length) {
+      final line = lines[i].trim();
+      if (line.isEmpty) {
+        i++;
+        continue;
+      }
+      if (line.startsWith('## STAMP:')) {
+        final n = int.tryParse(line.substring('## STAMP:'.length).trim()) ?? 0;
+        i++;
+        final block = _readBlock(lines, i);
+        i = block.nextIndex;
+        stamps.add(_stampFromBlock(block.fields, number: n, hopFallback: n));
+      } else if (line.startsWith('## RETURN_STAMP:')) {
+        final n = int.tryParse(
+              line.substring('## RETURN_STAMP:'.length).trim(),
+            ) ??
+            0;
+        i++;
+        final block = _readBlock(lines, i);
+        i = block.nextIndex;
+        returnStamps.add(
+          _stampFromBlock(block.fields, number: n, hopFallback: n),
+        );
+      } else if (line == '## DELIVERY_RECEIPT') {
+        i++;
+        final block = _readBlock(lines, i);
+        i = block.nextIndex;
+        deliveryReceipt = _receiptFromBlock(block.fields);
+      } else if (line == '## SENDER_ACKNOWLEDGMENT') {
+        i++;
+        final block = _readBlock(lines, i);
+        i = block.nextIndex;
+        acknowledgment = _ackFromBlock(block.fields);
+      } else {
+        // Unknown section — skip one line to avoid an infinite loop.
+        i++;
+      }
+    }
+
+    final recipientLocations = _parseRecipientLocations(
+      header['RECIPIENT_LOCATIONS'] ?? '',
+    );
+
+    return Postcard(
+      id: postcardId,
+      title: title,
+      createdTimestamp: header['CREATED'] ?? '',
+      senderCallsign: header['SENDER_CALLSIGN'] ?? '',
+      senderNpub: header['SENDER_NPUB'] ?? '',
+      recipientCallsign: header['RECIPIENT_CALLSIGN'],
+      recipientNpub: header['RECIPIENT_NPUB'] ?? '',
+      recipientLocations: recipientLocations,
+      type: header['TYPE'] ?? 'open',
+      status: header['STATUS'] ?? 'in-transit',
+      ttl: int.tryParse(header['TTL'] ?? ''),
+      priority: header['PRIORITY'] ?? 'normal',
+      content: contentLines.join('\n'),
+      metadata: metadata,
+      stamps: stamps,
+      deliveryReceipt: deliveryReceipt,
+      returnStamps: returnStamps,
+      acknowledgment: acknowledgment,
+    );
+  }
+
+  /// Read a block of KEY: VALUE (or "--> key: value") lines until we hit a
+  /// blank line or the next "## " section marker. Returns the parsed fields
+  /// plus the index of the first line that was NOT consumed.
+  static _BlockRead _readBlock(List<String> lines, int start) {
+    final fields = <String, String>{};
+    int i = start;
+    while (i < lines.length) {
+      final line = lines[i];
+      final stripped = line.trim();
+      if (stripped.isEmpty) {
+        i++;
+        break;
+      }
+      if (stripped.startsWith('## ')) break;
+      if (stripped.startsWith('--> ')) {
+        final rest = stripped.substring(4);
+        final colon = rest.indexOf(':');
+        if (colon > 0) {
+          fields[rest.substring(0, colon).trim()] =
+              rest.substring(colon + 1).trim();
+        }
+      } else {
+        final colon = stripped.indexOf(':');
+        if (colon > 0) {
+          fields[stripped.substring(0, colon).trim()] =
+              stripped.substring(colon + 1).trim();
+        }
+      }
+      i++;
+    }
+    return _BlockRead(fields: fields, nextIndex: i);
+  }
+
+  static PostcardStamp _stampFromBlock(
+    Map<String, String> f, {
+    required int number,
+    required int hopFallback,
+  }) {
+    final coords = (f['COORDINATES'] ?? '').split(',');
+    final lat = coords.length == 2
+        ? (double.tryParse(coords[0].trim()) ?? 0.0)
+        : 0.0;
+    final lon = coords.length == 2
+        ? (double.tryParse(coords[1].trim()) ?? 0.0)
+        : 0.0;
+    return PostcardStamp(
+      number: number,
+      stamperCallsign: f['STAMPER_CALLSIGN'] ?? '',
+      stamperNpub: f['STAMPER_NPUB'] ?? '',
+      timestamp: f['TIMESTAMP'] ?? '',
+      latitude: lat,
+      longitude: lon,
+      locationName: f['LOCATION_NAME'],
+      receivedFrom: f['RECEIVED_FROM'] ?? '',
+      receivedVia: f['RECEIVED_VIA'] ?? '',
+      hopNumber: int.tryParse(f['HOP_NUMBER'] ?? '') ?? hopFallback,
+      signature: f['signature'] ?? '',
+    );
+  }
+
+  static PostcardDeliveryReceipt _receiptFromBlock(Map<String, String> f) {
+    final coords = (f['COORDINATES'] ?? '').split(',');
+    final lat = coords.length == 2
+        ? (double.tryParse(coords[0].trim()) ?? 0.0)
+        : 0.0;
+    final lon = coords.length == 2
+        ? (double.tryParse(coords[1].trim()) ?? 0.0)
+        : 0.0;
+    return PostcardDeliveryReceipt(
+      recipientNpub: f['RECIPIENT_NPUB'] ?? '',
+      timestamp: f['DELIVERED_AT'] ?? '',
+      carrierCallsign: f['CARRIER_CALLSIGN'] ?? '',
+      carrierNpub: f['DELIVERED_BY'] ?? f['CARRIER_NPUB'] ?? '',
+      deliveryLatitude: lat,
+      deliveryLongitude: lon,
+      deliveryLocationName: f['LOCATION_NAME'],
+      deliveryNote: f['NOTE'],
+      signature: f['signature'] ?? '',
+    );
+  }
+
+  static PostcardAcknowledgment _ackFromBlock(Map<String, String> f) {
+    return PostcardAcknowledgment(
+      senderNpub: f['SENDER_NPUB'] ?? '',
+      timestamp: f['ACKNOWLEDGED_AT'] ?? '',
+      acknowledgmentNote: f['NOTE'],
+      signature: f['signature'] ?? '',
+    );
+  }
+
+  static List<RecipientLocation> _parseRecipientLocations(String value) {
+    final out = <RecipientLocation>[];
+    if (value.trim().isEmpty) return out;
+    for (final chunk in value.split(';')) {
+      final parts = chunk.trim().split(',');
+      if (parts.length < 2) continue;
+      final lat = double.tryParse(parts[0].trim());
+      final lon = double.tryParse(parts[1].trim());
+      if (lat == null || lon == null) continue;
+      out.add(RecipientLocation(latitude: lat, longitude: lon));
+    }
+    return out;
+  }
 
   /// Convert to JSON
   Map<String, dynamic> toJson() => {

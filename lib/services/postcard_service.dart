@@ -3,12 +3,22 @@
  * License: Apache-2.0
  */
 
-import 'dart:convert';
-
 import '../models/postcard.dart';
+import '../services/profile_service.dart';
+import '../util/nostr_event.dart';
+import '../util/nostr_crypto.dart';
 import 'profile_storage.dart';
 
-/// Service for managing postcards (sneakernet message delivery)
+/// Service for managing postcards (sneakernet message delivery).
+///
+/// Storage layout (spec v2.0):
+///
+///   postcards/
+///   └── postcard-{CALLSIGN}_YYYY-MM-DD_{ABCD}.txt
+///
+/// One postcard = one file. No per-message folder, no year folder, no
+/// postcard.json sidecar. `{ABCD}` is the first four hex characters of
+/// the sender's NOSTR signature over the postcard header+content.
 class PostcardService {
   static final PostcardService _instance = PostcardService._internal();
   factory PostcardService() => _instance;
@@ -33,164 +43,162 @@ class PostcardService {
   Future<void> initializeApp(String appPath) async {
     print('PostcardService: Initializing with collection path: $appPath');
     _appPath = appPath;
-
-    // Ensure postcards directory exists using storage
     await _storage.createDirectory('postcards');
     print('PostcardService: Created postcards directory');
   }
 
-  /// Get available years (folders in postcards directory)
+  // ── Listing ───────────────────────────────────────────────────────
+
+  /// Get available years, derived from the date embedded in each
+  /// postcard filename (YYYY-MM-DD).
   Future<List<int>> getYears() async {
     if (_appPath == null) return [];
-
     if (!await _storage.exists('postcards')) return [];
 
-    final years = <int>[];
+    final years = <int>{};
     final entries = await _storage.listDirectory('postcards');
-
-    for (var entry in entries) {
-      if (entry.isDirectory) {
-        final year = int.tryParse(entry.name);
-        if (year != null) {
-          years.add(year);
-        }
-      }
+    for (final entry in entries) {
+      if (entry.isDirectory) continue;
+      final year = _yearFromFilename(entry.name);
+      if (year != null) years.add(year);
     }
-
-    years.sort((a, b) => b.compareTo(a)); // Most recent first
-    return years;
+    final sorted = years.toList()..sort((a, b) => b.compareTo(a));
+    return sorted;
   }
 
-  /// Load postcards for a specific year or all years
+  /// Load postcards (optionally filtered by year and/or status).
   Future<List<Postcard>> loadPostcards({
     int? year,
     String? filterByStatus,
   }) async {
     if (_appPath == null) return [];
+    if (!await _storage.exists('postcards')) return [];
 
     final postcards = <Postcard>[];
-    final years = year != null ? [year] : await getYears();
+    final entries = await _storage.listDirectory('postcards');
+    for (final entry in entries) {
+      if (entry.isDirectory) continue;
+      if (!_isPostcardFilename(entry.name)) continue;
+      if (year != null && _yearFromFilename(entry.name) != year) continue;
 
-    for (var y in years) {
-      final yearPath = 'postcards/$y';
-      if (!await _storage.exists(yearPath)) continue;
-
-      final entries = await _storage.listDirectory(yearPath);
-
-      for (var entry in entries) {
-        if (entry.isDirectory) {
-          try {
-            // Postcard folders are like: YYYY-MM-DD_msg-{id}
-            if (RegExp(r'^\d{4}-\d{2}-\d{2}_msg-').hasMatch(entry.name)) {
-              final postcard = await loadPostcard(entry.name);
-              if (postcard != null) {
-                // Apply status filter if specified
-                if (filterByStatus == null || postcard.status == filterByStatus) {
-                  postcards.add(postcard);
-                }
-              }
-            }
-          } catch (e) {
-            print('PostcardService: Error loading postcard ${entry.path}: $e');
-          }
+      try {
+        final stem = entry.name.substring(0, entry.name.length - 4); // .txt
+        final postcard = await loadPostcard(stem);
+        if (postcard == null) continue;
+        if (filterByStatus != null && postcard.status != filterByStatus) {
+          continue;
         }
+        postcards.add(postcard);
+      } catch (e) {
+        print('PostcardService: Error loading postcard ${entry.name}: $e');
       }
     }
 
-    // Sort by created timestamp (most recent first)
     postcards.sort((a, b) => b.createdDateTime.compareTo(a.createdDateTime));
-
     return postcards;
   }
 
-  /// Load full postcard with stamps, delivery receipt, and acknowledgment.
-  ///
-  /// Reads postcard.json, which is written in lockstep with the
-  /// human-readable postcard.txt artifact by [_persistPostcard]. The JSON
-  /// sidecar avoids having to hand-parse the verbose exportAsText format.
+  /// Load a single postcard by its id (== filename stem, no .txt).
   Future<Postcard?> loadPostcard(String postcardId) async {
     if (_appPath == null) return null;
-
-    // Extract year from postcardId (format: YYYY-MM-DD_msg-{id})
-    final year = postcardId.substring(0, 4);
-    final postcardPath = 'postcards/$year/$postcardId';
-
-    if (!await _storage.exists(postcardPath)) {
-      print('PostcardService: Postcard directory not found: $postcardPath');
+    final path = 'postcards/$postcardId.txt';
+    final text = await _storage.readString(path);
+    if (text == null) {
+      print('PostcardService: postcard not found: $path');
       return null;
     }
-
-    final jsonFile = '$postcardPath/postcard.json';
-    final jsonContent = await _storage.readString(jsonFile);
-    if (jsonContent == null) {
-      print('PostcardService: postcard.json not found in $postcardPath');
-      return null;
-    }
-
     try {
-      final data = jsonDecode(jsonContent) as Map<String, dynamic>;
-      return Postcard.fromJson(data);
+      return Postcard.fromText(text, postcardId);
     } catch (e) {
-      print('PostcardService: Error loading postcard: $e');
+      print('PostcardService: Error parsing $path: $e');
       return null;
     }
   }
 
-  /// Write both the canonical JSON record (source of truth for in-app loads)
-  /// and the human-readable postcard.txt artifact (the sneakernet export
-  /// format signed and carried between devices).
-  Future<void> _persistPostcard(String postcardPath, Postcard postcard) async {
+  // ── Persistence ───────────────────────────────────────────────────
+
+  /// Write a postcard to disk at postcards/{id}.txt. The id is the
+  /// filename stem without the .txt extension.
+  Future<void> _persistPostcard(String postcardId, Postcard postcard) async {
     await _storage.writeString(
-      '$postcardPath/postcard.json',
-      jsonEncode(postcard.toJson()),
-    );
-    await _storage.writeString(
-      '$postcardPath/postcard.txt',
+      'postcards/$postcardId.txt',
       postcard.exportAsText(),
     );
   }
 
-  /// Sanitize message ID to create valid folder name
-  String sanitizeMessageId(String messageId) {
-    // Convert to lowercase, replace spaces with hyphens
-    String sanitized = messageId.toLowerCase().trim();
+  // ── Filename helpers ──────────────────────────────────────────────
 
-    // Replace spaces and underscores with hyphens
-    sanitized = sanitized.replaceAll(RegExp(r'[\s_]+'), '-');
+  static final RegExp _postcardFilenameRe = RegExp(
+    r'^postcard-[A-Z0-9]+_\d{4}-\d{2}-\d{2}_[0-9a-f]{4}(?:-\d+)?\.txt$',
+  );
 
-    // Remove non-alphanumeric characters except hyphens
-    sanitized = sanitized.replaceAll(RegExp(r'[^a-z0-9-]'), '');
+  bool _isPostcardFilename(String name) => _postcardFilenameRe.hasMatch(name);
 
-    // Remove multiple consecutive hyphens
-    sanitized = sanitized.replaceAll(RegExp(r'-+'), '-');
-
-    // Remove leading/trailing hyphens
-    sanitized = sanitized.replaceAll(RegExp(r'^-+|-+$'), '');
-
-    // Truncate to 30 characters
-    if (sanitized.length > 30) {
-      sanitized = sanitized.substring(0, 30);
-    }
-
-    return sanitized;
+  int? _yearFromFilename(String name) {
+    final m = RegExp(r'_(\d{4})-\d{2}-\d{2}_').firstMatch(name);
+    if (m == null) return null;
+    return int.tryParse(m.group(1)!);
   }
 
-  /// Check if folder name already exists, add suffix if needed
-  Future<String> _ensureUniqueFolderName(String baseFolderName, int year) async {
-    String folderName = baseFolderName;
-    int suffix = 1;
+  /// Sanitize callsign for use in a filename.
+  String _sanitizeCallsign(String callsign) {
+    final upper = callsign.toUpperCase();
+    final cleaned = upper.replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    return cleaned.isEmpty ? 'UNKNOWN' : cleaned;
+  }
 
-    while (await _storage.exists('postcards/$year/$folderName')) {
-      // Extract the base without the suffix
-      final baseWithoutSuffix = baseFolderName.replaceAll(RegExp(r'-\d+$'), '');
-      folderName = '$baseWithoutSuffix-$suffix';
+  /// Build the filename stem (no .txt). Appends `-N` if needed to avoid
+  /// collisions when the same sender happens to produce two files in a
+  /// day with the same signature prefix.
+  Future<String> _uniqueFilenameStem({
+    required String senderCallsign,
+    required DateTime now,
+    required String signatureHex,
+  }) async {
+    final dateStr = '${now.year.toString().padLeft(4, '0')}-'
+        '${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+    final prefix = (signatureHex.length >= 4
+            ? signatureHex.substring(0, 4)
+            : signatureHex.padLeft(4, '0'))
+        .toLowerCase();
+    final base = 'postcard-${_sanitizeCallsign(senderCallsign)}_'
+        '${dateStr}_$prefix';
+
+    String stem = base;
+    int suffix = 1;
+    while (await _storage.exists('postcards/$stem.txt')) {
+      stem = '$base-$suffix';
       suffix++;
     }
-
-    return folderName;
+    return stem;
   }
 
-  /// Format DateTime to timestamp string
+  // ── Signing ───────────────────────────────────────────────────────
+
+  /// Sign the postcard's header+content with the active profile's nsec.
+  /// Returns the 64-char hex Schnorr signature, or null if no nsec is
+  /// available (edge case — caller decides whether to proceed).
+  String? _signHeaderAndContent(Postcard postcard) {
+    final profile = ProfileService().getProfile();
+    if (profile.nsec.isEmpty) return null;
+
+    final signable = postcard.signableHeaderAndContent();
+    final pubkeyHex = NostrCrypto.decodeNpub(profile.npub);
+    final event = NostrEvent.textNote(
+      pubkeyHex: pubkeyHex,
+      content: signable,
+    );
+    try {
+      return event.signWithNsec(profile.nsec);
+    } catch (e) {
+      print('PostcardService: signing failed: $e');
+      return null;
+    }
+  }
+
+  // ── Timestamp formatting ──────────────────────────────────────────
+
   String _formatTimestamp(DateTime dt) {
     final year = dt.year.toString().padLeft(4, '0');
     final month = dt.month.toString().padLeft(2, '0');
@@ -201,7 +209,12 @@ class PostcardService {
     return '$year-$month-$day $hour:$minute\_$second';
   }
 
-  /// Create new postcard
+  // ── Create ────────────────────────────────────────────────────────
+
+  /// Create and persist a new postcard. Sender signature over
+  /// header+content is produced with the active profile's nsec and the
+  /// first four hex characters of that signature are folded into the
+  /// filename.
   Future<Postcard?> createPostcard({
     required String title,
     required String senderCallsign,
@@ -213,37 +226,16 @@ class PostcardService {
     required String content,
     int? ttl,
     String priority = 'normal',
-    String? messageId,
   }) async {
     if (_appPath == null) return null;
 
     try {
       final now = DateTime.now();
-      final year = now.year;
+      await _storage.createDirectory('postcards');
 
-      // Generate message ID if not provided
-      final msgId = messageId ?? sanitizeMessageId(title);
-
-      // Format folder name: YYYY-MM-DD_msg-{id}
-      final dateStr = '${now.year.toString().padLeft(4, '0')}-'
-          '${now.month.toString().padLeft(2, '0')}-'
-          '${now.day.toString().padLeft(2, '0')}';
-      final baseFolderName = '${dateStr}_msg-$msgId';
-      final folderName = await _ensureUniqueFolderName(baseFolderName, year);
-
-      // Ensure year directory exists using storage
-      await _storage.createDirectory('postcards/$year');
-
-      // Create postcard directory
-      final postcardPath = 'postcards/$year/$folderName';
-      await _storage.createDirectory(postcardPath);
-
-      // Create contributors directory
-      await _storage.createDirectory('$postcardPath/contributors');
-
-      // Create postcard object
-      final postcard = Postcard(
-        id: folderName,
+      // Build the postcard draft so we can compute the signable text.
+      final draft = Postcard(
+        id: '', // filled in once we have the signature prefix
         title: title,
         createdTimestamp: _formatTimestamp(now),
         senderCallsign: senderCallsign,
@@ -256,13 +248,32 @@ class PostcardService {
         ttl: ttl,
         priority: priority,
         content: content,
-        stamps: [],
-        returnStamps: [],
+        stamps: const [],
+        returnStamps: const [],
       );
 
-      await _persistPostcard(postcardPath, postcard);
+      final signature = _signHeaderAndContent(draft);
+      if (signature == null) {
+        print('PostcardService: cannot create postcard without an nsec');
+        return null;
+      }
 
-      print('PostcardService: Created postcard: $folderName');
+      final stem = await _uniqueFilenameStem(
+        senderCallsign: senderCallsign,
+        now: now,
+        signatureHex: signature,
+      );
+
+      final postcard = draft.copyWith(
+        id: stem,
+        metadata: {
+          'npub': senderNpub,
+          'signature': signature,
+        },
+      );
+
+      await _persistPostcard(stem, postcard);
+      print('PostcardService: created postcard $stem.txt');
       return postcard;
     } catch (e) {
       print('PostcardService: Error creating postcard: $e');
@@ -270,7 +281,12 @@ class PostcardService {
     }
   }
 
-  /// Add stamp to postcard journey
+  // ── Mutate an existing postcard ───────────────────────────────────
+  //
+  // Every mutator loads the existing postcard, produces the new
+  // Postcard, and writes it back to the same file. The filename never
+  // changes after creation — its id = stem is stable.
+
   Future<bool> addStamp({
     required String postcardId,
     required String stamperCallsign,
@@ -283,18 +299,10 @@ class PostcardService {
     required String signature,
   }) async {
     if (_appPath == null) return false;
-
     try {
-      final year = postcardId.substring(0, 4);
-      final postcardPath = 'postcards/$year/$postcardId';
-
-      if (!await _storage.exists(postcardPath)) return false;
-
-      // Load existing postcard
       final postcard = await loadPostcard(postcardId);
       if (postcard == null) return false;
 
-      // Create new stamp
       final now = DateTime.now();
       final stamp = PostcardStamp(
         number: postcard.stamps.length + 1,
@@ -310,14 +318,9 @@ class PostcardService {
         signature: signature,
       );
 
-      // Add stamp to postcard
-      final updatedStamps = [...postcard.stamps, stamp];
-      final updatedPostcard = postcard.copyWith(stamps: updatedStamps);
-
-      // Write updated postcard using storage
-      await _persistPostcard(postcardPath, updatedPostcard);
-
-      print('PostcardService: Added stamp #${stamp.number} to $postcardId');
+      final updated = postcard.copyWith(stamps: [...postcard.stamps, stamp]);
+      await _persistPostcard(postcardId, updated);
+      print('PostcardService: added stamp #${stamp.number} to $postcardId');
       return true;
     } catch (e) {
       print('PostcardService: Error adding stamp: $e');
@@ -325,7 +328,6 @@ class PostcardService {
     }
   }
 
-  /// Deliver postcard to recipient
   Future<bool> deliverPostcard({
     required String postcardId,
     required String carrierCallsign,
@@ -337,18 +339,10 @@ class PostcardService {
     required String signature,
   }) async {
     if (_appPath == null) return false;
-
     try {
-      final year = postcardId.substring(0, 4);
-      final postcardPath = 'postcards/$year/$postcardId';
-
-      if (!await _storage.exists(postcardPath)) return false;
-
-      // Load existing postcard
       final postcard = await loadPostcard(postcardId);
       if (postcard == null) return false;
 
-      // Create delivery receipt
       final now = DateTime.now();
       final deliveryReceipt = PostcardDeliveryReceipt(
         recipientNpub: postcard.recipientNpub,
@@ -362,24 +356,19 @@ class PostcardService {
         signature: signature,
       );
 
-      // Update postcard status and add delivery receipt
-      final updatedPostcard = postcard.copyWith(
+      final updated = postcard.copyWith(
         status: 'delivered',
         deliveryReceipt: deliveryReceipt,
       );
-
-      // Write updated postcard using storage
-      await _persistPostcard(postcardPath, updatedPostcard);
-
-      print('PostcardService: Delivered postcard: $postcardId');
+      await _persistPostcard(postcardId, updated);
+      print('PostcardService: delivered $postcardId');
       return true;
     } catch (e) {
-      print('PostcardService: Error delivering postcard: $e');
+      print('PostcardService: Error delivering: $e');
       return false;
     }
   }
 
-  /// Add return stamp to postcard
   Future<bool> addReturnStamp({
     required String postcardId,
     required String stamperCallsign,
@@ -392,18 +381,10 @@ class PostcardService {
     required String signature,
   }) async {
     if (_appPath == null) return false;
-
     try {
-      final year = postcardId.substring(0, 4);
-      final postcardPath = 'postcards/$year/$postcardId';
-
-      if (!await _storage.exists(postcardPath)) return false;
-
-      // Load existing postcard
       final postcard = await loadPostcard(postcardId);
       if (postcard == null) return false;
 
-      // Create return stamp
       final now = DateTime.now();
       final stamp = PostcardStamp(
         number: postcard.returnStamps.length + 1,
@@ -419,14 +400,11 @@ class PostcardService {
         signature: signature,
       );
 
-      // Add return stamp
-      final updatedReturnStamps = [...postcard.returnStamps, stamp];
-      final updatedPostcard = postcard.copyWith(returnStamps: updatedReturnStamps);
-
-      // Write updated postcard using storage
-      await _persistPostcard(postcardPath, updatedPostcard);
-
-      print('PostcardService: Added return stamp #${stamp.number} to $postcardId');
+      final updated = postcard.copyWith(
+        returnStamps: [...postcard.returnStamps, stamp],
+      );
+      await _persistPostcard(postcardId, updated);
+      print('PostcardService: added return stamp #${stamp.number} to $postcardId');
       return true;
     } catch (e) {
       print('PostcardService: Error adding return stamp: $e');
@@ -434,7 +412,6 @@ class PostcardService {
     }
   }
 
-  /// Acknowledge postcard receipt by sender
   Future<bool> acknowledgePostcard({
     required String postcardId,
     required String receivedTimestamp,
@@ -442,18 +419,10 @@ class PostcardService {
     required String signature,
   }) async {
     if (_appPath == null) return false;
-
     try {
-      final year = postcardId.substring(0, 4);
-      final postcardPath = 'postcards/$year/$postcardId';
-
-      if (!await _storage.exists(postcardPath)) return false;
-
-      // Load existing postcard
       final postcard = await loadPostcard(postcardId);
       if (postcard == null) return false;
 
-      // Create acknowledgment
       final acknowledgment = PostcardAcknowledgment(
         senderNpub: postcard.senderNpub,
         timestamp: receivedTimestamp,
@@ -461,112 +430,52 @@ class PostcardService {
         signature: signature,
       );
 
-      // Update postcard status and add acknowledgment
-      final updatedPostcard = postcard.copyWith(
+      final updated = postcard.copyWith(
         status: 'acknowledged',
         acknowledgment: acknowledgment,
       );
-
-      // Write updated postcard using storage
-      await _persistPostcard(postcardPath, updatedPostcard);
-
-      print('PostcardService: Acknowledged postcard: $postcardId');
+      await _persistPostcard(postcardId, updated);
+      print('PostcardService: acknowledged $postcardId');
       return true;
     } catch (e) {
-      print('PostcardService: Error acknowledging postcard: $e');
+      print('PostcardService: Error acknowledging: $e');
       return false;
     }
   }
 
-  /// Get postcards by status
-  Future<List<Postcard>> getPostcardsByStatus(String status) async {
-    return loadPostcards(filterByStatus: status);
-  }
+  // ── Convenience status queries ────────────────────────────────────
 
-  /// Get in-transit postcards
-  Future<List<Postcard>> getInTransitPostcards() async {
-    return getPostcardsByStatus('in-transit');
-  }
+  Future<List<Postcard>> getPostcardsByStatus(String status) =>
+      loadPostcards(filterByStatus: status);
+  Future<List<Postcard>> getInTransitPostcards() =>
+      getPostcardsByStatus('in-transit');
+  Future<List<Postcard>> getDeliveredPostcards() =>
+      getPostcardsByStatus('delivered');
+  Future<List<Postcard>> getAcknowledgedPostcards() =>
+      getPostcardsByStatus('acknowledged');
+  Future<List<Postcard>> getExpiredPostcards() =>
+      getPostcardsByStatus('expired');
 
-  /// Get delivered postcards
-  Future<List<Postcard>> getDeliveredPostcards() async {
-    return getPostcardsByStatus('delivered');
-  }
+  /// Contributor files no longer exist in the flat single-file layout —
+  /// kept as a no-op for callers that still invoke it. Remove when the
+  /// UI stops asking.
+  Future<List<String>> loadContributorFiles(String postcardId) async => const [];
 
-  /// Get acknowledged postcards
-  Future<List<Postcard>> getAcknowledgedPostcards() async {
-    return getPostcardsByStatus('acknowledged');
-  }
-
-  /// Get expired postcards
-  Future<List<Postcard>> getExpiredPostcards() async {
-    return getPostcardsByStatus('expired');
-  }
-
-  /// Load contributor files from contributors folder
-  Future<List<String>> loadContributorFiles(String postcardId) async {
-    if (_appPath == null) return [];
-
-    try {
-      final year = postcardId.substring(0, 4);
-      final contributorsPath = 'postcards/$year/$postcardId/contributors';
-
-      if (!await _storage.exists(contributorsPath)) return [];
-
-      final files = <String>[];
-      final entries = await _storage.listDirectory(contributorsPath);
-
-      for (var entry in entries) {
-        if (!entry.isDirectory) {
-          // Skip hidden files
-          if (!entry.name.startsWith('.')) {
-            files.add(entry.name);
-          }
-        }
-      }
-
-      // Sort alphabetically
-      files.sort();
-      return files;
-    } catch (e) {
-      print('PostcardService: Error loading contributor files: $e');
-      return [];
-    }
-  }
-
-  /// Check if postcard has expired
   bool isExpired(Postcard postcard) {
     if (postcard.ttl == null) return false;
-
-    final created = postcard.createdDateTime;
-    final expiryDate = created.add(Duration(days: postcard.ttl!));
-    return DateTime.now().isAfter(expiryDate);
+    final expiry = postcard.createdDateTime.add(Duration(days: postcard.ttl!));
+    return DateTime.now().isAfter(expiry);
   }
 
-  /// Mark postcard as expired
   Future<bool> markAsExpired(String postcardId) async {
     if (_appPath == null) return false;
-
     try {
-      final year = postcardId.substring(0, 4);
-      final postcardPath = 'postcards/$year/$postcardId';
-
-      if (!await _storage.exists(postcardPath)) return false;
-
-      // Load existing postcard
       final postcard = await loadPostcard(postcardId);
       if (postcard == null) return false;
-
-      // Update status to expired
-      final updatedPostcard = postcard.copyWith(status: 'expired');
-
-      // Write updated postcard using storage
-      await _persistPostcard(postcardPath, updatedPostcard);
-
-      print('PostcardService: Marked postcard as expired: $postcardId');
+      await _persistPostcard(postcardId, postcard.copyWith(status: 'expired'));
       return true;
     } catch (e) {
-      print('PostcardService: Error marking postcard as expired: $e');
+      print('PostcardService: Error marking expired: $e');
       return false;
     }
   }

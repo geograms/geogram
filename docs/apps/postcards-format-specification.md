@@ -91,66 +91,71 @@ Each stamp is cryptographically signed, creating an unbreakable chain of custody
 ```
 collection_name/
 └── postcards/
-    ├── 2026/
-    │   ├── 2026-04-24_msg-a7c5b1/
-    │   │   └── postcard.txt      # Self-contained: header, body,
-    │   │                         # stamps, receipt, ack, and every
-    │   │                         # attachment as inline base64.
-    │   ├── 2026-04-24_msg-3d8f2e/
-    │   │   └── postcard.txt
-    │   └── 2026-04-25_msg-9b4e6a/
-    │       └── postcard.txt
-    └── 2025/
-        └── 2025-12-25_msg-jkl012/
-            └── postcard.txt
+    ├── postcard-CR7BBQ_2026-04-24_9f2c.txt
+    ├── postcard-CR7BBQ_2026-04-24_3d8f.txt
+    ├── postcard-X135AS_2026-04-25_7a1b.txt
+    └── postcard-DELTA4_2025-12-25_c4d5.txt
 ```
 
-Every postcard is exactly one file. The folder only exists so the
-filesystem gives us a per-postcard container (for future artifacts like
-thumbnails or moderation state), not so we can scatter pieces of a
-single postcard across siblings.
+Every postcard is exactly one file. No per-message folder, no per-year
+folder. The filename encodes everything needed for listing and
+deduplication: who wrote it, when, and a four-hex-character cut of the
+sender's signature.
 
-### Postcard Folder Naming
+### Postcard Filename
 
-**Pattern**: `YYYY-MM-DD_msg-{message-id}/`
+**Pattern**: `postcard-{CALLSIGN}_{YYYY-MM-DD}_{ABCD}.txt`
 
-**Message ID**:
-- First 6 characters of SHA-256 hash of postcard content
-- Lowercase hexadecimal
-- Ensures uniqueness
-- Human-readable identifier
+**Fields**:
+
+1. **CALLSIGN** — the sender's callsign, uppercased, stripped of every
+   non-`[A-Z0-9]` character. Example: `CR7BBQ`.
+2. **YYYY-MM-DD** — the creation date in UTC (matches the CREATED
+   header field's date component).
+3. **ABCD** — the first four hex characters of the sender's first
+   signature (`metadata['signature']`). Hex is lowercase `[0-9a-f]`.
+4. **Suffix `-N`** (rare) — appended if the target filename would
+   collide. Example: `postcard-CR7BBQ_2026-04-24_9f2c-1.txt`. Each
+   callsign gets at most ~65 k signatures per day before a prefix
+   collision would be likely enough to matter, so in practice this
+   suffix is never seen.
 
 **Examples**:
+
 ```
-2025-11-21_msg-a7c5b1/      # Created Nov 21, 2025
-2025-11-22_msg-3d8f2e/      # Created Nov 22, 2025
-2024-12-25_msg-9b4e6a/      # Created Dec 25, 2024
+postcard-CR7BBQ_2026-04-24_9f2c.txt
+postcard-X135AS_2026-04-25_7a1b.txt
+postcard-DELTA4_2025-12-25_c4d5.txt
 ```
 
-### Year Organization
+### Postcard ID
 
-- **Format**: `postcards/YYYY/` (e.g., `postcards/2025/`, `postcards/2024/`)
-- **Purpose**: Organize postcards by year for archival
-- **Creation**: Automatically created when first postcard for that year is added
-- **Benefits**: Easy year-based browsing, archival, and cleanup
+The in-app `Postcard.id` is the filename stem without the `.txt`
+extension — e.g. `postcard-CR7BBQ_2026-04-24_9f2c`. The id never
+changes after creation: stamps, receipts, and the sender
+acknowledgment all mutate the file in place, appending new signed
+blocks at the bottom while the filename stays stable.
 
-### Legacy sibling folders (removed in v2.0)
+### Legacy folder layout (removed in v2.0)
 
-Earlier drafts of this spec placed attachments in sibling files,
-`contributors/` folders for each carrier, and a `.reactions/` directory
-alongside `postcard.txt`. v2.0 collapses everything into the postcard
-file itself:
+Earlier drafts of this spec placed each postcard in its own folder
+(`postcards/YYYY/YYYY-MM-DD_msg-{id}/postcard.txt`), with sibling
+`photo.jpg` attachments, a `contributors/<CALLSIGN>/` subfolder for
+each carrier, and a `.reactions/` sidecar. v2.0 collapses all of that
+into one file with a self-describing name:
 
+- Directory layout → flat `postcards/postcard-*.txt`, no nested folders.
 - Attachments → inline base64 ATTACHMENT blocks (see [Attachments](#attachments)).
 - Carrier narrative → the STAMP itself carries the stamper's callsign,
-  coordinates, timestamp, and transmission method; richer narrative
-  lives in future reactions on the postcard as a whole.
-- Reactions → will be carried in reaction postcards referencing the
-  parent by its message ID; not a sidecar of this file.
+  coordinates, timestamp, and transmission method; optional proof
+  photos attach inline.
+- Reactions → carried in reaction postcards referencing the parent by
+  its id; not a sidecar of this file.
 
-If you find an on-disk postcard with the old layout, read
-`postcard.txt` as the authoritative source — the sidecar files are
-ignored.
+If you find an on-disk postcard with the old layout, it is legacy data
+— the current implementation will not read it. Migrate by rewriting
+the text content into a new `postcard-{CALLSIGN}_YYYY-MM-DD_{ABCD}.txt`
+file at the top of the `postcards/` directory.
 
 ## Postcard Format
 
@@ -2045,11 +2050,18 @@ Postcards are built on top of the existing relay message system:
 
 Breaking format changes:
 
-- **Single-file rule**: a postcard is exactly one `postcard.txt`.
-  Sibling artifacts — `photo.jpg`, `contributors/`, `.reactions/` —
-  are removed. A postcard you receive over BLE, LoRa, or a USB stick
-  is now always one file, nothing else.
-- **Inline attachments**: binaries ride inside `postcard.txt` as
+- **One file, self-describing filename.** A postcard is exactly one
+  text file at `postcards/postcard-{CALLSIGN}_{YYYY-MM-DD}_{ABCD}.txt`,
+  where `{ABCD}` is the first four hex characters of the sender's
+  Schnorr signature over the header + content. No per-message folder,
+  no per-year folder, no `postcard.txt`/`postcard.json` pair — the
+  filename is now a stable identifier you can grep for, sort by, and
+  share unambiguously.
+- **Sibling artifacts removed.** `photo.jpg`, `contributors/`, and
+  `.reactions/` folders are no longer written. Legacy data on disk is
+  not read — migrate by rewriting the text content into the new
+  filename pattern.
+- **Inline attachments**: binaries ride inside the postcard file as
   base64 blocks between `## ATTACHMENT:` and `<-- end attachment`.
   Each attachment carries its own content-type, size, SHA-256, and
   ADDED_BY npub. Later signatures cover earlier attachments.
