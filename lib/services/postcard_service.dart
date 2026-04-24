@@ -49,8 +49,8 @@ class PostcardService {
 
   // ── Listing ───────────────────────────────────────────────────────
 
-  /// Get available years, derived from the date embedded in each
-  /// postcard filename (YYYY-MM-DD).
+  /// Get available years by scanning `postcards/` for shard directories
+  /// matching `YYYY` or `YYYY-N`.
   Future<List<int>> getYears() async {
     if (_appPath == null) return [];
     if (!await _storage.exists('postcards')) return [];
@@ -58,9 +58,9 @@ class PostcardService {
     final years = <int>{};
     final entries = await _storage.listDirectory('postcards');
     for (final entry in entries) {
-      if (entry.isDirectory) continue;
-      final year = _yearFromFilename(entry.name);
-      if (year != null) years.add(year);
+      if (!entry.isDirectory) continue;
+      final m = _shardNameRe.firstMatch(entry.name);
+      if (m != null) years.add(int.parse(m.group(1)!));
     }
     final sorted = years.toList()..sort((a, b) => b.compareTo(a));
     return sorted;
@@ -74,23 +74,39 @@ class PostcardService {
     if (_appPath == null) return [];
     if (!await _storage.exists('postcards')) return [];
 
-    final postcards = <Postcard>[];
-    final entries = await _storage.listDirectory('postcards');
-    for (final entry in entries) {
-      if (entry.isDirectory) continue;
-      if (!_isPostcardFilename(entry.name)) continue;
-      if (year != null && _yearFromFilename(entry.name) != year) continue;
-
-      try {
-        final stem = entry.name.substring(0, entry.name.length - 4); // .txt
-        final postcard = await loadPostcard(stem);
-        if (postcard == null) continue;
-        if (filterByStatus != null && postcard.status != filterByStatus) {
-          continue;
+    // Discover the year shards we need to walk.
+    final shards = <String>[];
+    if (year != null) {
+      shards.addAll(await _existingShardsForYear(year));
+    } else {
+      final entries = await _storage.listDirectory('postcards');
+      for (final entry in entries) {
+        if (entry.isDirectory && _shardNameRe.hasMatch(entry.name)) {
+          shards.add(entry.name);
         }
-        postcards.add(postcard);
-      } catch (e) {
-        print('PostcardService: Error loading postcard ${entry.name}: $e');
+      }
+    }
+
+    final postcards = <Postcard>[];
+    for (final shard in shards) {
+      final shardPath = 'postcards/$shard';
+      final files = await _storage.listDirectory(shardPath);
+      for (final file in files) {
+        if (file.isDirectory) continue;
+        if (!_isPostcardFilename(file.name)) continue;
+        final stem = file.name.substring(0, file.name.length - 4);
+        try {
+          final path = '$shardPath/${file.name}';
+          final text = await _storage.readString(path);
+          if (text == null) continue;
+          final postcard = Postcard.fromText(text, stem);
+          if (filterByStatus != null && postcard.status != filterByStatus) {
+            continue;
+          }
+          postcards.add(postcard);
+        } catch (e) {
+          print('PostcardService: Error loading ${file.name}: $e');
+        }
       }
     }
 
@@ -99,14 +115,16 @@ class PostcardService {
   }
 
   /// Load a single postcard by its id (== filename stem, no .txt).
+  /// Walks the year's shards until it finds the file.
   Future<Postcard?> loadPostcard(String postcardId) async {
     if (_appPath == null) return null;
-    final path = 'postcards/$postcardId.txt';
-    final text = await _storage.readString(path);
-    if (text == null) {
-      print('PostcardService: postcard not found: $path');
+    final path = await _resolvePostcardPath(postcardId);
+    if (path == null) {
+      print('PostcardService: postcard not found: $postcardId');
       return null;
     }
+    final text = await _storage.readString(path);
+    if (text == null) return null;
     try {
       return Postcard.fromText(text, postcardId);
     } catch (e) {
@@ -117,16 +135,38 @@ class PostcardService {
 
   // ── Persistence ───────────────────────────────────────────────────
 
-  /// Write a postcard to disk at postcards/{id}.txt. The id is the
-  /// filename stem without the .txt extension.
-  Future<void> _persistPostcard(String postcardId, Postcard postcard) async {
+  /// Write an existing postcard back to the shard it already lives in.
+  /// Used by mutators (addStamp, deliverPostcard, …) where the file
+  /// already exists on disk.
+  Future<void> _persistExisting(String postcardId, Postcard postcard) async {
+    final path = await _resolvePostcardPath(postcardId);
+    if (path == null) {
+      throw StateError(
+        'PostcardService: cannot persist unknown postcard $postcardId',
+      );
+    }
+    await _storage.writeString(path, postcard.exportAsText());
+  }
+
+  /// Write a brand-new postcard to the current shard for its year,
+  /// opening a new shard if the current one has reached the cap.
+  Future<void> _persistNew(String shard, String postcardId, Postcard postcard) async {
     await _storage.writeString(
-      'postcards/$postcardId.txt',
+      'postcards/$shard/$postcardId.txt',
       postcard.exportAsText(),
     );
   }
 
-  // ── Filename helpers ──────────────────────────────────────────────
+  // ── Filename + shard helpers ──────────────────────────────────────
+
+  /// A shard directory is named either `YYYY` (first shard for a year)
+  /// or `YYYY-N` (subsequent shards when the previous one filled up).
+  static final RegExp _shardNameRe = RegExp(r'^(\d{4})(?:-\d+)?$');
+
+  /// Max files we allow per shard directory. File systems (and some
+  /// sync/indexing tools) start misbehaving around 10 000 entries per
+  /// directory; 5 000 keeps plenty of headroom.
+  static const int _shardCap = 5000;
 
   static final RegExp _postcardFilenameRe = RegExp(
     r'^postcard-[A-Z0-9]+_\d{4}-\d{2}-\d{2}_[0-9a-f]{4}(?:-\d+)?\.txt$',
@@ -134,10 +174,67 @@ class PostcardService {
 
   bool _isPostcardFilename(String name) => _postcardFilenameRe.hasMatch(name);
 
-  int? _yearFromFilename(String name) {
-    final m = RegExp(r'_(\d{4})-\d{2}-\d{2}_').firstMatch(name);
+  /// Extract the year prefix from a postcard filename stem
+  /// (`postcard-CALLSIGN_YYYY-MM-DD_ABCD` → `YYYY`).
+  int? _yearFromStem(String stem) {
+    final m = RegExp(r'_(\d{4})-\d{2}-\d{2}_').firstMatch(stem);
     if (m == null) return null;
     return int.tryParse(m.group(1)!);
+  }
+
+  /// Return every existing shard directory for `year`, in ascending
+  /// order (`YYYY`, `YYYY-1`, `YYYY-2`, …).
+  Future<List<String>> _existingShardsForYear(int year) async {
+    final shards = <String>[];
+    int n = 0;
+    while (true) {
+      final name = n == 0 ? '$year' : '$year-$n';
+      if (!await _storage.exists('postcards/$name')) break;
+      shards.add(name);
+      n++;
+    }
+    return shards;
+  }
+
+  /// Resolve a postcard id to its on-disk path by walking the year's
+  /// shards until a matching file is found. Returns null if the file
+  /// is not in any shard.
+  Future<String?> _resolvePostcardPath(String postcardId) async {
+    final year = _yearFromStem(postcardId);
+    if (year == null) return null;
+    int n = 0;
+    while (true) {
+      final shard = n == 0 ? '$year' : '$year-$n';
+      final dir = 'postcards/$shard';
+      if (!await _storage.exists(dir)) return null;
+      final path = '$dir/$postcardId.txt';
+      if (await _storage.exists(path)) return path;
+      n++;
+    }
+  }
+
+  /// Return the name of the shard to write a new postcard for `year`
+  /// into. Creates the shard directory if needed. Iterates
+  /// YYYY → YYYY-1 → YYYY-2 → … until it finds one holding fewer than
+  /// [_shardCap] postcard files; if every existing shard is full, a
+  /// fresh one is created.
+  Future<String> _currentShardForYear(int year) async {
+    int n = 0;
+    while (true) {
+      final name = n == 0 ? '$year' : '$year-$n';
+      final dir = 'postcards/$name';
+      if (!await _storage.exists(dir)) {
+        await _storage.createDirectory(dir);
+        return name;
+      }
+      int count = 0;
+      final entries = await _storage.listDirectory(dir);
+      for (final entry in entries) {
+        if (!entry.isDirectory && _isPostcardFilename(entry.name)) count++;
+      }
+      if (count < _shardCap) return name;
+      n++;
+    }
   }
 
   /// Sanitize callsign for use in a filename.
@@ -147,9 +244,8 @@ class PostcardService {
     return cleaned.isEmpty ? 'UNKNOWN' : cleaned;
   }
 
-  /// Build the filename stem (no .txt). Appends `-N` if needed to avoid
-  /// collisions when the same sender happens to produce two files in a
-  /// day with the same signature prefix.
+  /// Build the filename stem (no .txt). Appends `-N` if a file with
+  /// the same stem already exists in any shard for the same year.
   Future<String> _uniqueFilenameStem({
     required String senderCallsign,
     required DateTime now,
@@ -167,7 +263,7 @@ class PostcardService {
 
     String stem = base;
     int suffix = 1;
-    while (await _storage.exists('postcards/$stem.txt')) {
+    while (await _resolvePostcardPath(stem) != null) {
       stem = '$base-$suffix';
       suffix++;
     }
@@ -272,8 +368,9 @@ class PostcardService {
         },
       );
 
-      await _persistPostcard(stem, postcard);
-      print('PostcardService: created postcard $stem.txt');
+      final shard = await _currentShardForYear(now.year);
+      await _persistNew(shard, stem, postcard);
+      print('PostcardService: created $shard/$stem.txt');
       return postcard;
     } catch (e) {
       print('PostcardService: Error creating postcard: $e');
@@ -319,7 +416,7 @@ class PostcardService {
       );
 
       final updated = postcard.copyWith(stamps: [...postcard.stamps, stamp]);
-      await _persistPostcard(postcardId, updated);
+      await _persistExisting(postcardId, updated);
       print('PostcardService: added stamp #${stamp.number} to $postcardId');
       return true;
     } catch (e) {
@@ -360,7 +457,7 @@ class PostcardService {
         status: 'delivered',
         deliveryReceipt: deliveryReceipt,
       );
-      await _persistPostcard(postcardId, updated);
+      await _persistExisting(postcardId, updated);
       print('PostcardService: delivered $postcardId');
       return true;
     } catch (e) {
@@ -403,7 +500,7 @@ class PostcardService {
       final updated = postcard.copyWith(
         returnStamps: [...postcard.returnStamps, stamp],
       );
-      await _persistPostcard(postcardId, updated);
+      await _persistExisting(postcardId, updated);
       print('PostcardService: added return stamp #${stamp.number} to $postcardId');
       return true;
     } catch (e) {
@@ -434,7 +531,7 @@ class PostcardService {
         status: 'acknowledged',
         acknowledgment: acknowledgment,
       );
-      await _persistPostcard(postcardId, updated);
+      await _persistExisting(postcardId, updated);
       print('PostcardService: acknowledged $postcardId');
       return true;
     } catch (e) {
@@ -472,7 +569,10 @@ class PostcardService {
     try {
       final postcard = await loadPostcard(postcardId);
       if (postcard == null) return false;
-      await _persistPostcard(postcardId, postcard.copyWith(status: 'expired'));
+      await _persistExisting(
+        postcardId,
+        postcard.copyWith(status: 'expired'),
+      );
       return true;
     } catch (e) {
       print('PostcardService: Error marking expired: $e');

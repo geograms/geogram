@@ -91,16 +91,52 @@ Each stamp is cryptographically signed, creating an unbreakable chain of custody
 ```
 collection_name/
 └── postcards/
-    ├── postcard-CR7BBQ_2026-04-24_9f2c.txt
-    ├── postcard-CR7BBQ_2026-04-24_3d8f.txt
-    ├── postcard-X135AS_2026-04-25_7a1b.txt
-    └── postcard-DELTA4_2025-12-25_c4d5.txt
+    ├── 2026/
+    │   ├── postcard-CR7BBQ_2026-04-24_9f2c.txt
+    │   ├── postcard-CR7BBQ_2026-04-24_3d8f.txt
+    │   └── postcard-X135AS_2026-04-25_7a1b.txt
+    ├── 2026-1/                   # created when 2026/ holds 5 000 files
+    │   └── postcard-CR7BBQ_2026-11-02_a9b2.txt
+    ├── 2025/
+    │   └── postcard-DELTA4_2025-12-25_c4d5.txt
+    └── 2024/
+        └── postcard-CR7BBQ_2024-06-10_5e03.txt
 ```
 
-Every postcard is exactly one file. No per-message folder, no per-year
-folder. The filename encodes everything needed for listing and
-deduplication: who wrote it, when, and a four-hex-character cut of the
-sender's signature.
+Every postcard is exactly one file. No per-message folder. The
+filename encodes who wrote it, when, and a four-hex-character cut of
+the sender's signature, which together identify it uniquely.
+
+### Yearly Shards
+
+Postcards for a given year live in a `YYYY/` directory. When that
+directory reaches **5 000 files**, the writer opens a new shard
+`YYYY-1/`; the next 5 000 go in `YYYY-2/`, and so on. The cap keeps
+every shard well under the ~10 000-entry soft limit most file systems,
+sync tools, and archival indexers start struggling with.
+
+Shard naming:
+
+- First shard for a year: `YYYY` (no suffix).
+- Subsequent shards: `YYYY-1`, `YYYY-2`, `YYYY-3`, …
+
+Writing rules:
+
+1. Start at shard `YYYY`.
+2. If it does not exist, create it and write there.
+3. If it holds fewer than 5 000 postcard files, write there.
+4. Otherwise, advance to `YYYY-1`, `YYYY-2`, … and repeat from step 2.
+
+Reading rules:
+
+- To list every postcard for a year, walk `YYYY`, `YYYY-1`,
+  `YYYY-2`, … in order, stopping at the first shard that does not
+  exist.
+- To resolve a single postcard by id, extract the year from the
+  filename stem and do the same shard walk until the file is found.
+- Shard membership is a local-disk concern; the id (and the filename)
+  do not encode the shard, so moving a file from `2026/` to `2026-1/`
+  is invisible at the semantic layer.
 
 ### Postcard Filename
 
@@ -2051,12 +2087,18 @@ Postcards are built on top of the existing relay message system:
 Breaking format changes:
 
 - **One file, self-describing filename.** A postcard is exactly one
-  text file at `postcards/postcard-{CALLSIGN}_{YYYY-MM-DD}_{ABCD}.txt`,
-  where `{ABCD}` is the first four hex characters of the sender's
-  Schnorr signature over the header + content. No per-message folder,
-  no per-year folder, no `postcard.txt`/`postcard.json` pair — the
-  filename is now a stable identifier you can grep for, sort by, and
-  share unambiguously.
+  text file named
+  `postcard-{CALLSIGN}_{YYYY-MM-DD}_{ABCD}.txt`, where `{ABCD}` is the
+  first four hex characters of the sender's Schnorr signature over
+  the header + content. No per-message folder, no
+  `postcard.txt`/`postcard.json` pair — the filename is a stable
+  identifier you can grep for, sort by, and share unambiguously.
+- **Yearly shards with a 5 000-file cap.** Files land in `YYYY/`;
+  when that directory reaches 5 000 postcards, the writer rolls over
+  to `YYYY-1/`, then `YYYY-2/`, and so on. Keeps every directory
+  comfortably below the ~10 000-entry threshold where file systems
+  and indexers start misbehaving. Shard membership is a local-disk
+  concern and not encoded in the id.
 - **Sibling artifacts removed.** `photo.jpg`, `contributors/`, and
   `.reactions/` folders are no longer written. Legacy data on disk is
   not read — migrate by rewriting the text content into the new
