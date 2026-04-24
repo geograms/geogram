@@ -485,10 +485,15 @@ class RemoteBlogPostDetailPage extends StatefulWidget {
   final models.BlogPost post;
   final RemoteDevice device;
 
+  /// When true, render only the body (no Scaffold / AppBar) so the caller
+  /// can embed this widget inside an existing master-detail pane.
+  final bool embedded;
+
   const RemoteBlogPostDetailPage({
     super.key,
     required this.post,
     required this.device,
+    this.embedded = false,
   });
 
   @override
@@ -673,6 +678,94 @@ class _RemoteBlogPostDetailPageState extends State<_RemoteBlogPostDetailPage> {
       stationUrl = preferredStation?.url;
     }
 
+    final body = ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        BlogPostDetailWidget(
+          post: _post,
+          appPath: '',
+          canEdit: false,
+          stationUrl: stationUrl,
+          profileIdentifier: widget.device.callsign,
+          onLike: _posting
+              ? null
+              : () => _signAndPostFeedback(
+                    FeedbackFolderUtils.feedbackTypeLikes, 'like'),
+          onPoint: _posting
+              ? null
+              : () => _signAndPostFeedback(
+                    FeedbackFolderUtils.feedbackTypePoints, 'point'),
+          onDislike: _posting
+              ? null
+              : () => _signAndPostFeedback(
+                    FeedbackFolderUtils.feedbackTypeDislikes, 'dislike'),
+          onSubscribe: _posting
+              ? null
+              : () => _signAndPostFeedback(
+                    FeedbackFolderUtils.feedbackTypeSubscribe, 'subscribe'),
+          onReaction: _posting
+              ? null
+              : (emoji) => _signAndPostFeedback(emoji, 'reaction'),
+        ),
+        const SizedBox(height: 12),
+        // Engagement summary — views / likes / comments at a glance.
+        _buildEngagementSummary(theme),
+        const SizedBox(height: 16),
+        const Divider(),
+        const SizedBox(height: 16),
+        Text(
+          '${i18n.t('comments')} (${_post.comments.length})',
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildCommentCompose(theme, i18n),
+        const SizedBox(height: 16),
+        if (_post.comments.isEmpty)
+          Text(
+            i18n.t('no_comments_yet'),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontStyle: FontStyle.italic,
+            ),
+            textAlign: TextAlign.center,
+          )
+        else
+          ..._post.comments.map((c) => _buildCommentCard(theme, c)),
+      ],
+    );
+
+    if (widget.embedded) {
+      // Caller embeds this inside its own master-detail pane — skip the
+      // Scaffold/AppBar and surface a lightweight refresh action inline.
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 8, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    i18n.t('blog_post'),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  tooltip: i18n.t('refresh'),
+                  onPressed: _refreshPost,
+                ),
+              ],
+            ),
+          ),
+          Expanded(child: body),
+        ],
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(i18n.t('blog_post')),
@@ -684,63 +777,7 @@ class _RemoteBlogPostDetailPageState extends State<_RemoteBlogPostDetailPage> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          BlogPostDetailWidget(
-            post: _post,
-            appPath: '',
-            canEdit: false,
-            stationUrl: stationUrl,
-            profileIdentifier: widget.device.callsign,
-            onLike: _posting
-                ? null
-                : () => _signAndPostFeedback(
-                      FeedbackFolderUtils.feedbackTypeLikes, 'like'),
-            onPoint: _posting
-                ? null
-                : () => _signAndPostFeedback(
-                      FeedbackFolderUtils.feedbackTypePoints, 'point'),
-            onDislike: _posting
-                ? null
-                : () => _signAndPostFeedback(
-                      FeedbackFolderUtils.feedbackTypeDislikes, 'dislike'),
-            onSubscribe: _posting
-                ? null
-                : () => _signAndPostFeedback(
-                      FeedbackFolderUtils.feedbackTypeSubscribe, 'subscribe'),
-            onReaction: _posting
-                ? null
-                : (emoji) => _signAndPostFeedback(emoji, 'reaction'),
-          ),
-          const SizedBox(height: 12),
-          // Engagement summary — views / likes / comments at a glance.
-          _buildEngagementSummary(theme),
-          const SizedBox(height: 16),
-          const Divider(),
-          const SizedBox(height: 16),
-          Text(
-            '${i18n.t('comments')} (${_post.comments.length})',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 12),
-          _buildCommentCompose(theme, i18n),
-          const SizedBox(height: 16),
-          if (_post.comments.isEmpty)
-            Text(
-              i18n.t('no_comments_yet'),
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-                fontStyle: FontStyle.italic,
-              ),
-              textAlign: TextAlign.center,
-            )
-          else
-            ..._post.comments.map((c) => _buildCommentCard(theme, c)),
-        ],
-      ),
+      body: body,
     );
   }
 

@@ -52,6 +52,10 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   List<BlogPost> _allPosts = [];
   List<BlogPost> _filteredPosts = [];
   BlogPost? _selectedPost;
+  // When the user picks a post from another device in wide layout, we show
+  // it inline in the right pane via the embedded RemoteBlogPostDetailPage.
+  BlogPost? _selectedRemotePost;
+  RemoteDevice? _selectedRemoteDevice;
   bool _isLoading = true;
   bool _showDraftsOnly = false;
   String? _stationUrl;
@@ -561,33 +565,47 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
 
   Future<void> _selectPost(BlogPost post) async {
     // Remote posts (fetched via /api/content/blog from another
-    // device) carry the source callsign in metadata. Open them in
-    // the remote detail page rather than trying to load them from
-    // local storage.
-    if (await _maybeOpenRemote(post)) return;
+    // device) carry the source callsign in metadata. On wide layout
+    // render them in the right pane via the embedded remote detail
+    // widget; on narrow, push full-screen.
+    if (await _maybeOpenRemote(post, isMobileView: false)) return;
     // Load full post with comments and feedback
     final fullPost = await _blogService.loadFullPostWithFeedback(post.id, userNpub: _currentUserNpub);
     setState(() {
       _selectedPost = fullPost;
+      _selectedRemotePost = null;
+      _selectedRemoteDevice = null;
     });
   }
 
-  Future<bool> _maybeOpenRemote(BlogPost post) async {
+  Future<bool> _maybeOpenRemote(
+    BlogPost post, {
+    required bool isMobileView,
+  }) async {
     final source = post.metadata['source_callsign'];
     if (source == null || source.isEmpty) return false;
     final device = DevicesService().getDevice(source);
     if (device == null || !mounted) return true;
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => RemoteBlogPostDetailPage(
-        post: post,
-        device: device,
-      ),
-    ));
+    if (isMobileView) {
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => RemoteBlogPostDetailPage(
+          post: post,
+          device: device,
+        ),
+      ));
+      return true;
+    }
+    // Wide layout: render inline in the right pane instead of pushing.
+    setState(() {
+      _selectedPost = null;
+      _selectedRemotePost = post;
+      _selectedRemoteDevice = device;
+    });
     return true;
   }
 
   Future<void> _selectPostMobile(BlogPost post) async {
-    if (await _maybeOpenRemote(post)) return;
+    if (await _maybeOpenRemote(post, isMobileView: true)) return;
     // Load full post with comments and feedback
     final fullPost = await _blogService.loadFullPostWithFeedback(post.id, userNpub: _currentUserNpub);
 
@@ -1239,6 +1257,18 @@ class _BlogBrowserPageState extends State<BlogBrowserPage> {
   }
 
   Widget _buildPostDetail(ThemeData theme, bool canEdit) {
+    // Remote post selected — render the embedded remote detail widget
+    // (same widget as the full-screen mobile view, sans Scaffold/AppBar).
+    if (_selectedRemotePost != null && _selectedRemoteDevice != null) {
+      return RemoteBlogPostDetailPage(
+        // Keying on post id forces a fresh State when the user switches
+        // between remote posts so initState re-runs and refreshes counts.
+        key: ValueKey('remote-${_selectedRemotePost!.id}'),
+        post: _selectedRemotePost!,
+        device: _selectedRemoteDevice!,
+        embedded: true,
+      );
+    }
     if (_selectedPost == null) {
       return Center(
         child: Column(
