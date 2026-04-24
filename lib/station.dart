@@ -2850,6 +2850,16 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       } else if (_isPlaceDetailsPath(path) && method == 'GET') {
         // /api/places/{callsign}/{folderName} - place details
         await _handlePlaceDetails(request);
+      } else if (method == 'GET' && await BlogHandlerMixin.tryServeOwnBlogPost(
+        request: request,
+        selfCallsign: _settings.callsign,
+        devicesDir: PureStorageConfig().devicesDir,
+        log: _log,
+      )) {
+        // /{selfCallsign}/blog/{slug}.html served from local disk — the
+        // station is never in its own proxyClients, so handleGenericDeviceProxy
+        // would otherwise 404 with "Device not connected" for the station's
+        // own blog. Handled inline when tryServeOwnBlogPost returns true.
       } else if (isDevicePath(path)) {
         // /{identifier}/* — pure proxy to connected device
         await handleGenericDeviceProxy(request);

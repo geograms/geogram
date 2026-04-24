@@ -2951,11 +2951,16 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       } else if (_isPlaceDetailsPath(path) && method == 'GET') {
         // /api/places/{callsign}/{folderName} - place details
         await _handlePlaceDetails(request);
-      } else if (method == 'GET' && await _tryServeOwnBlogPost(request)) {
+      } else if (method == 'GET' && await BlogHandlerMixin.tryServeOwnBlogPost(
+        request: request,
+        selfCallsign: _settings.callsign,
+        devicesDir: PureStorageConfig().devicesDir,
+        log: _log,
+      )) {
         // /{selfCallsign}/blog/{slug}.html served from local disk — the
         // station is never in its own proxyClients, so handleGenericDeviceProxy
         // would otherwise 404 with "Device not connected" for the station's
-        // own blog. Handled inline when _tryServeOwnBlogPost returns true.
+        // own blog. Handled inline when tryServeOwnBlogPost returns true.
       } else if (isDevicePath(path)) {
         // /{identifier}/* — pure proxy to connected device
         await handleGenericDeviceProxy(request);
@@ -6872,39 +6877,6 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
   /// Check if path matches /api/places/{callsign}/{folderName}
   bool _isPlaceDetailsPath(String path) {
     return _parsePlaceDetailsRequest(path) != null;
-  }
-
-  /// Try to serve a blog post URL that targets this station's own callsign.
-  ///
-  /// Matches `/{selfCallsign}/blog/{slug}.html`; returns true if the URL
-  /// matched and a response was written (whether 200 or 404/403/500).
-  /// Returns false — meaning "not my job" — for any non-matching URL.
-  ///
-  /// The generic device proxy (handleGenericDeviceProxy) treats the
-  /// identifier as a proxy-client key, so the station's own callsign is
-  /// never found and the proxy 404s with "Device not connected". This
-  /// short-circuit serves the blog from local disk via
-  /// BlogHandlerMixin.serveBlogFromDisk, which is the same code path the
-  /// mixin already uses as its local-fallback branch.
-  Future<bool> _tryServeOwnBlogPost(HttpRequest request) async {
-    final match = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$')
-        .firstMatch(request.uri.path);
-    if (match == null) return false;
-    final identifier = match.group(1)!;
-    final filename = match.group(2)!;
-    final selfCallsign = _settings.callsign;
-    if (selfCallsign.isEmpty) return false;
-    if (identifier.toLowerCase() != selfCallsign.toLowerCase()) return false;
-
-    await BlogHandlerMixin.serveBlogFromDisk(
-      request: request,
-      devicesDir: PureStorageConfig().devicesDir,
-      callsign: selfCallsign,
-      filename: filename,
-      identifier: identifier,
-      log: _log,
-    );
-    return true;
   }
 
   /// Handle GET /{callsign}/api/alerts/{alertId} - serve local alert details with photos list

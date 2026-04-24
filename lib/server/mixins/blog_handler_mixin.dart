@@ -128,6 +128,43 @@ mixin BlogHandlerMixin {
     }
   }
 
+  /// Route shortcut used by both station implementations.
+  ///
+  /// Matches `/{identifier}/blog/{slug}.html`. When the identifier equals
+  /// [selfCallsign] (case-insensitive), serves the post from local disk
+  /// via [serveBlogFromDisk] and returns true. Returns false for any
+  /// non-matching URL or non-self identifier — callers fall back to
+  /// their normal proxy / 404 path.
+  ///
+  /// This exists because handleGenericDeviceProxy looks the identifier up
+  /// in its live proxy-client registry and the station is never its own
+  /// client, so `/{selfCallsign}/blog/*.html` otherwise 404s with
+  /// "Device not connected" even though the post is right there on disk.
+  static Future<bool> tryServeOwnBlogPost({
+    required HttpRequest request,
+    required String selfCallsign,
+    required String devicesDir,
+    required void Function(String level, String message) log,
+  }) async {
+    if (selfCallsign.isEmpty) return false;
+    final match = RegExp(r'^/([^/]+)/blog/([^/]+)\.html$')
+        .firstMatch(request.uri.path);
+    if (match == null) return false;
+    final identifier = match.group(1)!;
+    final filename = match.group(2)!;
+    if (identifier.toLowerCase() != selfCallsign.toLowerCase()) return false;
+
+    await serveBlogFromDisk(
+      request: request,
+      devicesDir: devicesDir,
+      callsign: selfCallsign,
+      filename: filename,
+      identifier: identifier,
+      log: log,
+    );
+    return true;
+  }
+
   /// Serve a single blog post from the station's local disk.
   ///
   /// Reads `{devicesDir}/{callsign}/{collection}/{year}/{filename}/post.md`
