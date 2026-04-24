@@ -147,7 +147,10 @@ class PostcardTileWidget extends StatelessWidget {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      postcard.recipientCallsign ?? postcard.recipientNpub.substring(0, 12),
+                      postcard.recipientCallsign ??
+                          (postcard.recipientNpub.length >= 12
+                              ? postcard.recipientNpub.substring(0, 12)
+                              : postcard.recipientNpub),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),

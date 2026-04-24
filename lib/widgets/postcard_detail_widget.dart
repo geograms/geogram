@@ -341,15 +341,15 @@ class PostcardDetailWidget extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  callsign ?? npub.substring(0, 16) + '...',
+                  callsign ?? _npubPreview(npub, 16),
                   style: theme.textTheme.bodyMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                if (callsign != null) ...[
+                if (callsign != null && npub.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(
-                    npub.substring(0, 20) + '...',
+                    _npubPreview(npub, 20),
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                       fontFamily: 'monospace',
@@ -650,5 +650,14 @@ class PostcardDetailWidget extends StatelessWidget {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Deliver postcard dialog - TODO')),
     );
+  }
+
+  /// Truncate an npub for display without blowing up when it's shorter
+  /// than the requested length — or empty, which happens for postcards
+  /// created with only a callsign.
+  String _npubPreview(String npub, int max) {
+    if (npub.isEmpty) return '—';
+    if (npub.length <= max) return npub;
+    return '${npub.substring(0, max)}…';
   }
 }

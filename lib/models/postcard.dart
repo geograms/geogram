@@ -917,6 +917,11 @@ class Postcard {
 
   @override
   String toString() {
-    return 'Postcard(id: $id, title: $title, sender: $senderCallsign, recipient: ${recipientCallsign ?? recipientNpub.substring(0, 12)}, status: $status, hops: ${stamps.length})';
+    final recipient = recipientCallsign ??
+        (recipientNpub.length >= 12
+            ? recipientNpub.substring(0, 12)
+            : (recipientNpub.isEmpty ? '(none)' : recipientNpub));
+    return 'Postcard(id: $id, title: $title, sender: $senderCallsign, '
+        'recipient: $recipient, status: $status, hops: ${stamps.length})';
   }
 }
