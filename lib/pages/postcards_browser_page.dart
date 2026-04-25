@@ -696,6 +696,39 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
     }
   }
 
+  @override
+  void didUpdateWidget(_PostcardsMapView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // When the selection changes, fit the map so every hop AND every
+    // possible destination of the new postcard fit on screen.
+    if (oldWidget.selectedPostcardId != widget.selectedPostcardId &&
+        widget.selectedPostcardId != null &&
+        _mapInitialized) {
+      final selected = _selectedPostcard();
+      if (selected == null) return;
+      final journey = _journeyOf(selected);
+      if (journey == null) return;
+      final pts = <LatLng>[
+        for (final h in journey.hops) h.position,
+        ...journey.possibleDestinations,
+      ];
+      if (pts.isEmpty) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (pts.length == 1) {
+          _mapController.move(pts.first, 8);
+          return;
+        }
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: LatLngBounds.fromPoints(pts),
+            padding: const EdgeInsets.all(60),
+          ),
+        );
+      });
+    }
+  }
+
   Color _statusColor(String status) {
     switch (status) {
       case 'in-transit':
@@ -754,16 +787,8 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final selected = _selectedPostcard();
-    final selectedDst = selected == null ? null : _destinationOf(selected);
     final me = widget.myLocation;
-
-    final hasArrow = me != null && selectedDst != null;
-    final distanceKm = hasArrow
-        ? LocationService().calculateDistance(
-            me.latitude, me.longitude,
-            selectedDst.latitude, selectedDst.longitude,
-          )
-        : null;
+    final journey = selected == null ? null : _journeyOf(selected);
 
     return Column(
       children: [
@@ -800,43 +825,14 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
                         );
                       },
                     ),
-                    // Arrow + distance overlay for the selected postcard.
-                    if (me != null && selected != null && selectedDst != null) ...[
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: [me, selectedDst],
-                            strokeWidth: 3,
-                            color: _statusColor(selected.status)
-                                .withValues(alpha: 0.85),
-                          ),
-                        ],
-                      ),
-                      MarkerLayer(
-                        markers: [
-                          Marker(
-                            point: LatLng(
-                              (me.latitude + selectedDst.latitude) / 2,
-                              (me.longitude + selectedDst.longitude) / 2,
-                            ),
-                            width: 110,
-                            height: 28,
-                            child: _DistancePill(
-                              km: distanceKm ?? 0,
-                              color: _statusColor(selected.status),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                    // "Me" marker.
+                    // "Me" marker stays as a tertiary reference dot.
                     if (me != null)
                       MarkerLayer(
                         markers: [
                           Marker(
                             point: me,
-                            width: 28,
-                            height: 28,
+                            width: 22,
+                            height: 22,
                             child: Container(
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
@@ -907,6 +903,82 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
                         ),
                       ),
                     ),
+                    // ── Journey overlay for the selected postcard ──
+                    if (journey != null) ...[
+                      // Solid arrows between consecutive hops the
+                      // postcard has actually been at.
+                      if (journey.actualSegments.isNotEmpty)
+                        PolylineLayer(
+                          polylines: [
+                            for (final seg in journey.actualSegments)
+                              Polyline(
+                                points: [seg.from, seg.to],
+                                strokeWidth: 3,
+                                color: journey.color,
+                              ),
+                          ],
+                        ),
+                      // Semi-transparent arrows from the last-known
+                      // location to each "possible destination".
+                      if (journey.possibleSegments.isNotEmpty)
+                        PolylineLayer(
+                          polylines: [
+                            for (final seg in journey.possibleSegments)
+                              Polyline(
+                                points: [seg.from, seg.to],
+                                strokeWidth: 2,
+                                color: journey.color.withValues(alpha: 0.35),
+                              ),
+                          ],
+                        ),
+                      // Distance + age pills at each segment midpoint.
+                      MarkerLayer(
+                        markers: [
+                          for (final seg in journey.actualSegments)
+                            _segmentLabelMarker(
+                              seg,
+                              color: journey.color,
+                            ),
+                          for (final seg in journey.possibleSegments)
+                            _segmentLabelMarker(
+                              seg,
+                              color: journey.color,
+                              dim: true,
+                            ),
+                        ],
+                      ),
+                      // Hop markers (pickup, intermediate carriers,
+                      // last-seen) drawn on top of the arrows so the
+                      // dots sit at the line endpoints visually.
+                      MarkerLayer(
+                        markers: [
+                          for (final hop in journey.hops)
+                            _hopMarker(hop),
+                          for (final dst in journey.possibleDestinations)
+                            Marker(
+                              point: dst,
+                              width: 26,
+                              height: 26,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: journey.color
+                                      .withValues(alpha: 0.45),
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: const Icon(
+                                  Icons.flag_outlined,
+                                  size: 14,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 )
               else
@@ -937,6 +1009,181 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
         ),
       ],
     );
+  }
+
+  // ── Journey overlay computation ─────────────────────────────────
+
+  /// Build the geographic story for the given postcard:
+  ///   • hops = where it has actually been (each carrier stamp + the
+  ///            delivery receipt location if delivered).
+  ///   • possibleDestinations = recipient_locations not yet reached.
+  ///   • actualSegments = arrows between consecutive hops.
+  ///   • possibleSegments = arrows from the last known location to
+  ///     each possible destination.
+  /// Returns null when the postcard has no journey data at all (no
+  /// stamps and no recipient locations) — there's nothing to draw.
+  _Journey? _journeyOf(Postcard p) {
+    final hops = <_Hop>[];
+
+    for (var i = 0; i < p.stamps.length; i++) {
+      final s = p.stamps[i];
+      hops.add(_Hop(
+        position: LatLng(s.latitude, s.longitude),
+        label: s.stamperCallsign,
+        sublabel: s.locationName,
+        timestamp: s.dateTime,
+        kind: i == 0 ? _HopKind.pickup : _HopKind.carrier,
+        index: i + 1,
+      ));
+    }
+
+    if (p.deliveryReceipt != null) {
+      final r = p.deliveryReceipt!;
+      hops.add(_Hop(
+        position: LatLng(r.deliveryLatitude, r.deliveryLongitude),
+        label: p.recipientCallsign ?? widget.i18n.t('recipient'),
+        sublabel: r.deliveryLocationName,
+        timestamp: r.dateTime,
+        kind: _HopKind.delivered,
+        index: hops.length + 1,
+      ));
+    } else if (hops.isNotEmpty) {
+      // Promote the last carrier hop to "last seen".
+      hops[hops.length - 1] = hops.last.asLastSeen();
+    }
+
+    final possibleDestinations = <LatLng>[];
+    if (p.deliveryReceipt == null) {
+      for (final loc in p.recipientLocations) {
+        final pos = LatLng(loc.latitude, loc.longitude);
+        // Skip recipient locations the postcard has already reached
+        // (collapses the trivial "last seen == only destination" case).
+        if (hops.isNotEmpty &&
+            hops.last.position.latitude == pos.latitude &&
+            hops.last.position.longitude == pos.longitude) {
+          continue;
+        }
+        possibleDestinations.add(pos);
+      }
+    }
+
+    if (hops.isEmpty && possibleDestinations.isEmpty) return null;
+
+    final actualSegments = <_Segment>[];
+    for (var i = 0; i < hops.length - 1; i++) {
+      actualSegments.add(_Segment(
+        from: hops[i].position,
+        to: hops[i + 1].position,
+        sinceTimestamp: hops[i + 1].timestamp,
+      ));
+    }
+
+    final possibleSegments = <_Segment>[];
+    if (hops.isNotEmpty) {
+      final from = hops.last.position;
+      for (final dst in possibleDestinations) {
+        possibleSegments.add(_Segment(
+          from: from,
+          to: dst,
+          sinceTimestamp: null,
+        ));
+      }
+    }
+
+    return _Journey(
+      hops: hops,
+      possibleDestinations: possibleDestinations,
+      actualSegments: actualSegments,
+      possibleSegments: possibleSegments,
+      color: _statusColor(p.status),
+    );
+  }
+
+  Marker _hopMarker(_Hop hop) {
+    final IconData icon;
+    final Color fill;
+    switch (hop.kind) {
+      case _HopKind.pickup:
+        icon = Icons.flag;
+        fill = Colors.green.shade700;
+        break;
+      case _HopKind.carrier:
+        icon = Icons.location_on;
+        fill = Colors.blue.shade700;
+        break;
+      case _HopKind.lastSeen:
+        icon = Icons.location_searching;
+        fill = Colors.orange.shade700;
+        break;
+      case _HopKind.delivered:
+        icon = Icons.mark_email_read_outlined;
+        fill = Colors.green.shade700;
+        break;
+    }
+    return Marker(
+      point: hop.position,
+      width: 36,
+      height: 36,
+      child: Container(
+        decoration: BoxDecoration(
+          color: fill,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 3),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black38,
+              blurRadius: 5,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Icon(icon, color: Colors.white, size: 18),
+      ),
+    );
+  }
+
+  Marker _segmentLabelMarker(
+    _Segment seg, {
+    required Color color,
+    bool dim = false,
+  }) {
+    final mid = LatLng(
+      (seg.from.latitude + seg.to.latitude) / 2,
+      (seg.from.longitude + seg.to.longitude) / 2,
+    );
+    final km = LocationService().calculateDistance(
+      seg.from.latitude,
+      seg.from.longitude,
+      seg.to.latitude,
+      seg.to.longitude,
+    );
+    final since = seg.sinceTimestamp;
+    final age = since == null ? null : _formatAge(since);
+    return Marker(
+      point: mid,
+      width: 150,
+      height: 32,
+      child: _SegmentPill(
+        km: km,
+        ageLabel: age,
+        color: dim ? color.withValues(alpha: 0.7) : color,
+      ),
+    );
+  }
+
+  /// "3h ago" / "2d ago" / "Apr 24" — short and dense for an arrow label.
+  String _formatAge(DateTime when) {
+    final delta = DateTime.now().difference(when);
+    if (delta.isNegative) return '';
+    if (delta.inMinutes < 60) {
+      final m = delta.inMinutes.clamp(1, 59);
+      return '${m}m ago';
+    }
+    if (delta.inHours < 24) return '${delta.inHours}h ago';
+    if (delta.inDays < 14) return '${delta.inDays}d ago';
+    final m = when.month.toString().padLeft(2, '0');
+    final d = when.day.toString().padLeft(2, '0');
+    return '$m-$d';
   }
 
   Widget _buildToolbar(ThemeData theme) {
@@ -1041,12 +1288,79 @@ class _PostcardMarker extends StatelessWidget {
   }
 }
 
-class _DistancePill extends StatelessWidget {
-  final double km;
-  final Color color;
-  const _DistancePill({required this.km, required this.color});
+/// One step on the postcard's geographic story.
+enum _HopKind { pickup, carrier, lastSeen, delivered }
 
-  String _format(double km) {
+class _Hop {
+  final LatLng position;
+  final String label;
+  final String? sublabel;
+  final DateTime timestamp;
+  final _HopKind kind;
+  final int index;
+
+  const _Hop({
+    required this.position,
+    required this.label,
+    this.sublabel,
+    required this.timestamp,
+    required this.kind,
+    required this.index,
+  });
+
+  _Hop asLastSeen() => _Hop(
+        position: position,
+        label: label,
+        sublabel: sublabel,
+        timestamp: timestamp,
+        kind: _HopKind.lastSeen,
+        index: index,
+      );
+}
+
+/// A single arrow segment on the map.
+class _Segment {
+  final LatLng from;
+  final LatLng to;
+  final DateTime? sinceTimestamp;
+  const _Segment({
+    required this.from,
+    required this.to,
+    required this.sinceTimestamp,
+  });
+}
+
+/// Aggregated geographic story for a selected postcard.
+class _Journey {
+  final List<_Hop> hops;
+  final List<LatLng> possibleDestinations;
+  final List<_Segment> actualSegments;
+  final List<_Segment> possibleSegments;
+  final Color color;
+
+  const _Journey({
+    required this.hops,
+    required this.possibleDestinations,
+    required this.actualSegments,
+    required this.possibleSegments,
+    required this.color,
+  });
+}
+
+/// Pill rendered at the midpoint of a journey segment. Single line for
+/// distance only ("412 km"), two lines when an "since" age is included
+/// ("412 km · 3d ago").
+class _SegmentPill extends StatelessWidget {
+  final double km;
+  final String? ageLabel;
+  final Color color;
+  const _SegmentPill({
+    required this.km,
+    required this.color,
+    this.ageLabel,
+  });
+
+  String _formatKm(double km) {
     if (km < 1) return '${(km * 1000).round()} m';
     if (km < 10) return '${km.toStringAsFixed(1)} km';
     return '${km.round()} km';
@@ -1054,6 +1368,9 @@ class _DistancePill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final txt = ageLabel == null || ageLabel!.isEmpty
+        ? _formatKm(km)
+        : '${_formatKm(km)} · $ageLabel';
     return IgnorePointer(
       child: Center(
         child: Material(
@@ -1068,7 +1385,7 @@ class _DistancePill extends StatelessWidget {
                 Icon(Icons.arrow_forward, size: 14, color: color),
                 const SizedBox(width: 4),
                 Text(
-                  _format(km),
+                  txt,
                   style: TextStyle(
                     color: color,
                     fontSize: 12,

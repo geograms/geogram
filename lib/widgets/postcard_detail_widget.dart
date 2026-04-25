@@ -5,12 +5,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 
 import '../models/postcard.dart';
 import '../services/i18n_service.dart';
-import '../services/map_tile_service.dart' show MapTileService, MapLayerType;
 
 /// Widget for displaying full postcard details
 class PostcardDetailWidget extends StatelessWidget {
@@ -157,12 +154,6 @@ class PostcardDetailWidget extends StatelessWidget {
                     postcard.returnStamps.isNotEmpty)
                   _buildPathStorySection(theme, i18n),
 
-                // ── Possible destinations (mini map) ──────────────
-                if (postcard.recipientLocations.isNotEmpty) ...[
-                  const SizedBox(height: 24),
-                  _buildPossibleDestinationsSection(theme, i18n),
-                ],
-
                 // ── Raw stamp / receipt / ack details (collapsed) ─
                 if (postcard.stamps.isNotEmpty ||
                     postcard.deliveryReceipt != null ||
@@ -285,14 +276,11 @@ class PostcardDetailWidget extends StatelessWidget {
           onPressed: () {
             Clipboard.setData(ClipboardData(text: npub));
           },
-          tooltip: i18n_t_safe('copy_npub'),
+          tooltip: I18nService().t('copy_npub'),
         ),
       ],
     );
   }
-
-  // Tiny helper so we don't blow up if a future i18n key is missing.
-  String i18n_t_safe(String key) => I18nService().t(key);
 
   // ── Path story (where the postcard has been) ────────────────────
 
@@ -487,42 +475,6 @@ class PostcardDetailWidget extends StatelessWidget {
     );
   }
 
-  // ── Possible destinations (mini map) ────────────────────────────
-
-  Widget _buildPossibleDestinationsSection(ThemeData theme, I18nService i18n) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          i18n.t('possible_destinations'),
-          style: theme.textTheme.titleSmall?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          i18n.t('possible_destinations_hint'),
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 200,
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: _DestinationsMap(
-              locations: postcard.recipientLocations
-                  .map((l) => LatLng(l.latitude, l.longitude))
-                  .toList(),
-              accent: _getStatusColor(postcard.status),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   // ── Raw details (collapsed by default) ──────────────────────────
 
   Widget _buildRawDetailsSection(ThemeData theme, I18nService i18n) {
@@ -585,33 +537,6 @@ class PostcardDetailWidget extends StatelessWidget {
     }
   }
 
-  Widget _buildMetadataChip({
-    required IconData icon,
-    required String label,
-    required ThemeData theme,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceVariant,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildSection({
     required String title,
     required ThemeData theme,
@@ -629,82 +554,6 @@ class PostcardDetailWidget extends StatelessWidget {
         const SizedBox(height: 12),
         child,
       ],
-    );
-  }
-
-  Widget _buildParticipant({
-    required IconData icon,
-    required String label,
-    String? callsign,
-    required String npub,
-    required ThemeData theme,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceVariant.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: theme.colorScheme.onSurfaceVariant),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  callsign ?? _npubPreview(npub, 16),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                if (callsign != null && npub.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    _npubPreview(npub, 20),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.copy, size: 16),
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: npub));
-            },
-            tooltip: 'Copy npub',
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPlainContent(ThemeData theme) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: theme.colorScheme.outlineVariant,
-        ),
-      ),
-      child: Text(
-        postcard.content,
-        style: theme.textTheme.bodyMedium,
-      ),
     );
   }
 
@@ -917,47 +766,6 @@ class PostcardDetailWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildRecipientLocations(ThemeData theme, I18nService i18n) {
-    return Column(
-      children: postcard.recipientLocations.map((location) {
-        return Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceVariant.withOpacity(0.3),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.place, size: 20, color: theme.colorScheme.primary),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (location.locationName != null)
-                      Text(
-                        location.locationName!,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    Text(
-                      '${location.latitude}, ${location.longitude}',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-
   void _showAddStampDialog(BuildContext context) {
     // TODO: Implement add stamp dialog
     ScaffoldMessenger.of(context).showSnackBar(
@@ -1001,122 +809,3 @@ class _TimelineEntry {
   });
 }
 
-/// Small embedded map showing every recipient location for a postcard
-/// — the "possible destinations" the message might end up reaching.
-/// Auto-fits to show all markers; falls back to centering on the first
-/// when only one location is present.
-class _DestinationsMap extends StatefulWidget {
-  final List<LatLng> locations;
-  final Color accent;
-
-  const _DestinationsMap({required this.locations, required this.accent});
-
-  @override
-  State<_DestinationsMap> createState() => _DestinationsMapState();
-}
-
-class _DestinationsMapState extends State<_DestinationsMap> {
-  final MapController _controller = MapController();
-  final MapTileService _tiles = MapTileService();
-  bool _ready = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _tiles.initialize().then((_) {
-      if (mounted) setState(() => _ready = true);
-    });
-  }
-
-  LatLng _center() {
-    if (widget.locations.isEmpty) return const LatLng(0, 0);
-    var lat = 0.0, lng = 0.0;
-    for (final p in widget.locations) {
-      lat += p.latitude;
-      lng += p.longitude;
-    }
-    return LatLng(lat / widget.locations.length, lng / widget.locations.length);
-  }
-
-  double _initialZoom() {
-    if (widget.locations.length <= 1) return 6.0;
-    // Rough span → zoom heuristic; FlutterMap fitCamera not used to keep
-    // this widget lightweight.
-    var minLat = double.infinity, maxLat = -double.infinity;
-    var minLng = double.infinity, maxLng = -double.infinity;
-    for (final p in widget.locations) {
-      if (p.latitude < minLat) minLat = p.latitude;
-      if (p.latitude > maxLat) maxLat = p.latitude;
-      if (p.longitude < minLng) minLng = p.longitude;
-      if (p.longitude > maxLng) maxLng = p.longitude;
-    }
-    final span = (maxLat - minLat).abs() + (maxLng - minLng).abs();
-    if (span > 80) return 1;
-    if (span > 30) return 2;
-    if (span > 10) return 3;
-    if (span > 3) return 5;
-    if (span > 0.5) return 8;
-    return 10;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!_ready) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    return FlutterMap(
-      mapController: _controller,
-      options: MapOptions(
-        initialCenter: _center(),
-        initialZoom: _initialZoom(),
-        minZoom: 1,
-        maxZoom: 18,
-        interactionOptions: const InteractionOptions(
-          flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-        ),
-      ),
-      children: [
-        ValueListenableBuilder<MapLayerType>(
-          valueListenable: _tiles.layerTypeNotifier,
-          builder: (context, layerType, _) {
-            return TileLayer(
-              urlTemplate: _tiles.getTileUrl(layerType),
-              userAgentPackageName: 'dev.geogram',
-              subdomains: const [],
-              keepBuffer: 2,
-              tileBuilder: (_, w, __) => w,
-              evictErrorTileStrategy:
-                  EvictErrorTileStrategy.notVisibleRespectMargin,
-              tileProvider: _tiles.getTileProvider(layerType),
-            );
-          },
-        ),
-        MarkerLayer(
-          markers: [
-            for (final p in widget.locations)
-              Marker(
-                point: p,
-                width: 28,
-                height: 28,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: widget.accent,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 3,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: const Icon(Icons.place, size: 16, color: Colors.white),
-                ),
-              ),
-          ],
-        ),
-      ],
-    );
-  }
-}
