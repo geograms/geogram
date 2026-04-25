@@ -1,5 +1,15 @@
 # Geogram Desktop Changelog
 
+## 2026-04-25 - v1.39.0-beta.7
+
+### Fixes
+- Tracker / Paths: recorded tracks no longer pick up cell-tower / Wi-Fi triangulation as if it were GPS. Path recording now requests `LocationAccuracy.bestForNavigation` (pure GPS on Android, instead of fused location which silently falls back to cell), and any incoming fix coarser than 100 m is dropped before being persisted — so the recorded line stops zig-zagging across whole neighborhoods during cold-start or weak-signal periods.
+- Tracker / Paths: the watchdog one-shot fallback also forces pure GPS and uses a 30 s timeout (was 10 s) so cold-start has time to lock satellites.
+- App-wide user position (the dot on Maps, marketplace/devices distance sorting, default APRS beacon position, etc.): the always-on `UserLocationService` stream is now `LocationAccuracy.high` instead of `medium`, so the OS prefers real GPS rather than cell-tower triangulation. Battery is held in check by a 60 s Android `intervalDuration` and iOS `pauseLocationUpdatesAutomatically`, plus the unchanged 100 m `distanceFilter` throttle.
+
+### Changes
+- Tracker active-recording banner: while no fix has been accepted yet, shows "Acquiring GPS…" for the first 30 s and "Weak GPS signal (~Nm)" after that, instead of looking idle. Added en/pt/de strings.
+
 ## 2026-04-25 - v1.39.0-beta.6
 
 ### Fixes

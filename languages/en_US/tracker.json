@@ -120,6 +120,8 @@
   "tracker_gps_interval": "GPS Interval",
   "tracker_recording_in_progress": "Recording in progress",
   "tracker_recording_paused": "Recording paused",
+  "tracker_acquiring_gps": "Acquiring GPS…",
+  "tracker_weak_gps": "Weak GPS signal",
   "tracker_path_completed": "Path recording completed",
   "tracker_path_cancelled": "Path recording cancelled",
   "tracker_distance": "Distance",

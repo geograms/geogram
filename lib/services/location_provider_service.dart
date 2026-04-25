@@ -403,12 +403,15 @@ class LocationProviderService extends ChangeNotifier {
       // Use distanceFilter=0 only for high-fidelity consumers (path recording),
       // otherwise 10m to avoid unnecessary wakeups when stationary.
       // Power-aware: background uses 50m + medium accuracy, doze stops entirely.
+      // High-fidelity uses bestForNavigation to force pure GPS — LocationAccuracy.high
+      // on Android is fused location (GPS + Wi-Fi + cell), which produces
+      // cell-tower-grade fixes during cold-start or weak signal.
       final int distanceFilter;
       final LocationAccuracy accuracy;
       final bool wakeLock;
       if (_highFidelityCount > 0) {
         distanceFilter = 0;
-        accuracy = LocationAccuracy.high;
+        accuracy = LocationAccuracy.bestForNavigation;
         wakeLock = true;
       } else if (_currentPowerMode == PowerMode.background) {
         distanceFilter = 50;

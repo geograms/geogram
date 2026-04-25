@@ -12,6 +12,18 @@ import '../../services/location_provider_service.dart';
 import '../../services/power_aware_service.dart';
 import '../../util/task_monitor_helpers.dart';
 
+/// Maximum acceptable position accuracy (meters) for a recorded point.
+/// Cell-tower / Wi-Fi fixes typically report 500–5000 m; real GPS reports
+/// 3–30 m. 100 m leaves headroom for weak-signal driving while still
+/// filtering out the obvious cell-grade garbage that was making recorded
+/// tracks zig-zag across whole neighborhoods.
+const double _kMaxAcceptableAccuracyMeters = 100.0;
+
+/// Grace period after start during which a missing first fix is reported as
+/// "Acquiring GPS…" rather than "Weak GPS signal". Cold-start typically
+/// resolves within 10–30 s on a phone with assisted GPS.
+const Duration _kGpsAcquisitionGrace = Duration(seconds: 30);
+
 /// Service for managing GPS path recording.
 /// Uses [LocationProviderService] for GPS positioning.
 class PathRecordingService extends ChangeNotifier {
@@ -39,6 +51,11 @@ class PathRecordingService extends ChangeNotifier {
   bool _stoppingForInactivity = false;
   static const int _autoBaseIntervalSeconds = 5;
 
+  /// Accuracy (meters) of the most recent fix we rejected for being too
+  /// coarse. Cleared when an acceptable fix arrives. Drives the banner's
+  /// "Weak GPS signal" hint.
+  double? _lastRejectedAccuracy;
+
   // Getters
   bool get isRecording => _recordingState?.isRecording ?? false;
   bool get isPaused => _recordingState?.isPaused ?? false;
@@ -52,6 +69,27 @@ class PathRecordingService extends ChangeNotifier {
   TrackerRecordingState? get recordingState => _recordingState;
   TrackerPath? get activePath => _activePath;
   LockedPosition? get lastPosition => _lastObservedPosition ?? _lastPosition;
+
+  /// Status of GPS acquisition for the banner. Returns one of:
+  /// - `null` — the recording has at least one accepted point or hasn't
+  ///   started yet; the existing point counter is informative enough.
+  /// - "acquiring" — recording started < 30 s ago and we don't have a fix
+  ///   yet. Shows as "Acquiring GPS…".
+  /// - "weak" — recording started ≥ 30 s ago, still no accepted point, and
+  ///   the last reading we saw was too coarse (cell-tower grade). The UI
+  ///   surfaces the rejected-accuracy value so the user knows what's wrong.
+  GpsAcquisitionStatus get acquisitionStatus {
+    if (!isRecording) return GpsAcquisitionStatus.none;
+    if (_pointCount > 0) return GpsAcquisitionStatus.none;
+    final start = _startTime;
+    if (start == null) return GpsAcquisitionStatus.none;
+    final inGrace = DateTime.now().difference(start) < _kGpsAcquisitionGrace;
+    if (inGrace) return GpsAcquisitionStatus.acquiring;
+    return GpsAcquisitionStatus.weak;
+  }
+
+  /// Accuracy of the most recently rejected coarse fix, for the banner.
+  double? get lastRejectedAccuracyMeters => _lastRejectedAccuracy;
 
   /// Initialize the service with a TrackerService
   void initialize(TrackerService trackerService) {
@@ -694,6 +732,21 @@ class PathRecordingService extends ChangeNotifier {
   Future<void> _addPoint(LockedPosition position) async {
     if (_recordingState == null || _trackerService == null) return;
 
+    // Drop coarse fixes (cell-tower / Wi-Fi) so the recorded line doesn't
+    // spike sideways during cold-start or weak-signal periods. This is the
+    // single funnel for both the streaming path and the watchdog one-shot
+    // path, so the filter applies to everything that gets persisted.
+    // LockedPosition.accuracy is non-nullable, but a 0.0 sentinel from a
+    // platform that doesn't supply accuracy should not be rejected — only
+    // gate when we have a real positive value.
+    final acc = position.accuracy;
+    if (acc > 0 && acc > _kMaxAcceptableAccuracyMeters) {
+      _lastRejectedAccuracy = acc;
+      notifyListeners();
+      return;
+    }
+    _lastRejectedAccuracy = null;
+
     try {
       final lastPosition = _lastPosition;
       final pointTime = position.timestamp;
@@ -893,8 +946,10 @@ class PathRecordingService extends ChangeNotifier {
         try {
           final directPos = await Geolocator.getCurrentPosition(
             locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.high,
-              timeLimit: Duration(seconds: 10),
+              // Force pure GPS (not fused) so the fallback doesn't return
+              // a cached cell-tower fix; cold-start needs a longer window.
+              accuracy: LocationAccuracy.bestForNavigation,
+              timeLimit: Duration(seconds: 30),
             ),
           );
           position = LockedPosition.fromGeolocator(directPos);
@@ -938,4 +993,19 @@ class PathRecordingService extends ChangeNotifier {
     _taskHandle = null;
     super.dispose();
   }
+}
+
+/// State of the recorder's GPS acquisition; drives the banner's status hint.
+enum GpsAcquisitionStatus {
+  /// Recording inactive, or first fix already accepted — nothing to show.
+  none,
+
+  /// Recording started < 30 s ago and we don't have an accepted fix yet.
+  /// Banner reads "Acquiring GPS…".
+  acquiring,
+
+  /// Recording started ≥ 30 s ago, still no accepted fix. The last reading
+  /// (if any) was rejected for being too coarse. Banner reads "Weak GPS
+  /// signal" plus the rejected accuracy when available.
+  weak,
 }

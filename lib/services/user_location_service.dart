@@ -222,13 +222,41 @@ class UserLocationService extends ChangeNotifier {
       notifyListeners();
     }
 
-    // Start continuous position stream for mobile
+    // Start continuous position stream for mobile.
+    //
+    // Accuracy is `high` (not `medium`) so the OS prefers real GPS rather
+    // than fused-location's cell-tower / Wi-Fi triangulation — `medium` is
+    // why the user-position dot used to land 500–2000 m off when GPS was
+    // momentarily weak. Battery cost of `high` is bounded by the platform
+    // hints below: a 60 s sampling interval on Android lets the GPS chip
+    // power-cycle between samples, and `pauseLocationUpdatesAutomatically`
+    // on iOS lets the OS suspend updates when the user is stationary.
+    // distanceFilter of 100 m keeps the original "only re-broadcast when
+    // the user has actually moved" throttle intact — consumers like the
+    // map dot, marketplace proximity, and APRS beacons don't need finer.
     _positionSubscription?.cancel();
+    final LocationSettings streamSettings;
+    if (Platform.isAndroid) {
+      streamSettings = AndroidSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 100,
+        intervalDuration: const Duration(seconds: 60),
+      );
+    } else if (Platform.isIOS) {
+      streamSettings = AppleSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 100,
+        pauseLocationUpdatesAutomatically: true,
+        activityType: ActivityType.other,
+      );
+    } else {
+      streamSettings = const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 100,
+      );
+    }
     _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.medium,
-        distanceFilter: 100, // Update when moved 100+ meters
-      ),
+      locationSettings: streamSettings,
     ).listen(
       (Position position) {
         _updateLocation(position.latitude, position.longitude, 'gps');

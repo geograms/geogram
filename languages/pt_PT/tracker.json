@@ -120,6 +120,8 @@
   "tracker_gps_interval": "Intervalo GPS",
   "tracker_recording_in_progress": "Gravação em curso",
   "tracker_recording_paused": "Gravação pausada",
+  "tracker_acquiring_gps": "A obter GPS…",
+  "tracker_weak_gps": "Sinal GPS fraco",
   "tracker_path_completed": "Gravação de percurso concluída",
   "tracker_path_cancelled": "Gravação de percurso cancelada",
   "tracker_distance": "Distância",

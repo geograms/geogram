@@ -71,6 +71,53 @@ class _ActiveRecordingBannerState extends State<ActiveRecordingBanner> {
     }
   }
 
+  /// "Acquiring GPS…" / "Weak GPS signal" hint shown while no fix has been
+  /// accepted yet. Returns an empty widget once the recorder has at least
+  /// one accepted point — the existing point counter takes over from there.
+  Widget _buildAcquisitionHint(ThemeData theme, ColorScheme colorScheme) {
+    final status = widget.recordingService.acquisitionStatus;
+    if (status == GpsAcquisitionStatus.none) {
+      return const SizedBox.shrink();
+    }
+
+    final isAcquiring = status == GpsAcquisitionStatus.acquiring;
+    final icon = isAcquiring ? Icons.gps_not_fixed : Icons.gps_off;
+    final text = isAcquiring
+        ? widget.i18n.t('tracker_acquiring_gps')
+        : _weakSignalLabel();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        children: [
+          const SizedBox(width: 20), // align with the indicator dot above
+          Icon(
+            icon,
+            size: 14,
+            color: colorScheme.onPrimaryContainer.withValues(alpha: 0.75),
+          ),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              text,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onPrimaryContainer.withValues(alpha: 0.85),
+                fontStyle: FontStyle.italic,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _weakSignalLabel() {
+    final base = widget.i18n.t('tracker_weak_gps');
+    final acc = widget.recordingService.lastRejectedAccuracyMeters;
+    if (acc == null) return base;
+    return '$base (~${acc.toStringAsFixed(0)} m)';
+  }
+
   Widget _buildStatItem(
     IconData icon,
     String label,
@@ -251,6 +298,7 @@ class _ActiveRecordingBannerState extends State<ActiveRecordingBanner> {
               ),
             ],
           ),
+          if (!isPaused) _buildAcquisitionHint(theme, colorScheme),
           const SizedBox(height: 8),
 
           // Stats row
