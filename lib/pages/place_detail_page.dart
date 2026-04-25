@@ -3,7 +3,6 @@
  * License: Apache-2.0
  */
 
-import 'dart:io' show Directory, File, Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -75,41 +74,20 @@ class _PlaceDetailPageState extends State<PlaceDetailPage> {
   }
 
   Future<void> _loadPhotos() async {
-    if (kIsWeb || _place.folderPath == null) return;
-
+    if (kIsWeb) return;
     try {
-      final imagesDir = Directory('${_place.folderPath}/images');
-      if (await imagesDir.exists()) {
-        final entities = await imagesDir.list().toList();
-        setState(() {
-          _photos = entities
-              .where((e) => e is File && _isMediaFile(e.path))
-              .map((e) => e.path)
-              .toList();
-        });
-      }
+      // Goes through the storage abstraction so the lookup is rooted at
+      // the profile folder (raw `Directory(folderPath/images)` resolved
+      // against process CWD, which on Android is `/`, so listing always
+      // came back empty).
+      final paths = await _placeService.listPlacePhotos(_place);
+      if (!mounted) return;
+      setState(() {
+        _photos = paths;
+      });
     } catch (e) {
       LogService().log('PlaceDetailPage: Error loading photos: $e');
     }
-  }
-
-  bool _isImageFile(String path) {
-    final ext = path.toLowerCase();
-    return ext.endsWith('.jpg') || ext.endsWith('.jpeg') ||
-           ext.endsWith('.png') || ext.endsWith('.gif') ||
-           ext.endsWith('.webp');
-  }
-
-  bool _isVideoFile(String path) {
-    final ext = path.toLowerCase();
-    return ext.endsWith('.mp4') || ext.endsWith('.avi') ||
-           ext.endsWith('.mkv') || ext.endsWith('.mov') ||
-           ext.endsWith('.wmv') || ext.endsWith('.flv') ||
-           ext.endsWith('.webm');
-  }
-
-  bool _isMediaFile(String path) {
-    return _isImageFile(path) || _isVideoFile(path);
   }
 
   IconData _getTypeIcon(String? type) {

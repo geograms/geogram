@@ -351,47 +351,32 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     return option.group.name;
   }
 
-  /// Load existing images from the place folder
+  /// Load existing images from the place folder via the storage
+  /// abstraction. Returns absolute filesystem paths so the gallery can
+  /// render with `Image.file`. Also matches the saved `profileImage`
+  /// (relative form, e.g. `images/photo1.jpg`) against the loaded
+  /// absolute paths so the star marker stays on the right tile.
   Future<void> _loadExistingImages() async {
-    if (kIsWeb || widget.place?.folderPath == null) return;
+    if (kIsWeb || widget.place == null) return;
 
     try {
-      final folderPath = widget.place!.folderPath!;
-      final images = <String>[];
-
-      final imagesDir = Directory('$folderPath/images');
-      if (await imagesDir.exists()) {
-        final entities = await imagesDir.list().toList();
-        images.addAll(
-          entities
-              .where((e) => e is File && _isImageFile(e.path))
-              .map((e) => e.path),
-        );
-      }
-
-      final rootDir = Directory(folderPath);
-      if (await rootDir.exists()) {
-        final entities = await rootDir.list().toList();
-        images.addAll(
-          entities
-              .where((e) => e is File && _isImageFile(e.path))
-              .where((e) => path.basename(e.path).toLowerCase() != 'place.txt')
-              .map((e) => e.path),
-        );
-      }
-
-      images.sort();
-
+      final images = await _placeService.listPlacePhotos(widget.place!);
+      if (!mounted) return;
       setState(() {
         _existingImages = images;
       });
 
-      final profileImage = widget.place?.profileImage;
-      if (profileImage != null && profileImage.isNotEmpty) {
+      final profileImage = widget.place!.profileImage;
+      final folderPath = widget.place!.folderPath;
+      if (profileImage != null && profileImage.isNotEmpty && folderPath != null) {
+        final absoluteFolder =
+            AppService().profileStorage?.getAbsolutePath(folderPath);
         final resolved = path.isAbsolute(profileImage)
             ? profileImage
-            : path.join(folderPath, profileImage);
-        if (_existingImages.contains(resolved)) {
+            : (absoluteFolder != null
+                ? path.join(absoluteFolder, profileImage)
+                : null);
+        if (resolved != null && _existingImages.contains(resolved)) {
           setState(() {
             _profileImageSelection = resolved;
             _profileImageCleared = false;
@@ -403,55 +388,35 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
     }
   }
 
-  bool _isImageFile(String path) {
-    final ext = path.toLowerCase();
-    return ext.endsWith('.jpg') || ext.endsWith('.jpeg') ||
-           ext.endsWith('.png') || ext.endsWith('.gif') ||
-           ext.endsWith('.webp');
-  }
-
-  Map<String, String> _buildImageDestinations(String placeFolderPath) {
-    if (_imageFilePaths.isEmpty) {
-      return {};
-    }
-
-    final destinations = <String, String>{};
-    final imagesDir = Directory('$placeFolderPath/images');
-
-    var photoNumber = 1;
-    if (imagesDir.existsSync()) {
-      final entities = imagesDir.listSync();
-      final existingPhotos = entities.where((e) =>
-          e is File && e.path.contains('photo') && _isImageFile(e.path));
-      photoNumber = existingPhotos.length + 1;
-    }
-
-    for (final imagePath in _imageFilePaths) {
-      final ext = path.extension(imagePath).toLowerCase();
-      final destPath = '${imagesDir.path}/photo$photoNumber$ext';
-      destinations[imagePath] = destPath;
-      photoNumber++;
-    }
-
-    return destinations;
-  }
-
+  /// Resolve [_profileImageSelection] to a path stored under [Place.profileImage]
+  /// in `place.txt`. The value is relative to the place folder (e.g.
+  /// `images/photo1.jpg`). [copiedPhotos] maps each pending source path to
+  /// the relative destination path inside the profile storage; if the user
+  /// just picked a new image as the profile, look it up there. Otherwise
+  /// the selection is an existing absolute path under the place folder
+  /// (loaded by `_loadExistingImages`), and we strip the prefix.
   String? _resolveProfileImageRelativePath(
     String placeFolderPath,
-    Map<String, String> imageDestinations,
+    Map<String, String> copiedPhotos,
   ) {
     final selection = _profileImageSelection;
     if (selection == null || selection.isEmpty) {
       return null;
     }
 
-    final pendingDestination = imageDestinations[selection];
-    if (pendingDestination != null) {
-      return path.relative(pendingDestination, from: placeFolderPath);
+    final destRelative = copiedPhotos[selection];
+    if (destRelative != null) {
+      // destRelative is relative to the storage root; strip the place
+      // folder prefix to get the place-relative form stored in place.txt.
+      return path.relative(destRelative, from: placeFolderPath);
     }
 
-    if (path.isAbsolute(selection) && selection.startsWith(placeFolderPath)) {
-      return path.relative(selection, from: placeFolderPath);
+    final absoluteFolder =
+        AppService().profileStorage?.getAbsolutePath(placeFolderPath);
+    if (absoluteFolder != null &&
+        path.isAbsolute(selection) &&
+        selection.startsWith(absoluteFolder)) {
+      return path.relative(selection, from: absoluteFolder);
     }
 
     return null;
@@ -697,12 +662,23 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
         allowedGroups: _selectedGroups.toList(),
       );
 
-      final placeFolderPath = kIsWeb ? null : await _placeService.getPlaceFolderPath(draftPlace);
-      final imageDestinations = placeFolderPath != null
-          ? _buildImageDestinations(placeFolderPath)
-          : <String, String>{};
+      // Copy any newly-picked photos through ProfileStorage first so we
+      // know the relative paths (for `profileImage` in place.txt) and so
+      // the on-disk files actually land inside the profile folder. The
+      // previous flow used raw `Directory(...)` which silently failed on
+      // Android (process CWD is `/`), which is why created places had no
+      // photos at all.
+      final placeFolderPath =
+          kIsWeb ? null : await _placeService.getPlaceFolderPath(draftPlace);
+      final copiedPhotos = (kIsWeb || _imageFilePaths.isEmpty)
+          ? <String, String>{}
+          : await _placeService.copyPlacePhotos(
+              place: draftPlace,
+              sourcePaths: List<String>.from(_imageFilePaths),
+            );
+
       var profileImage = placeFolderPath != null
-          ? _resolveProfileImageRelativePath(placeFolderPath, imageDestinations)
+          ? _resolveProfileImageRelativePath(placeFolderPath, copiedPhotos)
           : null;
       if (profileImage == null &&
           !_profileImageCleared &&
@@ -712,7 +688,8 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
 
       final place = draftPlace.copyWith(profileImage: profileImage);
 
-      // Save place
+      // Save place metadata. Folder is already created by copyPlacePhotos
+      // when photos were added; savePlace's createDirectory is idempotent.
       final error = await _placeService.savePlace(place);
 
       if (error != null) {
@@ -722,16 +699,7 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
           );
         }
       } else {
-        // Save images after place is saved
-        await _saveImages(
-          place,
-          imageDestinations: imageDestinations,
-          placeFolderPath: placeFolderPath,
-        );
-
-        // Don't upload automatically - user can publish later via "Publish" button
-        // This allows saving places offline and publishing when back on wifi
-
+        _imageFilePaths.clear();
         if (mounted) {
           Navigator.pop(context, true);
         }
@@ -746,39 +714,6 @@ class _AddEditPlacePageState extends State<AddEditPlacePage> {
       if (mounted) {
         setState(() => _isSaving = false);
       }
-    }
-  }
-
-  /// Save photos to the place folder
-  Future<void> _saveImages(
-    Place place, {
-    required Map<String, String> imageDestinations,
-    String? placeFolderPath,
-  }) async {
-    if (kIsWeb || imageDestinations.isEmpty) return;
-
-    try {
-      final resolvedFolderPath = placeFolderPath ?? await _placeService.getPlaceFolderPath(place);
-      if (resolvedFolderPath == null) return;
-
-      final imagesDir = Directory('$resolvedFolderPath/images');
-
-      // Create images directory if it doesn't exist
-      if (!await imagesDir.exists()) {
-        await imagesDir.create(recursive: true);
-      }
-
-      for (final entry in imageDestinations.entries) {
-        final imagePath = entry.key;
-        final destPath = entry.value;
-        final imageFile = File(imagePath);
-        await imageFile.copy(destPath);
-      }
-
-      _imageFilePaths.clear();
-      LogService().log('Saved ${imageDestinations.length} photos for place ${place.name}');
-    } catch (e) {
-      LogService().log('Error saving place images: $e');
     }
   }
 

@@ -1,5 +1,10 @@
 # Geogram Desktop Changelog
 
+## 2026-04-25 - v1.39.0-beta.9
+
+### Fixes
+- Places: photos picked when creating or editing a place now actually land in the place's `images/` folder. The save path used raw `Directory(...)` against a relative path that the storage layer hands out — on Android the process CWD is `/`, so directory creation silently failed and every place ended up with zero photos despite the editor showing them as "added". Save (`_saveImages`), edit-time existing-image listing (`_loadExistingImages`), and detail-page photo loading (`_loadPhotos`) all now go through the new `PlaceService.copyPlacePhotos` / `PlaceService.listPlacePhotos` helpers, which use the same `ProfileStorage` abstraction `savePlace` already used to write `place.txt`. Encrypted profiles work for the same reason.
+
 ## 2026-04-25 - v1.39.0-beta.8
 
 ### Fixes

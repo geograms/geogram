@@ -308,6 +308,103 @@ class PlaceService {
     }
   }
 
+  /// Photo-file extensions that count as a place's gallery entries.
+  /// Kept as a single set so [copyPlacePhotos], [listPlacePhotos], and
+  /// numbering all agree on what "photo" means.
+  static const Set<String> _photoExtensions = {
+    '.jpg', '.jpeg', '.png', '.gif', '.webp',
+    // Videos surface in the gallery the same way as photos do, matching
+    // how the Events app treats short clips. Keeps the model identical.
+    '.mp4', '.mov', '.webm', '.mkv', '.avi', '.wmv', '.flv',
+  };
+
+  bool _isPhotoEntry(String fileName) {
+    final lower = fileName.toLowerCase();
+    final dot = lower.lastIndexOf('.');
+    if (dot < 0) return false;
+    return _photoExtensions.contains(lower.substring(dot));
+  }
+
+  /// Copy a list of source-file paths into [place]'s `images/` folder,
+  /// numbering them as `photoN.{ext}` continuing from any existing photos.
+  ///
+  /// Goes through [ProfileStorage] so the directory is rooted at the
+  /// profile folder rather than the process CWD. The previous raw
+  /// `Directory(...)` calls in the editor page silently failed on Android
+  /// (where the process CWD is `/`), which is why created places had no
+  /// photos at all. Encrypted profiles work for the same reason.
+  ///
+  /// Returns a `{sourcePath -> relativeDestPath}` map for the files
+  /// actually written. The caller can pass relative dest paths through
+  /// [Place.profileImage] (stored in `place.txt`) and use
+  /// [ProfileStorage.getAbsolutePath] for UI rendering.
+  Future<Map<String, String>> copyPlacePhotos({
+    required Place place,
+    required List<String> sourcePaths,
+  }) async {
+    if (sourcePaths.isEmpty) return const {};
+    final folderPath = place.folderPath ?? await getPlaceFolderPath(place);
+    if (folderPath == null) return const {};
+
+    final imagesRel = '$folderPath/images';
+    if (!await _storage.exists(imagesRel)) {
+      await _storage.createDirectory(imagesRel);
+    }
+
+    // Continue numbering after any existing photoN.* entries so re-edits
+    // don't overwrite earlier saves.
+    int photoNumber = 1;
+    try {
+      final entries = await _storage.listDirectory(imagesRel);
+      final existing = entries
+          .where((e) => !e.isDirectory && _isPhotoEntry(e.name))
+          .length;
+      photoNumber = existing + 1;
+    } catch (_) {}
+
+    final result = <String, String>{};
+    for (final src in sourcePaths) {
+      final dotIdx = src.lastIndexOf('.');
+      final ext = dotIdx > 0 ? src.substring(dotIdx).toLowerCase() : '.jpg';
+      final destRel = '$imagesRel/photo$photoNumber$ext';
+      try {
+        final bytes = await File(src).readAsBytes();
+        await _storage.writeBytes(destRel, bytes);
+        result[src] = destRel;
+        photoNumber++;
+      } catch (e) {
+        LogService().log('PlaceService: error copying $src -> $destRel: $e');
+      }
+    }
+    return result;
+  }
+
+  /// List the absolute filesystem paths of every photo / short video in
+  /// [place]'s `images/` folder. Goes through [ProfileStorage.listDirectory]
+  /// so the lookup is rooted at the profile folder, then converts each
+  /// entry to an absolute path via [ProfileStorage.getAbsolutePath] so the
+  /// UI can render with `Image.file`.
+  Future<List<String>> listPlacePhotos(Place place) async {
+    final folderPath = place.folderPath ?? await getPlaceFolderPath(place);
+    if (folderPath == null) return const [];
+    final imagesRel = '$folderPath/images';
+    if (!await _storage.exists(imagesRel)) return const [];
+    try {
+      final entries = await _storage.listDirectory(imagesRel);
+      final paths = <String>[];
+      for (final e in entries) {
+        if (e.isDirectory) continue;
+        if (!_isPhotoEntry(e.name)) continue;
+        paths.add(_storage.getAbsolutePath('$imagesRel/${e.name}'));
+      }
+      paths.sort();
+      return paths;
+    } catch (e) {
+      LogService().log('PlaceService: error listing photos: $e');
+      return const [];
+    }
+  }
+
   /// Get the folder path for a place (used for saving photos)
   /// Returns relative path
   Future<String?> getPlaceFolderPath(Place place) async {
