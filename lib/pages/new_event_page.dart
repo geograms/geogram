@@ -6,9 +6,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
 import 'package:latlong2/latlong.dart';
 
@@ -105,9 +103,6 @@ class _NewEventPageState extends State<NewEventPage>
     with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _i18n = I18nService();
-  final ImagePicker _imagePicker = ImagePicker();
-
-  bool get _isMobile => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
   late TabController _tabController;
 
   final _titleController = TextEditingController();
@@ -929,21 +924,20 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectTrailer() async {
-    String? filePath;
-
-    if (_isMobile) {
-      final video = await _imagePicker.pickVideo(source: ImageSource.gallery);
-      filePath = video?.path;
-    } else {
-      final paths = await FileFolderPicker.show(
-        context,
-        title: _i18n.t('select_trailer_video'),
-        allowMultiSelect: false,
-        allowedExtensions: FileFolderPicker.videoExtensions,
-        profileStorage: AppService().profileStorage,
-      );
-      filePath = (paths != null && paths.isNotEmpty) ? paths.first : null;
-    }
+    // Always use FileFolderPicker — native image_picker on Android can return
+    // a path to a cached thumbnail rather than the original (especially for
+    // cloud-backed Google Photos entries), and it can't see inside encrypted
+    // ProfileStorage either.
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('select_trailer_video'),
+      allowMultiSelect: false,
+      allowedExtensions: FileFolderPicker.videoExtensions,
+      profileStorage: AppService().profileStorage,
+      initialGridView: true,
+      initialDirectory: FileFolderPicker.defaultMediaDirectory(),
+    );
+    final filePath = (paths != null && paths.isNotEmpty) ? paths.first : null;
 
     if (filePath != null) {
       final originalFileName = path.basename(filePath);
@@ -969,21 +963,22 @@ class _NewEventPageState extends State<NewEventPage>
   }
 
   Future<void> _selectFlyer() async {
-    String? filePath;
-
-    if (_isMobile) {
-      final image = await _imagePicker.pickImage(source: ImageSource.gallery);
-      filePath = image?.path;
-    } else {
-      final paths = await FileFolderPicker.show(
-        context,
-        title: _i18n.t('select_photo_image'),
-        allowMultiSelect: false,
-        allowedExtensions: FileFolderPicker.imageExtensions,
-        profileStorage: AppService().profileStorage,
-      );
-      filePath = (paths != null && paths.isNotEmpty) ? paths.first : null;
-    }
+    // Always use FileFolderPicker — native image_picker on Android can return
+    // a path to a cached thumbnail (240×180-ish, no EXIF) rather than the
+    // original full-resolution image, especially for cloud-backed Google
+    // Photos entries. That's why some events used to have one pixelated
+    // entry in the gallery. FileFolderPicker also reads encrypted profile
+    // storage which the native picker cannot see.
+    final paths = await FileFolderPicker.show(
+      context,
+      title: _i18n.t('select_photo_image'),
+      allowMultiSelect: false,
+      allowedExtensions: FileFolderPicker.imageExtensions,
+      profileStorage: AppService().profileStorage,
+      initialGridView: true,
+      initialDirectory: FileFolderPicker.defaultMediaDirectory(),
+    );
+    final filePath = (paths != null && paths.isNotEmpty) ? paths.first : null;
 
     if (filePath != null) {
       final originalFileName = path.basename(filePath);

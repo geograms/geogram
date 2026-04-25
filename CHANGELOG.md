@@ -1,5 +1,10 @@
 # Geogram Desktop Changelog
 
+## 2026-04-25 - v1.39.0-beta.8
+
+### Fixes
+- Events: "Add photo" / "Add another photo" / "Select trailer video" no longer occasionally save a 240×180 thumbnail instead of the full-resolution image. The Android-only branch was using the native `image_picker` plugin, which on Motorola (and other OEMs that surface Google Photos cloud entries via the system picker) returns a path to a tiny cached thumbnail rather than the original. Both `_selectFlyer` and `_selectTrailer` now use the same `FileFolderPicker` the multi-select photo grid already uses on every platform — full files, encrypted-profile-aware, no thumbnail surprises. The unused `image_picker` import and the `_isMobile` getter went with it.
+
 ## 2026-04-25 - v1.39.0-beta.7
 
 ### Fixes
