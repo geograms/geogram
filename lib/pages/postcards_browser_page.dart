@@ -4,8 +4,15 @@
  */
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
+import 'package:latlong2/latlong.dart';
+
 import '../models/postcard.dart';
 import '../services/app_service.dart';
+import '../services/location_provider_service.dart';
+import '../services/location_service.dart';
+import '../services/map_tile_service.dart' show MapTileService, MapLayerType;
 import '../services/postcard_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
@@ -13,6 +20,8 @@ import '../services/i18n_service.dart';
 import '../widgets/postcard_tile_widget.dart';
 import '../widgets/postcard_detail_widget.dart';
 import 'new_postcard_page.dart';
+
+enum _ViewMode { map, list }
 
 /// Postcards browser page with 2-panel layout
 class PostcardsBrowserPage extends StatefulWidget {
@@ -43,6 +52,12 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
   String? _currentUserNpub;
   String? _currentCallsign;
   String _statusFilter = 'all'; // all, in-transit, delivered, acknowledged, expired
+
+  // Map-first view: default. Toggle with the AppBar action.
+  _ViewMode _viewMode = _ViewMode.map;
+  // Cached "me" coordinate for arrow + distance overlays. Refreshed
+  // when the LocationProviderService sees a fresh fix.
+  LatLng? _myLocation;
 
   @override
   void initState() {
@@ -84,6 +99,16 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
     if (_allPostcards.isNotEmpty) {
       _expandedYears.add(_allPostcards.first.year);
     }
+
+    // Pull a cached GPS fix for the map-overlay arrows. Non-blocking;
+    // the map renders fine without it (no arrow, no distance label).
+    _refreshMyLocation();
+  }
+
+  void _refreshMyLocation() {
+    final pos = LocationProviderService().currentPosition;
+    if (pos == null) return;
+    setState(() => _myLocation = LatLng(pos.latitude, pos.longitude));
   }
 
   Future<void> _loadPostcards() async {
@@ -202,36 +227,77 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isMap = _viewMode == _ViewMode.map;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(_i18n.t('postcards')),
+        actions: [
+          IconButton(
+            icon: Icon(isMap ? Icons.list : Icons.map_outlined),
+            tooltip: isMap ? _i18n.t('list_view') : _i18n.t('map_view'),
+            onPressed: () => setState(
+              () => _viewMode = isMap ? _ViewMode.list : _ViewMode.map,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: _i18n.t('refresh'),
+            onPressed: _loadPostcards,
+          ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: _i18n.t('new_postcard'),
+            onPressed: _createNewPostcard,
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : LayoutBuilder(
               builder: (context, constraints) {
-                // Use two-panel layout for wide screens, single panel for narrow
                 final isWideScreen = constraints.maxWidth >= 600;
 
+                final mainView = isMap
+                    ? _buildMapView(theme, isMobileView: !isWideScreen)
+                    : _buildPostcardList(theme, isMobileView: !isWideScreen);
+
                 if (isWideScreen) {
-                  // Desktop/landscape: Two-panel layout
+                  // Wide: main view on the left (map gets the lion's
+                  // share), detail on the right.
                   return Row(
                     children: [
-                      // Left panel: Postcard list
-                      _buildPostcardList(theme),
+                      Expanded(flex: 2, child: mainView),
                       const VerticalDivider(width: 1),
-                      // Right panel: Postcard detail
-                      Expanded(child: _buildPostcardDetail(theme)),
+                      Expanded(flex: 1, child: _buildPostcardDetail(theme)),
                     ],
                   );
-                } else {
-                  // Mobile/portrait: Single panel
-                  // Show postcard list, detail opens in full screen
-                  return _buildPostcardList(theme, isMobileView: true);
                 }
+                return mainView;
               },
             ),
+    );
+  }
+
+  // ── Map view ──────────────────────────────────────────────────────
+
+  Widget _buildMapView(ThemeData theme, {required bool isMobileView}) {
+    return _PostcardsMapView(
+      postcards: _filteredPostcards,
+      selectedPostcardId: _selectedPostcard?.id,
+      myLocation: _myLocation,
+      statusFilter: _statusFilter,
+      onStatusFilter: _setStatusFilter,
+      statusCount: _getStatusCount,
+      i18n: _i18n,
+      searchController: _searchController,
+      onPostcardTap: (postcard) async {
+        if (isMobileView) {
+          await _selectPostcardMobile(postcard);
+        } else {
+          await _selectPostcard(postcard);
+        }
+      },
     );
   }
 
@@ -241,33 +307,6 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
       color: theme.colorScheme.surface,
       child: Column(
         children: [
-          // Toolbar
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(
-                  color: theme.colorScheme.outlineVariant,
-                  width: 1,
-                ),
-              ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: _loadPostcards,
-                  tooltip: _i18n.t('refresh'),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.add),
-                  onPressed: _createNewPostcard,
-                  tooltip: _i18n.t('new_postcard'),
-                ),
-              ],
-            ),
-          ),
           // Status filter chips
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -593,6 +632,452 @@ class _PostcardDetailPageState extends State<_PostcardDetailPage> {
           isSender: widget.isSender,
           isRecipient: widget.isRecipient,
           onRefresh: _refresh,
+        ),
+      ),
+    );
+  }
+}
+
+// ── Map view widget ─────────────────────────────────────────────────
+
+/// Map-first overview of the postcards collection.
+///
+/// Renders one marker per postcard at its first recipient location,
+/// clustered so thousands of pins remain navigable. Marker colour
+/// encodes status (in-transit / delivered / acknowledged / expired).
+/// When a postcard is selected, an arrow polyline + distance label is
+/// drawn from the user's current location to the destination, so the
+/// "where is this message going" question is one tap away.
+class _PostcardsMapView extends StatefulWidget {
+  final List<Postcard> postcards;
+  final String? selectedPostcardId;
+  final LatLng? myLocation;
+  final String statusFilter;
+  final ValueChanged<String> onStatusFilter;
+  final int Function(String status) statusCount;
+  final I18nService i18n;
+  final TextEditingController searchController;
+  final ValueChanged<Postcard> onPostcardTap;
+
+  const _PostcardsMapView({
+    required this.postcards,
+    required this.selectedPostcardId,
+    required this.myLocation,
+    required this.statusFilter,
+    required this.onStatusFilter,
+    required this.statusCount,
+    required this.i18n,
+    required this.searchController,
+    required this.onPostcardTap,
+  });
+
+  @override
+  State<_PostcardsMapView> createState() => _PostcardsMapViewState();
+}
+
+class _PostcardsMapViewState extends State<_PostcardsMapView> {
+  final MapController _mapController = MapController();
+  final MapTileService _mapTileService = MapTileService();
+  bool _mapInitialized = false;
+
+  static const LatLng _defaultCenter = LatLng(40.0, -3.7);
+  static const double _defaultZoom = 4.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeMap();
+  }
+
+  Future<void> _initializeMap() async {
+    await _mapTileService.initialize();
+    if (mounted) {
+      setState(() => _mapInitialized = true);
+    }
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'in-transit':
+        return Colors.blue.shade600;
+      case 'delivered':
+        return Colors.green.shade600;
+      case 'acknowledged':
+        return Colors.grey.shade600;
+      case 'expired':
+        return Colors.red.shade400;
+      default:
+        return Colors.blue.shade600;
+    }
+  }
+
+  IconData _statusIcon(String status) {
+    switch (status) {
+      case 'delivered':
+        return Icons.mark_email_read_outlined;
+      case 'acknowledged':
+        return Icons.done_all;
+      case 'expired':
+        return Icons.schedule;
+      default:
+        return Icons.mail_outline;
+    }
+  }
+
+  /// First recipient location for a postcard, or null when none was set.
+  LatLng? _destinationOf(Postcard p) {
+    if (p.recipientLocations.isEmpty) return null;
+    final loc = p.recipientLocations.first;
+    return LatLng(loc.latitude, loc.longitude);
+  }
+
+  /// Resolve initial map center: my location → first postcard → default.
+  LatLng _initialCenter() {
+    if (widget.myLocation != null) return widget.myLocation!;
+    for (final p in widget.postcards) {
+      final dst = _destinationOf(p);
+      if (dst != null) return dst;
+    }
+    return _defaultCenter;
+  }
+
+  Postcard? _selectedPostcard() {
+    final id = widget.selectedPostcardId;
+    if (id == null) return null;
+    for (final p in widget.postcards) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final selected = _selectedPostcard();
+    final selectedDst = selected == null ? null : _destinationOf(selected);
+    final me = widget.myLocation;
+
+    final hasArrow = me != null && selectedDst != null;
+    final distanceKm = hasArrow
+        ? LocationService().calculateDistance(
+            me.latitude, me.longitude,
+            selectedDst.latitude, selectedDst.longitude,
+          )
+        : null;
+
+    return Column(
+      children: [
+        _buildToolbar(theme),
+        Expanded(
+          child: Stack(
+            children: [
+              if (_mapInitialized)
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: _initialCenter(),
+                    initialZoom: _defaultZoom,
+                    minZoom: 1.0,
+                    maxZoom: 18.0,
+                    interactionOptions: const InteractionOptions(
+                      flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+                    ),
+                  ),
+                  children: [
+                    ValueListenableBuilder<MapLayerType>(
+                      valueListenable: _mapTileService.layerTypeNotifier,
+                      builder: (context, layerType, _) {
+                        return TileLayer(
+                          urlTemplate: _mapTileService.getTileUrl(layerType),
+                          userAgentPackageName: 'dev.geogram',
+                          subdomains: const [],
+                          keepBuffer: 3,
+                          tileBuilder: (_, w, __) => w,
+                          evictErrorTileStrategy:
+                              EvictErrorTileStrategy.notVisibleRespectMargin,
+                          tileProvider:
+                              _mapTileService.getTileProvider(layerType),
+                        );
+                      },
+                    ),
+                    // Arrow + distance overlay for the selected postcard.
+                    if (me != null && selected != null && selectedDst != null) ...[
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: [me, selectedDst],
+                            strokeWidth: 3,
+                            color: _statusColor(selected.status)
+                                .withValues(alpha: 0.85),
+                          ),
+                        ],
+                      ),
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: LatLng(
+                              (me.latitude + selectedDst.latitude) / 2,
+                              (me.longitude + selectedDst.longitude) / 2,
+                            ),
+                            width: 110,
+                            height: 28,
+                            child: _DistancePill(
+                              km: distanceKm ?? 0,
+                              color: _statusColor(selected.status),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    // "Me" marker.
+                    if (me != null)
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: me,
+                            width: 28,
+                            height: 28,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: theme.colorScheme.primary,
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 3,
+                                ),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Colors.black26,
+                                    blurRadius: 4,
+                                    offset: Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    // Postcard markers, clustered.
+                    MarkerClusterLayerWidget(
+                      options: MarkerClusterLayerOptions(
+                        maxClusterRadius: 80,
+                        size: const Size(48, 48),
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.all(50),
+                        maxZoom: 15,
+                        markers: [
+                          for (final p in widget.postcards)
+                            if (_destinationOf(p) != null)
+                              Marker(
+                                point: _destinationOf(p)!,
+                                width: 38,
+                                height: 38,
+                                child: GestureDetector(
+                                  onTap: () => widget.onPostcardTap(p),
+                                  child: _PostcardMarker(
+                                    color: _statusColor(p.status),
+                                    icon: _statusIcon(p.status),
+                                    selected: p.id == widget.selectedPostcardId,
+                                  ),
+                                ),
+                              ),
+                        ],
+                        builder: (_, markers) => Container(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: theme.colorScheme.primary,
+                            border: Border.all(color: Colors.white, width: 3),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Colors.black26,
+                                blurRadius: 6,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Center(
+                            child: Text(
+                              '${markers.length}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              else
+                const Center(child: CircularProgressIndicator()),
+              if (widget.postcards.isEmpty && _mapInitialized)
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 16,
+                  child: Material(
+                    elevation: 2,
+                    borderRadius: BorderRadius.circular(20),
+                    color: theme.colorScheme.surface.withValues(alpha: 0.92),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      child: Text(
+                        widget.i18n.t('no_postcards_match_filter'),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildToolbar(ThemeData theme) {
+    final filters = const ['all', 'in-transit', 'delivered', 'acknowledged', 'expired'];
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border(
+          bottom: BorderSide(color: theme.colorScheme.outlineVariant),
+        ),
+      ),
+      child: Column(
+        children: [
+          TextField(
+            controller: widget.searchController,
+            decoration: InputDecoration(
+              hintText: widget.i18n.t('search_postcards'),
+              prefixIcon: const Icon(Icons.search, size: 20),
+              suffixIcon: widget.searchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: widget.searchController.clear,
+                    ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 32,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (final s in filters) ...[
+                  _filterChip(s, theme),
+                  const SizedBox(width: 6),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filterChip(String status, ThemeData theme) {
+    final selected = widget.statusFilter == status;
+    final count = widget.statusCount(status);
+    final label = status == 'all'
+        ? widget.i18n.t('all')
+        : widget.i18n.t(status.replaceAll('-', '_'));
+    return ChoiceChip(
+      label: Text('$label ($count)'),
+      selected: selected,
+      onSelected: (_) => widget.onStatusFilter(status),
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+  }
+}
+
+class _PostcardMarker extends StatelessWidget {
+  final Color color;
+  final IconData icon;
+  final bool selected;
+
+  const _PostcardMarker({
+    required this.color,
+    required this.icon,
+    required this.selected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 150),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color,
+        border: Border.all(
+          color: selected ? Colors.white : Colors.white.withValues(alpha: 0.6),
+          width: selected ? 3 : 2,
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black26,
+            blurRadius: 4,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Icon(icon, color: Colors.white, size: selected ? 22 : 18),
+    );
+  }
+}
+
+class _DistancePill extends StatelessWidget {
+  final double km;
+  final Color color;
+  const _DistancePill({required this.km, required this.color});
+
+  String _format(double km) {
+    if (km < 1) return '${(km * 1000).round()} m';
+    if (km < 10) return '${km.toStringAsFixed(1)} km';
+    return '${km.round()} km';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Center(
+        child: Material(
+          elevation: 2,
+          borderRadius: BorderRadius.circular(14),
+          color: Colors.white.withValues(alpha: 0.95),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.arrow_forward, size: 14, color: color),
+                const SizedBox(width: 4),
+                Text(
+                  _format(km),
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

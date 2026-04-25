@@ -932,6 +932,7 @@
   "postcard": "postcard",
   "search_postcards": "Search postcards...",
   "no_matching_postcards": "No matching postcards",
+  "no_postcards_match_filter": "No postcards match this filter",
   "no_postcards_yet": "No postcards yet",
   "create_first_postcard": "Create your first postcard",
   "select_postcard_to_view": "Select a postcard to view",
