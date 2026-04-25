@@ -120,6 +120,11 @@ class _EventDetailPageState extends State<EventDetailPage> {
       );
 
       if (newEventId != null && mounted) {
+        // Copy any pending photos / videos / generic media files added in
+        // the editor's Media tab. updateEvent() doesn't copy these — it
+        // only writes event.txt — so without this call the user's newly
+        // added video lands nowhere on disk and the gallery never sees it.
+        await _copyPendingMedia(newEventId, result);
         _hasChanges = true;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -136,6 +141,44 @@ class _EventDetailPageState extends State<EventDetailPage> {
           });
         }
       }
+    }
+  }
+
+  Future<void> _copyPendingMedia(
+    String eventId,
+    Map<String, dynamic> result,
+  ) async {
+    final photos = (result['photos'] as List<dynamic>?)
+            ?.map((entry) => Map<String, String>.from(entry as Map))
+            .toList() ??
+        [];
+    if (photos.isNotEmpty) {
+      await widget.eventService.copyPendingMediaFiles(
+        eventId: eventId,
+        files: photos,
+        ensureUnique: false,
+      );
+    }
+
+    final trailer = result['trailer'] as Map<String, String>?;
+    if (trailer != null && trailer.isNotEmpty) {
+      await widget.eventService.copyPendingMediaFiles(
+        eventId: eventId,
+        files: [trailer],
+        ensureUnique: false,
+      );
+    }
+
+    final mediaFiles = (result['mediaFiles'] as List<dynamic>?)
+            ?.map((entry) => Map<String, String>.from(entry as Map))
+            .toList() ??
+        [];
+    if (mediaFiles.isNotEmpty) {
+      await widget.eventService.copyPendingMediaFiles(
+        eventId: eventId,
+        files: mediaFiles,
+        ensureUnique: true,
+      );
     }
   }
 

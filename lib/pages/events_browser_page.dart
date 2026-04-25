@@ -684,17 +684,36 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       );
     }
 
+    await _copyEditableMedia(eventId, result);
+  }
+
+  /// Copy any pending photos / trailer / generic media files referenced by a
+  /// New-or-Edit-event result map into the event's folder. Shared by the
+  /// create flow and the edit flow — the edit flow used to skip this entirely,
+  /// so newly-added photos and videos were silently discarded.
+  Future<void> _copyEditableMedia(
+    String eventId,
+    Map<String, dynamic> result,
+  ) async {
     final photoFiles = (result['photos'] as List<dynamic>?)
             ?.map((entry) => Map<String, String>.from(entry as Map))
             .toList() ??
         [];
     if (photoFiles.isNotEmpty) {
-      await _copyPendingFiles(eventId, photoFiles, ensureUnique: false);
+      await _eventService.copyPendingMediaFiles(
+        eventId: eventId,
+        files: photoFiles,
+        ensureUnique: false,
+      );
     }
 
     final trailer = result['trailer'] as Map<String, String>?;
     if (trailer != null && trailer.isNotEmpty) {
-      await _copyPendingFiles(eventId, [trailer], ensureUnique: false);
+      await _eventService.copyPendingMediaFiles(
+        eventId: eventId,
+        files: [trailer],
+        ensureUnique: false,
+      );
     }
 
     final mediaFiles = (result['mediaFiles'] as List<dynamic>?)
@@ -702,7 +721,11 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
             .toList() ??
         [];
     if (mediaFiles.isNotEmpty) {
-      await _copyPendingFiles(eventId, mediaFiles, ensureUnique: true);
+      await _eventService.copyPendingMediaFiles(
+        eventId: eventId,
+        files: mediaFiles,
+        ensureUnique: true,
+      );
     }
   }
 
@@ -750,46 +773,9 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     );
   }
 
-  Future<void> _copyPendingFiles(
-    String eventId,
-    List<Map<String, String>> files, {
-    required bool ensureUnique,
-  }) async {
-    if (widget.appPath == null) return;
-    final eventPath = _eventFolderPath(eventId);
-
-    for (final file in files) {
-      final sourcePath = file['sourcePath'];
-      final targetName = file['targetName'];
-      if (sourcePath == null || sourcePath.isEmpty) continue;
-      if (targetName == null || targetName.isEmpty) continue;
-
-      String finalName = targetName;
-      if (ensureUnique) {
-        finalName = await _ensureUniqueFileName(eventPath, targetName);
-      }
-
-      final sourceFile = File(sourcePath);
-      if (!await sourceFile.exists()) continue;
-      await sourceFile.copy('$eventPath/$finalName');
-    }
-  }
-
   String _eventFolderPath(String eventId) {
     final year = eventId.substring(0, 4);
     return '${widget.appPath}/$year/$eventId';
-  }
-
-  Future<String> _ensureUniqueFileName(String dirPath, String fileName) async {
-    final ext = path.extension(fileName);
-    final base = path.basenameWithoutExtension(fileName);
-    var candidate = fileName;
-    var suffix = 1;
-    while (await File('$dirPath/$candidate').exists()) {
-      candidate = '${base}_$suffix$ext';
-      suffix++;
-    }
-    return candidate;
   }
 
   Future<void> _editEvent() async {
@@ -840,6 +826,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       );
 
       if (newEventId != null && mounted) {
+        await _copyEditableMedia(newEventId, result);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(_i18n.t('event_updated')),
@@ -901,6 +888,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
       );
 
       if (newEventId != null && mounted) {
+        await _copyEditableMedia(newEventId, result);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(_i18n.t('event_updated')),

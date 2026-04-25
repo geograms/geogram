@@ -22,6 +22,7 @@ import '../services/i18n_service.dart';
 import '../services/log_service.dart';
 import '../util/feedback_comment_utils.dart';
 import '../util/feedback_folder_utils.dart';
+import '../util/file_icon_helper.dart';
 import 'event_feedback_section.dart';
 import 'event_community_media_section.dart';
 import '../pages/photo_viewer_page.dart';
@@ -1888,22 +1889,24 @@ class _SwipeableFlyerState extends State<_SwipeableFlyer> {
                       ),
                     );
                   },
-                  child: Image.file(
-                    io.File(paths[index]),
-                    fit: BoxFit.contain,
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        color: theme.colorScheme.surfaceVariant,
-                        child: Center(
-                          child: Icon(
-                            Icons.broken_image,
-                            size: 48,
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
+                  child: FileIconHelper.isVideo(paths[index])
+                      ? _buildVideoPoster(theme, paths[index])
+                      : Image.file(
+                          io.File(paths[index]),
+                          fit: BoxFit.contain,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              color: theme.colorScheme.surfaceVariant,
+                              child: Center(
+                                child: Icon(
+                                  Icons.broken_image,
+                                  size: 48,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  ),
                 );
               },
             ),
@@ -1937,6 +1940,58 @@ class _SwipeableFlyerState extends State<_SwipeableFlyer> {
             ),
         ],
       ],
+    );
+  }
+
+  /// Inline gallery thumbnail for a video file. We don't try to extract a
+  /// frame as a poster (that would need a video decoder running for every
+  /// gallery slide); instead show a movie-camera icon over a dark background
+  /// so the entry is visible. Tap propagates to PhotoViewerPage which has a
+  /// real video player wired up via media_kit.
+  Widget _buildVideoPoster(ThemeData theme, String videoPath) {
+    return Container(
+      color: Colors.black,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Center(
+            child: Icon(
+              Icons.movie_outlined,
+              size: 64,
+              color: Colors.white.withOpacity(0.65),
+            ),
+          ),
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.play_arrow,
+                size: 40,
+                color: Colors.white,
+              ),
+            ),
+          ),
+          Positioned(
+            left: 8,
+            right: 8,
+            bottom: 8,
+            child: Text(
+              path.basename(videoPath),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

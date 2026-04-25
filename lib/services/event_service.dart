@@ -735,6 +735,74 @@ class EventService {
     }
   }
 
+  /// Copy a list of pending media files into an event's folder.
+  ///
+  /// Each [files] entry is a `{sourcePath, targetName}` map produced by
+  /// `NewEventPage` (photos, trailer, generic media) — `sourcePath` is a
+  /// regular filesystem path the user picked, `targetName` is the name the
+  /// file should land under inside the event folder. The write goes through
+  /// [ProfileStorage] so encrypted profiles still work.
+  ///
+  /// Used by both the create flow and the edit flow; without this the edit
+  /// flow silently dropped newly-added photos and videos because the only
+  /// equivalent helper used to live as a private method on the events
+  /// browser page and was never invoked after `updateEvent`.
+  Future<int> copyPendingMediaFiles({
+    required String eventId,
+    required List<Map<String, String>> files,
+    required bool ensureUnique,
+  }) async {
+    if (files.isEmpty) return 0;
+    if (eventId.length < 4) return 0;
+    final year = eventId.substring(0, 4);
+    final eventRelativePath = '$year/$eventId';
+    if (!await _storage.directoryExists(eventRelativePath)) return 0;
+
+    int copied = 0;
+    for (final file in files) {
+      final sourcePath = file['sourcePath'];
+      final targetName = file['targetName'];
+      if (sourcePath == null || sourcePath.isEmpty) continue;
+      if (targetName == null || targetName.isEmpty) continue;
+
+      final sourceFile = File(sourcePath);
+      if (!await sourceFile.exists()) continue;
+
+      String finalName = targetName;
+      if (ensureUnique) {
+        finalName = await _ensureUniqueMediaFileName(
+          eventRelativePath,
+          targetName,
+        );
+      }
+
+      try {
+        final bytes = await sourceFile.readAsBytes();
+        await _storage.writeBytes('$eventRelativePath/$finalName', bytes);
+        copied++;
+      } catch (e) {
+        print('EventService: Error copying $sourcePath -> $finalName: $e');
+      }
+    }
+    return copied;
+  }
+
+  Future<String> _ensureUniqueMediaFileName(
+    String dirRelativePath,
+    String fileName,
+  ) async {
+    final dot = fileName.lastIndexOf('.');
+    final base = dot > 0 ? fileName.substring(0, dot) : fileName;
+    final ext = dot > 0 ? fileName.substring(dot) : '';
+    var candidate = fileName;
+    var suffix = 1;
+    while (await _storage.exists('$dirRelativePath/$candidate')) {
+      candidate = '${base}_$suffix$ext';
+      suffix++;
+    }
+    return candidate;
+  }
+
   /// Generate the next image filename for an uploaded image.
   /// [existingFlyers] is the list of current image filenames in the event dir.
   /// [extension] is the file extension without dot (e.g. 'jpg', 'png').

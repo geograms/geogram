@@ -1,5 +1,14 @@
 # Geogram Desktop Changelog
 
+## 2026-04-25 - v1.39.0-beta.6
+
+### Fixes
+- Events: editing an existing event to add new photos or videos no longer drops the files — the editor now copies pending media into the event folder after `updateEvent`, so the gallery picks them up on reload. Affected all three edit entry points (detail page, browser sidebar, tile menu) which previously called `updateEvent` and never persisted the new picks.
+- Events gallery: video entries (mp4 / mov / mkv / webm / avi / wmv / flv) now render a play-button poster instead of a broken-image icon; tap opens the existing full-screen video player in `PhotoViewerPage`.
+
+### Changes
+- Refactor: pending-media file copies moved into `EventService.copyPendingMediaFiles` so the create flow and all edit flows share one path; the per-page `_copyPendingFiles` / `_ensureUniqueFileName` helpers in `events_browser_page.dart` are gone, and the new helper writes through `ProfileStorage` so encrypted profiles work.
+
 ## 2026-04-24 - v1.39.0-beta.5
 
 ### Changes
