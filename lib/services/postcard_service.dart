@@ -590,7 +590,11 @@ class PostcardService {
   /// because the goal is to populate the map for visual testing, not
   /// to ship verifiable mail. Returns the number of files written.
   Future<int> seedSamplePostcards({int count = 2000}) async {
-    if (_appPath == null) return 0;
+    if (_appPath == null) {
+      print('PostcardService: seedSamplePostcards aborted — no _appPath');
+      return 0;
+    }
+    print('PostcardService: seedSamplePostcards($count) → $_appPath');
     await _storage.createDirectory('postcards');
 
     final rng = math.Random(0xCAFE);
@@ -755,6 +759,7 @@ class PostcardService {
       }
     }
 
+    print('PostcardService: seedSamplePostcards wrote $written files');
     return written;
   }
 

@@ -283,14 +283,15 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
             tooltip: _i18n.t('refresh'),
             onPressed: _loadPostcards,
           ),
-          GestureDetector(
-            onLongPress: _seedSamples,
-            child: IconButton(
-              icon: const Icon(Icons.add),
-              tooltip:
-                  '${_i18n.t('new_postcard')}  ·  long-press: inject 2000 sample postcards',
-              onPressed: _createNewPostcard,
-            ),
+          IconButton(
+            icon: const Icon(Icons.science_outlined),
+            tooltip: 'Inject 2000 sample postcards (debug)',
+            onPressed: _seedSamples,
+          ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: _i18n.t('new_postcard'),
+            onPressed: _createNewPostcard,
           ),
         ],
       ),
