@@ -100,7 +100,7 @@ class SharedFolder {
       'version': formatVersion,
       'id': id,
       'title': title,
-      'location': syncedPath ?? location,
+      'location': location,
       'visibility': visibility.value,
       if (allowedReaders.isNotEmpty) 'allowedReaders': allowedReaders,
       if (allowedGroups.isNotEmpty) 'allowedGroups': allowedGroups,

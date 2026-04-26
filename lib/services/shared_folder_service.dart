@@ -4,6 +4,10 @@
  */
 
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
+
 import '../models/shared_folder.dart';
 import 'log_service.dart';
 import 'profile_storage.dart';
@@ -68,19 +72,21 @@ class SharedFolderService {
   }
 
   Future<SharedFolder> _prepareForWrite(SharedFolder folder) async {
-    if (!folder.syncEnabled) return folder;
+    await _ensureLocationExists(folder.location);
+    return folder.copyWith(modifiedAt: folder.modifiedAt);
+  }
 
-    final syncedPath = (folder.syncedPath == null || folder.syncedPath!.isEmpty)
-        ? 'folders/${folder.id}'
-        : folder.syncedPath!;
-    await _storage.createDirectory(syncedPath);
-
-    return folder.copyWith(
-      location: _storage.getAbsolutePath(syncedPath),
-      syncedPath: syncedPath,
-      syncEnabled: true,
-      modifiedAt: folder.modifiedAt,
-    );
+  Future<void> _ensureLocationExists(String location) async {
+    if (location.isEmpty) return;
+    final basePath = _storage.basePath;
+    if (location == basePath || p.isWithin(basePath, location)) {
+      final relative = location == basePath
+          ? ''
+          : p.relative(location, from: basePath).replaceAll('\\', '/');
+      await _storage.createDirectory(relative);
+      return;
+    }
+    await Directory(location).create(recursive: true);
   }
 
   /// Load all shared folder entries

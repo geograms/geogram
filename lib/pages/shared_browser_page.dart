@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
 import '../models/app.dart';
 import '../models/shared_folder.dart';
 import '../models/group.dart';
@@ -307,11 +308,22 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     ];
   }
 
+  String _sanitizeFolderName(String value) {
+    return value
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'-+'), '-')
+        .replaceAll(RegExp(r'^-|-$'), '');
+  }
+
   Future<void> _showAddDialog() async {
     final titleController = TextEditingController();
     final descController = TextEditingController();
     String? selectedPath;
+    String? selectedParentPath;
     var syncAcrossDevices = true;
+    var createNewFolder = false;
     String visibility = 'public';
     List<Group> availableGroups = [];
     final selectedGroups = <String>{};
@@ -349,7 +361,7 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                       contentPadding: EdgeInsets.zero,
                       title: const Text('Sync across devices'),
                       subtitle: const Text(
-                        'Store this folder inside Geogram so device sync can keep it up to date.',
+                        'Make this folder part of the mirrored shared set.',
                       ),
                       value: syncAcrossDevices,
                       onChanged: (value) {
@@ -358,16 +370,52 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                         });
                       },
                     ),
+                    if (syncAcrossDevices) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(
+                          'After saving, pair the other device in Device Sync. The Shared entry will sync and each device keeps its own local folder path.',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 16),
 
-                    if (!syncAcrossDevices) ...[
+                    ToggleButtons(
+                      isSelected: [
+                        !createNewFolder,
+                        createNewFolder,
+                      ],
+                      onPressed: (index) {
+                        setDialogState(() {
+                          createNewFolder = index == 1;
+                        });
+                      },
+                      borderRadius: BorderRadius.circular(8),
+                      constraints: const BoxConstraints(minHeight: 40),
+                      children: const [
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 16),
+                          child: Text('Use existing folder'),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 16),
+                          child: Text('Create new folder'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+
+                    if (!createNewFolder) ...[
                       OutlinedButton.icon(
                         onPressed: () async {
                           try {
                             final path =
                                 await FilePicker.platform.getDirectoryPath(
                               dialogTitle: _i18n.t('select_folder'),
-                            );
+                              );
                             if (path != null) {
                               setDialogState(() => selectedPath = path);
                             }
@@ -382,7 +430,7 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                         ),
                       ),
                     ],
-                    if (!syncAcrossDevices && selectedPath != null) ...[
+                    if (!createNewFolder && selectedPath != null) ...[
                       const SizedBox(height: 8),
                       Container(
                         padding: const EdgeInsets.all(10),
@@ -412,6 +460,59 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                           ],
                         ),
                       ),
+                    ],
+                    if (createNewFolder) ...[
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          try {
+                            final path =
+                                await FilePicker.platform.getDirectoryPath(
+                              dialogTitle: 'Choose parent folder',
+                            );
+                            if (path != null) {
+                              setDialogState(() => selectedParentPath = path);
+                            }
+                          } catch (e) {
+                            // Ignore picker errors
+                          }
+                        },
+                        icon: const Icon(Icons.create_new_folder),
+                        label: const Text('Choose parent folder'),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 48),
+                        ),
+                      ),
+                      if (selectedParentPath != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .primaryContainer
+                                .withValues(alpha: 0.3),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.create_new_folder,
+                                size: 18,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '${selectedParentPath!}/${_sanitizeFolderName(titleController.text.isEmpty ? 'new-folder' : titleController.text)}',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                     const SizedBox(height: 16),
 
@@ -489,13 +590,21 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                 onPressed: () {
                   final title = titleController.text.trim();
                   if (title.isEmpty) return;
-                  if (!syncAcrossDevices && selectedPath == null) return;
+                  final folderName = _sanitizeFolderName(title);
+                  if (createNewFolder) {
+                    if (selectedParentPath == null) return;
+                  } else if (selectedPath == null) {
+                    return;
+                  }
+                  final location = createNewFolder
+                      ? p.join(selectedParentPath!, folderName)
+                      : selectedPath!;
 
                   Navigator.pop(
                     context,
                     SharedFolder(
                       title: title,
-                      location: syncAcrossDevices ? '' : selectedPath!,
+                      location: location,
                       visibility:
                           SharedFolderVisibility.fromValue(visibility),
                       allowedGroups: selectedGroups.toList(),
@@ -526,8 +635,6 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
   }
 
   Future<void> _showEditDialog(SharedFolder folder) async {
-    final titleController = TextEditingController(text: folder.title);
-    final descController = TextEditingController(text: folder.description);
     String visibility = folder.visibility.value;
     List<Group> availableGroups = [];
     final selectedGroups = <String>{...folder.allowedGroups};
