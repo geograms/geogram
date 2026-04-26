@@ -128,11 +128,8 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
     });
 
     _filterPostcards();
-
-    // Auto-select the most recent postcard (first in the list)
-    if (_allPostcards.isNotEmpty && _selectedPostcard == null) {
-      await _selectPostcard(_allPostcards.first);
-    }
+    // No auto-select. The detail pane stays collapsed until the user
+    // taps a marker.
   }
 
   void _filterPostcards() {
@@ -263,8 +260,13 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
                     : _buildPostcardList(theme, isMobileView: !isWideScreen);
 
                 if (isWideScreen) {
-                  // Wide: main view on the left (map gets the lion's
-                  // share), detail on the right.
+                  // Wide: main view fills the screen until the user
+                  // taps a postcard. Then the detail pane slides in
+                  // on the right and takes 1/3 of the width. With no
+                  // selection there is no empty placeholder column.
+                  if (_selectedPostcard == null) {
+                    return mainView;
+                  }
                   return Row(
                     children: [
                       Expanded(flex: 2, child: mainView),
@@ -286,6 +288,7 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
       postcards: _filteredPostcards,
       selectedPostcardId: _selectedPostcard?.id,
       myLocation: _myLocation,
+      myCallsign: _currentCallsign,
       statusFilter: _statusFilter,
       onStatusFilter: _setStatusFilter,
       statusCount: _getStatusCount,
@@ -652,6 +655,7 @@ class _PostcardsMapView extends StatefulWidget {
   final List<Postcard> postcards;
   final String? selectedPostcardId;
   final LatLng? myLocation;
+  final String? myCallsign;
   final String statusFilter;
   final ValueChanged<String> onStatusFilter;
   final int Function(String status) statusCount;
@@ -663,6 +667,7 @@ class _PostcardsMapView extends StatefulWidget {
     required this.postcards,
     required this.selectedPostcardId,
     required this.myLocation,
+    required this.myCallsign,
     required this.statusFilter,
     required this.onStatusFilter,
     required this.statusCount,
@@ -741,19 +746,6 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
         return Colors.red.shade400;
       default:
         return Colors.blue.shade600;
-    }
-  }
-
-  IconData _statusIcon(String status) {
-    switch (status) {
-      case 'delivered':
-        return Icons.mark_email_read_outlined;
-      case 'acknowledged':
-        return Icons.done_all;
-      case 'expired':
-        return Icons.schedule;
-      default:
-        return Icons.mail_outline;
     }
   }
 
@@ -853,26 +845,29 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
                           ),
                         ],
                       ),
-                    // Postcard markers, clustered.
+                    // Postcard markers, clustered. maxZoom matches the
+                    // FlutterMap maxZoom so postcards sharing exact
+                    // recipient coordinates always group into a single
+                    // count bubble instead of stacking on top of each
+                    // other at high zoom.
                     MarkerClusterLayerWidget(
                       options: MarkerClusterLayerOptions(
-                        maxClusterRadius: 80,
-                        size: const Size(48, 48),
+                        maxClusterRadius: 60,
+                        size: const Size(36, 36),
                         alignment: Alignment.center,
                         padding: const EdgeInsets.all(50),
-                        maxZoom: 15,
+                        maxZoom: 18,
                         markers: [
                           for (final p in widget.postcards)
                             if (_destinationOf(p) != null)
                               Marker(
                                 point: _destinationOf(p)!,
-                                width: 38,
-                                height: 38,
+                                width: 22,
+                                height: 22,
                                 child: GestureDetector(
                                   onTap: () => widget.onPostcardTap(p),
                                   child: _PostcardMarker(
                                     color: _statusColor(p.status),
-                                    icon: _statusIcon(p.status),
                                     selected: p.id == widget.selectedPostcardId,
                                   ),
                                 ),
@@ -881,13 +876,14 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
                         builder: (_, markers) => Container(
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: theme.colorScheme.primary,
-                            border: Border.all(color: Colors.white, width: 3),
+                            color: theme.colorScheme.primary
+                                .withValues(alpha: 0.92),
+                            border: Border.all(color: Colors.white, width: 2),
                             boxShadow: const [
                               BoxShadow(
                                 color: Colors.black26,
-                                blurRadius: 6,
-                                offset: Offset(0, 2),
+                                blurRadius: 4,
+                                offset: Offset(0, 1),
                               ),
                             ],
                           ),
@@ -1025,6 +1021,23 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
   _Journey? _journeyOf(Postcard p) {
     final hops = <_Hop>[];
 
+    // If the postcard has no carrier stamps yet but I am the sender
+    // and we have a fresh GPS fix, my current location is the natural
+    // origin — that's where the postcard physically came from.
+    if (p.stamps.isEmpty &&
+        widget.myLocation != null &&
+        widget.myCallsign != null &&
+        p.senderCallsign.toUpperCase() == widget.myCallsign!.toUpperCase()) {
+      hops.add(_Hop(
+        position: widget.myLocation!,
+        label: p.senderCallsign,
+        sublabel: widget.i18n.t('sender'),
+        timestamp: p.createdDateTime,
+        kind: _HopKind.pickup,
+        index: 0,
+      ));
+    }
+
     for (var i = 0; i < p.stamps.length; i++) {
       final s = p.stamps[i];
       hops.add(_Hop(
@@ -1032,7 +1045,7 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
         label: s.stamperCallsign,
         sublabel: s.locationName,
         timestamp: s.dateTime,
-        kind: i == 0 ? _HopKind.pickup : _HopKind.carrier,
+        kind: i == 0 && hops.isEmpty ? _HopKind.pickup : _HopKind.carrier,
         index: i + 1,
       ));
     }
@@ -1047,8 +1060,10 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
         kind: _HopKind.delivered,
         index: hops.length + 1,
       ));
-    } else if (hops.isNotEmpty) {
-      // Promote the last carrier hop to "last seen".
+    } else if (p.stamps.isNotEmpty) {
+      // Only promote when there are actual carrier stamps. A synthesized
+      // origin (sender-with-no-stamps) keeps the pickup icon — it has not
+      // been "last seen" anywhere new.
       hops[hops.length - 1] = hops.last.asLastSeen();
     }
 
@@ -1253,16 +1268,15 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
   }
 }
 
+/// Plain coloured dot for a single (un-clustered) postcard. The status
+/// is conveyed by the colour; trying to pack an icon inside a 22 px
+/// circle made things look cluttered, especially when several
+/// postcards landed at adjacent coords.
 class _PostcardMarker extends StatelessWidget {
   final Color color;
-  final IconData icon;
   final bool selected;
 
-  const _PostcardMarker({
-    required this.color,
-    required this.icon,
-    required this.selected,
-  });
+  const _PostcardMarker({required this.color, required this.selected});
 
   @override
   Widget build(BuildContext context) {
@@ -1272,18 +1286,17 @@ class _PostcardMarker extends StatelessWidget {
         shape: BoxShape.circle,
         color: color,
         border: Border.all(
-          color: selected ? Colors.white : Colors.white.withValues(alpha: 0.6),
+          color: Colors.white,
           width: selected ? 3 : 2,
         ),
         boxShadow: const [
           BoxShadow(
             color: Colors.black26,
-            blurRadius: 4,
-            offset: Offset(0, 2),
+            blurRadius: 3,
+            offset: Offset(0, 1),
           ),
         ],
       ),
-      child: Icon(icon, color: Colors.white, size: selected ? 22 : 18),
     );
   }
 }
