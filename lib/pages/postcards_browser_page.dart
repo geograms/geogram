@@ -221,6 +221,47 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
     return _allPostcards.where((p) => p.status == status).length;
   }
 
+  /// Long-press handler on the "+" AppBar icon. Generates 2000
+  /// synthetic postcards spread across Portuguese cities so the map
+  /// can be evaluated against realistic density.
+  Future<void> _seedSamples() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Inject sample postcards'),
+        content: const Text(
+          'This adds 2000 synthetic postcards across 30 Portuguese '
+          'cities, with random journeys and statuses. Useful for '
+          'testing the map; safe to delete from the postcards/ '
+          'directory afterwards.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Inject 2000'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Seeding 2000 sample postcards…')),
+    );
+    final n = await _postcardService.seedSamplePostcards(count: 2000);
+    if (!mounted) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(content: Text('Seeded $n sample postcards.')),
+    );
+    await _loadPostcards();
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -242,10 +283,14 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
             tooltip: _i18n.t('refresh'),
             onPressed: _loadPostcards,
           ),
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: _i18n.t('new_postcard'),
-            onPressed: _createNewPostcard,
+          GestureDetector(
+            onLongPress: _seedSamples,
+            child: IconButton(
+              icon: const Icon(Icons.add),
+              tooltip:
+                  '${_i18n.t('new_postcard')}  ·  long-press: inject 2000 sample postcards',
+              onPressed: _createNewPostcard,
+            ),
           ),
         ],
       ),
@@ -1021,21 +1066,37 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
   _Journey? _journeyOf(Postcard p) {
     final hops = <_Hop>[];
 
-    // If the postcard has no carrier stamps yet but I am the sender
-    // and we have a fresh GPS fix, my current location is the natural
-    // origin — that's where the postcard physically came from.
-    if (p.stamps.isEmpty &&
-        widget.myLocation != null &&
-        widget.myCallsign != null &&
-        p.senderCallsign.toUpperCase() == widget.myCallsign!.toUpperCase()) {
-      hops.add(_Hop(
-        position: widget.myLocation!,
-        label: p.senderCallsign,
-        sublabel: widget.i18n.t('sender'),
-        timestamp: p.createdDateTime,
-        kind: _HopKind.pickup,
-        index: 0,
-      ));
+    // Synthesize an origin point so we always have something to draw
+    // arrows from. Priority:
+    //   1) my GPS fix when I am the sender (the real origin),
+    //   2) my GPS fix even when I'm not the sender (visual reference
+    //      so the map still tells a story),
+    //   3) first recipient location as a synthetic departure point
+    //      (clearly a fallback — flagged with the "pickup" icon and
+    //      labelled with the sender callsign).
+    if (p.stamps.isEmpty) {
+      LatLng? origin;
+      if (widget.myLocation != null &&
+          widget.myCallsign != null &&
+          p.senderCallsign.toUpperCase() ==
+              widget.myCallsign!.toUpperCase()) {
+        origin = widget.myLocation;
+      } else if (widget.myLocation != null) {
+        origin = widget.myLocation;
+      } else if (p.recipientLocations.isNotEmpty) {
+        final r = p.recipientLocations.first;
+        origin = LatLng(r.latitude, r.longitude);
+      }
+      if (origin != null) {
+        hops.add(_Hop(
+          position: origin,
+          label: p.senderCallsign,
+          sublabel: widget.i18n.t('sender'),
+          timestamp: p.createdDateTime,
+          kind: _HopKind.pickup,
+          index: 0,
+        ));
+      }
     }
 
     for (var i = 0; i < p.stamps.length; i++) {

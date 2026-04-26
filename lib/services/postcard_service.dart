@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'dart:math' as math;
+
 import '../models/postcard.dart';
 import '../services/profile_service.dart';
 import '../util/nostr_event.dart';
@@ -579,4 +581,267 @@ class PostcardService {
       return false;
     }
   }
+
+  // ── Sample / debug seeding ────────────────────────────────────────
+
+  /// Inject [count] synthetic postcards spread across Portuguese cities,
+  /// each with a randomized journey (1–3 carrier stamps and a random
+  /// status). Bypasses NOSTR signing — signatures are random hex —
+  /// because the goal is to populate the map for visual testing, not
+  /// to ship verifiable mail. Returns the number of files written.
+  Future<int> seedSamplePostcards({int count = 2000}) async {
+    if (_appPath == null) return 0;
+    await _storage.createDirectory('postcards');
+
+    final rng = math.Random(0xCAFE);
+    final senderProfile = ProfileService().getProfile();
+    final senderCs = senderProfile.callsign.isEmpty
+        ? 'CR0BOT0'
+        : senderProfile.callsign;
+    final senderNpub = senderProfile.npub;
+
+    int written = 0;
+    DateTime? lastDate;
+    String currentShard = '';
+
+    for (var i = 0; i < count; i++) {
+      // Spread creation timestamps across the past 180 days.
+      final daysAgo = rng.nextInt(180);
+      final created = DateTime.now().subtract(Duration(
+        days: daysAgo,
+        hours: rng.nextInt(24),
+        minutes: rng.nextInt(60),
+        seconds: rng.nextInt(60),
+      ));
+
+      // Pick or refresh the shard whenever the year changes.
+      if (lastDate == null || created.year != lastDate.year) {
+        currentShard = await _currentShardForYear(created.year);
+        lastDate = created;
+      }
+
+      // Random sender (sometimes me, sometimes a fictional bot).
+      final isMine = rng.nextDouble() < 0.5;
+      final sCs = isMine ? senderCs : 'BOT${(rng.nextInt(99) + 1).toString().padLeft(2, '0')}';
+      final sNpub = isMine ? senderNpub : 'npub1bot${i.toRadixString(16).padLeft(4, '0')}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+
+      // Recipient: random bot.
+      final rCs = 'BOT${(rng.nextInt(99) + 1).toString().padLeft(2, '0')}';
+      final rNpub = 'npub1rcp${i.toRadixString(16).padLeft(4, '0')}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';
+
+      // 1–3 recipient locations from the Portuguese city pool.
+      final recipientLocs = <RecipientLocation>[];
+      final nDest = 1 + rng.nextInt(3);
+      final destPicks = _pickN(_ptCities, nDest, rng);
+      for (final c in destPicks) {
+        recipientLocs.add(RecipientLocation(
+          latitude: _jitter(c.lat, rng),
+          longitude: _jitter(c.lng, rng),
+          locationName: c.name,
+        ));
+      }
+
+      // 0–4 stamps. Older postcards skew toward more hops.
+      final maxHops = (daysAgo / 60).clamp(1, 4).toInt();
+      final nStamps = rng.nextInt(maxHops + 1);
+      final stamps = <PostcardStamp>[];
+      String prevFrom = 'sender';
+      DateTime hopWhen = created;
+      for (var h = 0; h < nStamps; h++) {
+        final city = _ptCities[rng.nextInt(_ptCities.length)];
+        hopWhen = hopWhen.add(Duration(hours: 6 + rng.nextInt(48)));
+        if (hopWhen.isAfter(DateTime.now())) hopWhen = DateTime.now();
+        final via = _viaPool[rng.nextInt(_viaPool.length)];
+        stamps.add(PostcardStamp(
+          number: h + 1,
+          stamperCallsign: 'CARRY${(rng.nextInt(50) + 1).toString().padLeft(2, '0')}',
+          stamperNpub: 'npub1car${h.toRadixString(16)}${i.toRadixString(16).padLeft(4, '0')}xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+          timestamp: _formatTimestamp(hopWhen),
+          latitude: _jitter(city.lat, rng),
+          longitude: _jitter(city.lng, rng),
+          locationName: city.name,
+          receivedFrom: prevFrom,
+          receivedVia: via,
+          hopNumber: h + 1,
+          signature: _randomHex(rng, 64),
+        ));
+        prevFrom = 'npub1car${h.toRadixString(16)}…';
+      }
+
+      // Status distribution.
+      final roll = rng.nextDouble();
+      String status;
+      PostcardDeliveryReceipt? receipt;
+      if (roll < 0.6 || stamps.isEmpty) {
+        status = 'in-transit';
+      } else if (roll < 0.85) {
+        status = 'delivered';
+        final dest = destPicks.first;
+        receipt = PostcardDeliveryReceipt(
+          recipientNpub: rNpub,
+          timestamp: _formatTimestamp(
+            hopWhen.add(Duration(hours: 1 + rng.nextInt(48))),
+          ),
+          carrierCallsign: stamps.last.stamperCallsign,
+          carrierNpub: stamps.last.stamperNpub,
+          deliveryLatitude: _jitter(dest.lat, rng),
+          deliveryLongitude: _jitter(dest.lng, rng),
+          deliveryLocationName: dest.name,
+          signature: _randomHex(rng, 64),
+        );
+      } else if (roll < 0.95) {
+        status = 'expired';
+      } else {
+        status = 'acknowledged';
+        final dest = destPicks.first;
+        receipt = PostcardDeliveryReceipt(
+          recipientNpub: rNpub,
+          timestamp: _formatTimestamp(hopWhen),
+          carrierCallsign: stamps.last.stamperCallsign,
+          carrierNpub: stamps.last.stamperNpub,
+          deliveryLatitude: _jitter(dest.lat, rng),
+          deliveryLongitude: _jitter(dest.lng, rng),
+          deliveryLocationName: dest.name,
+          signature: _randomHex(rng, 64),
+        );
+      }
+
+      final title = _titlePool[rng.nextInt(_titlePool.length)]
+          .replaceAll('{city}', destPicks.first.name);
+      final body = _bodyPool[rng.nextInt(_bodyPool.length)]
+          .replaceAll('{city}', destPicks.first.name);
+
+      final sigHex = _randomHex(rng, 64);
+      final dateStr = '${created.year.toString().padLeft(4, '0')}-'
+          '${created.month.toString().padLeft(2, '0')}-'
+          '${created.day.toString().padLeft(2, '0')}';
+      final stem = 'postcard-${_sanitizeCallsign(sCs)}_'
+          '${dateStr}_${sigHex.substring(0, 4)}';
+
+      // Skip if a same-stem file already exists in this shard.
+      final filePath = 'postcards/$currentShard/$stem.txt';
+      if (await _storage.exists(filePath)) continue;
+
+      final p = Postcard(
+        id: stem,
+        title: title,
+        createdTimestamp: _formatTimestamp(created),
+        senderCallsign: sCs,
+        senderNpub: sNpub,
+        recipientCallsign: rCs,
+        recipientNpub: rNpub,
+        recipientLocations: recipientLocs,
+        type: 'open',
+        status: status,
+        ttl: 30,
+        priority: 'normal',
+        content: body,
+        metadata: {'npub': sNpub, 'signature': sigHex},
+        stamps: stamps,
+        deliveryReceipt: receipt,
+      );
+
+      try {
+        await _storage.writeString(filePath, p.exportAsText());
+        written++;
+      } catch (_) {
+        // Continue on write errors so a partial seed still produces
+        // useful map content.
+      }
+
+      // Roll over to a new shard if we hit the cap mid-burst.
+      if (written % _shardCap == 0) {
+        currentShard = await _currentShardForYear(created.year);
+      }
+    }
+
+    return written;
+  }
+
+  String _randomHex(math.Random rng, int len) {
+    const chars = '0123456789abcdef';
+    final buf = StringBuffer();
+    for (var i = 0; i < len; i++) {
+      buf.write(chars[rng.nextInt(16)]);
+    }
+    return buf.toString();
+  }
+
+  double _jitter(double v, math.Random rng) =>
+      v + (rng.nextDouble() - 0.5) * 0.04;
+
+  List<_City> _pickN(List<_City> src, int n, math.Random rng) {
+    final pool = [...src]..shuffle(rng);
+    return pool.take(n).toList();
+  }
+
+  static const List<_City> _ptCities = [
+    _City('Lisbon', 38.7223, -9.1393),
+    _City('Porto', 41.1579, -8.6291),
+    _City('Coimbra', 40.2110, -8.4292),
+    _City('Braga', 41.5454, -8.4265),
+    _City('Faro', 37.0194, -7.9304),
+    _City('Funchal', 32.6669, -16.9241),
+    _City('Aveiro', 40.6443, -8.6455),
+    _City('Évora', 38.5713, -7.9135),
+    _City('Viseu', 40.6566, -7.9128),
+    _City('Leiria', 39.7437, -8.8071),
+    _City('Setúbal', 38.5244, -8.8882),
+    _City('Guimarães', 41.4413, -8.2911),
+    _City('Viana do Castelo', 41.6932, -8.8327),
+    _City('Vila Real', 41.3006, -7.7441),
+    _City('Bragança', 41.8071, -6.7567),
+    _City('Castelo Branco', 39.8217, -7.4912),
+    _City('Beja', 38.0150, -7.8633),
+    _City('Santarém', 39.2362, -8.6859),
+    _City('Portalegre', 39.2916, -7.4307),
+    _City('Tomar', 39.6033, -8.4108),
+    _City('Caldas da Rainha', 39.4039, -9.1346),
+    _City('Sines', 37.9542, -8.8693),
+    _City('Lagos', 37.1028, -8.6736),
+    _City('Albufeira', 37.0894, -8.2474),
+    _City('Cascais', 38.6968, -9.4214),
+    _City('Sintra', 38.8029, -9.3817),
+    _City('Almada', 38.6790, -9.1569),
+    _City('Loures', 38.8307, -9.1683),
+    _City('Ponta Delgada', 37.7412, -25.6756),
+    _City('Angra do Heroísmo', 38.6566, -27.2210),
+  ];
+
+  static const List<String> _viaPool = [
+    'BLE', 'LoRa', 'WiFi-LAN', 'Radio', 'Satellite',
+    'In-Person', 'Meshtastic', 'Cellular',
+  ];
+
+  static const List<String> _titlePool = [
+    'Greetings from {city}',
+    'Quick note from {city}',
+    'Sunset over {city}',
+    'Wish you were here',
+    'Test postcard',
+    'Hello from the road',
+    'Update from {city}',
+    'Postcards from the edge',
+    'Just a hello',
+    'Coffee in {city}',
+  ];
+
+  static const List<String> _bodyPool = [
+    'Spent the day walking around {city}. Beautiful weather, great food.',
+    'Quick note before the next leg of the trip — heading out tomorrow.',
+    'Arrived in {city} this morning. Will write more when I have time.',
+    'Test message generated for the map. Ignore.',
+    'The light in {city} is something else this time of year.',
+    'Catching the train soon. Wanted to say hi.',
+    'Met a couple of carriers along the way — they took excellent care of this card.',
+    'Coffee, books, more coffee. The {city} routine.',
+  ];
+}
+
+/// Tiny helper class for seed-data city table.
+class _City {
+  final String name;
+  final double lat;
+  final double lng;
+  const _City(this.name, this.lat, this.lng);
 }
