@@ -3,6 +3,8 @@
  * License: Apache-2.0
  */
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
@@ -19,6 +21,7 @@ import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../widgets/postcard_tile_widget.dart';
 import '../widgets/postcard_detail_widget.dart';
+import 'city_picker_page.dart';
 import 'new_postcard_page.dart';
 
 enum _ViewMode { map, list }
@@ -305,22 +308,10 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
                     ? _buildMapView(theme, isMobileView: !isWideScreen)
                     : _buildPostcardList(theme, isMobileView: !isWideScreen);
 
-                if (isWideScreen) {
-                  // Wide: main view fills the screen until the user
-                  // taps a postcard. Then the detail pane slides in
-                  // on the right and takes 1/3 of the width. With no
-                  // selection there is no empty placeholder column.
-                  if (_selectedPostcard == null) {
-                    return mainView;
-                  }
-                  return Row(
-                    children: [
-                      Expanded(flex: 2, child: mainView),
-                      const VerticalDivider(width: 1),
-                      Expanded(flex: 1, child: _buildPostcardDetail(theme)),
-                    ],
-                  );
-                }
+                // Map is always full-width. The selected-postcard
+                // preview lives as a floating card on top of the map
+                // (rendered inside _PostcardsMapView), and tapping
+                // "Open" on that card pushes the full detail page.
                 return mainView;
               },
             ),
@@ -332,7 +323,7 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
   Widget _buildMapView(ThemeData theme, {required bool isMobileView}) {
     return _PostcardsMapView(
       postcards: _filteredPostcards,
-      selectedPostcardId: _selectedPostcard?.id,
+      selectedPostcard: _selectedPostcard,
       myLocation: _myLocation,
       myCallsign: _currentCallsign,
       statusFilter: _statusFilter,
@@ -340,12 +331,11 @@ class _PostcardsBrowserPageState extends State<PostcardsBrowserPage> {
       statusCount: _getStatusCount,
       i18n: _i18n,
       searchController: _searchController,
-      onPostcardTap: (postcard) async {
-        if (isMobileView) {
-          await _selectPostcardMobile(postcard);
-        } else {
-          await _selectPostcard(postcard);
-        }
+      onPostcardTap: _selectPostcard,
+      onClearSelection: () => setState(() => _selectedPostcard = null),
+      onOpenSelected: () async {
+        if (_selectedPostcard == null) return;
+        await _selectPostcardMobile(_selectedPostcard!);
       },
     );
   }
@@ -699,7 +689,7 @@ class _PostcardDetailPageState extends State<_PostcardDetailPage> {
 /// "where is this message going" question is one tap away.
 class _PostcardsMapView extends StatefulWidget {
   final List<Postcard> postcards;
-  final String? selectedPostcardId;
+  final Postcard? selectedPostcard;
   final LatLng? myLocation;
   final String? myCallsign;
   final String statusFilter;
@@ -708,10 +698,14 @@ class _PostcardsMapView extends StatefulWidget {
   final I18nService i18n;
   final TextEditingController searchController;
   final ValueChanged<Postcard> onPostcardTap;
+  final VoidCallback onClearSelection;
+  final VoidCallback onOpenSelected;
+
+  String? get selectedPostcardId => selectedPostcard?.id;
 
   const _PostcardsMapView({
     required this.postcards,
-    required this.selectedPostcardId,
+    required this.selectedPostcard,
     required this.myLocation,
     required this.myCallsign,
     required this.statusFilter,
@@ -720,13 +714,16 @@ class _PostcardsMapView extends StatefulWidget {
     required this.i18n,
     required this.searchController,
     required this.onPostcardTap,
+    required this.onClearSelection,
+    required this.onOpenSelected,
   });
 
   @override
   State<_PostcardsMapView> createState() => _PostcardsMapViewState();
 }
 
-class _PostcardsMapViewState extends State<_PostcardsMapView> {
+class _PostcardsMapViewState extends State<_PostcardsMapView>
+    with TickerProviderStateMixin {
   final MapController _mapController = MapController();
   final MapTileService _mapTileService = MapTileService();
   bool _mapInitialized = false;
@@ -734,10 +731,82 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
   static const LatLng _defaultCenter = LatLng(40.0, -3.7);
   static const double _defaultZoom = 4.0;
 
+  // Smooth camera animation. The map controller's move/fitCamera are
+  // instant snaps; we animate by ticking move() per frame.
+  AnimationController? _camController;
+  Animation<double>? _camAnim;
+  LatLng? _camFromCenter;
+  LatLng? _camToCenter;
+  double _camFromZoom = 0;
+  double _camToZoom = 0;
+
   @override
   void initState() {
     super.initState();
     _initializeMap();
+  }
+
+  @override
+  void dispose() {
+    _camController?.dispose();
+    super.dispose();
+  }
+
+  /// Smoothly animate the map from its current camera state to
+  /// [target] (centre + zoom). Used on selection changes so picking a
+  /// postcard glides instead of teleporting.
+  void _animateCameraTo(LatLng target, double zoom) {
+    _camController?.dispose();
+    _camFromCenter = _mapController.camera.center;
+    _camToCenter = target;
+    _camFromZoom = _mapController.camera.zoom;
+    _camToZoom = zoom;
+
+    _camController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _camAnim = CurvedAnimation(
+      parent: _camController!,
+      curve: Curves.easeInOutCubic,
+    );
+    _camAnim!.addListener(() {
+      final t = _camAnim!.value;
+      final lat = _camFromCenter!.latitude +
+          (_camToCenter!.latitude - _camFromCenter!.latitude) * t;
+      final lng = _camFromCenter!.longitude +
+          (_camToCenter!.longitude - _camFromCenter!.longitude) * t;
+      final z = _camFromZoom + (_camToZoom - _camFromZoom) * t;
+      _mapController.move(LatLng(lat, lng), z);
+    });
+    _camController!.forward();
+  }
+
+  /// Animate the camera so [points] all fit on screen with padding.
+  /// Computes the centre and a zoom that fits the bounding box.
+  void _animateFitBounds(List<LatLng> points, {double pad = 60}) {
+    if (points.isEmpty) return;
+    if (points.length == 1) {
+      _animateCameraTo(points.first, 10);
+      return;
+    }
+    var minLat = double.infinity, maxLat = -double.infinity;
+    var minLng = double.infinity, maxLng = -double.infinity;
+    for (final p in points) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+    final centre = LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2);
+    // Use flutter_map's camera-fit math by asking it to compute the
+    // target zoom for these bounds, then animate to that.
+    final fit = CameraFit.bounds(
+      bounds: LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng)),
+      padding: EdgeInsets.all(pad),
+    );
+    final fitted = fit.fit(_mapController.camera);
+    _animateCameraTo(centre, fitted.zoom);
   }
 
   Future<void> _initializeMap() async {
@@ -750,8 +819,6 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
   @override
   void didUpdateWidget(_PostcardsMapView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // When the selection changes, fit the map so every hop AND every
-    // possible destination of the new postcard fit on screen.
     if (oldWidget.selectedPostcardId != widget.selectedPostcardId &&
         widget.selectedPostcardId != null &&
         _mapInitialized) {
@@ -766,16 +833,7 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
       if (pts.isEmpty) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (pts.length == 1) {
-          _mapController.move(pts.first, 8);
-          return;
-        }
-        _mapController.fitCamera(
-          CameraFit.bounds(
-            bounds: LatLngBounds.fromPoints(pts),
-            padding: const EdgeInsets.all(60),
-          ),
-        );
+        _animateFitBounds(pts);
       });
     }
   }
@@ -795,6 +853,18 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
     }
   }
 
+  /// Density colour for cluster bubbles. Light green for a handful of
+  /// postcards, scaling through blue / orange / red as the count rises
+  /// — at a glance the courier sees where messages pile up.
+  Color _heatColor(int count) {
+    if (count >= 200) return Colors.red.shade700;
+    if (count >= 100) return Colors.deepOrange.shade600;
+    if (count >= 40) return Colors.orange.shade600;
+    if (count >= 15) return Colors.amber.shade700;
+    if (count >= 5) return Colors.lightBlue.shade600;
+    return Colors.green.shade600;
+  }
+
   /// First recipient location for a postcard, or null when none was set.
   LatLng? _destinationOf(Postcard p) {
     if (p.recipientLocations.isEmpty) return null;
@@ -812,14 +882,7 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
     return _defaultCenter;
   }
 
-  Postcard? _selectedPostcard() {
-    final id = widget.selectedPostcardId;
-    if (id == null) return null;
-    for (final p in widget.postcards) {
-      if (p.id == id) return p;
-    }
-    return null;
-  }
+  Postcard? _selectedPostcard() => widget.selectedPostcard;
 
   @override
   Widget build(BuildContext context) {
@@ -845,6 +908,13 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
                     interactionOptions: const InteractionOptions(
                       flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
                     ),
+                    // Tapping empty map area dismisses the selected
+                    // postcard's floating preview / journey overlay.
+                    onTap: (_, __) {
+                      if (widget.selectedPostcard != null) {
+                        widget.onClearSelection();
+                      }
+                    },
                   ),
                   children: [
                     ValueListenableBuilder<MapLayerType>(
@@ -919,30 +989,43 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
                                 ),
                               ),
                         ],
-                        builder: (_, markers) => Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: theme.colorScheme.primary
-                                .withValues(alpha: 0.92),
-                            border: Border.all(color: Colors.white, width: 2),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Colors.black26,
-                                blurRadius: 4,
-                                offset: Offset(0, 1),
-                              ),
-                            ],
-                          ),
-                          child: Center(
-                            child: Text(
-                              '${markers.length}',
-                              style: const TextStyle(
+                        builder: (_, markers) {
+                          // Heat colour: light → blue → orange → red as
+                          // the cluster gets denser. Tells the courier
+                          // at a glance "lots of mail wants to go here".
+                          final n = markers.length;
+                          final color = _heatColor(n);
+                          final size = (28 + math.sqrt(n) * 4)
+                              .clamp(28.0, 64.0);
+                          return Container(
+                            width: size,
+                            height: size,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: color.withValues(alpha: 0.92),
+                              border: Border.all(
                                 color: Colors.white,
-                                fontWeight: FontWeight.bold,
+                                width: 2,
+                              ),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 4,
+                                  offset: Offset(0, 1),
+                                ),
+                              ],
+                            ),
+                            child: Center(
+                              child: Text(
+                                n > 999 ? '${(n / 1000).toStringAsFixed(1)}k' : '$n',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
-                          ),
-                        ),
+                          );
+                        },
                       ),
                     ),
                     // ── Journey overlay for the selected postcard ──
@@ -1046,11 +1129,239 @@ class _PostcardsMapViewState extends State<_PostcardsMapView> {
                     ),
                   ),
                 ),
+              // Courier-helper FAB sits top-right; pops a bottom
+              // sheet that asks where the user is going and lists
+              // postcards heading toward the same area.
+              if (_mapInitialized)
+                Positioned(
+                  right: 12,
+                  top: 12,
+                  child: FloatingActionButton.small(
+                    heroTag: 'courier_helper',
+                    backgroundColor: theme.colorScheme.primary,
+                    foregroundColor: theme.colorScheme.onPrimary,
+                    onPressed: _openCourierHelper,
+                    tooltip: 'Help deliver — find postcards heading my way',
+                    child: const Icon(Icons.alt_route),
+                  ),
+                ),
+              // Floating preview for the currently-selected postcard.
+              if (selected != null)
+                Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: 16,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 480),
+                      child: _PostcardPreviewCard(
+                        postcard: selected,
+                        statusColor: _statusColor(selected.status),
+                        onClose: widget.onClearSelection,
+                        onOpen: widget.onOpenSelected,
+                        i18n: widget.i18n,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
       ],
     );
+  }
+
+  // ── Courier helper ──────────────────────────────────────────────
+
+  LatLng? _courierFrom;
+  LatLng? _courierTo;
+  String? _courierFromLabel;
+  String? _courierToLabel;
+
+  Future<void> _openCourierHelper() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          final theme = Theme.of(ctx);
+          final candidates = _courierTo == null
+              ? const <_CourierCandidate>[]
+              : _bestCandidates(_courierTo!);
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.6,
+            minChildSize: 0.35,
+            maxChildSize: 0.92,
+            builder: (_, scroll) => Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.outlineVariant,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Help deliver',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    'Pick where you are and where you are going. We\'ll show '
+                    'postcards heading near your destination.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.my_location, size: 16),
+                          label: Text(
+                            _courierFromLabel ?? 'I am here…',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onPressed: () async {
+                            final c = await Navigator.push<CityEntry>(
+                              ctx,
+                              MaterialPageRoute(
+                                builder: (_) => const CityPickerPage(),
+                              ),
+                            );
+                            if (c == null) return;
+                            setSheet(() {
+                              _courierFrom = LatLng(c.lat, c.lng);
+                              _courierFromLabel = c.city;
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.flag_outlined, size: 16),
+                          label: Text(
+                            _courierToLabel ?? 'Going to…',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          onPressed: () async {
+                            final c = await Navigator.push<CityEntry>(
+                              ctx,
+                              MaterialPageRoute(
+                                builder: (_) => const CityPickerPage(),
+                              ),
+                            );
+                            if (c == null) return;
+                            setSheet(() {
+                              _courierTo = LatLng(c.lat, c.lng);
+                              _courierToLabel = c.city;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (_courierTo == null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Text(
+                          'Set a destination to see candidates.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    )
+                  else if (candidates.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Text(
+                          'No postcards near $_courierToLabel yet.',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: ListView.separated(
+                        controller: scroll,
+                        itemCount: candidates.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (_, i) {
+                          final c = candidates[i];
+                          return ListTile(
+                            dense: true,
+                            leading: CircleAvatar(
+                              radius: 14,
+                              backgroundColor: _statusColor(c.postcard.status),
+                              child: const Icon(
+                                Icons.mail_outline,
+                                size: 14,
+                                color: Colors.white,
+                              ),
+                            ),
+                            title: Text(
+                              c.postcard.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              '${c.postcard.senderCallsign} → '
+                              '${c.postcard.recipientCallsign ?? '—'}'
+                              '   ·   ${c.distanceKm.toStringAsFixed(0)} km',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: () {
+                              Navigator.pop(ctx);
+                              widget.onPostcardTap(c.postcard);
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Score every postcard by straight-line distance from its first
+  /// recipient location to the courier's destination, return the top 30.
+  List<_CourierCandidate> _bestCandidates(LatLng dest) {
+    final scored = <_CourierCandidate>[];
+    for (final p in widget.postcards) {
+      final d = _destinationOf(p);
+      if (d == null) continue;
+      final km = LocationService().calculateDistance(
+        dest.latitude,
+        dest.longitude,
+        d.latitude,
+        d.longitude,
+      );
+      scored.add(_CourierCandidate(postcard: p, distanceKm: km));
+    }
+    scored.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+    return scored.take(30).toList();
   }
 
   // ── Journey overlay computation ─────────────────────────────────
@@ -1474,4 +1785,133 @@ class _SegmentPill extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Floating preview card shown over the map when a postcard is
+/// selected. Gives the title, From → To, and a path summary, plus
+/// "Close" / "Open" actions. Replaces the wide-screen right-pane
+/// detail panel, which the user found disruptive.
+class _PostcardPreviewCard extends StatelessWidget {
+  final Postcard postcard;
+  final Color statusColor;
+  final VoidCallback onClose;
+  final VoidCallback onOpen;
+  final I18nService i18n;
+
+  const _PostcardPreviewCard({
+    required this.postcard,
+    required this.statusColor,
+    required this.onClose,
+    required this.onOpen,
+    required this.i18n,
+  });
+
+  String _summary() {
+    final from = postcard.senderCallsign;
+    final to = postcard.recipientCallsign ?? '—';
+    final hops = postcard.stamps.length;
+    final hopsLabel = hops == 0
+        ? 'no hops yet'
+        : '$hops hop${hops == 1 ? '' : 's'}';
+    return '$from → $to · $hopsLabel';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      elevation: 6,
+      borderRadius: BorderRadius.circular(12),
+      color: theme.colorScheme.surface.withValues(alpha: 0.97),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 4,
+              height: 44,
+              margin: const EdgeInsets.only(right: 12, top: 2),
+              decoration: BoxDecoration(
+                color: statusColor,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    postcard.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _summary(),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: statusColor.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          i18n.t(postcard.status.replaceAll('-', '_')),
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: statusColor,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.open_in_new, size: 18),
+                  tooltip: 'Open',
+                  onPressed: onOpen,
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  tooltip: 'Close',
+                  onPressed: onClose,
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 32, minHeight: 32),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One row in the courier-helper bottom sheet's results list.
+class _CourierCandidate {
+  final Postcard postcard;
+  final double distanceKm;
+  const _CourierCandidate({required this.postcard, required this.distanceKm});
 }
