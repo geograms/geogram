@@ -5,6 +5,14 @@
 ### Fixes
 - Events browser: when the home-screen badge says an event needs attention, the user can now actually find it. Years that contain an event with unseen activity (pending access requests, new comments / likes, pending contributor uploads) are auto-expanded on entry, and the year header carries a small red dot when collapsed — previously only the most-recent year was expanded, so an attention item from a prior year was hidden behind a chevron with no indicator.
 - Event tile badge: now refreshes live. The tile subscribes to `NowItemEvent` / `NowGroupRemoveEvent` for its own event id, so the dot appears the moment a new comment / like / contribution lands and disappears the moment the owner clears them — instead of staying stale until the page is reopened.
+- Postcards browser: the right-pane detail panel no longer auto-grabs a third of the screen on entry — selection now requires an explicit marker tap. Markers stacking at high zoom is fixed by bumping cluster `maxZoom` to 18 and shrinking marker / cluster radii so coincident postcards always group into a single count bubble.
+- Postcards map: arrows now draw for brand-new postcards with no carrier stamps yet — a synthetic "pickup" hop at the user's current GPS fix anchors the journey when the local user is the sender, so the faded arrows to each possible destination appear immediately.
+
+### Changes
+- Postcards map UX: tapping a marker shows a floating preview card (status pill, title, "From → To · N hops", Open / Close) instead of the old sidebar; wide and narrow layouts now share the same flow.
+- Postcards map: camera glides between selections via a 600 ms `easeInOutCubic` animation instead of snapping. Cluster bubbles are heat-coloured (green → red, sized by `sqrt(count)`) so the courier sees pile-ups at a glance; counts above 999 render compact ("1.2k").
+- Postcards courier helper: new "alt_route" FAB opens a draggable sheet — set "I am here" + "Going to" via the city picker, and the panel ranks every loaded postcard by straight-line distance to the destination and lets you tap straight onto the best candidate.
+- Postcards seeding: a standalone "Inject samples" button now lives in the AppBar (no longer hidden behind a debug menu) and writes 2000 synthetic postcards across Portuguese cities for visual map testing, with progress logging.
 
 ## 2026-04-26 - v1.39.0-beta.12
 
