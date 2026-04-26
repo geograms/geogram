@@ -1,5 +1,15 @@
 # Geogram Desktop Changelog
 
+## 2026-04-26 - v1.39.0-beta.14
+
+### Fixes
+- File browser thumbnails: opening a folder full of HD videos no longer crashes the app. The picker used to fire `VideoMetadataExtractor.generateThumbnail` synchronously per visible tile during `build`, spawning one `media_kit` Player instance for every video at once — N parallel video files getting opened into RAM is what OOM-killed geogram on phones. Generation is now funneled through a new `ThumbnailGeneratorService` singleton that processes one request at a time and yields between each so the UI thread stays responsive.
+- File browser thumbnails: hard size cap before generation. Images > 50 MB and videos > 500 MB are skipped — the picker shows the generic file icon instead of trying to decode a 4 GB recording. Avoids the worst single-file OOMs (`Player.open` on a multi-GB file can't be made safe regardless of queue depth).
+
+### Changes
+- New `ThumbnailGeneratorService` registers itself with the Task Monitor (`Settings → Tasks` shows "Thumbnail Generator") via `MonitoredIsolateHandle`, reporting `running` while a thumbnail is in flight and `idle` between requests, with success / failure counters per file. Pause / resume from the monitor is supported because it's a non-critical background job.
+- Picker thumbnail loading is now fire-and-forget — `_loadThumbnail` returns immediately and the `.then(...)` updates state when the result lands, instead of awaiting on the build path.
+
 ## 2026-04-26 - v1.39.0-beta.13
 
 ### Fixes

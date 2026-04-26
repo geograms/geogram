@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
@@ -17,7 +16,7 @@ import '../services/mirror_auto_sync_service.dart';
 import '../services/profile_storage.dart';
 import '../services/recent_files_service.dart';
 import '../services/sync_version_service.dart';
-import '../util/video_metadata_extractor.dart';
+import '../services/thumbnail_generator_service.dart';
 
 /// Sort mode for file/folder listing
 enum FileSortMode {
@@ -983,68 +982,25 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     return ext == 'mp4';  // Only mp4 for now, as it's most reliable
   }
 
-  Future<void> _loadThumbnail(FileSystemItem item) async {
+  /// Request a thumbnail through [ThumbnailGeneratorService]. The
+  /// service serializes generation across the whole app, applies a
+  /// hard size cap, and reports progress through the Task Monitor —
+  /// so opening a folder of large videos no longer spawns N parallel
+  /// `media_kit` players on the UI thread.
+  void _loadThumbnail(FileSystemItem item) {
     if (_thumbnailCache.containsKey(item.path)) return;
     if (_loadingThumbnails.contains(item.path)) return;
-
     _loadingThumbnails.add(item.path);
-
-    if (_isImageFile(item.name)) {
-      // Images use the file directly as thumbnail
-      _thumbnailCache[item.path] = item.path;
-      // Defer setState to avoid calling it during build
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) setState(() {});
-      });
-    } else if (_isVideoFile(item.name)) {
-      // Check persistent cache first
-      if (_cacheInitialized) {
-        final hasCached = await _cacheService.hasThumbnail(item.path, item.modified);
-        if (hasCached) {
-          final cachedPath = await _cacheService.getThumbnailTempPath(item.path);
-          if (cachedPath != null) {
-            _thumbnailCache[item.path] = cachedPath;
-            _loadingThumbnails.remove(item.path);
-            if (mounted) setState(() {});
-            return;
-          }
-        }
-      }
-
-      // Generate video thumbnail
-      final tempDir = Directory.systemTemp;
-      final outputPath = '${tempDir.path}/thumb_${item.name.hashCode}.png';
-
-      final thumbPath = await VideoMetadataExtractor.generateThumbnail(
-        item.path,
-        outputPath,
-        atSeconds: 1,
-      );
-
+    // Fire and forget — the readyStream listener (set up in
+    // initState) calls setState when the result lands.
+    ThumbnailGeneratorService()
+        .requestThumbnail(item.path, modified: item.modified)
+        .then((thumbPath) {
+      if (!mounted) return;
       _thumbnailCache[item.path] = thumbPath;
-
-      // Save to persistent cache
-      if (_cacheInitialized && thumbPath != null) {
-        try {
-          final thumbFile = File(thumbPath);
-          if (await thumbFile.exists()) {
-            final bytes = await thumbFile.readAsBytes();
-            await _cacheService.saveThumbnail(
-              item.path,
-              Uint8List.fromList(bytes),
-              item.modified,
-              extension: 'png',
-            );
-          }
-        } catch (_) {
-          // Ignore thumbnail cache errors
-        }
-      }
-
-      if (mounted) setState(() {});
-    }
-
-    _loadingThumbnails.remove(item.path);
+      _loadingThumbnails.remove(item.path);
+      setState(() {});
+    });
   }
 
   Widget _buildItemThumbnail(FileSystemItem item, ThemeData theme, {double size = 44}) {
