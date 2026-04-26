@@ -628,7 +628,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
           _selectedFiles[folder] = changes.map((c) => c.path).toSet();
           for (final change in changes) {
             final key = '$folder:${change.path}';
-            _fileDirections[key] = change.type != FileChangeType.upload;
+            _fileDirections[key] = change.type != FileChangeType.upload &&
+                change.type != FileChangeType.deleteRemote;
           }
         }
       } catch (e) {
@@ -1026,7 +1027,9 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       } else if (_directionFilter == false) {
         // Push only — select uploads (local-only files)
         _selectedFiles[folder] = changes
-            .where((c) => c.type == FileChangeType.upload)
+            .where((c) =>
+                c.type == FileChangeType.upload ||
+                c.type == FileChangeType.deleteRemote)
             .map((c) => c.path)
             .toSet();
         // Set direction to push for all
@@ -1039,7 +1042,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
             .where(
               (c) =>
                   c.type == FileChangeType.add ||
-                  c.type == FileChangeType.modify,
+                  c.type == FileChangeType.modify ||
+                  c.type == FileChangeType.delete,
             )
             .map((c) => c.path)
             .toSet();
@@ -1055,7 +1059,11 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
     final adds = changes.where((c) => c.type == FileChangeType.add).length;
     final mods = changes.where((c) => c.type == FileChangeType.modify).length;
     final dels = changes.where((c) => c.type == FileChangeType.delete).length;
-    final ups = changes.where((c) => c.type == FileChangeType.upload).length;
+    final ups = changes
+        .where((c) =>
+            c.type == FileChangeType.upload ||
+            c.type == FileChangeType.deleteRemote)
+        .length;
     final selected = _selectedFiles[folder] ?? {};
     final isExpanded = _expandedFolders.contains(folder);
 
@@ -1470,6 +1478,7 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
       case FileChangeType.delete:
         return Colors.red;
       case FileChangeType.upload:
+      case FileChangeType.deleteRemote:
         return Colors.blue;
     }
   }
@@ -1484,6 +1493,8 @@ class _DeviceSyncPageState extends State<DeviceSyncPage> {
         return 'Deleted on remote, still on local';
       case FileChangeType.upload:
         return 'Only on local';
+      case FileChangeType.deleteRemote:
+        return 'Deleted locally, still on remote';
     }
   }
 
@@ -1759,6 +1770,7 @@ class _DiffNode {
           dels = 1;
           break;
         case FileChangeType.upload:
+        case FileChangeType.deleteRemote:
           ups = 1;
           break;
       }

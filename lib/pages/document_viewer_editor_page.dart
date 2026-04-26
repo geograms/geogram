@@ -16,6 +16,10 @@ import 'package:flutter_highlighting/themes/github.dart';
 import 'package:pdfx/pdfx.dart';
 import 'package:path/path.dart' as path;
 
+import '../models/mirror_config.dart';
+import '../models/sync_file_version.dart';
+import '../services/app_service.dart';
+import '../services/sync_version_service.dart';
 import '../widgets/syntax_highlight_controller.dart';
 
 /// Document viewer type options.
@@ -452,7 +456,9 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   /// Save edited content to disk.
   Future<void> saveFile() async {
     try {
+      await _archiveBeforeSave();
       await File(widget.filePath).writeAsString(_editController.text);
+      await _clearTombstoneAfterSave();
       setState(() {
         _textContent = _editController.text;
         _hasUnsavedChanges = false;
@@ -471,7 +477,9 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
   /// Save edited content to disk without leaving edit mode (for Ctrl+S).
   Future<void> _saveInPlace() async {
     try {
+      await _archiveBeforeSave();
       await File(widget.filePath).writeAsString(_editController.text);
+      await _clearTombstoneAfterSave();
       setState(() {
         _textContent = _editController.text;
         _hasUnsavedChanges = false;
@@ -484,6 +492,42 @@ class DocumentViewerWidgetState extends State<DocumentViewerWidget> {
         );
       }
     }
+  }
+
+  ({String folder, String filePath})? _profileSyncPath() {
+    final storage = AppService().profileStorage;
+    if (storage == null) return null;
+    final basePath = storage.basePath;
+    if (widget.filePath != basePath && !path.isWithin(basePath, widget.filePath)) {
+      return null;
+    }
+    final relativePath = widget.filePath == basePath
+        ? ''
+        : path.relative(widget.filePath, from: basePath).replaceAll('\\', '/');
+    final slash = relativePath.indexOf('/');
+    if (slash <= 0 || slash == relativePath.length - 1) return null;
+    final folder = relativePath.substring(0, slash);
+    if (!kSyncableFolders.contains(folder)) return null;
+    return (folder: folder, filePath: relativePath.substring(slash + 1));
+  }
+
+  Future<void> _archiveBeforeSave() async {
+    final syncPath = _profileSyncPath();
+    if (syncPath == null) return;
+    await SyncVersionService.instance.archiveProfileFile(
+      folder: syncPath.folder,
+      filePath: syncPath.filePath,
+      reason: SyncVersionReason.modified,
+    );
+  }
+
+  Future<void> _clearTombstoneAfterSave() async {
+    final syncPath = _profileSyncPath();
+    if (syncPath == null) return;
+    await SyncVersionService.instance.removeTombstone(
+      syncPath.folder,
+      syncPath.filePath,
+    );
   }
 
   /// Cancel editing (prompts if there are unsaved changes).
@@ -1132,12 +1176,16 @@ class DocumentViewerEditorPage extends StatefulWidget {
   /// Read-only mode (default: false).
   final bool readOnly;
 
+  /// Called after a successful save when editing.
+  final VoidCallback? onSaved;
+
   const DocumentViewerEditorPage({
     super.key,
     required this.filePath,
     this.viewerType = DocumentViewerType.auto,
     this.title,
     this.readOnly = false,
+    this.onSaved,
   });
 
   @override
@@ -1157,6 +1205,7 @@ class _DocumentViewerEditorPageState extends State<DocumentViewerEditorPage> {
         editable: !widget.readOnly && DocumentViewerWidget.isEditableExtension(
           path.extension(widget.filePath).replaceFirst('.', ''),
         ),
+        onSaved: widget.onSaved,
       ),
     );
   }

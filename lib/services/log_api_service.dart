@@ -96,7 +96,9 @@ import 'alert_sharing_service.dart';
 import 'mirror_auto_sync_service.dart';
 import 'mirror_config_service.dart';
 import 'mirror_sync_service.dart';
+import 'sync_version_service.dart';
 import '../models/mirror_config.dart';
+import '../models/sync_file_version.dart';
 import 'encrypted_storage_stub.dart' if (dart.library.ui) 'encrypted_storage_service.dart';
 import 'place_feedback_service.dart';
 import 'place_service.dart';
@@ -127,10 +129,8 @@ import '../wallet/models/debt_ledger.dart';
 import '../wallet/models/debt_entry.dart';
 import '../wallet/models/debt_summary.dart';
 import '../util/feedback_comment_utils.dart';
-import '../util/feedback_folder_utils.dart';
 import '../p2p/p2p_service.dart';
 import '../transfer/models/transfer_models.dart';
-import '../transfer/models/transfer_offer.dart';
 import '../transfer/services/transfer_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
 import '../pages/transfer_send_page.dart';
@@ -143,7 +143,6 @@ import '../server/mixins/contributor_submit_mixin.dart';
 import '../models/shared_folder.dart';
 import 'shared_folder_service.dart';
 import 'groups_service.dart';
-import 'hotspot_portal_service.dart';
 import '../models/app.dart';
 import '../tracker/models/tracker_visibility.dart';
 import '../work/models/workspace.dart';
@@ -19671,6 +19670,11 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       return await _handleMirrorUpload(request, headers);
     }
 
+    // POST /api/mirror/delete - Delete a file from peer
+    if (urlPath == 'api/mirror/delete' && request.method == 'POST') {
+      return await _handleMirrorDelete(request, headers);
+    }
+
     // POST /api/mirror/pair - Reciprocal pairing
     if (urlPath == 'api/mirror/pair' && request.method == 'POST') {
       return await _handleMirrorPair(request, headers);
@@ -19897,11 +19901,16 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
 
       MirrorManifest manifest;
       if (!folderExists) {
+        final tombstones = await SyncVersionService.instance.listTombstones(
+          folder,
+          storage: AppService().profileStorage,
+        );
         manifest = MirrorManifest(
           folder: folder,
           totalFiles: 0,
           totalBytes: 0,
           files: [],
+          tombstones: tombstones,
           generatedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
         );
       } else {
@@ -19926,6 +19935,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           'total_files': manifest.totalFiles,
           'total_bytes': manifest.totalBytes,
           'files': manifest.files.map((f) => f.toJson()).toList(),
+          'tombstones': manifest.tombstones.map((t) => t.toJson()).toList(),
           'generated_at': manifest.generatedAt,
         }),
         headers: headers,
@@ -20005,11 +20015,16 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           final exists = await io.Directory(folderPath).exists();
           MirrorManifest manifest;
           if (!exists) {
+            final tombstones = await SyncVersionService.instance.listTombstones(
+              folder,
+              storage: storage,
+            );
             manifest = MirrorManifest(
               folder: folder,
               totalFiles: 0,
               totalBytes: 0,
               files: const [],
+              tombstones: tombstones,
               generatedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
             );
           } else {
@@ -20024,6 +20039,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
             'total_files': manifest.totalFiles,
             'total_bytes': manifest.totalBytes,
             'files': manifest.files.map((f) => f.toJson()).toList(),
+            'tombstones': manifest.tombstones.map((t) => t.toJson()).toList(),
             'generated_at': manifest.generatedAt,
           };
         }
@@ -20128,10 +20144,18 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         );
       }
 
-      // Read file from the peer callsign's folder on disk
-      Uint8List bytes;
-      final file = io.File(fullPath);
-      if (!await file.exists()) {
+      // Read file from profile storage when available.
+      final storage = AppService().profileStorage;
+      Uint8List? bytes = storage != null
+          ? await storage.readBytes('$folder/$filePath')
+          : null;
+      if (bytes == null) {
+        final file = io.File(fullPath);
+        if (await file.exists()) {
+          bytes = await file.readAsBytes();
+        }
+      }
+      if (bytes == null) {
         return shelf.Response.notFound(
           jsonEncode({
             'success': false,
@@ -20141,7 +20165,6 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           headers: headers,
         );
       }
-      bytes = await file.readAsBytes();
 
       // Compute SHA1
       final sha1Hash = sha1.convert(bytes).toString();
@@ -20312,10 +20335,39 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         }
       }
 
-      // Write file to the peer callsign's folder on disk
-      final file = io.File(fullPath);
-      await file.parent.create(recursive: true);
-      await file.writeAsBytes(bodyBytes);
+      final storage = AppService().profileStorage;
+      if (storage != null) {
+        await SyncVersionService.instance.archiveProfileFile(
+          folder: folder,
+          filePath: filePath,
+          reason: SyncVersionReason.modified,
+          storage: storage,
+        );
+        await storage.writeBytes('$folder/$filePath', bodyBytes);
+        await SyncVersionService.instance.removeTombstone(
+          folder,
+          filePath,
+          storage: storage,
+        );
+      } else {
+        final file = io.File(fullPath);
+        await file.parent.create(recursive: true);
+        await SyncVersionService.instance.archiveFilesystemFile(
+          folder: folder,
+          filePath: filePath,
+          fullPath: fullPath,
+          reason: SyncVersionReason.modified,
+        );
+        await file.writeAsBytes(bodyBytes);
+        await SyncVersionService.instance.removeTombstone(folder, filePath);
+      }
+
+      if (folder == 'shared') {
+        _fireSharedSyncActivity(
+          summary: 'File changed: $filePath',
+          callsign: tokenData.peerCallsign,
+        );
+      }
 
       return shelf.Response.ok(
         jsonEncode({
@@ -20336,6 +20388,166 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         headers: headers,
       );
     }
+  }
+
+  /// Handle POST /api/mirror/delete - Delete a file from peer.
+  Future<shelf.Response> _handleMirrorDelete(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final filePath = request.url.queryParameters['path'];
+      final token = request.url.queryParameters['token'];
+      final deletedAtParam = request.url.queryParameters['deleted_at'];
+
+      if (token == null || token.isEmpty) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      if (filePath == null || filePath.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing path parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      final mirrorService = MirrorSyncService.instance;
+      final tokenData = mirrorService.validateToken(token);
+      if (tokenData == null) {
+        return shelf.Response(
+          401,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Invalid or expired token',
+            'code': 'INVALID_TOKEN',
+          }),
+          headers: headers,
+        );
+      }
+
+      final folderParam = request.url.queryParameters['folder'];
+      final folder = tokenData.folder == MirrorSyncService.sessionFolder
+          ? folderParam
+          : tokenData.folder;
+      if (folder == null || folder.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing folder parameter for session token',
+            'code': 'INVALID_REQUEST',
+          }),
+          headers: headers,
+        );
+      }
+
+      final callsignDir = StorageConfig().getCallsignDir(tokenData.peerCallsign);
+      final folderPath = '$callsignDir/$folder';
+      final fullPath = '$folderPath/$filePath';
+      final normalizedPath = path.normalize(fullPath);
+      if (!normalizedPath.startsWith(path.normalize(folderPath))) {
+        return shelf.Response(
+          403,
+          body: jsonEncode({
+            'success': false,
+            'error': 'Invalid path',
+            'code': 'PATH_TRAVERSAL',
+          }),
+          headers: headers,
+        );
+      }
+
+      final storage = AppService().profileStorage;
+      SyncFileVersion? version;
+      var existed = false;
+      if (storage != null) {
+        existed = await storage.exists('$folder/$filePath');
+        if (existed) {
+          version = await SyncVersionService.instance.archiveProfileFile(
+            folder: folder,
+            filePath: filePath,
+            reason: SyncVersionReason.deleted,
+            storage: storage,
+          );
+          await storage.delete('$folder/$filePath');
+        }
+      } else {
+        final file = io.File(fullPath);
+        existed = await file.exists();
+        if (existed) {
+          version = await SyncVersionService.instance.archiveFilesystemFile(
+            folder: folder,
+            filePath: filePath,
+            fullPath: fullPath,
+            reason: SyncVersionReason.deleted,
+          );
+          await file.delete();
+        }
+      }
+
+      await SyncVersionService.instance.recordTombstone(
+        folder: folder,
+        filePath: filePath,
+        size: version?.size,
+        sha1Hash: version?.sha1 ?? request.url.queryParameters['sha1'],
+        deletedAt: int.tryParse(deletedAtParam ?? ''),
+        storage: storage,
+      );
+
+      if (folder == 'shared') {
+        _fireSharedSyncActivity(
+          summary: 'File deleted: $filePath',
+          callsign: tokenData.peerCallsign,
+        );
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'path': filePath,
+          'deleted': existed,
+          if (deletedAtParam != null) 'deleted_at': deletedAtParam,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror delete error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  void _fireSharedSyncActivity({
+    required String summary,
+    required String callsign,
+  }) {
+    EventBus().fire(
+      NowItemEvent(
+        id: 'shared:$summary:${DateTime.now().toIso8601String()}',
+        appType: 'shared',
+        sourceId: 'shared',
+        sourceName: 'Shared files',
+        callsign: callsign,
+        summary: summary,
+        priority: NowPriority.sharedFile,
+      ),
+    );
   }
 
   /// Handle POST /api/mirror/pair - Reciprocal pairing
@@ -21211,7 +21423,12 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           }
 
           // Perform sync
-          final result = await mirrorService.syncFolder(peerUrl, folder, peerCallsign: peerCallsign);
+          final result = await mirrorService.syncFolder(
+            peerUrl,
+            folder,
+            peerCallsign: peerCallsign,
+            storage: AppService().profileStorage,
+          );
 
           return shelf.Response.ok(
             jsonEncode({
@@ -21220,6 +21437,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
               'files_added': result.filesAdded,
               'files_modified': result.filesModified,
               'files_deleted': result.filesDeleted,
+              'files_uploaded': result.filesUploaded,
               'bytes_transferred': result.bytesTransferred,
               'duration_ms': result.duration.inMilliseconds,
             }),
@@ -21315,6 +21533,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
                 'peers_skipped': 0,
                 'total_added': 0,
                 'total_modified': 0,
+                'total_deleted': 0,
                 'total_uploaded': 0,
                 'errors': 0,
                 'details': [],
@@ -21328,6 +21547,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           var peersSkipped = 0;
           var totalAdded = 0;
           var totalModified = 0;
+          var totalDeleted = 0;
           var totalUploaded = 0;
           var errors = 0;
           final details = <Map<String, dynamic>>[];
@@ -21353,12 +21573,15 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
                   peerCallsign: peer.callsign,
                   syncStyle: style,
                   ignorePatterns: appConfig.ignorePatterns,
+                  excludeRules: configService.config?.excludeRules ?? const [],
+                  storage: AppService().profileStorage,
                 );
                 final detail = <String, dynamic>{
                   'peer': peer.callsign,
                   'app': appId,
                   'added': result.filesAdded,
                   'modified': result.filesModified,
+                  'deleted': result.filesDeleted,
                   'uploaded': result.filesUploaded,
                 };
                 if (!result.success) {
@@ -21367,6 +21590,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
                 } else {
                   totalAdded += result.filesAdded;
                   totalModified += result.filesModified;
+                  totalDeleted += result.filesDeleted;
                   totalUploaded += result.filesUploaded;
                   peerHadSync = true;
                 }
@@ -21392,6 +21616,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
               'peers_skipped': peersSkipped,
               'total_added': totalAdded,
               'total_modified': totalModified,
+              'total_deleted': totalDeleted,
               'total_uploaded': totalUploaded,
               'errors': errors,
               'details': details,
@@ -21420,6 +21645,8 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
               'enabled': config.enabled,
               'device_id': config.deviceId,
               'device_name': config.deviceName,
+              'versioning_enabled': config.versioningEnabled,
+              'version_retention_days': config.versionRetentionDays,
               'peers': config.peers.map((p) => {
                 'peer_id': p.peerId,
                 'name': p.name,
@@ -21432,6 +21659,65 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
                   'state': v.state.name,
                 })),
               }).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_versioning_set':
+          final enabledParam = params['enabled'];
+          final retentionParam = params['retention_days'];
+          final enabled = enabledParam == null
+              ? (MirrorConfigService.instance.config?.versioningEnabled ?? true)
+              : enabledParam == true || enabledParam == 'true';
+          final retentionDays = retentionParam is int
+              ? retentionParam
+              : int.tryParse(retentionParam?.toString() ?? '') ??
+                  (MirrorConfigService.instance.config?.versionRetentionDays ??
+                      30);
+          await MirrorConfigService.instance.setVersioning(
+            enabled: enabled,
+            retentionDays: retentionDays,
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'versioning_enabled': enabled,
+              'version_retention_days': retentionDays,
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_versions_list':
+          final versions = await SyncVersionService.instance.listVersions(
+            folder: params['folder'] as String?,
+            filePath: params['path'] as String?,
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'versions': versions.map((v) => v.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_versions_restore':
+          final versionId = params['id'] as String?;
+          if (versionId == null || versionId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing id parameter',
+              }),
+              headers: headers,
+            );
+          }
+          final restored = await SyncVersionService.instance.restoreVersion(
+            versionId,
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': restored,
+              if (!restored) 'error': 'Version not found',
             }),
             headers: headers,
           );
@@ -21722,6 +22008,9 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
                 'mirror_remove_allowed_peer',
                 'mirror_sync_all',
                 'mirror_config',
+                'mirror_versioning_set',
+                'mirror_versions_list',
+                'mirror_versions_restore',
                 'mirror_auto_sync_status',
                 'mirror_auto_sync_trigger',
                 'mirror_relay_status',

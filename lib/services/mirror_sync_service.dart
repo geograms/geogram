@@ -21,11 +21,13 @@ import 'package:uuid/uuid.dart';
 import '../util/managed_http_client.dart';
 import '../util/nostr_event.dart';
 import '../util/nostr_crypto.dart';
+import '../models/sync_file_version.dart';
 import 'file_index_service.dart';
 import 'log_service.dart';
 import 'mirror_config_service.dart';
 import 'profile_service.dart';
 import 'profile_storage.dart';
+import 'sync_version_service.dart';
 import 'storage_config.dart';
 import '../models/mirror_config.dart';
 
@@ -138,6 +140,9 @@ class MirrorManifest {
   /// List of files with metadata
   final List<MirrorFileEntry> files;
 
+  /// Deletion markers still within retention.
+  final List<MirrorTombstone> tombstones;
+
   /// When the manifest was generated (Unix timestamp)
   final int generatedAt;
 
@@ -146,6 +151,7 @@ class MirrorManifest {
     required this.totalFiles,
     required this.totalBytes,
     required this.files,
+    this.tombstones = const [],
     required this.generatedAt,
   });
 
@@ -157,6 +163,12 @@ class MirrorManifest {
       files: (json['files'] as List)
           .map((e) => MirrorFileEntry.fromJson(e as Map<String, dynamic>))
           .toList(),
+      tombstones: (json['tombstones'] as List<dynamic>?)
+              ?.map((e) => MirrorTombstone.fromJson(
+                    e as Map<String, dynamic>,
+                  ))
+              .toList() ??
+          const [],
       generatedAt: json['generated_at'] as int,
     );
   }
@@ -166,6 +178,8 @@ class MirrorManifest {
     'total_files': totalFiles,
     'total_bytes': totalBytes,
     'files': files.map((f) => f.toJson()).toList(),
+    if (tombstones.isNotEmpty)
+      'tombstones': tombstones.map((t) => t.toJson()).toList(),
     'generated_at': generatedAt,
   };
 }
@@ -183,6 +197,9 @@ enum FileChangeType {
 
   /// File needs to be uploaded to remote (local newer or local-only)
   upload,
+
+  /// File should be deleted on the remote peer.
+  deleteRemote,
 }
 
 /// A detected change between local and remote folders
@@ -191,6 +208,7 @@ class FileChange {
   final String path;
   final MirrorFileEntry? remoteEntry;
   final MirrorFileEntry? localEntry;
+  final MirrorTombstone? tombstone;
   final int? localSize;
 
   const FileChange({
@@ -198,6 +216,7 @@ class FileChange {
     required this.path,
     this.remoteEntry,
     this.localEntry,
+    this.tombstone,
     this.localSize,
   });
 
@@ -221,6 +240,12 @@ class FileChange {
     type: FileChangeType.upload,
     path: localEntry.path,
     localEntry: localEntry,
+  );
+
+  factory FileChange.deleteRemote(MirrorTombstone tombstone) => FileChange(
+    type: FileChangeType.deleteRemote,
+    path: tombstone.path,
+    tombstone: tombstone,
   );
 }
 
@@ -819,6 +844,8 @@ class MirrorSyncService {
 
     fileIndex?.batchPutHashes(folder, cacheMisses);
     fileIndex?.pruneFolder(folder, currentPaths);
+    final tombstones =
+        await SyncVersionService.instance.listTombstones(folder, storage: storage);
 
     // Sort files by path for consistent ordering
     files.sort((a, b) => a.path.compareTo(b.path));
@@ -836,6 +863,7 @@ class MirrorSyncService {
       totalFiles: files.length,
       totalBytes: totalBytes,
       files: files,
+      tombstones: tombstones,
       generatedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
     );
   }
@@ -1137,6 +1165,16 @@ class MirrorSyncService {
         .where((r) => r.mode == ExcludeMode.modifiedOnly)
         .map((r) => stripFolder(r.pattern))
         .toList();
+    final remoteTombstonesByPath = {
+      for (final tombstone in remote.tombstones) tombstone.path: tombstone,
+    };
+    final localTombstones = await SyncVersionService.instance.listTombstones(
+      folder,
+      storage: storage,
+    );
+    final localTombstonesByPath = {
+      for (final tombstone in localTombstones) tombstone.path: tombstone,
+    };
 
     int filesProcessed = 0;
     int totalEntries = 0;
@@ -1346,13 +1384,32 @@ class MirrorSyncService {
       if (isIgnored(remoteFile.path, alwaysExclude)) continue;
 
       final local = localFiles.remove(remoteFile.path);
+      final localTombstone = localTombstonesByPath[remoteFile.path];
 
       if (local == null) {
-        if (syncStyle != SyncStyle.sendOnly) {
+        if (localTombstone != null &&
+            localTombstone.deletedAt >= remoteFile.mtime &&
+            syncStyle != SyncStyle.receiveOnly) {
+          changes.add(FileChange.deleteRemote(localTombstone));
+        } else if (syncStyle != SyncStyle.sendOnly) {
           // File doesn't exist locally - add (download from remote)
           changes.add(FileChange.add(remoteFile));
         }
       } else {
+        final remoteTombstone = remoteTombstonesByPath[remoteFile.path];
+        if (remoteTombstone != null &&
+            remoteTombstone.deletedAt >= local.mtime &&
+            syncStyle != SyncStyle.sendOnly) {
+          changes.add(FileChange.delete(remoteFile.path, local.size));
+          continue;
+        }
+        if (localTombstone != null &&
+            localTombstone.deletedAt >= remoteFile.mtime &&
+            syncStyle != SyncStyle.receiveOnly) {
+          changes.add(FileChange.deleteRemote(localTombstone));
+          continue;
+        }
+
         if (local.size == remoteFile.size && local.mtime == remoteFile.mtime) {
           // Fast path: unchanged by metadata, no need to hash.
           continue;
@@ -1433,6 +1490,23 @@ class MirrorSyncService {
       }
     }
 
+    // Remaining local files don't exist in remote. A remote tombstone means the
+    // peer intentionally deleted the file, so delete locally when the tombstone
+    // is newer than our copy.
+    final tombstonedLocalPaths = <String>{};
+    for (final entry in localFiles.entries) {
+      final remoteTombstone = remoteTombstonesByPath[entry.key];
+      if (remoteTombstone != null &&
+          remoteTombstone.deletedAt >= entry.value.mtime &&
+          syncStyle != SyncStyle.sendOnly) {
+        changes.add(FileChange.delete(entry.key, entry.value.size));
+        tombstonedLocalPaths.add(entry.key);
+      }
+    }
+    for (final removedPath in tombstonedLocalPaths) {
+      localFiles.remove(removedPath);
+    }
+
     // Remaining local files don't exist in remote
     if (deleteLocalOnly) {
       for (final entry in localFiles.entries) {
@@ -1442,6 +1516,14 @@ class MirrorSyncService {
         syncStyle == SyncStyle.sendOnly) {
       // Local-only files should be uploaded to remote.
       for (final entry in localFiles.entries) {
+        final remoteTombstone = remoteTombstonesByPath[entry.key];
+        if (remoteTombstone != null &&
+            remoteTombstone.deletedAt >= entry.value.mtime) {
+          if (syncStyle != SyncStyle.sendOnly) {
+            changes.add(FileChange.delete(entry.key, entry.value.size));
+          }
+          continue;
+        }
         changes.add(
           FileChange.upload(
             MirrorFileEntry(
@@ -1510,6 +1592,12 @@ class MirrorSyncService {
 
       // Filesystem path: stream directly to file (no full-body buffer)
       final targetPath = '$localPath/$filePath';
+      await SyncVersionService.instance.archiveFilesystemFile(
+        folder: folder,
+        filePath: filePath,
+        fullPath: targetPath,
+        reason: SyncVersionReason.modified,
+      );
       final result = await streamDownloadToFile(
         url,
         targetPath,
@@ -1534,6 +1622,7 @@ class MirrorSyncService {
         return false;
       }
 
+      await SyncVersionService.instance.removeTombstone(folder, filePath);
       return true;
     } catch (e) {
       LogService().log('MirrorSync: File download failed: $filePath: $e');
@@ -1598,7 +1687,18 @@ class MirrorSyncService {
         }
       }
 
+      await SyncVersionService.instance.archiveProfileFile(
+        folder: folder,
+        filePath: filePath,
+        reason: SyncVersionReason.modified,
+        storage: storage,
+      );
       await storage.writeBytes('$folder/$filePath', Uint8List.fromList(bytes));
+      await SyncVersionService.instance.removeTombstone(
+        folder,
+        filePath,
+        storage: storage,
+      );
       return true;
     });
   }
@@ -1661,6 +1761,38 @@ class MirrorSyncService {
       return body['success'] == true;
     } catch (e) {
       LogService().log('MirrorSync: File upload failed: $filePath: $e');
+      return false;
+    }
+  }
+
+  /// Delete a single file on a peer and create a remote tombstone.
+  Future<bool> deleteRemoteFile(
+    String peerUrl,
+    String folder,
+    String filePath,
+    String token, {
+    MirrorTombstone? tombstone,
+  }) async {
+    try {
+      final params = {
+        'path': filePath,
+        'token': token,
+        'folder': folder,
+        if (tombstone != null) 'deleted_at': tombstone.deletedAt.toString(),
+        if (tombstone?.sha1 != null) 'sha1': tombstone!.sha1!,
+      };
+      final url = _buildPeerUri(peerUrl, '/api/mirror/delete', params);
+      final response = await http.post(url);
+      if (response.statusCode != 200) {
+        LogService().log(
+          'MirrorSync: Remote delete failed: $filePath (${response.statusCode})',
+        );
+        return false;
+      }
+      final body = jsonDecode(response.body);
+      return body['success'] == true;
+    } catch (e) {
+      LogService().log('MirrorSync: Remote delete failed: $filePath: $e');
       return false;
     }
   }
@@ -1780,13 +1912,40 @@ class MirrorSyncService {
             if (storage != null) {
               final exists = await storage.exists('$folder/${change.path}');
               if (exists) {
+                final version =
+                    await SyncVersionService.instance.archiveProfileFile(
+                  folder: folder,
+                  filePath: change.path,
+                  reason: SyncVersionReason.deleted,
+                  storage: storage,
+                );
                 await storage.delete('$folder/${change.path}');
+                await SyncVersionService.instance.recordTombstone(
+                  folder: folder,
+                  filePath: change.path,
+                  size: version?.size ?? change.localSize,
+                  sha1Hash: version?.sha1,
+                  storage: storage,
+                );
                 filesDeleted++;
               }
             } else {
               final file = File('$localPath/${change.path}');
               if (await file.exists()) {
+                final version =
+                    await SyncVersionService.instance.archiveFilesystemFile(
+                  folder: folder,
+                  filePath: change.path,
+                  fullPath: file.path,
+                  reason: SyncVersionReason.deleted,
+                );
                 await file.delete();
+                await SyncVersionService.instance.recordTombstone(
+                  folder: folder,
+                  filePath: change.path,
+                  size: version?.size ?? change.localSize,
+                  sha1Hash: version?.sha1,
+                );
                 filesDeleted++;
               }
             }
@@ -1808,6 +1967,19 @@ class MirrorSyncService {
             if (success) {
               filesUploaded++;
               bytesUploaded += change.localEntry?.size ?? 0;
+            }
+            break;
+
+          case FileChangeType.deleteRemote:
+            final success = await deleteRemoteFile(
+              peerUrl,
+              folder,
+              change.path,
+              token,
+              tombstone: change.tombstone,
+            );
+            if (success) {
+              filesUploaded++;
             }
             break;
         }

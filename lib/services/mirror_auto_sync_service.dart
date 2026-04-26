@@ -15,7 +15,9 @@ import 'package:http/http.dart' as http;
 
 import '../models/mirror_config.dart';
 import '../models/monitored_task.dart';
+import '../util/event_bus.dart';
 import '../util/task_monitor_helpers.dart';
+import 'app_service.dart';
 import 'log_service.dart';
 import 'mirror_config_service.dart';
 import 'mirror_sync_service.dart';
@@ -24,6 +26,7 @@ import 'mirror_sync_service.dart';
 class MirrorSyncAllResult {
   final int filesAdded;
   final int filesModified;
+  final int filesDeleted;
   final int filesUploaded;
   final int errors;
   final int peersSkipped;
@@ -33,6 +36,7 @@ class MirrorSyncAllResult {
   const MirrorSyncAllResult({
     this.filesAdded = 0,
     this.filesModified = 0,
+    this.filesDeleted = 0,
     this.filesUploaded = 0,
     this.errors = 0,
     this.peersSkipped = 0,
@@ -43,6 +47,7 @@ class MirrorSyncAllResult {
   Map<String, dynamic> toJson() => {
         'files_added': filesAdded,
         'files_modified': filesModified,
+        'files_deleted': filesDeleted,
         'files_uploaded': filesUploaded,
         'errors': errors,
         'peers_skipped': peersSkipped,
@@ -64,6 +69,7 @@ class MirrorAutoSyncService {
   bool _active = false;
   int _intervalMinutes = 15;
   DateTime? _lastSyncAt;
+  Timer? _requestedSyncTimer;
 
   /// Whether the auto-sync timer is currently active.
   bool get isActive => _active;
@@ -94,10 +100,32 @@ class MirrorAutoSyncService {
   void stop() {
     _timer?.cancel();
     _timer = null;
+    _requestedSyncTimer?.cancel();
+    _requestedSyncTimer = null;
     _configSubscription?.cancel();
     _configSubscription = null;
     _active = false;
     LogService().log('MirrorAutoSync: stopped');
+  }
+
+  /// Schedule an automatic sync shortly after a local file change.
+  void requestSyncSoon({
+    String reason = 'local change',
+    Duration debounce = const Duration(seconds: 5),
+  }) {
+    final config = MirrorConfigService.instance.config;
+    if (config == null ||
+        !config.enabled ||
+        !config.preferences.autoSync ||
+        config.peers.isEmpty) {
+      return;
+    }
+    _requestedSyncTimer?.cancel();
+    _requestedSyncTimer = Timer(debounce, () async {
+      if (_isSyncing) return;
+      LogService().log('MirrorAutoSync: requested sync ($reason)');
+      await syncAllPeers();
+    });
   }
 
   /// Evaluate whether the timer should be running based on config.
@@ -147,6 +175,7 @@ class MirrorAutoSyncService {
     LogService().log(
       'MirrorAutoSync: sync done — '
       '+${result.filesAdded} new, ~${result.filesModified} updated, '
+      '-${result.filesDeleted} deleted, '
       '↑${result.filesUploaded} uploaded, ${result.errors} error(s)',
     );
   }
@@ -200,10 +229,12 @@ class MirrorAutoSyncService {
 
     final configService = MirrorConfigService.instance;
     final syncService = MirrorSyncService.instance;
+    final storage = AppService().profileStorage;
     final peers = configService.config?.peers ?? [];
 
     var totalAdded = 0;
     var totalModified = 0;
+    var totalDeleted = 0;
     var totalUploaded = 0;
     var errors = 0;
     var skipped = 0;
@@ -250,6 +281,7 @@ class MirrorAutoSyncService {
               ignorePatterns: appConfig.ignorePatterns,
               excludeRules: configService.config?.excludeRules ?? const [],
               onProgress: onProgress,
+              storage: storage,
             );
 
             final detail = <String, dynamic>{
@@ -257,6 +289,7 @@ class MirrorAutoSyncService {
               'app': appId,
               'added': result.filesAdded,
               'modified': result.filesModified,
+              'deleted': result.filesDeleted,
               'uploaded': result.filesUploaded,
               if (usedRelay) 'relay': true,
             };
@@ -264,7 +297,15 @@ class MirrorAutoSyncService {
             if (result.success) {
               totalAdded += result.filesAdded;
               totalModified += result.filesModified;
+              totalDeleted += result.filesDeleted;
               totalUploaded += result.filesUploaded;
+              if (appId == 'shared' &&
+                  (result.filesAdded +
+                          result.filesModified +
+                          result.filesDeleted) >
+                      0) {
+                _notifySharedFolderChanged(peer, result);
+              }
               peerHadSync = true;
             } else {
               detail['error'] = result.error;
@@ -293,11 +334,34 @@ class MirrorAutoSyncService {
     return MirrorSyncAllResult(
       filesAdded: totalAdded,
       filesModified: totalModified,
+      filesDeleted: totalDeleted,
       filesUploaded: totalUploaded,
       errors: errors,
       peersSkipped: skipped,
       peersSynced: peersSynced,
       details: details,
+    );
+  }
+
+  void _notifySharedFolderChanged(MirrorPeer peer, SyncResult result) {
+    final changed =
+        result.filesAdded + result.filesModified + result.filesDeleted;
+    if (changed <= 0) return;
+    final parts = <String>[
+      if (result.filesAdded > 0) '${result.filesAdded} added',
+      if (result.filesModified > 0) '${result.filesModified} changed',
+      if (result.filesDeleted > 0) '${result.filesDeleted} deleted',
+    ];
+    EventBus().fire(
+      NowItemEvent(
+        id: 'shared:${peer.peerId}:${DateTime.now().toIso8601String()}',
+        appType: 'shared',
+        sourceId: 'shared',
+        sourceName: 'Shared files',
+        callsign: peer.callsign,
+        summary: parts.join(', '),
+        priority: NowPriority.sharedFile,
+      ),
     );
   }
 

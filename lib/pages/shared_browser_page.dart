@@ -16,6 +16,8 @@ import '../services/devices_service.dart';
 import '../services/i18n_service.dart';
 import '../services/groups_service.dart';
 import '../services/contact_service.dart';
+import '../services/mirror_auto_sync_service.dart';
+import '../services/mirror_config_service.dart';
 import '../services/profile_storage.dart';
 import '../services/profile_service.dart';
 import '../services/shared_folder_service.dart';
@@ -309,6 +311,7 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     final titleController = TextEditingController();
     final descController = TextEditingController();
     String? selectedPath;
+    var syncAcrossDevices = true;
     String visibility = 'public';
     List<Group> availableGroups = [];
     final selectedGroups = <String>{};
@@ -342,28 +345,44 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                     ),
                     const SizedBox(height: 16),
 
-                    // Folder picker
-                    OutlinedButton.icon(
-                      onPressed: () async {
-                        try {
-                          final path =
-                              await FilePicker.platform.getDirectoryPath(
-                            dialogTitle: _i18n.t('select_folder'),
-                          );
-                          if (path != null) {
-                            setDialogState(() => selectedPath = path);
-                          }
-                        } catch (e) {
-                          // Ignore picker errors
-                        }
-                      },
-                      icon: const Icon(Icons.folder_open),
-                      label: Text(_i18n.t('choose_folder')),
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(double.infinity, 48),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Sync across devices'),
+                      subtitle: const Text(
+                        'Store this folder inside Geogram so device sync can keep it up to date.',
                       ),
+                      value: syncAcrossDevices,
+                      onChanged: (value) {
+                        setDialogState(() {
+                          syncAcrossDevices = value;
+                        });
+                      },
                     ),
-                    if (selectedPath != null) ...[
+                    const SizedBox(height: 16),
+
+                    if (!syncAcrossDevices) ...[
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          try {
+                            final path =
+                                await FilePicker.platform.getDirectoryPath(
+                              dialogTitle: _i18n.t('select_folder'),
+                            );
+                            if (path != null) {
+                              setDialogState(() => selectedPath = path);
+                            }
+                          } catch (e) {
+                            // Ignore picker errors
+                          }
+                        },
+                        icon: const Icon(Icons.folder_open),
+                        label: Text(_i18n.t('choose_folder')),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(double.infinity, 48),
+                        ),
+                      ),
+                    ],
+                    if (!syncAcrossDevices && selectedPath != null) ...[
                       const SizedBox(height: 8),
                       Container(
                         padding: const EdgeInsets.all(10),
@@ -469,18 +488,20 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
               FilledButton(
                 onPressed: () {
                   final title = titleController.text.trim();
-                  if (title.isEmpty || selectedPath == null) return;
+                  if (title.isEmpty) return;
+                  if (!syncAcrossDevices && selectedPath == null) return;
 
                   Navigator.pop(
                     context,
                     SharedFolder(
                       title: title,
-                      location: selectedPath!,
+                      location: syncAcrossDevices ? '' : selectedPath!,
                       visibility:
                           SharedFolderVisibility.fromValue(visibility),
                       allowedGroups: selectedGroups.toList(),
                       allowedReaders: allowedReaders.keys.toList(),
                       description: descController.text.trim(),
+                      syncEnabled: syncAcrossDevices,
                     ),
                   );
                 },
@@ -494,6 +515,12 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
 
     if (result != null) {
       await _service.save(result);
+      if (result.syncEnabled) {
+        await MirrorConfigService.instance.setEnabled(true);
+        MirrorAutoSyncService.instance.requestSyncSoon(
+          reason: 'shared folder added',
+        );
+      }
       await _loadFolders();
     }
   }
@@ -534,6 +561,11 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
 
     if (result != null) {
       await _service.update(result);
+      if (result.syncEnabled) {
+        MirrorAutoSyncService.instance.requestSyncSoon(
+          reason: 'shared folder updated',
+        );
+      }
       await _loadFolders();
     }
   }
@@ -749,6 +781,21 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
+              if (folder.syncEnabled) ...[
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.sync,
+                  size: 14,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Synced',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
+                ),
+              ],
               if (folder.visibility == SharedFolderVisibility.restricted) ...[
                 const SizedBox(width: 8),
                 Text(

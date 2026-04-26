@@ -36,6 +36,8 @@ class SharedFolder {
   final List<String> allowedReaders;
   final List<String> allowedGroups;
   final String description;
+  final bool syncEnabled;
+  final String? syncedPath;
   final DateTime createdAt;
   final DateTime modifiedAt;
 
@@ -50,6 +52,8 @@ class SharedFolder {
     List<String>? allowedReaders,
     List<String>? allowedGroups,
     this.description = '',
+    this.syncEnabled = false,
+    this.syncedPath,
     DateTime? createdAt,
     DateTime? modifiedAt,
     this.filePath,
@@ -68,6 +72,8 @@ class SharedFolder {
     List<String>? allowedReaders,
     List<String>? allowedGroups,
     String? description,
+    bool? syncEnabled,
+    String? syncedPath,
     DateTime? createdAt,
     DateTime? modifiedAt,
     String? filePath,
@@ -80,6 +86,8 @@ class SharedFolder {
       allowedReaders: allowedReaders ?? List.from(this.allowedReaders),
       allowedGroups: allowedGroups ?? List.from(this.allowedGroups),
       description: description ?? this.description,
+      syncEnabled: syncEnabled ?? this.syncEnabled,
+      syncedPath: syncedPath ?? this.syncedPath,
       createdAt: createdAt ?? this.createdAt,
       modifiedAt: modifiedAt ?? DateTime.now(),
       filePath: filePath ?? this.filePath,
@@ -92,11 +100,13 @@ class SharedFolder {
       'version': formatVersion,
       'id': id,
       'title': title,
-      'location': location,
+      'location': syncedPath ?? location,
       'visibility': visibility.value,
       if (allowedReaders.isNotEmpty) 'allowedReaders': allowedReaders,
       if (allowedGroups.isNotEmpty) 'allowedGroups': allowedGroups,
       if (description.isNotEmpty) 'description': description,
+      if (syncEnabled) 'syncEnabled': true,
+      if (syncedPath != null) 'syncedPath': syncedPath,
       'created': createdAt.toIso8601String(),
       'modified': modifiedAt.toIso8601String(),
     };
@@ -116,6 +126,9 @@ class SharedFolder {
       allowedGroups:
           (json['allowedGroups'] as List<dynamic>?)?.cast<String>() ?? [],
       description: json['description'] as String? ?? '',
+      syncEnabled:
+          json['syncEnabled'] as bool? ?? json['syncedPath'] != null,
+      syncedPath: json['syncedPath'] as String?,
       createdAt: DateTime.parse(json['created'] as String),
       modifiedAt: DateTime.parse(json['modified'] as String),
       filePath: filePath,

@@ -4,13 +4,17 @@
  */
 
 import 'dart:async';
+import 'dart:io';
 
+import '../models/sync_file_version.dart';
 import '../models/monitored_task.dart';
 import '../services/app_service.dart';
 import '../services/log_service.dart';
 import '../services/mirror_discovery_service.dart';
 import '../services/mirror_sync_service.dart';
+import '../services/profile_storage.dart';
 import '../services/profile_service.dart';
+import '../services/sync_version_service.dart';
 import '../services/task_monitor_service.dart';
 
 /// Immutable progress snapshot emitted by [SyncTransferService].
@@ -279,30 +283,49 @@ class SyncTransferService {
             final change = request.diffs[folder]
                 ?.where((c) => c.path == filePath)
                 .firstOrNull;
-            success = await mirror.downloadFile(
-              request.peerUrl!,
-              folder,
-              filePath,
-              localPath,
-              token,
-              expectedSha1: change?.remoteEntry?.sha1,
-              storage: storage,
-            );
+            if (change?.type == FileChangeType.delete) {
+              success = await _deleteLocalFile(
+                folder,
+                filePath,
+                localPath,
+                storage,
+              );
+            } else {
+              success = await mirror.downloadFile(
+                request.peerUrl!,
+                folder,
+                filePath,
+                localPath,
+                token,
+                expectedSha1: change?.remoteEntry?.sha1,
+                storage: storage,
+              );
+            }
           } else {
             final change = request.diffs[folder]
                 ?.where((c) => c.path == filePath)
                 .firstOrNull;
-            success = await mirror.uploadFile(
-              request.peerUrl!,
-              folder,
-              filePath,
-              localPath,
-              token,
-              sha1Hash: (change?.localEntry?.sha1.isNotEmpty ?? false)
-                  ? change!.localEntry!.sha1
-                  : null,
-              storage: storage,
-            );
+            if (change?.type == FileChangeType.deleteRemote) {
+              success = await mirror.deleteRemoteFile(
+                request.peerUrl!,
+                folder,
+                filePath,
+                token,
+                tombstone: change?.tombstone,
+              );
+            } else {
+              success = await mirror.uploadFile(
+                request.peerUrl!,
+                folder,
+                filePath,
+                localPath,
+                token,
+                sha1Hash: (change?.localEntry?.sha1.isNotEmpty ?? false)
+                    ? change!.localEntry!.sha1
+                    : null,
+                storage: storage,
+              );
+            }
           }
           if (!success) {
             failCount++;
@@ -396,6 +419,56 @@ class SyncTransferService {
           );
         }
       }
+    }
+  }
+
+  Future<bool> _deleteLocalFile(
+    String folder,
+    String filePath,
+    String localPath,
+    ProfileStorage? storage,
+  ) async {
+    try {
+      if (storage != null) {
+        final path = '$folder/$filePath';
+        if (await storage.exists(path)) {
+          final version = await SyncVersionService.instance.archiveProfileFile(
+            folder: folder,
+            filePath: filePath,
+            reason: SyncVersionReason.deleted,
+            storage: storage,
+          );
+          await storage.delete(path);
+          await SyncVersionService.instance.recordTombstone(
+            folder: folder,
+            filePath: filePath,
+            size: version?.size,
+            sha1Hash: version?.sha1,
+            storage: storage,
+          );
+        }
+      } else {
+        final file = File('$localPath/$filePath');
+        if (await file.exists()) {
+          final version = await SyncVersionService.instance.archiveFilesystemFile(
+            folder: folder,
+            filePath: filePath,
+            fullPath: file.path,
+            reason: SyncVersionReason.deleted,
+          );
+          await file.delete();
+          await SyncVersionService.instance.recordTombstone(
+            folder: folder,
+            filePath: filePath,
+            size: version?.size,
+            sha1Hash: version?.sha1,
+          );
+        }
+      }
+      return true;
+    } catch (e) {
+      LogService().log('SyncTransferService: Local delete failed: $e');
+      return false;
     }
   }
 }

@@ -9,10 +9,14 @@ import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../models/file_browser_cache_models.dart';
+import '../models/mirror_config.dart';
+import '../models/sync_file_version.dart';
 import '../pages/transfer_send_page.dart';
 import '../services/file_browser_cache_service.dart';
+import '../services/mirror_auto_sync_service.dart';
 import '../services/profile_storage.dart';
 import '../services/recent_files_service.dart';
+import '../services/sync_version_service.dart';
 import '../util/video_metadata_extractor.dart';
 
 /// Sort mode for file/folder listing
@@ -307,6 +311,62 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     final basePath = storage.basePath;
     final dirPath = _currentDirectory.path;
     return dirPath == basePath || p.isWithin(basePath, dirPath);
+  }
+
+  String? _profileRelativePath(String fullPath) {
+    final storage = widget.profileStorage;
+    if (storage == null) return null;
+    final basePath = storage.basePath;
+    if (fullPath == basePath) return '';
+    if (!p.isWithin(basePath, fullPath)) return null;
+    return p.relative(fullPath, from: basePath).replaceAll('\\', '/');
+  }
+
+  bool _isSyncableProfilePath(String relativePath) {
+    final firstSegment = relativePath.split('/').first;
+    return kSyncableFolders.contains(firstSegment);
+  }
+
+  void _scheduleSyncForProfilePath(String? relativePath, String reason) {
+    if (relativePath == null || relativePath.isEmpty) return;
+    if (!_isSyncableProfilePath(relativePath)) return;
+    MirrorAutoSyncService.instance.requestSyncSoon(reason: reason);
+  }
+
+  Future<void> _archiveAndTombstoneStorageFile(String relativePath) async {
+    if (!_isSyncableProfilePath(relativePath)) return;
+    final slash = relativePath.indexOf('/');
+    if (slash <= 0 || slash == relativePath.length - 1) return;
+    final folder = relativePath.substring(0, slash);
+    final filePath = relativePath.substring(slash + 1);
+    final storage = widget.profileStorage!;
+    final version = await SyncVersionService.instance.archiveProfileFile(
+      folder: folder,
+      filePath: filePath,
+      reason: SyncVersionReason.deleted,
+      storage: storage,
+    );
+    await SyncVersionService.instance.recordTombstone(
+      folder: folder,
+      filePath: filePath,
+      size: version?.size,
+      sha1Hash: version?.sha1,
+      storage: storage,
+    );
+  }
+
+  Future<void> _archiveAndTombstoneStorageTree(String relativePath) async {
+    final storage = widget.profileStorage!;
+    if (await storage.exists(relativePath)) {
+      await _archiveAndTombstoneStorageFile(relativePath);
+      return;
+    }
+    final entries = await storage.listDirectory(relativePath, recursive: true);
+    for (final entry in entries) {
+      if (!entry.isDirectory) {
+        await _archiveAndTombstoneStorageFile(entry.path);
+      }
+    }
   }
 
   /// Load directory contents from ProfileStorage instead of raw filesystem.
@@ -1147,6 +1207,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
           return;
         }
         await storage.createDirectory(newDirRelative);
+        _scheduleSyncForProfilePath(newDirRelative, 'folder created');
       } else {
         final newDir = Directory(p.join(_currentDirectory.path, trimmed));
         if (await newDir.exists()) {
@@ -2493,7 +2554,37 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     final dir = p.dirname(item.path);
     final newPath = p.join(dir, newName);
     try {
-      if (item.isDirectory) {
+      if (_isInsideProfileStorage()) {
+        final storage = widget.profileStorage!;
+        final oldRelative = _profileRelativePath(item.path);
+        final parentRelative = _profileRelativePath(dir) ?? '';
+        final newRelative = parentRelative.isEmpty
+            ? newName
+            : '$parentRelative/$newName';
+        if (oldRelative == null) return;
+        final exists = item.isDirectory
+            ? await storage.directoryExists(newRelative)
+            : await storage.exists(newRelative);
+        if (exists) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('A file with this name already exists')),
+            );
+          }
+          return;
+        }
+        if (item.isDirectory) {
+          await _moveDirectoryInStorage(storage, oldRelative, newRelative);
+        } else {
+          final bytes = await storage.readBytes(oldRelative);
+          if (bytes != null) {
+            await storage.writeBytes(newRelative, bytes);
+          }
+          await _archiveAndTombstoneStorageFile(oldRelative);
+          await storage.delete(oldRelative);
+        }
+        _scheduleSyncForProfilePath(newRelative, 'item renamed');
+      } else if (item.isDirectory) {
         await Directory(item.path).rename(newPath);
       } else {
         await File(item.path).rename(newPath);
@@ -2622,6 +2713,10 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       }
     }
     setState(() => _clipboardItems.clear());
+    _scheduleSyncForProfilePath(
+      _profileRelativePath(_currentDirectory.path),
+      'items pasted',
+    );
     _loadDirectory();
   }
 
@@ -2710,8 +2805,10 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       if (bytes != null) {
         await storage.writeBytes(destRelative, bytes);
       }
+      await _archiveAndTombstoneStorageFile(srcRelative);
       await storage.delete(srcRelative);
     }
+    _scheduleSyncForProfilePath(destRelative, 'item moved');
   }
 
   Future<void> _moveDirectoryInStorage(
@@ -2736,6 +2833,7 @@ class FileFolderPickerState extends State<FileFolderPicker> {
         if (bytes != null) {
           await storage.writeBytes(childDest, bytes);
         }
+        await _archiveAndTombstoneStorageFile(childSrc);
         await storage.delete(childSrc);
       }
     }
@@ -2805,6 +2903,10 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       );
     }
 
+    _scheduleSyncForProfilePath(
+      _profileRelativePath(_currentDirectory.path),
+      'items imported',
+    );
     _loadDirectory();
   }
 
@@ -3091,7 +3193,17 @@ class FileFolderPickerState extends State<FileFolderPicker> {
 
   Future<void> _performDelete(FileSystemItem item) async {
     try {
-      if (item.isDirectory) {
+      final relativePath = _profileRelativePath(item.path);
+      if (_isInsideProfileStorage() && relativePath != null) {
+        final storage = widget.profileStorage!;
+        await _archiveAndTombstoneStorageTree(relativePath);
+        if (item.isDirectory) {
+          await storage.deleteDirectory(relativePath, recursive: true);
+        } else {
+          await storage.delete(relativePath);
+        }
+        _scheduleSyncForProfilePath(relativePath, 'item deleted');
+      } else if (item.isDirectory) {
         await Directory(item.path).delete(recursive: true);
       } else {
         await File(item.path).delete();

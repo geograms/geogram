@@ -14,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../services/app_service.dart';
 import '../services/i18n_service.dart';
+import '../services/mirror_auto_sync_service.dart';
 import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../widgets/file_folder_picker.dart';
@@ -184,6 +185,21 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
     }
   }
 
+  void _scheduleSyncForPath(String filePath) {
+    final storage = AppService().profileStorage;
+    if (storage == null) return;
+    final basePath = storage.basePath;
+    if (filePath != basePath && !p.isWithin(basePath, filePath)) return;
+    final relativePath =
+        filePath == basePath ? '' : p.relative(filePath, from: basePath);
+    final firstSegment = relativePath.split(p.separator).first;
+    if (firstSegment == 'shared') {
+      MirrorAutoSyncService.instance.requestSyncSoon(
+        reason: 'shared file saved',
+      );
+    }
+  }
+
   void _loadFolderFiles(String filePath, Set<String> extensions) {
     final dir = Directory(p.dirname(filePath));
     final files = dir.listSync()
@@ -273,6 +289,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
           builder: (_) => DocumentViewerEditorPage(
             filePath: path,
             viewerType: DocumentViewerType.markdown,
+            onSaved: () => _scheduleSyncForPath(path),
           ),
         ),
       );
@@ -283,6 +300,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
           builder: (_) => DocumentViewerEditorPage(
             filePath: path,
             viewerType: DocumentViewerType.text,
+            onSaved: () => _scheduleSyncForPath(path),
           ),
         ),
       );
@@ -648,6 +666,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
         viewerType: DocumentViewerType.markdown,
         editable: true,
         showEditToolbar: false,
+        onSaved: () => _scheduleSyncForPath(path),
       );
     }
 
@@ -658,6 +677,7 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
       viewerType: DocumentViewerType.text,
       editable: true,
       showEditToolbar: false,
+      onSaved: () => _scheduleSyncForPath(path),
     );
   }
 

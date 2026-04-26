@@ -655,6 +655,13 @@ class MirrorConfig {
   /// Device priority for station routing (1=high, 2=medium, 3=low/default)
   int priority;
 
+  /// Keep local file versions before sync overwrites or deletes files.
+  bool versioningEnabled;
+
+  /// Number of days to keep file versions and deletion tombstones.
+  /// Defaults to 30. A value of 0 disables retention.
+  int versionRetentionDays;
+
   MirrorConfig({
     this.enabled = false,
     required this.deviceId,
@@ -664,6 +671,8 @@ class MirrorConfig {
     this.defaultSyncStyle = SyncStyle.sendReceive,
     List<SyncExcludeRule>? excludeRules,
     this.priority = 3,
+    this.versioningEnabled = true,
+    this.versionRetentionDays = 30,
   })  : peers = peers ?? [],
         preferences = preferences ?? ConnectionPreferences(),
         excludeRules = excludeRules ?? [];
@@ -714,6 +723,8 @@ class MirrorConfig {
               .toList() ??
           [],
       priority: json['priority'] as int? ?? 3,
+      versioningEnabled: json['versioning_enabled'] as bool? ?? true,
+      versionRetentionDays: json['version_retention_days'] as int? ?? 30,
     );
   }
 
@@ -727,6 +738,8 @@ class MirrorConfig {
         if (excludeRules.isNotEmpty)
           'exclude_rules': excludeRules.map((r) => r.toJson()).toList(),
         'priority': priority,
+        'versioning_enabled': versioningEnabled,
+        'version_retention_days': versionRetentionDays,
       };
 
   MirrorConfig copyWith({
@@ -737,6 +750,8 @@ class MirrorConfig {
     SyncStyle? defaultSyncStyle,
     List<SyncExcludeRule>? excludeRules,
     int? priority,
+    bool? versioningEnabled,
+    int? versionRetentionDays,
   }) {
     return MirrorConfig(
       enabled: enabled ?? this.enabled,
@@ -747,6 +762,9 @@ class MirrorConfig {
       defaultSyncStyle: defaultSyncStyle ?? this.defaultSyncStyle,
       excludeRules: excludeRules ?? List.from(this.excludeRules),
       priority: priority ?? this.priority,
+      versioningEnabled: versioningEnabled ?? this.versioningEnabled,
+      versionRetentionDays:
+          versionRetentionDays ?? this.versionRetentionDays,
     );
   }
 }

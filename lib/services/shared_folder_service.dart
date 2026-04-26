@@ -58,6 +58,31 @@ class SharedFolderService {
     return fullPath;
   }
 
+  SharedFolder _resolveSyncedFolderLocation(SharedFolder folder) {
+    final syncedPath = folder.syncedPath;
+    if (syncedPath == null || syncedPath.isEmpty) return folder;
+    return folder.copyWith(
+      location: _storage.getAbsolutePath(syncedPath),
+      modifiedAt: folder.modifiedAt,
+    );
+  }
+
+  Future<SharedFolder> _prepareForWrite(SharedFolder folder) async {
+    if (!folder.syncEnabled) return folder;
+
+    final syncedPath = (folder.syncedPath == null || folder.syncedPath!.isEmpty)
+        ? 'folders/${folder.id}'
+        : folder.syncedPath!;
+    await _storage.createDirectory(syncedPath);
+
+    return folder.copyWith(
+      location: _storage.getAbsolutePath(syncedPath),
+      syncedPath: syncedPath,
+      syncEnabled: true,
+      modifiedAt: folder.modifiedAt,
+    );
+  }
+
   /// Load all shared folder entries
   Future<List<SharedFolder>> loadAll() async {
     if (_appPath == null) return [];
@@ -79,9 +104,11 @@ class SharedFolderService {
             final content = await _storage.readString(entry.path);
             if (content != null) {
               final fullPath = _storage.getAbsolutePath(entry.path);
-              final folder =
-                  SharedFolder.fromJsonString(content, filePath: fullPath);
-              folders.add(folder);
+              final folder = SharedFolder.fromJsonString(
+                content,
+                filePath: fullPath,
+              );
+              folders.add(_resolveSyncedFolderLocation(folder));
             }
           } catch (e) {
             LogService()
@@ -118,8 +145,10 @@ class SharedFolderService {
       counter++;
     }
 
-    final updatedFolder = folder.copyWith(
+    final preparedFolder = await _prepareForWrite(folder);
+    final updatedFolder = preparedFolder.copyWith(
       filePath: _storage.getAbsolutePath(finalPath),
+      modifiedAt: preparedFolder.modifiedAt,
     );
 
     await _storage.writeString(finalPath, updatedFolder.toJsonString());
@@ -136,7 +165,8 @@ class SharedFolderService {
     }
 
     final relativePath = _getRelativePath(folder.filePath!);
-    final updatedFolder = folder.copyWith(modifiedAt: DateTime.now());
+    final preparedFolder = await _prepareForWrite(folder);
+    final updatedFolder = preparedFolder.copyWith(modifiedAt: DateTime.now());
 
     await _storage.writeString(relativePath, updatedFolder.toJsonString());
 
@@ -160,7 +190,9 @@ class SharedFolderService {
       final content = await _storage.readString(relativePath);
       if (content == null) return null;
 
-      return SharedFolder.fromJsonString(content, filePath: filePath);
+      return _resolveSyncedFolderLocation(
+        SharedFolder.fromJsonString(content, filePath: filePath),
+      );
     } catch (e) {
       LogService()
           .log('SharedFolderService: Error loading from $filePath: $e');

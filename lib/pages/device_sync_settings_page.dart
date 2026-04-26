@@ -12,6 +12,7 @@ import '../services/mirror_config_service.dart';
 import '../services/mirror_discovery_service.dart';
 import '../services/websocket_service.dart';
 import 'mirror_settings_page.dart';
+import 'sync_file_versions_page.dart';
 
 /// Settings page for managing device sync configuration.
 class DeviceSyncSettingsPage extends StatefulWidget {
@@ -71,12 +72,91 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
 
                     const Divider(),
 
+                    _buildVersioningSection(theme),
+
+                    ListTile(
+                      leading: const Icon(Icons.history_rounded),
+                      title: const Text('Browse file versions'),
+                      subtitle: const Text(
+                        'Restore previous copies of synced files and deleted items',
+                      ),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const SyncFileVersionsPage(),
+                          ),
+                        );
+                      },
+                    ),
+
+                    const Divider(),
+
                     // Known mirror devices section
                     _buildKnownDevicesSection(theme, discoveredMirrors),
                   ],
                 );
               },
             ),
+    );
+  }
+
+  Widget _buildVersioningSection(ThemeData theme) {
+    final enabled = _config?.versioningEnabled ?? true;
+    final retentionDays = _config?.versionRetentionDays ?? 30;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Text(
+            'File Versions',
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: theme.colorScheme.primary,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+        SwitchListTile(
+          title: const Text('Keep previous file versions'),
+          subtitle: Text(
+            enabled
+                ? 'Changed and deleted files can be restored for $retentionDays days'
+                : 'Changed and deleted files are not archived',
+          ),
+          value: enabled,
+          onChanged: (value) => _saveVersioning(
+            enabled: value,
+            retentionDays: retentionDays,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: DropdownButtonFormField<int>(
+            value: retentionDays,
+            decoration: const InputDecoration(
+              labelText: 'Retention',
+              border: OutlineInputBorder(),
+            ),
+            items: const [
+              DropdownMenuItem(value: 7, child: Text('7 days')),
+              DropdownMenuItem(value: 30, child: Text('30 days')),
+              DropdownMenuItem(value: 90, child: Text('90 days')),
+              DropdownMenuItem(value: 365, child: Text('1 year')),
+            ],
+            onChanged: enabled
+                ? (value) {
+                    if (value != null) {
+                      _saveVersioning(
+                        enabled: enabled,
+                        retentionDays: value,
+                      );
+                    }
+                  }
+                : null,
+          ),
+        ),
+      ],
     );
   }
 
@@ -308,6 +388,27 @@ class _DeviceSyncSettingsPageState extends State<DeviceSyncSettingsPage> {
       final label = priority == 1 ? 'High' : priority == 2 ? 'Medium' : 'Low';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Priority set to $label')),
+      );
+    }
+  }
+
+  Future<void> _saveVersioning({
+    required bool enabled,
+    required int retentionDays,
+  }) async {
+    await _configService.setVersioning(
+      enabled: enabled,
+      retentionDays: retentionDays,
+    );
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            enabled
+                ? 'File versions kept for $retentionDays days'
+                : 'File versioning disabled',
+          ),
+        ),
       );
     }
   }

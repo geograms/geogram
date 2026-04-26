@@ -158,6 +158,19 @@ class MirrorConfigService {
     await updateConfig((c) => c.copyWith(priority: priority));
   }
 
+  /// Update sync version retention settings.
+  Future<void> setVersioning({
+    required bool enabled,
+    required int retentionDays,
+  }) async {
+    await updateConfig(
+      (c) => c.copyWith(
+        versioningEnabled: enabled,
+        versionRetentionDays: retentionDays < 0 ? 0 : retentionDays,
+      ),
+    );
+  }
+
   /// Add a new peer
   Future<void> addPeer(MirrorPeer peer) async {
     await updateConfig((c) {
