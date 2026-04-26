@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../models/event.dart';
 import '../services/i18n_service.dart';
 import '../util/event_activity_notifier.dart';
+import '../util/event_bus.dart';
 
 /// Widget for displaying an event in the list
 class EventTileWidget extends StatefulWidget {
@@ -49,11 +50,33 @@ class _EventTileWidgetState extends State<EventTileWidget> {
   // whenever > 0 so the owner knows at a glance which events need
   // their attention.
   int _unseenActivity = 0;
+  EventSubscription<NowItemEvent>? _itemSub;
+  EventSubscription<NowGroupRemoveEvent>? _removeSub;
 
   @override
   void initState() {
     super.initState();
     _loadUnseenActivity();
+    // Re-scan when this event's NowItems are added or cleared so the
+    // badge appears the moment a new comment / like / contribution
+    // lands and disappears the moment the owner clears them.
+    _itemSub = EventBus().on<NowItemEvent>((e) {
+      if (!EventActivityNotifier.ownedAppTypes.contains(e.appType)) return;
+      if (e.sourceId != widget.event.id) return;
+      _loadUnseenActivity();
+    });
+    _removeSub = EventBus().on<NowGroupRemoveEvent>((e) {
+      if (!EventActivityNotifier.ownedAppTypes.contains(e.appType)) return;
+      if (e.sourceId != widget.event.id) return;
+      _loadUnseenActivity();
+    });
+  }
+
+  @override
+  void dispose() {
+    _itemSub?.cancel();
+    _removeSub?.cancel();
+    super.dispose();
   }
 
   @override

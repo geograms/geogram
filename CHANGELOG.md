@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2026-04-26 - v1.39.0-beta.13
+
+### Fixes
+- Events browser: when the home-screen badge says an event needs attention, the user can now actually find it. Years that contain an event with unseen activity (pending access requests, new comments / likes, pending contributor uploads) are auto-expanded on entry, and the year header carries a small red dot when collapsed — previously only the most-recent year was expanded, so an attention item from a prior year was hidden behind a chevron with no indicator.
+- Event tile badge: now refreshes live. The tile subscribes to `NowItemEvent` / `NowGroupRemoveEvent` for its own event id, so the dot appears the moment a new comment / like / contribution lands and disappears the moment the owner clears them — instead of staying stale until the page is reopened.
+
 ## 2026-04-26 - v1.39.0-beta.12
 
 ### Changes

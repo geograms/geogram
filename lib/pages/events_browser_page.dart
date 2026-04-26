@@ -4,6 +4,7 @@
  */
 
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -20,9 +21,11 @@ import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/i18n_service.dart';
 import '../services/log_service.dart';
+import '../services/now_service.dart';
 import '../services/remote_content_client.dart';
 import '../services/remote_event_cache.dart';
 import '../util/event_activity_notifier.dart';
+import '../models/now_item.dart';
 import '../widgets/event_tile_widget.dart';
 import '../widgets/event_detail_widget.dart';
 import '../widgets/file_folder_picker.dart';
@@ -89,17 +92,58 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
   bool _isLoadingRemote = false;
   bool _remoteLoadedOnce = false;
 
+  // Event IDs that the Now feed reports as needing the owner's
+  // attention (pending access requests, new comments / likes,
+  // pending contributor uploads). Drives the year-header indicator
+  // and seeds initial year expansion so the user lands on the
+  // event the home-screen badge is pointing at.
+  Set<String> _attentionEventIds = const <String>{};
+  StreamSubscription<List<NowItem>>? _nowItemsSubscription;
+
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_filterEvents);
     _initialize();
+    _attentionEventIds = _computeAttentionIds(NowService().items);
+    _nowItemsSubscription = NowService().itemsStream.listen((items) {
+      if (!mounted) return;
+      final next = _computeAttentionIds(items);
+      if (next.length == _attentionEventIds.length &&
+          next.containsAll(_attentionEventIds)) {
+        return;
+      }
+      setState(() {
+        _attentionEventIds = next;
+        _expandYearsForAttention();
+      });
+    });
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _nowItemsSubscription?.cancel();
     super.dispose();
+  }
+
+  Set<String> _computeAttentionIds(List<NowItem> items) {
+    final ids = <String>{};
+    for (final i in items) {
+      if (!EventActivityNotifier.ownedAppTypes.contains(i.appType)) continue;
+      if (i.sourceId.isEmpty) continue;
+      ids.add(i.sourceId);
+    }
+    return ids;
+  }
+
+  void _expandYearsForAttention() {
+    if (_attentionEventIds.isEmpty) return;
+    for (final e in _allEvents) {
+      if (_attentionEventIds.contains(e.id)) {
+        _expandedYears.add(e.year);
+      }
+    }
   }
 
   Future<void> _initialize() async {
@@ -150,6 +194,10 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
     if (_allEvents.isNotEmpty) {
       _expandedYears.add(_allEvents.first.year);
     }
+    // Also expand any year that contains an event the home-screen
+    // badge is flagging — otherwise the user clicks Events, sees
+    // a collapsed older year, and can't find the dot.
+    _expandYearsForAttention();
   }
 
   /// Load events from remote device via API
@@ -1308,6 +1356,12 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
 
         if (item.isHeader) {
           final isExpanded = _expandedYears.contains(item.year);
+          // Aggregate the attention dot at the year level so a
+          // collapsed year still tells the user "one of the events
+          // inside here needs you".
+          final yearEvents = eventsByYear[item.year]!;
+          final yearHasAttention = yearEvents
+              .any((e) => _attentionEventIds.contains(e.id));
           return Material(
             color: theme.colorScheme.surfaceVariant,
             child: InkWell(
@@ -1332,6 +1386,17 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                    if (yearHasAttention) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.error,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ],
                     const Spacer(),
                     Text(
                       '${item.eventCount} ${item.eventCount == 1 ? _i18n.t('event') : _i18n.t('events')}',
