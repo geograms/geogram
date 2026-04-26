@@ -45,6 +45,7 @@ import 'services/station_activity_publisher_service.dart';
 import 'services/station_chat_queue_service.dart';
 import 'services/dm_notification_service.dart';
 import 'services/backup_notification_service.dart';
+import 'services/local_backup_service.dart';
 import 'services/message_attention_service.dart';
 import 'services/update_service.dart';
 import 'services/devices_service.dart';
@@ -676,6 +677,12 @@ void main() async {
       // UpdateService may check for updates - defer it
       await UpdateService().initialize();
       LogService().log('UpdateService initialized (deferred)');
+
+      // Start the auto-backup timer if the user has it enabled. Done at boot
+      // so the timer fires regardless of whether the user opens the Backup
+      // page in this session.
+      LocalBackupService().initialize();
+      LogService().log('LocalBackupService initialized (deferred)');
 
       // Start station auto-discovery (background task)
       StationDiscoveryService().start();

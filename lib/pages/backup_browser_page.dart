@@ -65,6 +65,7 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
     super.initState();
     _loadData();
     _setupSubscriptions();
+    _localBackupService.statusNotifier.addListener(_onLocalBackupStatusChanged);
   }
 
   @override
@@ -72,7 +73,15 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
     _statusSubscription?.cancel();
     _providersSubscription?.cancel();
     _clientsSubscription?.cancel();
+    _localBackupService.statusNotifier.removeListener(_onLocalBackupStatusChanged);
     super.dispose();
+  }
+
+  void _onLocalBackupStatusChanged() {
+    if (!mounted) return;
+    final next = _localBackupService.statusNotifier.value;
+    setState(() => _localBackupStatus = next);
+    if (!next.isInProgress) _refreshLocalSnapshots();
   }
 
   void _setupSubscriptions() {
@@ -1806,18 +1815,9 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
   }
 
   Future<void> _createLocalBackup() async {
-    setState(() {
-      _localBackupStatus = LocalBackupStatus(isInProgress: true);
-    });
-
     final snapshot = await _localBackupService.createBackup();
 
     if (mounted) {
-      setState(() {
-        _localBackupStatus = _localBackupService.status;
-      });
-      await _refreshLocalSnapshots();
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(snapshot != null
@@ -1849,17 +1849,9 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
 
     if (confirmed != true) return;
 
-    setState(() {
-      _localBackupStatus = LocalBackupStatus(isInProgress: true);
-    });
-
     final success = await _localBackupService.restoreSnapshot(snapshot.filePath);
 
     if (mounted) {
-      setState(() {
-        _localBackupStatus = _localBackupService.status;
-      });
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(success
@@ -1975,14 +1967,34 @@ class _BackupBrowserPageState extends State<BackupBrowserPage> {
 
           if (_localBackupStatus.isInProgress) ...[
             const SizedBox(height: 8),
-            LinearProgressIndicator(value: _localBackupStatus.progress > 0 ? _localBackupStatus.progress : null),
-            const SizedBox(height: 4),
-            Text(
-              _localBackupStatus.currentFile != null
-                  ? '${_i18n.t('backup_local_in_progress')} ${_localBackupStatus.currentFile}'
-                  : _i18n.t('backup_local_in_progress'),
-              style: theme.textTheme.bodySmall,
+            LinearProgressIndicator(
+              value: _localBackupStatus.progress > 0
+                  ? _localBackupStatus.progress
+                  : null,
             ),
+            const SizedBox(height: 4),
+            Builder(builder: (_) {
+              final s = _localBackupStatus;
+              final pct = (s.progress * 100).clamp(0, 100).toStringAsFixed(0);
+              final counts = s.filesTotal > 0
+                  ? '${s.filesProcessed} / ${s.filesTotal}  •  $pct%'
+                  : _i18n.t('backup_local_in_progress');
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(counts, style: theme.textTheme.bodySmall),
+                  if (s.currentFile != null)
+                    Text(
+                      s.currentFile!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              );
+            }),
           ],
 
           const SizedBox(height: 24),

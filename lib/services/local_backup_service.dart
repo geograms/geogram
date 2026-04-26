@@ -12,6 +12,7 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -35,11 +36,21 @@ class LocalBackupService {
   LocalBackupStatus _status = LocalBackupStatus.idle();
   MonitoredAsyncPeriodicTimer? _autoBackupTimer;
 
+  /// Live status updates for the UI. The page can subscribe to this and
+  /// rebuild as files are processed without polling.
+  final ValueNotifier<LocalBackupStatus> statusNotifier =
+      ValueNotifier(LocalBackupStatus.idle());
+
   // --- Public getters ---
 
   LocalBackupSettings get settings => _settings;
   LocalBackupStatus get status => _status;
   bool get isAutoBackupRunning => _autoBackupTimer != null;
+
+  void _setStatus(LocalBackupStatus next) {
+    _status = next;
+    statusNotifier.value = next;
+  }
 
   // --- Lifecycle ---
 
@@ -152,13 +163,13 @@ class LocalBackupService {
       return null;
     }
 
-    _status = LocalBackupStatus(isInProgress: true);
+    _setStatus(LocalBackupStatus(isInProgress: true));
     _log('Creating local backup for $callsign');
 
     final store = BackupStore.openFor(folder);
     final validationError = await store.validate();
     if (validationError != null) {
-      _status = LocalBackupStatus(error: validationError);
+      _setStatus(LocalBackupStatus(error: validationError));
       _log('Cannot create backup: destination not writable: $validationError');
       return null;
     }
@@ -218,7 +229,7 @@ class LocalBackupService {
       _settings = _settings.copyWith(lastBackupAt: now);
       _saveSettings();
 
-      _status = LocalBackupStatus.idle();
+      _setStatus(LocalBackupStatus.idle());
       _log('Local backup created: $zipName (${_formatBytes(archiveSize)})');
 
       // Prune old snapshots
@@ -226,7 +237,7 @@ class LocalBackupService {
 
       return snapshot;
     } catch (e) {
-      _status = LocalBackupStatus(error: e.toString());
+      _setStatus(LocalBackupStatus(error: e.toString()));
       _log('Local backup failed: $e');
       return null;
     } finally {
@@ -297,7 +308,7 @@ class LocalBackupService {
       return false;
     }
 
-    _status = LocalBackupStatus(isInProgress: true);
+    _setStatus(LocalBackupStatus(isInProgress: true));
     _log('Restoring local backup from: $locator');
 
     try {
@@ -315,10 +326,10 @@ class LocalBackupService {
         jsonDecode(manifestJson) as Map<String, dynamic>,
       );
 
-      _status = LocalBackupStatus(
+      _setStatus(LocalBackupStatus(
         isInProgress: true,
         filesTotal: manifest.totalFiles,
-      );
+      ));
 
       if (manifest.isEncrypted) {
         await _restoreEncryptedProfile(callsign, archive, manifest);
@@ -326,11 +337,11 @@ class LocalBackupService {
         await _restoreFilesystemProfile(callsign, archive, manifest);
       }
 
-      _status = LocalBackupStatus.idle();
+      _setStatus(LocalBackupStatus.idle());
       _log('Local backup restored successfully (${manifest.totalFiles} files)');
       return true;
     } catch (e) {
-      _status = LocalBackupStatus(error: e.toString());
+      _setStatus(LocalBackupStatus(error: e.toString()));
       _log('Local backup restore failed: $e');
       return false;
     }
@@ -375,23 +386,23 @@ class LocalBackupService {
       }
     }
 
-    _status = LocalBackupStatus(
+    _setStatus(LocalBackupStatus(
       isInProgress: true,
       filesTotal: files.length,
-    );
+    ));
 
     int totalBytes = 0;
     for (int i = 0; i < files.length; i++) {
       final file = files[i];
       final relativePath = p.relative(file.path, from: profileDir.path);
 
-      _status = LocalBackupStatus(
+      _setStatus(LocalBackupStatus(
         isInProgress: true,
         progress: files.isEmpty ? 0 : i / files.length,
         filesProcessed: i,
         filesTotal: files.length,
         currentFile: relativePath,
-      );
+      ));
 
       try {
         final content = await file.readAsBytes();
@@ -429,11 +440,11 @@ class LocalBackupService {
       throw Exception('Encrypted archive not found: $archivePath');
     }
 
-    _status = LocalBackupStatus(
+    _setStatus(LocalBackupStatus(
       isInProgress: true,
       filesTotal: 1,
       currentFile: '${callsign.toUpperCase()}.sqlite',
-    );
+    ));
 
     final content = await archiveFile.readAsBytes();
     final sha1Hash = sha1.convert(content).toString();
@@ -498,13 +509,13 @@ class LocalBackupService {
       if (entry.name == 'manifest.json') continue;
       if (!entry.isFile) continue;
 
-      _status = LocalBackupStatus(
+      _setStatus(LocalBackupStatus(
         isInProgress: true,
         progress: manifest.totalFiles > 0 ? restored / manifest.totalFiles : 0,
         filesProcessed: restored,
         filesTotal: manifest.totalFiles,
         currentFile: entry.name,
-      );
+      ));
 
       final outPath = p.join(profileDir, entry.name);
       final outFile = File(outPath);

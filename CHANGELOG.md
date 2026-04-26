@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2026-04-26 - v1.39.0-beta.11
+
+### Fixes
+- Backup / Local: the "Backup Now" UI now shows real progress instead of a never-ending indeterminate bar. `LocalBackupService` exposes a `ValueNotifier<LocalBackupStatus>` and routes every status mutation through it, so the page rebuilds as files are processed. The in-progress label switched from a single static line to "filesProcessed / filesTotal · NN%" plus the current filename underneath, matching what the service has been computing all along.
+- Backup / Auto-backup: the periodic timer now actually runs. `LocalBackupService.initialize()` is called from `main.dart` next to `UpdateService().initialize()`, so the auto-backup timer starts at app boot rather than only when the user opens the Backup page. Previously the auto-backup setting could be toggled on, the user could close the app, and the timer would never start in any future session unless they navigated back to the Backup screen first.
+
 ## 2026-04-26 - v1.39.0-beta.10
 
 ### Fixes
