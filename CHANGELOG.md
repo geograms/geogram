@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2026-04-26 - v1.39.0-beta.12
+
+### Changes
+- Backup / Auto-backup task: the monitored periodic timer is now registered unconditionally on `LocalBackupService.initialize()`, so the "Auto Backup" entry shows up on the Task Monitor (Settings → Tasks) at all times — even when the toggle is off — and can be paused / resumed from there. The tick handler short-circuits silently when auto-backup is disabled or no folder is set, so an inactive task doesn't spam the monitor.
+- Backup / Auto-backup catch-up: when the user enables auto-backup, or when the app boots with auto-backup already enabled, an immediate (30 s deferred) backup runs if `lastBackupAt` is older than the configured interval. Previously a 7-day interval meant the user had to wait a week to see the first backup happen, which read as "it never works".
+
 ## 2026-04-26 - v1.39.0-beta.11
 
 ### Fixes

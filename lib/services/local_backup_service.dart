@@ -45,7 +45,14 @@ class LocalBackupService {
 
   LocalBackupSettings get settings => _settings;
   LocalBackupStatus get status => _status;
-  bool get isAutoBackupRunning => _autoBackupTimer != null;
+
+  /// True when auto-backup is configured to run (enabled + folder set).
+  /// The monitored task is always registered after [initialize], even when
+  /// disabled — this getter reflects whether ticks will actually back up.
+  bool get isAutoBackupRunning =>
+      _autoBackupTimer != null &&
+      _settings.autoBackupEnabled &&
+      _settings.backupFolderPath != null;
 
   void _setStatus(LocalBackupStatus next) {
     _status = next;
@@ -58,15 +65,17 @@ class LocalBackupService {
     if (_initialized) return;
     _loadSettings();
     _initialized = true;
+    // Always start the monitored timer so the auto-backup task is visible
+    // and pause-able from the Task Monitor regardless of the enabled toggle.
+    // Tick handler decides whether to actually run a backup.
+    _startAutoBackupTimer();
     _log('LocalBackupService initialized');
-
-    if (_settings.autoBackupEnabled && _settings.backupFolderPath != null) {
-      startAutoBackup();
-    }
+    _scheduleStartupCatchUp();
   }
 
   void dispose() {
-    stopAutoBackup();
+    _autoBackupTimer?.cancel();
+    _autoBackupTimer = null;
   }
 
   // --- Settings persistence ---
@@ -95,6 +104,9 @@ class LocalBackupService {
     int? autoBackupIntervalMinutes,
     int? maxSnapshots,
   }) {
+    final wasDisabled = !_settings.autoBackupEnabled;
+    final oldInterval = _settings.autoBackupIntervalMinutes;
+
     _settings = _settings.copyWith(
       autoBackupEnabled: autoBackupEnabled,
       autoBackupIntervalMinutes: autoBackupIntervalMinutes,
@@ -102,20 +114,29 @@ class LocalBackupService {
     );
     _saveSettings();
 
-    // Re-evaluate timer
-    if (_settings.autoBackupEnabled && _settings.backupFolderPath != null) {
-      startAutoBackup();
-    } else {
-      stopAutoBackup();
+    // Recreate the timer when the cadence changes — Timer.periodic can't
+    // adjust its interval in flight.
+    if (autoBackupIntervalMinutes != null &&
+        autoBackupIntervalMinutes != oldInterval) {
+      _startAutoBackupTimer();
+    }
+
+    // When the user just enabled auto-backup, kick off a backup right away
+    // instead of making them wait up to a week for the first tick.
+    if (wasDisabled &&
+        _settings.autoBackupEnabled &&
+        _settings.backupFolderPath != null) {
+      _scheduleStartupCatchUp();
     }
   }
 
   // --- Auto-backup timer ---
 
-  void startAutoBackup() {
-    stopAutoBackup();
-    if (!_settings.autoBackupEnabled || _settings.backupFolderPath == null) return;
-
+  /// Create (or recreate) the monitored periodic timer. The task is always
+  /// registered with [TaskMonitorService] so it shows up on the task
+  /// monitor, can be paused / resumed there, and reports lifecycle.
+  void _startAutoBackupTimer() {
+    _autoBackupTimer?.cancel();
     _autoBackupTimer = MonitoredAsyncPeriodicTimer(
       id: 'local_backup.auto',
       name: 'Auto Backup',
@@ -125,21 +146,40 @@ class LocalBackupService {
       priority: TaskPriority.low,
       callback: (_) async => await _onAutoBackupTick(),
     );
-    _log('Auto-backup started (every ${_settings.autoBackupIntervalMinutes} min)');
-  }
-
-  void stopAutoBackup() {
-    _autoBackupTimer?.cancel();
-    _autoBackupTimer = null;
+    _log('Auto-backup task registered (every ${_settings.autoBackupIntervalMinutes} min)');
   }
 
   Future<void> _onAutoBackupTick() async {
+    if (!_settings.autoBackupEnabled ||
+        _settings.backupFolderPath == null) {
+      // Task is registered but inactive — skip silently so the monitor
+      // doesn't fill with noise on every tick.
+      return;
+    }
     if (_status.isInProgress) {
       _log('Auto-backup tick skipped — operation in progress');
       return;
     }
     _log('Auto-backup tick — creating backup');
     await createBackup();
+  }
+
+  /// Run an immediate backup if auto-backup is enabled and the last run is
+  /// older than the configured interval (or never happened). Deferred 30 s
+  /// so app startup completes before disk-heavy work begins.
+  void _scheduleStartupCatchUp() {
+    if (!_settings.autoBackupEnabled) return;
+    if (_settings.backupFolderPath == null) return;
+    final last = _settings.lastBackupAt;
+    final interval = Duration(minutes: _settings.autoBackupIntervalMinutes);
+    final overdue = last == null || DateTime.now().difference(last) >= interval;
+    if (!overdue) return;
+
+    Future<void>.delayed(const Duration(seconds: 30), () async {
+      if (!_initialized) return;
+      _log('Auto-backup catch-up — last run is overdue');
+      await _onAutoBackupTick();
+    });
   }
 
   // --- Core operations ---
