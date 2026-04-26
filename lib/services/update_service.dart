@@ -120,6 +120,13 @@ class UpdateService {
           }
         }
       }
+
+      // Whether or not auto-check is enabled, an APK from a prior session
+      // may already be on disk waiting to install. Recover that state now
+      // so the install button is blue immediately on app open — without
+      // this, the user sees a grey button until a fresh GitHub round-trip
+      // succeeds, which never happens offline.
+      unawaited(recoverCompletedDownloadFromDisk());
     } catch (e) {
       LogService().log('Error initializing UpdateService: $e');
     }
@@ -509,6 +516,13 @@ class UpdateService {
 
     LogService().log(
         'Update check complete: current=$appVersion, latest=${release.version}, assetReady=$hasAsset, updateAvailable=$updateReady');
+
+    // After every successful check, sync `_completedDownloadPath` with what's
+    // on disk for this release. Covers the periodic-check cycle so the
+    // install button lights up as soon as the new release is observed and
+    // the matching APK is found, without waiting for the user to navigate
+    // to the Updates page.
+    unawaited(recoverCompletedDownloadFromDisk());
 
     if (updateReady) {
       unawaited(_maybeAutoDownload(release));
@@ -1295,6 +1309,11 @@ class UpdateService {
         await partialFile.rename(tempFilePath);
         _downloadProgress = 1.0;
         downloadProgress.value = 1.0;
+        // Same in-memory state update as the normal completion path below —
+        // without this, the `completedDownloadPathNotifier` never fires and
+        // any UI listening for it (the update banner, the install button)
+        // misses the transition.
+        _setCompletedDownload(tempFilePath, release.version);
         return tempFilePath;
       }
 
@@ -1712,6 +1731,30 @@ class UpdateService {
   void clearCompletedDownload() {
     _setCompletedDownload(null, null);
     LogService().log('Cleared completed download state');
+  }
+
+  /// If we don't have an in-memory `_completedDownloadPath` but a matching
+  /// APK is already on disk for the known latest release, recover the state.
+  ///
+  /// Without this, on Android the install button stays grey across app
+  /// restarts — the in-memory `_completedDownloadPath` is process-local and
+  /// the previous-only path that recovered it (`UpdatePage._checkForUpdatesInBackground`)
+  /// runs the disk scan only after a successful GitHub round-trip.
+  /// Offline / slow network / dismissed page = APK on disk, button never blue.
+  Future<void> recoverCompletedDownloadFromDisk() async {
+    if (_completedDownloadPath != null) return;
+    final release = _latestRelease;
+    if (release == null) return;
+    try {
+      final foundPath = await findCompletedDownload(release);
+      if (foundPath != null) {
+        _setCompletedDownload(foundPath, release.version);
+        LogService().log(
+            'Recovered completed download from disk: v${release.version} at $foundPath');
+      }
+    } catch (e) {
+      LogService().log('Error recovering completed download: $e');
+    }
   }
 
   /// Check if a completed download file exists for a given release version

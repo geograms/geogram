@@ -86,8 +86,14 @@ class _UpdatePageState extends State<UpdatePage> {
       _latestRelease = _updateService.getLatestRelease();
       _backups = await _updateService.listBackups();
 
-      // Check if there's already a completed download ready to install (in-memory state)
-      // Note: Filesystem check moved to after background update check to use latest version
+      // Check if there's already a completed download ready to install
+      // (in-memory state). If not, immediately scan disk for an APK matching
+      // the cached release — the previous behavior deferred this scan until
+      // after a successful GitHub round-trip, so on poor / no network the
+      // install button stayed grey even though the APK was on disk.
+      if (!_updateService.hasCompletedDownload && _latestRelease != null) {
+        await _updateService.recoverCompletedDownloadFromDisk();
+      }
       if (_updateService.hasCompletedDownload) {
         _completedDownloadPath = _updateService.completedDownloadPath;
       }

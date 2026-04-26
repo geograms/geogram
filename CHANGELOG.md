@@ -1,5 +1,11 @@
 # Geogram Desktop Changelog
 
+## 2026-04-26 - v1.39.0-beta.10
+
+### Fixes
+- Self-updater: the install button on the Updates page now lights up immediately when an APK from a prior session is already on disk, instead of staying grey until a fresh GitHub round-trip succeeds. The disk scan ran only deep inside the page's background-update-check flow — so on poor / no network, after backgrounding the app, after process restart, etc., the user saw a downloaded APK but no way to install it. `UpdateService` now recovers the completed-download state from disk both on `init()` and at the end of every `checkForUpdates()`, and `UpdatePage._loadData` does the same scan up-front so the button is correct even before the network call returns.
+- Self-updater: when `downloadUpdate` re-uses an already-complete partial-file (renames `.partial` → `.apk` without re-fetching), it now also fires `_setCompletedDownload` so the `completedDownloadPathNotifier` listeners (banner, install button) actually see the transition.
+
 ## 2026-04-25 - v1.39.0-beta.9
 
 ### Fixes
