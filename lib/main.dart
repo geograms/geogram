@@ -992,47 +992,53 @@ void main() async {
   return; // Early return since runApp is already called
 }
 
-/// Set up global crash handlers for Flutter errors
+/// Set up global crash handlers for Flutter errors.
+///
+/// Both handlers share a single rate-limiter: logging + native-channel
+/// notification are skipped after 5 errors in any 5-second window. This
+/// guards against two failure modes that look identical from outside:
+///   - OOM death spiral: every allocation triggers another error, and
+///     the crash log write itself allocates memory.
+///   - Layout overflow that fires every frame: a RenderFlex assert that
+///     re-fires on each rebuild burns the main isolate at 60 Hz writing
+///     identical crash records to disk and bouncing through the JNI
+///     channel, eventually starving the HTTP server and the UI.
+/// Either way, "stop logging the same thing 60 times per second" is the
+/// right move — the first few records are kept; the rest are dropped.
 void _setupCrashHandlers() {
-  // Handle Flutter framework errors (widget build errors, etc.)
-  FlutterError.onError = (FlutterErrorDetails details) {
-    // Use details.toString() for full context (widget tree, render object info)
-    // instead of just exceptionAsString() which only gives the error message
-    final fullError = details.toString();
+  DateTime? lastErrorTime;
+  int errorCount = 0;
 
-    // Log the error with full context
+  bool shouldDrop() {
+    final now = DateTime.now();
+    if (lastErrorTime != null &&
+        now.difference(lastErrorTime!).inSeconds < 5) {
+      errorCount++;
+      if (errorCount > 5) return true;
+    } else {
+      errorCount = 1;
+    }
+    lastErrorTime = now;
+    return false;
+  }
+
+  FlutterError.onError = (FlutterErrorDetails details) {
+    // Always present in debug consoles so devs see the issue.
+    FlutterError.presentError(details);
+    if (shouldDrop()) return;
+
+    // Use details.toString() for full context (widget tree, render object
+    // info) instead of just exceptionAsString().
+    final fullError = details.toString();
     CrashService().logCrashSync('FlutterError', fullError, details.stack);
 
-    // Present error in debug mode
-    FlutterError.presentError(details);
-
-    // For fatal errors, notify native for potential restart (with full context)
     if (details.silent != true) {
       CrashService().notifyNativeCrash(fullError, stackTrace: details.stack);
     }
   };
 
-  // Handle async errors that escape zones (platform dispatcher errors)
-  // Rate-limit error handling to prevent OOM crash loops.
-  // During OOM, every allocation triggers another error, and logging
-  // the error allocates more memory — creating a death spiral.
-  DateTime? _lastErrorTime;
-  int _errorCount = 0;
-
   PlatformDispatcher.instance.onError = (error, stack) {
-    final now = DateTime.now();
-    if (_lastErrorTime != null &&
-        now.difference(_lastErrorTime!).inSeconds < 5) {
-      _errorCount++;
-      if (_errorCount > 5) {
-        // Too many errors in 5s — stop logging to break OOM death spiral
-        return true;
-      }
-    } else {
-      _errorCount = 1;
-    }
-    _lastErrorTime = now;
-
+    if (shouldDrop()) return true;
     CrashService().logCrashSync('PlatformDispatcher', error, stack);
     // Don't notify native during OOM — the crash log write allocates
     // memory which triggers more OOM in a death spiral.
