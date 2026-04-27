@@ -3,7 +3,6 @@
  * License: Apache-2.0
  */
 
-import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -21,7 +20,6 @@ import '../services/groups_service.dart';
 import '../services/contact_service.dart';
 import '../services/profile_storage.dart';
 import '../services/profile_service.dart';
-import '../connection/connection_manager.dart';
 import '../services/shared_folder_service.dart';
 import '../services/shared_invitation_service.dart';
 import '../services/shared_sync_service.dart';
@@ -772,27 +770,56 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.appTitle),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.input),
-            tooltip: 'Join with code',
-            onPressed: _showJoinDialog,
-          ),
-        ],
-      ),
+      appBar: AppBar(title: Text(widget.appTitle)),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _folders.isEmpty
           ? _buildEmptyState(theme)
           : _buildFolderList(theme),
       floatingActionButton: FloatingActionButton(
-        onPressed: _showAddDialog,
+        onPressed: _showAddOrJoinSheet,
         tooltip: _i18n.t('add_shared_folder'),
         child: const Icon(Icons.add),
       ),
     );
+  }
+
+  Future<void> _showAddOrJoinSheet() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.create_new_folder),
+                title: const Text('Create a shared folder'),
+                subtitle: const Text(
+                  'Pick a folder on this device to share',
+                ),
+                onTap: () => Navigator.pop(ctx, 'add'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.input),
+                title: const Text('Join with invitation code'),
+                subtitle: const Text(
+                  'Paste a code someone sent you',
+                ),
+                onTap: () => Navigator.pop(ctx, 'join'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'add') {
+      await _showAddDialog();
+    } else if (choice == 'join') {
+      await _showJoinDialog();
+    }
   }
 
   Future<void> _showInviteDialog(SharedFolder folder) async {
@@ -978,90 +1005,18 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
   Future<({bool success, String? error, String? title})> _joinByCode(
     String code,
   ) async {
-    final parts = code.split('-');
-    if (parts.length != 2 || parts[0].isEmpty || parts[1].length != 4) {
-      return (
-        success: false,
-        error: 'Invalid code format (expected CALLSIGN-XXXX)',
-        title: null,
-      );
-    }
-    final hostCallsign = parts[0];
-    final profile = ProfileService().getProfile();
-
-    final validateResp = await ConnectionManager().apiRequest(
-      callsign: hostCallsign,
-      method: 'GET',
-      path:
-          '/api/shared/invitations/validate?code=${Uri.encodeQueryComponent(code)}',
+    final result = await SharedSyncService.instance.joinByCode(
+      code: code,
+      guestPlatform: kIsWeb ? 'web' : Platform.operatingSystem,
     );
-    if (!validateResp.success ||
-        validateResp.statusCode == null ||
-        validateResp.statusCode! >= 400) {
-      return (
-        success: false,
-        error: validateResp.error ?? 'Validate failed (${validateResp.statusCode})',
-        title: null,
-      );
+    if (mounted && result.success) {
+      await _loadFolders();
     }
-
-    final redeemResp = await ConnectionManager().apiRequest(
-      callsign: hostCallsign,
-      method: 'POST',
-      path: '/api/shared/invitations/redeem',
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'code': code,
-        'guest_npub': profile.npub,
-        'guest_callsign': profile.callsign.toUpperCase(),
-        'guest_name': profile.callsign.toUpperCase(),
-        'guest_platform': kIsWeb ? 'web' : Platform.operatingSystem,
-      }),
+    return (
+      success: result.success,
+      error: result.error,
+      title: result.folder?.title,
     );
-    if (!redeemResp.success ||
-        redeemResp.statusCode == null ||
-        redeemResp.statusCode! >= 400) {
-      return (
-        success: false,
-        error: redeemResp.error ?? 'Redeem failed (${redeemResp.statusCode})',
-        title: null,
-      );
-    }
-    final data = redeemResp.responseData;
-    Map<String, dynamic>? payload;
-    if (data is Map<String, dynamic>) {
-      payload = data;
-    } else if (data is String) {
-      payload = jsonDecode(data) as Map<String, dynamic>;
-    } else if (data is List<int>) {
-      payload = jsonDecode(utf8.decode(data, allowMalformed: true))
-          as Map<String, dynamic>;
-    }
-    if (payload == null || payload['success'] != true) {
-      return (
-        success: false,
-        error: payload?['error']?.toString() ?? 'Invalid redeem response',
-        title: null,
-      );
-    }
-    final remoteFolder = payload['folder'] as Map<String, dynamic>?;
-    final accessToken = payload['access_token'] as String?;
-    if (remoteFolder == null || accessToken == null) {
-      return (
-        success: false,
-        error: 'Redeem response missing folder or access_token',
-        title: null,
-      );
-    }
-    final joinedFolder =
-        SharedFolder.fromJson(remoteFolder).copyWith(location: '');
-    final saved = await _service.save(joinedFolder);
-    await SharedSyncService.instance.setAccessToken(
-      folderId: saved.id,
-      token: accessToken,
-    );
-    SharedSyncService.instance.requestSyncSoon(reason: 'joined folder');
-    return (success: true, error: null, title: saved.title);
   }
 
   Widget _buildEmptyState(ThemeData theme) {

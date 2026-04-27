@@ -198,6 +198,15 @@ class SharedInvitationService {
       );
     }
     final invite = _invitations[index];
+    if (invite.status == SharedInvitationStatus.accepted &&
+        invite.guestNpub == guestNpub &&
+        invite.accessToken != null) {
+      return SharedInvitationResult(
+        success: true,
+        status: 'accepted',
+        invitation: invite,
+      );
+    }
     if (!invite.isPending) {
       return SharedInvitationResult(
         success: false,

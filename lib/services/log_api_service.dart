@@ -23513,27 +23513,6 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
     }
   }
 
-  dynamic _decodeSharedPayload(dynamic data) {
-    if (data == null) return null;
-    if (data is Map || data is List) return data;
-    if (data is String) {
-      if (data.isEmpty) return null;
-      try {
-        return jsonDecode(data);
-      } catch (_) {
-        return null;
-      }
-    }
-    if (data is List<int>) {
-      try {
-        return jsonDecode(utf8.decode(data, allowMalformed: true));
-      } catch (_) {
-        return null;
-      }
-    }
-    return null;
-  }
-
   /// Handle shared folder debug actions
   Future<shelf.Response> _handleSharedAction(
     String action,
@@ -23696,6 +23675,10 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           );
 
         case 'shared_join':
+          // Calls the SAME code path as the UI's "Join with code" button so
+          // automated tests via this debug API exercise exactly what the UI
+          // does. Do not duplicate the logic — fix it in
+          // SharedSyncService.joinByCode if behavior needs to change.
           final code = (params['code'] as String?)?.trim().toUpperCase();
           if (code == null || code.isEmpty) {
             return shelf.Response.ok(
@@ -23703,121 +23686,26 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
               headers: headers,
             );
           }
-          final parts = code.split('-');
-          if (parts.length != 2 || parts[0].isEmpty || parts[1].length != 4) {
-            return shelf.Response.ok(
-              jsonEncode({
-                'success': false,
-                'error': 'Invalid code format (expected CALLSIGN-XXXX)',
-              }),
-              headers: headers,
-            );
-          }
-          final hostCallsign = parts[0];
-          final profile = ProfileService().getProfile();
-          // Step 1: validate
-          final validateResp = await ConnectionManager().apiRequest(
-            callsign: hostCallsign,
-            method: 'GET',
-            path:
-                '/api/shared/invitations/validate?code=${Uri.encodeQueryComponent(code)}',
+          final joinResult = await SharedSyncService.instance.joinByCode(
+            code: code,
+            guestPlatform:
+                params['guest_platform'] as String? ?? io.Platform.operatingSystem,
           );
-          if (!validateResp.success ||
-              validateResp.statusCode == null ||
-              validateResp.statusCode! >= 400) {
+          if (!joinResult.success) {
             return shelf.Response.ok(
               jsonEncode({
                 'success': false,
-                'error':
-                    'Validate failed: ${validateResp.error ?? 'HTTP ${validateResp.statusCode}'}',
+                'error': joinResult.error ?? 'Join failed',
               }),
               headers: headers,
             );
           }
-          final validatePayload = _decodeSharedPayload(validateResp.responseData);
-          if (validatePayload is! Map<String, dynamic> ||
-              validatePayload['success'] != true) {
-            return shelf.Response.ok(
-              jsonEncode({
-                'success': false,
-                'error': validatePayload is Map<String, dynamic>
-                    ? (validatePayload['error']?.toString() ?? 'Invalid invite')
-                    : 'Invalid validate response',
-              }),
-              headers: headers,
-            );
-          }
-          // Step 2: redeem
-          final redeemResp = await ConnectionManager().apiRequest(
-            callsign: hostCallsign,
-            method: 'POST',
-            path: '/api/shared/invitations/redeem',
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'code': code,
-              'guest_npub': profile.npub,
-              'guest_callsign': profile.callsign.toUpperCase(),
-              'guest_name': params['guest_name'] as String? ??
-                  profile.callsign.toUpperCase(),
-              'guest_platform':
-                  params['guest_platform'] as String? ?? io.Platform.operatingSystem,
-            }),
-          );
-          if (!redeemResp.success ||
-              redeemResp.statusCode == null ||
-              redeemResp.statusCode! >= 400) {
-            return shelf.Response.ok(
-              jsonEncode({
-                'success': false,
-                'error':
-                    'Redeem failed: ${redeemResp.error ?? 'HTTP ${redeemResp.statusCode}'}',
-              }),
-              headers: headers,
-            );
-          }
-          final redeemPayload = _decodeSharedPayload(redeemResp.responseData);
-          if (redeemPayload is! Map<String, dynamic> ||
-              redeemPayload['success'] != true) {
-            return shelf.Response.ok(
-              jsonEncode({
-                'success': false,
-                'error': redeemPayload is Map<String, dynamic>
-                    ? (redeemPayload['error']?.toString() ?? 'Redeem failed')
-                    : 'Invalid redeem response',
-              }),
-              headers: headers,
-            );
-          }
-          final remoteFolder =
-              redeemPayload['folder'] as Map<String, dynamic>?;
-          final accessToken = redeemPayload['access_token'] as String?;
-          if (remoteFolder == null || accessToken == null) {
-            return shelf.Response.ok(
-              jsonEncode({
-                'success': false,
-                'error': 'Redeem response missing folder or access_token',
-              }),
-              headers: headers,
-            );
-          }
-          // Save the folder locally with this device's auto location
-          final joinedFolder = SharedFolder.fromJson(remoteFolder);
-          final saved = await service.save(joinedFolder.copyWith(
-            // Ensure local persistence picks our default location.
-            location: '',
-          ));
-          await SharedSyncService.instance.setAccessToken(
-            folderId: saved.id,
-            token: accessToken,
-          );
-          // Trigger an immediate sync so the user sees content right away.
-          SharedSyncService.instance.requestSyncSoon(reason: 'joined folder');
           return shelf.Response.ok(
             jsonEncode({
               'success': true,
               'folder': {
-                ...saved.toJson(),
-                'filePath': saved.filePath,
+                ...joinResult.folder!.toJson(),
+                'filePath': joinResult.folder!.filePath,
               },
             }),
             headers: headers,

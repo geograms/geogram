@@ -22,8 +22,21 @@ import '../models/shared_folder.dart';
 import '../util/task_monitor_helpers.dart';
 import 'app_service.dart';
 import 'log_service.dart';
+import 'profile_service.dart';
 import 'profile_storage.dart';
 import 'shared_folder_service.dart';
+
+class SharedJoinResult {
+  final bool success;
+  final String? error;
+  final SharedFolder? folder;
+
+  const SharedJoinResult({
+    required this.success,
+    this.error,
+    this.folder,
+  });
+}
 
 class SharedSyncResult {
   final bool success;
@@ -548,6 +561,170 @@ class SharedSyncService {
       'version': 1,
       'tokens': _cachedAccessTokens,
     });
+  }
+
+  /// Validate + redeem an invitation code with the host, persist the
+  /// resulting folder locally, store the access token, and trigger an
+  /// immediate sync. Used by both the UI ("Join with code") and the
+  /// `shared_join` debug action — they MUST share this code path so
+  /// that automated tests exercise exactly what the UI does.
+  Future<SharedJoinResult> joinByCode({
+    required String code,
+    String? guestPlatform,
+  }) async {
+    final normalized = code.trim().toUpperCase();
+    final parts = normalized.split('-');
+    if (parts.length != 2 || parts[0].isEmpty || parts[1].length != 4) {
+      return const SharedJoinResult(
+        success: false,
+        error: 'Invalid code format (expected CALLSIGN-XXXX)',
+      );
+    }
+    final hostCallsign = parts[0];
+    final profile = ProfileService().getProfile();
+    if (profile.callsign.isEmpty) {
+      return const SharedJoinResult(
+        success: false,
+        error: 'No active profile callsign',
+      );
+    }
+    if (profile.callsign.toUpperCase() == hostCallsign) {
+      return const SharedJoinResult(
+        success: false,
+        error: 'You are the host of this invitation',
+      );
+    }
+
+    final service = await SharedFolderService.forCurrentProfile(
+      createIfMissing: true,
+    );
+    if (service == null) {
+      return const SharedJoinResult(
+        success: false,
+        error: 'No Shared app available on this profile',
+      );
+    }
+
+    final cm = ConnectionManager();
+
+    final validateResp = await cm.apiRequest(
+      callsign: hostCallsign,
+      method: 'GET',
+      path:
+          '/api/shared/invitations/validate?code=${Uri.encodeQueryComponent(normalized)}',
+    );
+    if (!validateResp.success ||
+        validateResp.statusCode == null ||
+        validateResp.statusCode! >= 400) {
+      return SharedJoinResult(
+        success: false,
+        error:
+            'Validate failed: ${validateResp.error ?? 'HTTP ${validateResp.statusCode}'}',
+      );
+    }
+    final validatePayload = _decodeJsonPayload(validateResp.responseData);
+    if (validatePayload is! Map<String, dynamic>) {
+      return const SharedJoinResult(
+        success: false,
+        error: 'Invalid validate response',
+      );
+    }
+    if (validatePayload['success'] != true) {
+      return SharedJoinResult(
+        success: false,
+        error: validatePayload['error']?.toString() ?? 'Invalid invite',
+      );
+    }
+
+    final redeemResp = await cm.apiRequest(
+      callsign: hostCallsign,
+      method: 'POST',
+      path: '/api/shared/invitations/redeem',
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'code': normalized,
+        'guest_npub': profile.npub,
+        'guest_callsign': profile.callsign.toUpperCase(),
+        'guest_name': profile.callsign.toUpperCase(),
+        if (guestPlatform != null) 'guest_platform': guestPlatform,
+      }),
+    );
+    if (!redeemResp.success ||
+        redeemResp.statusCode == null ||
+        redeemResp.statusCode! >= 400) {
+      return SharedJoinResult(
+        success: false,
+        error:
+            'Redeem failed: ${redeemResp.error ?? 'HTTP ${redeemResp.statusCode}'}',
+      );
+    }
+    final redeemPayload = _decodeJsonPayload(redeemResp.responseData);
+    if (redeemPayload is! Map<String, dynamic>) {
+      LogService().log(
+        'SharedSyncService.joinByCode: redeem returned non-map: '
+        '${redeemResp.responseData.runtimeType}',
+      );
+      return const SharedJoinResult(
+        success: false,
+        error: 'Invalid redeem response',
+      );
+    }
+    if (redeemPayload['success'] != true) {
+      return SharedJoinResult(
+        success: false,
+        error: redeemPayload['error']?.toString() ?? 'Redeem failed',
+      );
+    }
+    final remoteFolder = redeemPayload['folder'] as Map<String, dynamic>?;
+    final accessToken = redeemPayload['access_token'] as String?;
+    if (remoteFolder == null || accessToken == null) {
+      LogService().log(
+        'SharedSyncService.joinByCode: redeem payload missing fields '
+        '(folder=${remoteFolder != null}, '
+        'access_token=${accessToken != null})',
+      );
+      return const SharedJoinResult(
+        success: false,
+        error: 'Redeem response missing folder or access_token',
+      );
+    }
+
+    try {
+      final joined = SharedFolder.fromJson(remoteFolder).copyWith(
+        location: '',
+      );
+      final saved = await service.save(joined);
+      await setAccessToken(folderId: saved.id, token: accessToken);
+      requestSyncSoon(reason: 'joined folder');
+      return SharedJoinResult(success: true, folder: saved);
+    } catch (e, stack) {
+      LogService().log('SharedSyncService.joinByCode: save failed: $e');
+      LogService().log('Stack: $stack');
+      return SharedJoinResult(
+        success: false,
+        error: 'Local save failed: $e',
+      );
+    }
+  }
+
+  Object? _decodeJsonPayload(Object? data) {
+    if (data == null) return null;
+    if (data is Map<String, dynamic>) return data;
+    if (data is List<int>) {
+      try {
+        return jsonDecode(utf8.decode(data, allowMalformed: true));
+      } catch (_) {
+        return null;
+      }
+    }
+    if (data is String) {
+      try {
+        return jsonDecode(data);
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
   }
 
   Future<void> clearAccessToken(String folderId) async {
