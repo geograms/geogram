@@ -750,7 +750,17 @@ class UpdateService {
   /// Get download URL for current platform
   String? getDownloadUrl(ReleaseInfo release) {
     final platform = detectPlatform();
-    final assetType = platform.assetType;
+    var assetType = platform.assetType;
+
+    // On Android, the running build's signing flavor determines which
+    // variant Android will accept as an in-place upgrade. A debug-signed
+    // app cannot be upgraded by a release-signed APK (or vice versa);
+    // Android rejects it with INSTALL_FAILED_UPDATE_INCOMPATIBLE.
+    // Match the variant to the running build's signature flavor so the
+    // user gets a working auto-update either way.
+    if (!kIsWeb && Platform.isAndroid && kDebugMode) {
+      assetType = UpdateAssetType.androidDebug;
+    }
 
     // Check for custom download URL pattern
     if (_settings?.downloadUrlPattern.isNotEmpty == true) {

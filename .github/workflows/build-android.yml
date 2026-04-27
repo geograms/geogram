@@ -132,19 +132,11 @@ jobs:
       timeout-minutes: 15
       run: flutter build appbundle --release
 
-    - name: Setup debug keystore (shared with local builds for auto-update)
-      env:
-        ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
-      run: |
-        if [ -n "$ANDROID_DEBUG_KEYSTORE_BASE64" ]; then
-          mkdir -p ~/.android
-          echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > ~/.android/debug.keystore
-          echo "Debug keystore installed from secret"
-        else
-          echo "No debug keystore secret found, using auto-generated"
-        fi
-
-    - name: Build Debug APK (for station auto-update)
+    - name: Build Debug APK (for auto-update + stations)
+      # Signing for the debug variant is wired in android/app/build.gradle.kts
+      # to use the keystore committed at android/app/debug.keystore — same
+      # signature on every dev machine and every CI run, so in-app auto-update
+      # never hits INSTALL_FAILED_UPDATE_INCOMPATIBLE.
       timeout-minutes: 30
       run: flutter build apk --debug
 

@@ -12,3 +12,8 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# Allow the shared debug keystore so every dev machine and CI sign debug
+# builds with the same key. Without this, auto-update fails with
+# INSTALL_FAILED_UPDATE_INCOMPATIBLE every time the signing machine changes.
+!app/debug.keystore

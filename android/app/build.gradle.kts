@@ -45,6 +45,18 @@ android {
     }
 
     signingConfigs {
+        // Override the default debug signingConfig to use a keystore committed
+        // to the repo (android/app/debug.keystore). Without this, every dev
+        // machine and every CI runner produces APKs signed by their own
+        // auto-generated ~/.android/debug.keystore — and the in-app updater
+        // fails with INSTALL_FAILED_UPDATE_INCOMPATIBLE on every beta.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+
         create("release") {
             if (keystorePropertiesFile.exists()) {
                 keyAlias = keystoreProperties["keyAlias"] as String
