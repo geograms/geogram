@@ -22054,6 +22054,188 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
             headers: headers,
           );
 
+        case 'mirror_add_peer':
+          final callsign = (params['callsign'] as String?)?.trim() ?? '';
+          final npub = (params['npub'] as String?)?.trim() ?? '';
+          final name = (params['name'] as String?)?.trim();
+          final address = (params['address'] as String?)?.trim();
+          final platform = (params['platform'] as String?)?.trim();
+          final apps = (params['apps'] as List<dynamic>?)
+                  ?.map((value) => value.toString().trim())
+                  .where((value) => value.isNotEmpty)
+                  .toList() ??
+              const <String>[];
+
+          if (callsign.isEmpty || npub.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing callsign or npub parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final configService = MirrorConfigService.instance;
+          final existing = configService.config?.peers
+              .where(
+                (peer) =>
+                    peer.peerId == npub ||
+                    peer.npub == npub ||
+                    peer.callsign.toUpperCase() == callsign.toUpperCase(),
+              )
+              .firstOrNull;
+
+          final addresses = <String>[
+            if (address != null && address.isNotEmpty) address,
+            ...?existing?.addresses.where((entry) => entry != address),
+          ];
+
+          final mergedApps = <String, AppSyncConfig>{
+            ...?existing?.apps,
+            for (final appId in apps)
+              appId: AppSyncConfig(
+                appId: appId,
+                enabled: true,
+                style: SyncStyle.sendReceive,
+              ),
+          };
+
+          final peer = MirrorPeer(
+            peerId: existing?.peerId ?? npub,
+            npub: npub,
+            name: name?.isNotEmpty == true ? name! : (existing?.name ?? callsign),
+            callsign: callsign,
+            addresses: addresses,
+            apps: mergedApps,
+            connectionState: existing?.connectionState ?? PeerConnectionState.disconnected,
+            lastSyncAt: existing?.lastSyncAt,
+            lastSeenAt: DateTime.now(),
+            lastQuality: existing?.lastQuality,
+            platform: platform?.isNotEmpty == true ? platform : existing?.platform,
+            autoSyncMode: existing?.autoSyncMode ?? AutoSyncMode.manual,
+            syncIntervalMinutes: existing?.syncIntervalMinutes,
+          );
+
+          if (existing == null) {
+            await configService.addPeer(peer);
+          } else {
+            await configService.updatePeer(peer);
+          }
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Mirror peer saved',
+              'peer': peer.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_remove_peer':
+          final peerId = (params['peer_id'] as String?)?.trim() ?? '';
+          if (peerId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing peer_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+
+          final configService = MirrorConfigService.instance;
+          final peer = configService.config?.peers
+              .where(
+                (entry) =>
+                    entry.peerId == peerId ||
+                    entry.npub == peerId ||
+                    entry.callsign.toUpperCase() == peerId.toUpperCase(),
+              )
+              .firstOrNull;
+
+          if (peer == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Peer not found',
+              }),
+              headers: headers,
+            );
+          }
+
+          await configService.removePeer(peer.peerId);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Mirror peer removed',
+              'peer_id': peer.peerId,
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_update_peer_app':
+          final peerId = params['peer_id'] as String?;
+          final appId = params['app_id'] as String?;
+          if (peerId == null || peerId.isEmpty || appId == null || appId.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing peer_id or app_id parameter',
+              }),
+              headers: headers,
+            );
+          }
+          final enabledParam = params['enabled'];
+          final enabled = enabledParam == null
+              ? true
+              : enabledParam == true || enabledParam == 'true';
+          final styleParam = params['style'] as String?;
+          final style = switch (styleParam) {
+            'receiveOnly' => SyncStyle.receiveOnly,
+            'sendOnly' => SyncStyle.sendOnly,
+            'paused' => SyncStyle.paused,
+            _ => SyncStyle.sendReceive,
+          };
+          final configService = MirrorConfigService.instance;
+          final peer = configService.config?.peers
+              .where(
+                (entry) =>
+                    entry.peerId == peerId ||
+                    entry.npub == peerId ||
+                    entry.callsign.toUpperCase() == peerId.toUpperCase(),
+              )
+              .firstOrNull;
+          if (peer == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Peer not found',
+              }),
+              headers: headers,
+            );
+          }
+          await configService.updatePeerAppConfig(
+            peer.peerId,
+            appId,
+            AppSyncConfig(
+              appId: appId,
+              enabled: enabled,
+              style: style,
+            ),
+          );
+          final updated = configService.config?.peers
+              .where((entry) => entry.peerId == peer.peerId)
+              .firstOrNull;
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'peer': updated?.toJson(),
+            }),
+            headers: headers,
+          );
+
         case 'mirror_diff_test':
           // Test diffManifest correctness using REAL profile data.
           //

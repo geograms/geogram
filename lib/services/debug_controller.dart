@@ -169,6 +169,12 @@ enum DebugAction {
   /// Remove an allowed peer
   mirrorRemoveAllowedPeer,
 
+  /// Register or update a mirror peer explicitly
+  mirrorAddPeer,
+
+  /// Remove a mirror peer explicitly
+  mirrorRemovePeer,
+
   /// Open Mirror Settings page
   mirrorOpenSettings,
 
@@ -648,6 +654,36 @@ class DebugController {
   /// Remove an allowed peer from mirror sync
   void triggerMirrorRemoveAllowedPeer({required String npub}) {
     triggerAction(DebugAction.mirrorRemoveAllowedPeer, params: {'npub': npub});
+  }
+
+  /// Register or update a mirror peer explicitly
+  void triggerMirrorAddPeer({
+    required String callsign,
+    required String npub,
+    String? name,
+    String? address,
+    String? platform,
+    List<String>? apps,
+  }) {
+    triggerAction(
+      DebugAction.mirrorAddPeer,
+      params: {
+        'callsign': callsign,
+        'npub': npub,
+        if (name != null) 'name': name,
+        if (address != null) 'address': address,
+        if (platform != null) 'platform': platform,
+        if (apps != null) 'apps': apps,
+      },
+    );
+  }
+
+  /// Remove a mirror peer explicitly
+  void triggerMirrorRemovePeer({required String peerId}) {
+    triggerAction(
+      DebugAction.mirrorRemovePeer,
+      params: {'peer_id': peerId},
+    );
   }
 
   /// Trigger opening Mirror Settings page
@@ -1162,6 +1198,33 @@ class DebugController {
         'action': 'mirror_revoke_access',
         'description': 'Revoke mirror access for a peer',
         'params': {'npub': 'Peer NOSTR public key to revoke (required)'},
+      },
+      {
+        'action': 'mirror_add_peer',
+        'description': 'Add or update a mirror peer record',
+        'params': {
+          'callsign': 'Peer callsign (required)',
+          'npub': 'Peer NOSTR public key (required)',
+          'name': '(optional) Display name',
+          'address': '(optional) Direct or relay address',
+          'platform': '(optional) Peer platform',
+          'apps': '(optional) List of app ids to enable',
+        },
+      },
+      {
+        'action': 'mirror_remove_peer',
+        'description': 'Remove a mirror peer record',
+        'params': {'peer_id': 'Peer ID, npub, or callsign (required)'},
+      },
+      {
+        'action': 'mirror_update_peer_app',
+        'description': 'Update a peer app sync config',
+        'params': {
+          'peer_id': 'Peer ID or npub (required)',
+          'app_id': 'App id (required)',
+          'enabled': 'true/false (optional, default true)',
+          'style': 'sendReceive|receiveOnly|sendOnly|paused (optional)',
+        },
       },
       {
         'action': 'profile_list',

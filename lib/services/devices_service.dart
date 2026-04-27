@@ -470,6 +470,20 @@ class DevicesService {
         );
         break;
 
+      case DebugAction.mirrorAddPeer:
+        // Mirror peer registration is handled by the debug API / config layer.
+        LogService().log(
+          'DevicesService: Mirror peer registration handled by MirrorConfigService',
+        );
+        break;
+
+      case DebugAction.mirrorRemovePeer:
+        // Mirror peer removal is handled by the debug API / config layer.
+        LogService().log(
+          'DevicesService: Mirror peer removal handled by MirrorConfigService',
+        );
+        break;
+
       case DebugAction.disconnectStation:
         // Station disconnection is handled by StationService
         LogService().log(

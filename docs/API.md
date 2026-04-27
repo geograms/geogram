@@ -4186,6 +4186,16 @@ curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "mirror_revoke_access", "npub": "npub1..."}'
 
+# Add or update a mirror peer record
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_add_peer", "callsign": "X3TEGE", "npub": "npub1...", "address": "http://192.168.178.89:3456", "apps": ["blog", "shared"]}'
+
+# Remove a mirror peer record
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_remove_peer", "peer_id": "npub1..."}'
+
 # Check auto-sync timer status
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
