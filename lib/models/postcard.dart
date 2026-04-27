@@ -197,6 +197,56 @@ class PostcardAcknowledgment {
   }
 }
 
+/// Compact "I am carrying this" record appended by a courier when
+/// they pick the postcard up to physically transport it. Smaller than
+/// a full STAMP — no coordinates, no transmission method — because it
+/// describes intent ("I'm taking this with me") rather than a hop.
+/// The signature covers `signablePart()` and is verifiable against
+/// [carrierNpub] using a Schnorr verifier.
+class CarryRecord {
+  final String carrierCallsign;
+  final String carrierNpub;
+  final String timestamp; // YYYY-MM-DD HH:MM_ss
+  final String signature; // hex Schnorr sig over signablePart()
+
+  const CarryRecord({
+    required this.carrierCallsign,
+    required this.carrierNpub,
+    required this.timestamp,
+    required this.signature,
+  });
+
+  /// Bytes that the [signature] covers.
+  String signablePart() =>
+      'CARRY|$carrierCallsign|$carrierNpub|$timestamp';
+
+  String get displayTimestamp => timestamp.replaceAll('_', ':');
+
+  DateTime get dateTime {
+    try {
+      return DateTime.parse(timestamp.replaceAll('_', ':'));
+    } catch (_) {
+      return DateTime.now();
+    }
+  }
+
+  Map<String, dynamic> toJson() => {
+        'carrierCallsign': carrierCallsign,
+        'carrierNpub': carrierNpub,
+        'timestamp': timestamp,
+        'signature': signature,
+      };
+
+  factory CarryRecord.fromJson(Map<String, dynamic> json) {
+    return CarryRecord(
+      carrierCallsign: json['carrierCallsign'] as String,
+      carrierNpub: json['carrierNpub'] as String,
+      timestamp: json['timestamp'] as String,
+      signature: json['signature'] as String,
+    );
+  }
+}
+
 /// Model representing recipient location hint
 class RecipientLocation {
   final double latitude;
@@ -260,6 +310,7 @@ class Postcard {
   final PostcardDeliveryReceipt? deliveryReceipt;
   final List<PostcardStamp> returnStamps; // Return journey stamps
   final PostcardAcknowledgment? acknowledgment;
+  final List<CarryRecord> carries; // Couriers who picked it up
 
   // Additional data
   final List<String> attachments; // Photo filenames, etc.
@@ -284,6 +335,7 @@ class Postcard {
     this.deliveryReceipt,
     this.returnStamps = const [],
     this.acknowledgment,
+    this.carries = const [],
     this.attachments = const [],
     this.contributorCounts = const {},
   });
@@ -431,6 +483,7 @@ class Postcard {
     PostcardDeliveryReceipt? deliveryReceipt,
     List<PostcardStamp>? returnStamps,
     PostcardAcknowledgment? acknowledgment,
+    List<CarryRecord>? carries,
     List<String>? attachments,
     Map<String, int>? contributorCounts,
   }) {
@@ -453,6 +506,7 @@ class Postcard {
       deliveryReceipt: deliveryReceipt ?? this.deliveryReceipt,
       returnStamps: returnStamps ?? this.returnStamps,
       acknowledgment: acknowledgment ?? this.acknowledgment,
+      carries: carries ?? this.carries,
       attachments: attachments ?? this.attachments,
       contributorCounts: contributorCounts ?? this.contributorCounts,
     );
