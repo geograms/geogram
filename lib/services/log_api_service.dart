@@ -142,7 +142,10 @@ import '../server/mixins/chat_modification_mixin.dart';
 import '../server/mixins/content_browse_mixin.dart';
 import '../server/mixins/contributor_submit_mixin.dart';
 import '../models/shared_folder.dart';
+import '../models/shared_invitation.dart';
 import 'shared_folder_service.dart';
+import 'shared_invitation_service.dart';
+import 'shared_sync_service.dart';
 import 'groups_service.dart';
 import '../models/app.dart';
 import '../tracker/models/tracker_visibility.dart';
@@ -161,6 +164,7 @@ import '../work/models/ndf_document.dart';
 import '../work/models/ndf_interaction_settings.dart';
 import 'package:archive/archive.dart';
 import 'file_browser_cache_service.dart';
+import 'thumbnail_generator_service.dart';
 import '../util/video_metadata_extractor.dart';
 import '../api/handlers/feedback_handler.dart';
 import '../api/handlers/feedback_delete_helper.dart';
@@ -733,6 +737,11 @@ class LogApiService
     // Mirror Sync API endpoints
     if (urlPath.startsWith('api/mirror/')) {
       return await _handleMirrorRequest(request, urlPath, headers);
+    }
+
+    // Shared app sync API endpoints
+    if (urlPath.startsWith('api/shared/')) {
+      return await _handleSharedRequest(request, urlPath, headers);
     }
 
     // P2P Transfer API endpoints
@@ -3319,6 +3328,11 @@ class LogApiService
       // Handle task monitor debug actions
       if (action.toLowerCase().startsWith('task_')) {
         return _handleTaskAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle thumbnail subsystem debug actions
+      if (action.toLowerCase().startsWith('thumbnail_')) {
+        return await _handleThumbnailAction(action.toLowerCase(), params, headers);
       }
 
       // Handle hotspot portal debug actions
@@ -19699,6 +19713,404 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
     );
   }
 
+  /// Router for /api/shared/... — Shared-app sync endpoints. Independent
+  /// from the Mirror endpoints; access is gated per-folder via the
+  /// X-Shared-Token header issued at invite redemption.
+  Future<shelf.Response> _handleSharedRequest(
+    shelf.Request request,
+    String urlPath,
+    Map<String, String> headers,
+  ) async {
+    // GET /api/shared/invitations/validate
+    if (urlPath == 'api/shared/invitations/validate' &&
+        request.method == 'GET') {
+      return _handleSharedInviteValidate(request, headers);
+    }
+    // POST /api/shared/invitations/redeem
+    if (urlPath == 'api/shared/invitations/redeem' &&
+        request.method == 'POST') {
+      return _handleSharedInviteRedeem(request, headers);
+    }
+
+    final folderId = _extractFolderId(urlPath);
+    if (folderId == null) {
+      return shelf.Response.notFound(
+        jsonEncode({'error': 'Shared endpoint not found'}),
+        headers: headers,
+      );
+    }
+    final tail = urlPath.substring('api/shared/folders/'.length + folderId.length);
+    if (tail == '/manifest' && request.method == 'GET') {
+      return _handleSharedManifest(folderId, request, headers);
+    }
+    if (tail == '/file' && request.method == 'GET') {
+      return _handleSharedFileGet(folderId, request, headers);
+    }
+    if (tail == '/file' && request.method == 'POST') {
+      return _handleSharedFilePost(folderId, request, headers);
+    }
+    if (tail == '/delete' && request.method == 'POST') {
+      return _handleSharedFileDelete(folderId, request, headers);
+    }
+    return shelf.Response.notFound(
+      jsonEncode({'error': 'Shared endpoint not found'}),
+      headers: headers,
+    );
+  }
+
+  String? _extractFolderId(String urlPath) {
+    const prefix = 'api/shared/folders/';
+    if (!urlPath.startsWith(prefix)) return null;
+    final rest = urlPath.substring(prefix.length);
+    final slash = rest.indexOf('/');
+    if (slash <= 0) return null;
+    return rest.substring(0, slash);
+  }
+
+  Future<({SharedFolder folder, SharedInvitation invitation})?>
+      _resolveSharedRequest(
+    String folderId,
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    final token = request.headers['x-shared-token'] ??
+        request.headers['X-Shared-Token'];
+    if (token == null || token.isEmpty) return null;
+    final invite = await SharedInvitationService.instance
+        .findByAccessToken(token);
+    if (invite == null) return null;
+    if (invite.folderId != folderId) return null;
+    final service = await SharedFolderService.forCurrentProfile();
+    if (service == null) return null;
+    final folders = await service.loadAll();
+    final folder = folders.cast<SharedFolder?>().firstWhere(
+      (f) => f?.id == folderId,
+      orElse: () => null,
+    );
+    if (folder == null) return null;
+    if (!service.isOwnedLocally(folder)) return null;
+    return (folder: folder, invitation: invite);
+  }
+
+  Future<shelf.Response> _handleSharedManifest(
+    String folderId,
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final resolved = await _resolveSharedRequest(folderId, request, headers);
+      if (resolved == null) {
+        return shelf.Response.forbidden(
+          jsonEncode({'success': false, 'error': 'Invalid token'}),
+          headers: headers,
+        );
+      }
+      final service = await SharedFolderService.forCurrentProfile();
+      if (service == null) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'success': false, 'error': 'No shared service'}),
+          headers: headers,
+        );
+      }
+      final snapshots = await service.snapshotFiles(resolved.folder, hash: true);
+      final tombstones = await SyncVersionService.instance.listTombstones(
+        'shared',
+        storage: AppService().profileStorage,
+      );
+      final folderPrefix = '${resolved.folder.id}/';
+      final folderTombstones = tombstones
+          .where((t) => t.path.startsWith(folderPrefix))
+          .map((t) => {
+                'path': t.path.substring(folderPrefix.length),
+                'deleted_at': t.deletedAt,
+                if (t.size != null) 'size': t.size,
+                if (t.sha1 != null) 'sha1': t.sha1,
+              })
+          .toList();
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'files': snapshots.values.map((s) => s.toJson()).toList(),
+          'tombstones': folderTombstones,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('Shared manifest error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleSharedFileGet(
+    String folderId,
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final resolved = await _resolveSharedRequest(folderId, request, headers);
+      if (resolved == null) {
+        return shelf.Response.forbidden(
+          jsonEncode({'success': false, 'error': 'Invalid token'}),
+          headers: headers,
+        );
+      }
+      final filePath = request.url.queryParameters['path']?.trim();
+      if (filePath == null || filePath.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'success': false, 'error': 'Missing path'}),
+          headers: headers,
+        );
+      }
+      final service = await SharedFolderService.forCurrentProfile();
+      if (service == null) {
+        return shelf.Response.internalServerError(
+          body: jsonEncode({'success': false, 'error': 'No shared service'}),
+          headers: headers,
+        );
+      }
+      final bytes = await service.readFile(
+        folder: resolved.folder,
+        relativePath: filePath,
+      );
+      if (bytes == null) {
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'exists': false, 'path': filePath}),
+          headers: headers,
+        );
+      }
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'exists': true,
+          'path': filePath,
+          'size': bytes.length,
+          'content_b64': base64Encode(bytes),
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('Shared file GET error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleSharedFilePost(
+    String folderId,
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final resolved = await _resolveSharedRequest(folderId, request, headers);
+      if (resolved == null) {
+        return shelf.Response.forbidden(
+          jsonEncode({'success': false, 'error': 'Invalid token'}),
+          headers: headers,
+        );
+      }
+      final body = jsonDecode(await request.readAsString())
+          as Map<String, dynamic>;
+      final filePath = (body['path'] as String?)?.trim();
+      final b64 = body['content_b64'] as String?;
+      if (filePath == null || filePath.isEmpty || b64 == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing path or content_b64',
+          }),
+          headers: headers,
+        );
+      }
+      final bytes = Uint8List.fromList(base64Decode(b64));
+      await SharedSyncService.instance.hostApplyWrite(
+        folderId: folderId,
+        relativePath: filePath,
+        bytes: bytes,
+      );
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'path': filePath,
+          'size': bytes.length,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('Shared file POST error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleSharedFileDelete(
+    String folderId,
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final resolved = await _resolveSharedRequest(folderId, request, headers);
+      if (resolved == null) {
+        return shelf.Response.forbidden(
+          jsonEncode({'success': false, 'error': 'Invalid token'}),
+          headers: headers,
+        );
+      }
+      final body = jsonDecode(await request.readAsString())
+          as Map<String, dynamic>;
+      final filePath = (body['path'] as String?)?.trim();
+      if (filePath == null || filePath.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'success': false, 'error': 'Missing path'}),
+          headers: headers,
+        );
+      }
+      await SharedSyncService.instance.hostApplyDelete(
+        folderId: folderId,
+        relativePath: filePath,
+      );
+      return shelf.Response.ok(
+        jsonEncode({'success': true, 'path': filePath}),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('Shared file DELETE error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleSharedInviteValidate(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final code = request.url.queryParameters['code']?.trim() ?? '';
+      if (code.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'success': false, 'error': 'Missing code'}),
+          headers: headers,
+        );
+      }
+      final result = await SharedInvitationService.instance.validateInvite(code);
+      Map<String, dynamic>? folderJson;
+      if (result.success && result.invitation != null) {
+        final service = await SharedFolderService.forCurrentProfile();
+        if (service != null) {
+          final folders = await service.loadAll();
+          final folder = folders.cast<SharedFolder?>().firstWhere(
+            (f) => f?.id == result.invitation!.folderId,
+            orElse: () => null,
+          );
+          if (folder != null) {
+            folderJson = {
+              'id': folder.id,
+              'title': folder.title,
+              'description': folder.description,
+              'visibility': folder.visibility.value,
+              'hostCallsign': folder.hostCallsign,
+              'hostNpub': folder.hostNpub,
+            };
+          }
+        }
+      }
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': result.success,
+          'status': result.status,
+          if (result.error != null) 'error': result.error,
+          if (folderJson != null) 'folder': folderJson,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('Shared invite validate error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleSharedInviteRedeem(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = jsonDecode(await request.readAsString())
+          as Map<String, dynamic>;
+      final code = (body['code'] as String?)?.trim() ?? '';
+      final guestNpub = (body['guest_npub'] as String?)?.trim() ?? '';
+      final guestCallsign = (body['guest_callsign'] as String?)?.trim() ?? '';
+      final guestName = (body['guest_name'] as String?)?.trim() ?? '';
+      final guestPlatform = (body['guest_platform'] as String?)?.trim();
+      if (code.isEmpty || guestNpub.isEmpty || guestCallsign.isEmpty ||
+          guestName.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing code or guest identity fields',
+          }),
+          headers: headers,
+        );
+      }
+      final result = await SharedInvitationService.instance.redeemInvite(
+        code: code,
+        guestNpub: guestNpub,
+        guestCallsign: guestCallsign,
+        guestName: guestName,
+        guestPlatform: guestPlatform,
+      );
+      Map<String, dynamic>? folderJson;
+      if (result.success && result.invitation != null) {
+        final service = await SharedFolderService.forCurrentProfile();
+        if (service != null) {
+          final folders = await service.loadAll();
+          final folder = folders.cast<SharedFolder?>().firstWhere(
+            (f) => f?.id == result.invitation!.folderId,
+            orElse: () => null,
+          );
+          if (folder != null) {
+            folderJson = folder.toJson();
+            // Strip the host's localLocations — those are private to the host.
+            folderJson.remove('localLocations');
+          }
+        }
+      }
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': result.success,
+          'status': result.status,
+          if (result.error != null) 'error': result.error,
+          if (result.invitation?.accessToken != null)
+            'access_token': result.invitation!.accessToken,
+          if (folderJson != null) 'folder': folderJson,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('Shared invite redeem error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
   /// Handle GET /api/mirror/challenge - Generate authentication challenge
   Future<shelf.Response> _handleMirrorChallenge(
     shelf.Request request,
@@ -19910,13 +20322,16 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
 
       // If folder doesn't exist on disk, return an empty manifest so the
       // peer can detect all its local files as pushable uploads.
-      final folderExists = await io.Directory(folderPath).exists();
+      final storage = AppService().profileStorage;
+      final folderExists = storage != null
+          ? await storage.directoryExists(folder)
+          : await io.Directory(folderPath).exists();
 
       MirrorManifest manifest;
       if (!folderExists) {
         final tombstones = await SyncVersionService.instance.listTombstones(
           folder,
-          storage: AppService().profileStorage,
+          storage: storage,
         );
         manifest = MirrorManifest(
           folder: folder,
@@ -19929,7 +20344,6 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       } else {
         final indexPath = StorageConfig().getFileIndexPath(tokenData.peerCallsign);
         final fileIndex = FileIndexService(indexPath);
-        final storage = AppService().profileStorage;
         try {
           manifest = await mirrorService.generateManifest(
             storage != null ? '${tokenData.peerCallsign}/$folder' : folderPath,
@@ -20025,7 +20439,9 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       try {
         for (final folder in kSyncableFolders) {
           final folderPath = '$callsignDir/$folder';
-          final exists = await io.Directory(folderPath).exists();
+          final exists = storage != null
+              ? await storage.directoryExists(folder)
+              : await io.Directory(folderPath).exists();
           MirrorManifest manifest;
           if (!exists) {
             final tombstones = await SyncVersionService.instance.listTombstones(
@@ -20375,12 +20791,6 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         await SyncVersionService.instance.removeTombstone(folder, filePath);
       }
 
-      if (folder == 'shared') {
-        _fireSharedSyncActivity(
-          summary: 'File changed: $filePath',
-          callsign: tokenData.peerCallsign,
-        );
-      }
 
       return shelf.Response.ok(
         jsonEncode({
@@ -20517,13 +20927,6 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         storage: storage,
       );
 
-      if (folder == 'shared') {
-        _fireSharedSyncActivity(
-          summary: 'File deleted: $filePath',
-          callsign: tokenData.peerCallsign,
-        );
-      }
-
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
@@ -20544,23 +20947,6 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         headers: headers,
       );
     }
-  }
-
-  void _fireSharedSyncActivity({
-    required String summary,
-    required String callsign,
-  }) {
-    EventBus().fire(
-      NowItemEvent(
-        id: 'shared:$summary:${DateTime.now().toIso8601String()}',
-        appType: 'shared',
-        sourceId: 'shared',
-        sourceName: 'Shared files',
-        callsign: callsign,
-        summary: summary,
-        priority: NowPriority.sharedFile,
-      ),
-    );
   }
 
   /// Handle POST /api/mirror/pair - Reciprocal pairing
@@ -23127,6 +23513,27 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
     }
   }
 
+  dynamic _decodeSharedPayload(dynamic data) {
+    if (data == null) return null;
+    if (data is Map || data is List) return data;
+    if (data is String) {
+      if (data.isEmpty) return null;
+      try {
+        return jsonDecode(data);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (data is List<int>) {
+      try {
+        return jsonDecode(utf8.decode(data, allowMalformed: true));
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
   /// Handle shared folder debug actions
   Future<shelf.Response> _handleSharedAction(
     String action,
@@ -23142,100 +23549,54 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         );
       }
 
-      // Find shared app
-      final apps = await AppService().loadApps();
-      final sharedApp = apps.cast<App?>().firstWhere(
-        (a) => a?.type == 'shared',
-        orElse: () => null,
+      final service = await SharedFolderService.forCurrentProfile(
+        createIfMissing: true,
       );
-      if (sharedApp?.storagePath == null) {
+      if (service == null) {
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'No shared app found'}),
           headers: headers,
         );
       }
 
-      final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
-        profileStorage, sharedApp!.storagePath!,
-      );
-      final service = SharedFolderService();
-      service.setStorage(scopedStorage);
-      await service.initializeApp(sharedApp.storagePath!);
+      Future<SharedFolder?> findFolder(String? key) async {
+        if (key == null || key.isEmpty) return null;
+        return service.findFolder(key);
+      }
 
       switch (action) {
         case 'shared_add':
           final title = params['title'] as String?;
           final location = params['location'] as String?;
-          if (title == null || title.isEmpty || location == null || location.isEmpty) {
+          if (title == null || title.isEmpty) {
             return shelf.Response.ok(
-              jsonEncode({
-                'success': false,
-                'error': 'Missing title or location',
-              }),
+              jsonEncode({'success': false, 'error': 'Missing title'}),
               headers: headers,
             );
           }
-
-          final apps = await AppService().loadApps();
-          var sharedApp = apps.where((a) => a.type == 'shared').firstOrNull;
-          sharedApp ??= await AppService().createApp(
-            title: 'Shared',
-            type: 'shared',
-          );
-          final storagePath = sharedApp.storagePath;
-          if (storagePath == null) {
-            return shelf.Response.ok(
-              jsonEncode({
-                'success': false,
-                'error': 'Shared app has no storage path',
-              }),
-              headers: headers,
-            );
-          }
-
-          final profileStorage = AppService().profileStorage;
-          if (profileStorage == null) {
-            return shelf.Response.ok(
-              jsonEncode({
-                'success': false,
-                'error': 'Profile storage not available',
-              }),
-              headers: headers,
-            );
-          }
-
-          final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
-            profileStorage,
-            storagePath,
-          );
-          final service = SharedFolderService();
-          service.setStorage(scopedStorage);
-          await service.initializeApp(storagePath);
-
-          final visibility =
-              params['visibility'] as String? ?? 'public';
+          final visibility = params['visibility'] as String? ?? 'public';
           final description = params['description'] as String? ?? '';
-          final syncEnabled = params['syncEnabled'] == true ||
-              params['syncEnabled'] == 'true';
-
           final folder = SharedFolder(
             title: title,
-            location: location,
+            location: location ?? '',
             visibility: SharedFolderVisibility.fromValue(visibility),
             description: description,
-            syncEnabled: syncEnabled,
+            syncEnabled: true,
+            hostCallsign: service.currentCallsign,
+            hostNpub: ProfileService().getProfile().npub,
           );
           final saved = await service.save(folder);
-
           return shelf.Response.ok(
             jsonEncode({
               'success': true,
-              'message': 'Added shared folder: $title → $location',
+              'message': 'Added shared folder: $title',
               'entry': {
                 'id': saved.id,
                 'title': saved.title,
                 'location': saved.location,
                 'visibility': saved.visibility.value,
+                'syncEnabled': saved.syncEnabled,
+                'hostCallsign': saved.hostCallsign,
                 'slug': saved.sanitizedFilename,
               },
             }),
@@ -23250,6 +23611,396 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
               'folders': folders.map((f) => {
                 ...f.toJson(),
                 'filePath': f.filePath,
+                'owned': service.isOwnedLocally(f),
+              }).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'shared_invite_create':
+          final folderKey =
+              (params['folder_id'] ?? params['folder'] ?? params['title'])
+                  as String?;
+          final folder = await findFolder(folderKey);
+          if (folder == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Folder not found',
+              }),
+              headers: headers,
+            );
+          }
+          if (!service.isOwnedLocally(folder)) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Only the host of a folder can create invitations',
+              }),
+              headers: headers,
+            );
+          }
+          final invite = await SharedInvitationService.instance.createInvite(
+            folderId: folder.id,
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'invitation': invite.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'shared_invite_list':
+          final folderKey =
+              (params['folder_id'] ?? params['folder']) as String?;
+          final folder = folderKey == null ? null : await findFolder(folderKey);
+          final invites = await SharedInvitationService.instance.listInvitations(
+            folderId: folder?.id,
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'invitations': invites.map((i) => i.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'shared_invite_revoke':
+          final folderKey =
+              (params['folder_id'] ?? params['folder']) as String?;
+          final guestNpub = params['guest_npub'] as String?;
+          if (folderKey == null || guestNpub == null || guestNpub.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Missing folder_id or guest_npub',
+              }),
+              headers: headers,
+            );
+          }
+          final folder = await findFolder(folderKey);
+          if (folder == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Folder not found'}),
+              headers: headers,
+            );
+          }
+          final revoked = await SharedInvitationService.instance.revokeAccess(
+            folderId: folder.id,
+            guestNpub: guestNpub,
+          );
+          return shelf.Response.ok(
+            jsonEncode({'success': true, 'revoked_count': revoked}),
+            headers: headers,
+          );
+
+        case 'shared_join':
+          final code = (params['code'] as String?)?.trim().toUpperCase();
+          if (code == null || code.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Missing code'}),
+              headers: headers,
+            );
+          }
+          final parts = code.split('-');
+          if (parts.length != 2 || parts[0].isEmpty || parts[1].length != 4) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Invalid code format (expected CALLSIGN-XXXX)',
+              }),
+              headers: headers,
+            );
+          }
+          final hostCallsign = parts[0];
+          final profile = ProfileService().getProfile();
+          // Step 1: validate
+          final validateResp = await ConnectionManager().apiRequest(
+            callsign: hostCallsign,
+            method: 'GET',
+            path:
+                '/api/shared/invitations/validate?code=${Uri.encodeQueryComponent(code)}',
+          );
+          if (!validateResp.success ||
+              validateResp.statusCode == null ||
+              validateResp.statusCode! >= 400) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error':
+                    'Validate failed: ${validateResp.error ?? 'HTTP ${validateResp.statusCode}'}',
+              }),
+              headers: headers,
+            );
+          }
+          final validatePayload = _decodeSharedPayload(validateResp.responseData);
+          if (validatePayload is! Map<String, dynamic> ||
+              validatePayload['success'] != true) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': validatePayload is Map<String, dynamic>
+                    ? (validatePayload['error']?.toString() ?? 'Invalid invite')
+                    : 'Invalid validate response',
+              }),
+              headers: headers,
+            );
+          }
+          // Step 2: redeem
+          final redeemResp = await ConnectionManager().apiRequest(
+            callsign: hostCallsign,
+            method: 'POST',
+            path: '/api/shared/invitations/redeem',
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'code': code,
+              'guest_npub': profile.npub,
+              'guest_callsign': profile.callsign.toUpperCase(),
+              'guest_name': params['guest_name'] as String? ??
+                  profile.callsign.toUpperCase(),
+              'guest_platform':
+                  params['guest_platform'] as String? ?? io.Platform.operatingSystem,
+            }),
+          );
+          if (!redeemResp.success ||
+              redeemResp.statusCode == null ||
+              redeemResp.statusCode! >= 400) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error':
+                    'Redeem failed: ${redeemResp.error ?? 'HTTP ${redeemResp.statusCode}'}',
+              }),
+              headers: headers,
+            );
+          }
+          final redeemPayload = _decodeSharedPayload(redeemResp.responseData);
+          if (redeemPayload is! Map<String, dynamic> ||
+              redeemPayload['success'] != true) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': redeemPayload is Map<String, dynamic>
+                    ? (redeemPayload['error']?.toString() ?? 'Redeem failed')
+                    : 'Invalid redeem response',
+              }),
+              headers: headers,
+            );
+          }
+          final remoteFolder =
+              redeemPayload['folder'] as Map<String, dynamic>?;
+          final accessToken = redeemPayload['access_token'] as String?;
+          if (remoteFolder == null || accessToken == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Redeem response missing folder or access_token',
+              }),
+              headers: headers,
+            );
+          }
+          // Save the folder locally with this device's auto location
+          final joinedFolder = SharedFolder.fromJson(remoteFolder);
+          final saved = await service.save(joinedFolder.copyWith(
+            // Ensure local persistence picks our default location.
+            location: '',
+          ));
+          await SharedSyncService.instance.setAccessToken(
+            folderId: saved.id,
+            token: accessToken,
+          );
+          // Trigger an immediate sync so the user sees content right away.
+          SharedSyncService.instance.requestSyncSoon(reason: 'joined folder');
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'folder': {
+                ...saved.toJson(),
+                'filePath': saved.filePath,
+              },
+            }),
+            headers: headers,
+          );
+
+        case 'shared_file_write':
+          final folderKey =
+              (params['folder_id'] ?? params['folder'] ?? params['title'])
+                  as String?;
+          final filePath = params['path'] as String?;
+          final content = params['content'] as String?;
+          if (folderKey == null || filePath == null || content == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Missing folder_id/title, path, or content',
+              }),
+              headers: headers,
+            );
+          }
+          final folder = await findFolder(folderKey);
+          if (folder == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Folder not found'}),
+              headers: headers,
+            );
+          }
+          final updated = await service.writeFile(
+            folder: folder,
+            relativePath: filePath,
+            bytes: Uint8List.fromList(utf8.encode(content)),
+          );
+          SharedSyncService.instance.requestSyncSoon(reason: 'file written');
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'folder': {
+                'id': updated.id,
+                'title': updated.title,
+                'location': updated.location,
+                'hostCallsign': updated.hostCallsign,
+              },
+              'path': filePath,
+              'size': utf8.encode(content).length,
+            }),
+            headers: headers,
+          );
+
+        case 'shared_file_read':
+          final folderKey =
+              (params['folder_id'] ?? params['folder'] ?? params['title'])
+                  as String?;
+          final filePath = params['path'] as String?;
+          if (folderKey == null || filePath == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Missing folder_id/title or path',
+              }),
+              headers: headers,
+            );
+          }
+          final folder = await findFolder(folderKey);
+          if (folder == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Folder not found'}),
+              headers: headers,
+            );
+          }
+          final bytes = await service.readFile(
+            folder: folder,
+            relativePath: filePath,
+          );
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'exists': bytes != null,
+              'path': filePath,
+              if (bytes != null) 'content': utf8.decode(bytes),
+              if (bytes != null) 'size': bytes.length,
+            }),
+            headers: headers,
+          );
+
+        case 'shared_file_list':
+          final folderKey =
+              (params['folder_id'] ?? params['folder'] ?? params['title'])
+                  as String?;
+          if (folderKey == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Missing folder_id/title'}),
+              headers: headers,
+            );
+          }
+          final folder = await findFolder(folderKey);
+          if (folder == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Folder not found'}),
+              headers: headers,
+            );
+          }
+          final snapshots = await service.snapshotFiles(folder, hash: true);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'folder': {
+                'id': folder.id,
+                'title': folder.title,
+                'location': folder.location,
+                'hostCallsign': folder.hostCallsign,
+                'owned': service.isOwnedLocally(folder),
+              },
+              'files': snapshots.values.map((s) => s.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'shared_file_delete':
+          final folderKey =
+              (params['folder_id'] ?? params['folder'] ?? params['title'])
+                  as String?;
+          final filePath = params['path'] as String?;
+          if (folderKey == null || filePath == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Missing folder_id/title or path',
+              }),
+              headers: headers,
+            );
+          }
+          final folder = await findFolder(folderKey);
+          if (folder == null) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Folder not found'}),
+              headers: headers,
+            );
+          }
+          final updated = await service.deleteFile(
+            folder: folder,
+            relativePath: filePath,
+          );
+          SharedSyncService.instance.requestSyncSoon(reason: 'file deleted');
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'folder': {
+                'id': updated.id,
+                'title': updated.title,
+                'location': updated.location,
+                'hostCallsign': updated.hostCallsign,
+              },
+              'path': filePath,
+            }),
+            headers: headers,
+          );
+
+        case 'shared_sync_now':
+          await SharedSyncService.instance.syncAllJoinedFolders();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'last_run': SharedSyncService.instance.lastRunAt?.toIso8601String(),
+              'last_results': SharedSyncService.instance.lastResults
+                  .map((id, r) => MapEntry(id, r.toJson())),
+            }),
+            headers: headers,
+          );
+
+        case 'shared_sync_status':
+          final folders = await service.loadAll();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'is_running': SharedSyncService.instance.isRunning,
+              'last_run': SharedSyncService.instance.lastRunAt?.toIso8601String(),
+              'folders': folders.map((f) => {
+                'id': f.id,
+                'title': f.title,
+                'owned': service.isOwnedLocally(f),
+                'host_callsign': f.hostCallsign,
+                'last_result':
+                    SharedSyncService.instance.lastResults[f.id]?.toJson(),
               }).toList(),
             }),
             headers: headers,
@@ -23352,7 +24103,23 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
             jsonEncode({
               'success': false,
               'error': 'Unknown shared action: $action',
-              'available': ['shared_list', 'shared_test_access', 'shared_test_cookie', 'shared_update'],
+              'available': [
+                'shared_list',
+                'shared_add',
+                'shared_invite_create',
+                'shared_invite_list',
+                'shared_invite_revoke',
+                'shared_join',
+                'shared_file_write',
+                'shared_file_read',
+                'shared_file_list',
+                'shared_file_delete',
+                'shared_sync_now',
+                'shared_sync_status',
+                'shared_test_access',
+                'shared_test_cookie',
+                'shared_update',
+              ],
             }),
             headers: headers,
           );
@@ -25671,6 +26438,195 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       default:
         return shelf.Response.ok(
           jsonEncode({'success': false, 'error': 'Unknown task action: $action'}),
+          headers: headers,
+        );
+    }
+  }
+
+  // ============================================================
+  // Thumbnail Debug Actions
+  // ============================================================
+  //
+  // Used to validate the cross-platform thumbnail subsystem on Android.
+  // Each endpoint is read-only except thumbnail_clear_all and exists so
+  // ./launch-android.sh + curl can verify cache hits across reopens.
+
+  Future<shelf.Response> _handleThumbnailAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    switch (action) {
+      case 'thumbnail_status': {
+        final cache = FileBrowserCacheService();
+        await cache.initialize();
+        final gen = ThumbnailGeneratorService();
+        final monitor = TaskMonitorService();
+        final task = monitor.getTask('thumbnail.generator');
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'cache_dir': StorageConfig().fileBrowserCacheDir,
+            'pending_count': gen.pendingCount,
+            'task_state': task == null
+                ? 'not_registered'
+                : {
+                    'status': task.status.name,
+                    'run_count': task.runCount,
+                    'success_count': task.successCount,
+                    'fail_count': task.failCount,
+                    'last_error': task.lastError,
+                  },
+          }),
+          headers: headers,
+        );
+      }
+
+      case 'thumbnail_find_videos': {
+        // Scan common Android paths for mp4 files. Returns up to `limit`
+        // entries with size + modified so the caller can pick a test target.
+        final limit = (params['limit'] as int?) ?? 20;
+        final results = <Map<String, dynamic>>[];
+        const roots = [
+          '/storage/emulated/0/DCIM/Camera',
+          '/storage/emulated/0/DCIM',
+          '/storage/emulated/0/Movies',
+          '/storage/emulated/0/Download',
+          '/storage/emulated/0/Pictures',
+        ];
+        for (final root in roots) {
+          if (results.length >= limit) break;
+          final dir = io.Directory(root);
+          if (!await dir.exists()) continue;
+          try {
+            await for (final entity in dir.list(recursive: false)) {
+              if (results.length >= limit) break;
+              if (entity is io.File &&
+                  entity.path.toLowerCase().endsWith('.mp4')) {
+                try {
+                  final stat = await entity.stat();
+                  results.add({
+                    'path': entity.path,
+                    'size': stat.size,
+                    'modified': stat.modified.toIso8601String(),
+                  });
+                } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        }
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'count': results.length,
+            'videos': results,
+          }),
+          headers: headers,
+        );
+      }
+
+      case 'thumbnail_request': {
+        final path = params['path'] as String?;
+        if (path == null || path.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'path parameter required'}),
+            headers: headers,
+          );
+        }
+        final cache = FileBrowserCacheService();
+        await cache.initialize();
+        // Source mtime is the cache key — same one the picker uses.
+        DateTime? mtime;
+        try {
+          final stat = await io.File(path).stat();
+          mtime = stat.modified;
+        } catch (_) {}
+        // Pre-check whether this is going to hit the cache (so we can
+        // distinguish "cached, ~0ms" from "generated, slow path").
+        final wasCached = mtime != null
+            ? await cache.hasThumbnail(path, mtime)
+            : false;
+
+        final sw = Stopwatch()..start();
+        final outPath = await ThumbnailGeneratorService()
+            .requestThumbnail(path, modified: mtime);
+        sw.stop();
+
+        int? cachedSize;
+        if (outPath != null) {
+          try {
+            cachedSize = await io.File(outPath).length();
+          } catch (_) {}
+        }
+
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': outPath != null,
+            'cached_hit': wasCached,
+            'generation_ms': sw.elapsedMilliseconds,
+            'output_path': outPath,
+            'output_size_bytes': cachedSize,
+            'source_modified': mtime?.toIso8601String(),
+          }),
+          headers: headers,
+        );
+      }
+
+      case 'thumbnail_inspect': {
+        final path = params['path'] as String?;
+        if (path == null || path.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'path parameter required'}),
+            headers: headers,
+          );
+        }
+        final cache = FileBrowserCacheService();
+        await cache.initialize();
+        DateTime? mtime;
+        try {
+          final stat = await io.File(path).stat();
+          mtime = stat.modified;
+        } catch (_) {}
+        final has = mtime != null
+            ? await cache.hasThumbnail(path, mtime)
+            : false;
+        final cachedPath =
+            has ? await cache.getThumbnailTempPath(path) : null;
+        int? cachedSize;
+        if (cachedPath != null) {
+          try {
+            cachedSize = await io.File(cachedPath).length();
+          } catch (_) {}
+        }
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'has_cache': has,
+            'cached_path': cachedPath,
+            'cached_size_bytes': cachedSize,
+            'volume_id': cache.getVolumeId(path),
+            'source_modified': mtime?.toIso8601String(),
+          }),
+          headers: headers,
+        );
+      }
+
+      case 'thumbnail_clear_all': {
+        final cache = FileBrowserCacheService();
+        await cache.initialize();
+        await cache.clearAllCaches();
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'message': 'cleared'}),
+          headers: headers,
+        );
+      }
+
+      default:
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': false,
+            'error': 'Unknown thumbnail action: $action',
+          }),
           headers: headers,
         );
     }

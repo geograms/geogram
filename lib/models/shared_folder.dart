@@ -25,9 +25,17 @@ enum SharedFolderVisibility {
   }
 }
 
-/// Model for a shared folder entry within the "Shared" app
+/// Model for a shared folder entry within the "Shared" app.
+///
+/// A folder is "owned" on the device whose callsign matches [hostCallsign],
+/// and "joined" elsewhere. Owners are the source of truth; joiners pull from
+/// the host (and push their local changes back) via [SharedSyncService].
+///
+/// [localLocations] maps `callsign -> absolute path` so each device can keep
+/// the folder in a different place locally without that path leaking to the
+/// rest of the network.
 class SharedFolder {
-  static const String formatVersion = '1.0';
+  static const String formatVersion = '2.0';
 
   final String id;
   final String title;
@@ -37,7 +45,9 @@ class SharedFolder {
   final List<String> allowedGroups;
   final String description;
   final bool syncEnabled;
-  final String? syncedPath;
+  final String? hostCallsign;
+  final String? hostNpub;
+  final Map<String, String> localLocations;
   final DateTime createdAt;
   final DateTime modifiedAt;
 
@@ -53,15 +63,18 @@ class SharedFolder {
     List<String>? allowedGroups,
     this.description = '',
     this.syncEnabled = false,
-    this.syncedPath,
+    this.hostCallsign,
+    this.hostNpub,
+    Map<String, String>? localLocations,
     DateTime? createdAt,
     DateTime? modifiedAt,
     this.filePath,
-  })  : id = id ?? const Uuid().v4(),
-        allowedReaders = allowedReaders ?? [],
-        allowedGroups = allowedGroups ?? [],
-        createdAt = createdAt ?? DateTime.now(),
-        modifiedAt = modifiedAt ?? DateTime.now();
+  }) : id = id ?? const Uuid().v4(),
+       allowedReaders = allowedReaders ?? [],
+       allowedGroups = allowedGroups ?? [],
+       localLocations = localLocations ?? {},
+       createdAt = createdAt ?? DateTime.now(),
+       modifiedAt = modifiedAt ?? DateTime.now();
 
   /// Create a copy with updated fields
   SharedFolder copyWith({
@@ -73,7 +86,9 @@ class SharedFolder {
     List<String>? allowedGroups,
     String? description,
     bool? syncEnabled,
-    String? syncedPath,
+    String? hostCallsign,
+    String? hostNpub,
+    Map<String, String>? localLocations,
     DateTime? createdAt,
     DateTime? modifiedAt,
     String? filePath,
@@ -87,7 +102,9 @@ class SharedFolder {
       allowedGroups: allowedGroups ?? List.from(this.allowedGroups),
       description: description ?? this.description,
       syncEnabled: syncEnabled ?? this.syncEnabled,
-      syncedPath: syncedPath ?? this.syncedPath,
+      hostCallsign: hostCallsign ?? this.hostCallsign,
+      hostNpub: hostNpub ?? this.hostNpub,
+      localLocations: localLocations ?? Map.from(this.localLocations),
       createdAt: createdAt ?? this.createdAt,
       modifiedAt: modifiedAt ?? DateTime.now(),
       filePath: filePath ?? this.filePath,
@@ -106,7 +123,9 @@ class SharedFolder {
       if (allowedGroups.isNotEmpty) 'allowedGroups': allowedGroups,
       if (description.isNotEmpty) 'description': description,
       if (syncEnabled) 'syncEnabled': true,
-      if (syncedPath != null) 'syncedPath': syncedPath,
+      if (hostCallsign != null) 'hostCallsign': hostCallsign,
+      if (hostNpub != null) 'hostNpub': hostNpub,
+      if (localLocations.isNotEmpty) 'localLocations': localLocations,
       'created': createdAt.toIso8601String(),
       'modified': modifiedAt.toIso8601String(),
     };
@@ -126,9 +145,14 @@ class SharedFolder {
       allowedGroups:
           (json['allowedGroups'] as List<dynamic>?)?.cast<String>() ?? [],
       description: json['description'] as String? ?? '',
-      syncEnabled:
-          json['syncEnabled'] as bool? ?? json['syncedPath'] != null,
-      syncedPath: json['syncedPath'] as String?,
+      syncEnabled: json['syncEnabled'] as bool? ?? false,
+      hostCallsign: (json['hostCallsign'] as String?)?.toUpperCase(),
+      hostNpub: json['hostNpub'] as String?,
+      localLocations:
+          (json['localLocations'] as Map<String, dynamic>?)?.map(
+            (key, value) => MapEntry(key, value as String),
+          ) ??
+          {},
       createdAt: DateTime.parse(json['created'] as String),
       modifiedAt: DateTime.parse(json['modified'] as String),
       filePath: filePath,
@@ -159,5 +183,5 @@ class SharedFolder {
 
   @override
   String toString() =>
-      'SharedFolder(id: $id, title: $title, location: $location)';
+      'SharedFolder(id: $id, title: $title, host: $hostCallsign)';
 }

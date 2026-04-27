@@ -15,7 +15,6 @@ import 'package:http/http.dart' as http;
 
 import '../models/mirror_config.dart';
 import '../models/monitored_task.dart';
-import '../util/event_bus.dart';
 import '../util/task_monitor_helpers.dart';
 import 'app_service.dart';
 import 'devices_service.dart';
@@ -310,13 +309,6 @@ class MirrorAutoSyncService {
               totalModified += result.filesModified;
               totalDeleted += result.filesDeleted;
               totalUploaded += result.filesUploaded;
-              if (appId == 'shared' &&
-                  (result.filesAdded +
-                          result.filesModified +
-                          result.filesDeleted) >
-                      0) {
-                _notifySharedFolderChanged(peer, result);
-              }
               peerHadSync = true;
             } else {
               detail['error'] = result.error;
@@ -351,28 +343,6 @@ class MirrorAutoSyncService {
       peersSkipped: skipped,
       peersSynced: peersSynced,
       details: details,
-    );
-  }
-
-  void _notifySharedFolderChanged(MirrorPeer peer, SyncResult result) {
-    final changed =
-        result.filesAdded + result.filesModified + result.filesDeleted;
-    if (changed <= 0) return;
-    final parts = <String>[
-      if (result.filesAdded > 0) '${result.filesAdded} added',
-      if (result.filesModified > 0) '${result.filesModified} changed',
-      if (result.filesDeleted > 0) '${result.filesDeleted} deleted',
-    ];
-    EventBus().fire(
-      NowItemEvent(
-        id: 'shared:${peer.peerId}:${DateTime.now().toIso8601String()}',
-        appType: 'shared',
-        sourceId: 'shared',
-        sourceName: 'Shared files',
-        callsign: peer.callsign,
-        summary: parts.join(', '),
-        priority: NowPriority.sharedFile,
-      ),
     );
   }
 

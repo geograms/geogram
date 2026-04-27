@@ -9,7 +9,6 @@
 #include <ble_peripheral/ble_peripheral_plugin_c_api.h>
 #include <desktop_drop/desktop_drop_plugin.h>
 #include <file_selector_windows/file_selector_windows.h>
-#include <flutter_onnxruntime/flutter_onnxruntime_plugin.h>
 #include <flutter_webrtc/flutter_web_r_t_c_plugin.h>
 #include <geolocator_windows/geolocator_windows.h>
 #include <media_kit_libs_windows_video/media_kit_libs_windows_video_plugin_c_api.h>
@@ -34,8 +33,6 @@ void RegisterPlugins(flutter::PluginRegistry* registry) {
       registry->GetRegistrarForPlugin("DesktopDropPlugin"));
   FileSelectorWindowsRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("FileSelectorWindows"));
-  FlutterOnnxruntimePluginRegisterWithRegistrar(
-      registry->GetRegistrarForPlugin("FlutterOnnxruntimePlugin"));
   FlutterWebRTCPluginRegisterWithRegistrar(
       registry->GetRegistrarForPlugin("FlutterWebRTCPlugin"));
   GeolocatorWindowsRegisterWithRegistrar(

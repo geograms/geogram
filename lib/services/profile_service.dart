@@ -16,6 +16,7 @@ import '../services/file_index_service.dart';
 import '../services/mirror_auto_sync_service.dart';
 import '../services/mirror_config_service.dart';
 import '../services/mirror_sync_service.dart';
+import '../services/shared_sync_service.dart';
 import '../services/chat_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/app_args.dart';
@@ -560,6 +561,10 @@ class ProfileService {
     MirrorSyncService.instance.loadAllowedPeersFromConfig();
     MirrorAutoSyncService.instance.start();
 
+    // Shared app sync (independent of Mirror)
+    await SharedSyncService.instance.stop();
+    await SharedSyncService.instance.start();
+
     // Restart background file indexing for new profile
     FileIndexService.startBackgroundIndexing(
       dbPath: StorageConfig().getFileIndexPath(newProfile.callsign),
@@ -874,6 +879,10 @@ class ProfileService {
       );
       MirrorSyncService.instance.loadAllowedPeersFromConfig();
       MirrorAutoSyncService.instance.start();
+
+      // Shared app sync (independent of Mirror)
+      await SharedSyncService.instance.stop();
+      await SharedSyncService.instance.start();
 
       // Reset chat state for profile isolation
       ChatService().reset();

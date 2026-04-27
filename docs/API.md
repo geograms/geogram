@@ -2760,7 +2760,11 @@ Triggers a debug action.
 | `atproto_search_people` | Search actors/profiles across Bluesky network | `query` (required): Search text, `limit` (optional): 1-100 |
 | `atproto_search_posts` | Search posts/content across Bluesky network | `query` (required): Search text, `limit` (optional): 1-100 |
 | `shared_list` | List all shared folder entries with metadata | None |
-| `shared_add` | Add a shared folder entry to the Shared app | `title` (required), `location` (required), `visibility` (optional), `description` (optional), `syncEnabled` (optional) |
+| `shared_add` | Add a shared folder entry to the Shared app | `title` (required), `location` (optional when `syncEnabled` is true; auto-created if omitted), `visibility` (optional), `description` (optional), `syncEnabled` (optional) |
+| `shared_file_write` | Write text content into a synced shared folder and stage it for mirror sync | `folder_id` or `title` (required), `path` (required relative path), `content` (required) |
+| `shared_file_read` | Read text content from a synced shared folder | `folder_id` or `title` (required), `path` (required relative path), `staged` (optional, read mirrored staging copy) |
+| `shared_file_list` | List local and staged files for a synced shared folder | `folder_id` or `title` (required) |
+| `shared_file_delete` | Delete a file from a synced shared folder and stage a tombstone | `folder_id` or `title` (required), `path` (required relative path) |
 | `shared_test_access` | Test access control for a given pubkey | `pubkey` (optional): Hex pubkey to test. Returns accessibility per folder |
 | `shared_test_cookie` | Test cookie parsing from HTTP headers | `headers` (required): Raw HTTP headers string to parse for `geogram_nostr_pubkey` cookie |
 | `hotspot_portal_start` | Start the captive portal HTTP server + DNS | `gateway_ip` (optional): Gateway IP (default: 192.168.49.1), `station_name` (optional): Station name for portal title |
@@ -5008,4 +5012,77 @@ curl -X POST http://localhost:8080/api/debug \
 curl -X POST http://localhost:8080/api/debug \
   -H 'Content-Type: application/json' \
   -d '{"action": "task_resume_performance"}'
+```
+
+---
+
+## Thumbnail Subsystem
+
+Debug API actions for validating the file-browser thumbnail cache and the
+cross-platform extractor (ffmpeg subprocess on desktop, MediaMetadataRetriever
+channel on Android, HTMLVideoElement+Canvas on web).
+
+### thumbnail_status
+
+Returns the cache directory, current in-flight queue depth, and the Task
+Monitor entry for the thumbnail generator.
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "thumbnail_status"}'
+```
+
+### thumbnail_find_videos
+
+Scans common Android paths (DCIM, Movies, Download, Pictures) for `.mp4`
+files and returns up to `limit` (default 20) matches with size + modified.
+Used by smoke tests to pick a real file to thumbnail.
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "thumbnail_find_videos", "limit": 5}'
+```
+
+### thumbnail_request
+
+Generates (or returns from cache) a thumbnail for `path`. The response
+fields let the caller distinguish a cache hit from a miss-then-generate:
+
+- `cached_hit` — whether the cache already had a current entry before
+  this call (so a `false` followed by `true` on the second call proves
+  the cache is working).
+- `generation_ms` — wall time of the call. ~0–10 ms for a hit, hundreds
+  to a few thousand ms for a miss (depends on extractor + file size).
+- `output_path` — on-disk path to the cached thumbnail file.
+- `output_size_bytes` — size of the cached thumbnail.
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "thumbnail_request", "path": "/storage/emulated/0/DCIM/Camera/VID_0001.mp4"}'
+```
+
+### thumbnail_inspect
+
+Read-only check of the cache state for a given `path`. Returns whether
+the cache has an entry (and if so the file path + size) without
+triggering any generation.
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "thumbnail_inspect", "path": "/storage/emulated/0/DCIM/Camera/VID_0001.mp4"}'
+```
+
+### thumbnail_clear_all
+
+Wipes every cached thumbnail and the directory-listing cache. Use to
+force a fresh miss when re-testing.
+
+```bash
+curl -X POST http://localhost:8080/api/debug \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "thumbnail_clear_all"}'
 ```
