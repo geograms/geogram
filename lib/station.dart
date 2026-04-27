@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
+import 'package:archive/archive.dart';
 import 'package:path/path.dart' as path;
 import 'cli/pure_storage_config.dart';
 import 'bot/models/music_model_info.dart';
@@ -2712,6 +2713,8 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
         await _handleUpdatesLatest(request);
       } else if (path.startsWith('/updates/')) {
         await _handleUpdateDownload(request);
+      } else if (path == '/geoip/dbip-city-lite.mmdb') {
+        await _handleGeoipDownload(request);
       } else if (path == '/api/mirrors') {
         await handleMirrorsRequest(request);
       } else if (path == '/api/devices' || path == '/api/clients') {
@@ -10033,6 +10036,102 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
       request.response.statusCode = 500;
       request.response.write('Error reading file');
     }
+  }
+
+  /// Handle GET /geoip/dbip-city-lite.mmdb - Serve GeoIP database
+  Future<void> _handleGeoipDownload(HttpRequest request) async {
+    if (request.method != 'GET') {
+      request.response.statusCode = 405;
+      request.response.write('Method Not Allowed');
+      return;
+    }
+
+    if (_updatesDirectory == null) {
+      request.response.statusCode = 503;
+      request.response.write('Updates directory not initialized');
+      return;
+    }
+
+    final filePath = '$_updatesDirectory/geoip/dbip-city-lite.mmdb';
+    final file = File(filePath);
+
+    if (!await file.exists()) {
+      // Start download in background if not already downloading
+      _startGeoipDownloadInBackground();
+
+      request.response.statusCode = 404;
+      request.response.write('GeoIP database not found. Station is downloading it...');
+      return;
+    }
+
+    try {
+      final fileLength = await file.length();
+      request.response.headers.set('Content-Type', 'application/octet-stream');
+      request.response.headers.set('Content-Length', fileLength.toString());
+      request.response.headers.set('Content-Disposition', 'attachment; filename="dbip-city-lite.mmdb"');
+
+      await request.response.addStream(file.openRead());
+      _log('INFO', 'Served GeoIP database (${(fileLength / (1024 * 1024)).toStringAsFixed(1)}MB)');
+    } catch (e) {
+      _log('ERROR', 'Error serving GeoIP database: $e');
+      request.response.statusCode = 500;
+      request.response.write('Error reading file');
+    }
+  }
+
+  bool _isGeoipDownloading = false;
+
+  void _startGeoipDownloadInBackground() {
+    if (_isGeoipDownloading) return;
+    _isGeoipDownloading = true;
+
+    () async {
+      try {
+        if (_updatesDirectory == null) return;
+        final geoipDir = '$_updatesDirectory/geoip';
+        final mmdbPath = '$geoipDir/dbip-city-lite.mmdb';
+
+        // Check if already exists
+        if (await File(mmdbPath).exists()) {
+          _log('INFO', 'GeoIP database already exists');
+          return;
+        }
+
+        await Directory(geoipDir).create(recursive: true);
+
+        // Download from jsdelivr (compressed)
+        _log('INFO', 'Downloading GeoIP database from jsdelivr...');
+        const url = 'https://cdn.jsdelivr.net/npm/dbip-city-lite/dbip-city-lite.mmdb.gz';
+        final compressedPath = '$geoipDir/dbip-city-lite.mmdb.gz';
+
+        final client = http.Client();
+        try {
+          final response = await client.get(Uri.parse(url));
+          if (response.statusCode == 200) {
+            await File(compressedPath).writeAsBytes(response.bodyBytes);
+            _log('INFO', 'GeoIP database downloaded, decompressing...');
+
+            // Decompress
+            final compressedData = await File(compressedPath).readAsBytes();
+            final decompressed = GZipDecoder().decodeBytes(compressedData);
+            await File(mmdbPath).writeAsBytes(decompressed);
+
+            // Clean up compressed file
+            await File(compressedPath).delete();
+
+            _log('INFO', 'GeoIP database ready (${(decompressed.length / (1024 * 1024)).toStringAsFixed(1)}MB)');
+          } else {
+            _log('WARN', 'Failed to download GeoIP database: HTTP ${response.statusCode}');
+          }
+        } finally {
+          client.close();
+        }
+      } catch (e) {
+        _log('ERROR', 'GeoIP database download failed: $e');
+      } finally {
+        _isGeoipDownloading = false;
+      }
+    }();
   }
 }
 

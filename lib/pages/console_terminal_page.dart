@@ -9,7 +9,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/cli_console_controller.dart';
 import '../services/i18n_service.dart';
-import '../tts/services/tts_service.dart';
 
 /// Traditional terminal page with inline input
 class ConsoleTerminalPage extends StatefulWidget {
@@ -288,23 +287,19 @@ class _ConsoleTerminalPageState extends State<ConsoleTerminalPage> {
     }
   }
 
-  /// Handle CTRL+S - speak last output using TTS
+  /// Handle CTRL+S - copy last output to clipboard
   Future<void> _handleSay() async {
     if (_lastOutput.isEmpty) {
       return;
     }
 
-    // Strip ANSI escape codes for clean TTS output
+    // Strip ANSI escape codes for clean output
     final cleanText = _lastOutput.replaceAll(RegExp(r'\x1B\[[0-9;]*[a-zA-Z]'), '');
     if (cleanText.trim().isEmpty) {
       return;
     }
 
-    try {
-      await TtsService().speak(cleanText);
-    } catch (e) {
-      // Silently ignore TTS errors to not interrupt terminal flow
-    }
+    await Clipboard.setData(ClipboardData(text: cleanText));
   }
 
   /// Build TextSpan list from terminal spans (including inline input)

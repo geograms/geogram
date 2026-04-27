@@ -16,7 +16,6 @@ import '../models/music_track.dart';
 import 'fm_synth_service.dart';
 import 'music_model_manager.dart';
 import 'music_storage_service.dart';
-import 'music_onnx_service.dart';
 import '../../services/audio_service.dart';
 import '../../services/log_service.dart';
 
@@ -35,7 +34,6 @@ class MusicGenerationService {
   final MusicModelManager _modelManager = MusicModelManager();
   final MusicStorageService _storage = MusicStorageService();
   final AudioService _audioService = AudioService();
-  final MusicOnnxService _onnxService = MusicOnnxService();
 
   /// Currently playing track
   MusicTrack? _currentTrack;
@@ -316,60 +314,7 @@ class MusicGenerationService {
     MusicModelInfo model, {
     required void Function(double progress) onProgress,
   }) async {
-    final stopwatch = Stopwatch()..start();
-    final modelDir = await _modelManager.getModelDir(model.id);
-    await _onnxService.initialize(modelDir);
-
-    final totalSeconds =
-        max(1, (request.duration.inMilliseconds / 1000).round());
-    final chunkSeconds = max(1, model.maxDurationSec);
-    final totalChunks = (totalSeconds / chunkSeconds).ceil();
-
-    final chunks = <Float32List>[];
-    var sampleRate = 32000;
-
-    final aiPrompt = _buildAiPrompt(request);
-
-    for (var i = 0; i < totalChunks; i++) {
-      final remaining = totalSeconds - (i * chunkSeconds);
-      final durationSeconds = min(chunkSeconds, remaining);
-      final chunkDuration = Duration(seconds: durationSeconds);
-
-      final chunk = await _onnxService.generateAudio(
-        prompt: aiPrompt,
-        duration: chunkDuration,
-        onProgress: (progress) {
-          onProgress((i + progress) / totalChunks);
-        },
-      );
-      sampleRate = chunk.sampleRate;
-      chunks.add(chunk.samples);
-    }
-
-    final combined = _combineChunks(chunks, sampleRate);
-    final wavData = _encodeWav(combined, sampleRate);
-    final trackDuration = _durationFromSamples(combined.length, sampleRate);
-
-    final trackId =
-        'ai_${DateTime.now().millisecondsSinceEpoch}_${Random().nextInt(10000)}';
-    final track = MusicTrack(
-      id: trackId,
-      filePath: '',
-      genre: request.genre,
-      prompt: request.prompt,
-      duration: trackDuration,
-      createdAt: DateTime.now(),
-      modelUsed: model.id,
-      isFMFallback: false,
-      stats: MusicGenerationStats(
-        processingTimeMs: stopwatch.elapsedMilliseconds,
-        qualityLevel: model.tier,
-      ),
-    );
-
-    final filePath = await _storage.saveTrack(track, wavData);
-    stopwatch.stop();
-    return track.copyWith(filePath: filePath);
+    throw UnsupportedError('AI music generation requires ONNX runtime which has been removed');
   }
 
   String _buildAiPrompt(MusicGenerationRequest request) {

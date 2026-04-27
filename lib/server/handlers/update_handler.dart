@@ -2,13 +2,22 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:io' as io;
 
+import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
 import 'package:mime/mime.dart';
 
 import '../station_settings.dart';
 import '../../models/update_settings.dart' show UpdateAssetType;
 import '../../util/managed_http_client.dart' show streamDownloadToFile;
+
+/// MMDB database download URLs
+class GeoIpUrls {
+  static const String jsdelivrUrl = 'https://cdn.jsdelivr.net/npm/dbip-city-lite/dbip-city-lite.mmdb.gz';
+  static const String dbipDirectUrl = 'https://download.db-ip.com resolving...';
+  static const String dbipCityLiteUrl = 'https://download.db-ip.com/db-ip-city-lite.mmdb.gz';
+}
 
 /// Handler for update mirror endpoints
 class UpdateHandler {
@@ -18,6 +27,7 @@ class UpdateHandler {
 
   Map<String, dynamic>? _cachedRelease;
   bool _isDownloadingUpdates = false;
+  bool _isDownloadingGeoip = false;
   Timer? _pollTimer;
   final Map<String, String> _downloadedAssets = {};
   final Map<String, String> _assetFilenames = {};
@@ -279,5 +289,88 @@ class UpdateHandler {
   /// Check if a specific asset is downloaded
   bool hasAsset(String filename) {
     return _downloadedAssets.containsKey(filename);
+  }
+
+  /// Get the geoip directory path
+  String get _geoipDirectory => '$updatesDirectory/geoip';
+
+  /// Get the geoip MMDB file path
+  String get _geoipMmdbPath => '$_geoipDirectory/dbip-city-lite.mmdb';
+
+  /// Handle GET /geoip/dbip-city-lite.mmdb
+  Future<void> handleGeoipDownload(HttpRequest request) async {
+    final file = File(_geoipMmdbPath);
+
+    if (!await file.exists()) {
+      request.response.statusCode = 404;
+      request.response.write('GeoIP database not found. Station is downloading it...');
+      return;
+    }
+
+    try {
+      final bytes = await file.readAsBytes();
+      request.response.headers.contentType = ContentType.parse('application/octet-stream');
+      request.response.headers.add('Content-Disposition', 'attachment; filename="dbip-city-lite.mmdb"');
+      request.response.headers.add('Content-Length', bytes.length.toString());
+      request.response.add(bytes);
+    } catch (e) {
+      log('ERROR', 'Failed to serve GeoIP file: $e');
+      request.response.statusCode = 500;
+      request.response.write('Internal error');
+    }
+  }
+
+  /// Download GeoIP MMDB database (runs in background)
+  Future<void> downloadGeoipDatabase() async {
+    if (_isDownloadingGeoip) return;
+
+    // Check if already exists
+    final file = File(_geoipMmdbPath);
+    if (await file.exists()) {
+      log('INFO', 'GeoIP database already exists');
+      return;
+    }
+
+    _isDownloadingGeoip = true;
+    try {
+      // Create geoip directory
+      await Directory(_geoipDirectory).create(recursive: true);
+
+      // Try jsdelivr first (compressed, ~19MB)
+      log('INFO', 'Downloading GeoIP database from jsdelivr...');
+      final compressedPath = '$_geoipDirectory/dbip-city-lite.mmdb.gz';
+
+      final result = await streamDownloadToFile(
+        Uri.parse(GeoIpUrls.jsdelivrUrl),
+        compressedPath,
+        headers: {'User-Agent': 'Geogram-Station-GeoIP'},
+        timeout: const Duration(minutes: 5),
+      );
+
+      if (result.success) {
+        log('INFO', 'GeoIP database downloaded (${result.bytesWritten} bytes), decompressing...');
+
+        // Decompress .gz file
+        final compressedData = await File(compressedPath).readAsBytes();
+        final decompressed = GZipDecoder().decodeBytes(compressedData);
+        await File(_geoipMmdbPath).writeAsBytes(decompressed);
+
+        // Remove compressed file
+        await File(compressedPath).delete();
+
+        log('INFO', 'GeoIP database ready: $_geoipMmdbPath (${decompressed.length} bytes)');
+      } else {
+        log('WARN', 'Failed to download GeoIP database from jsdelivr');
+      }
+    } catch (e) {
+      log('ERROR', 'GeoIP database download failed: $e');
+    } finally {
+      _isDownloadingGeoip = false;
+    }
+  }
+
+  /// Start geoip download on station startup
+  void startGeoipDownload() {
+    downloadGeoipDatabase();
   }
 }

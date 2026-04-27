@@ -11,10 +11,14 @@
  */
 
 import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart' show InternetAddressType, NetworkInterface, Platform, File, Directory;
+
+import 'dart:typed_data';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart' show InternetAddressType, NetworkInterface, Platform;
 
+import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/services.dart' show rootBundle; // for on-demand GeoIP DB loading
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
@@ -23,6 +27,9 @@ import '../services/geoip_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_service.dart';
 import '../services/websocket_service.dart';
+import '../services/storage_config.dart';
+import '../services/station_service.dart';
+import '../services/profile_storage.dart';
 
 /// Result of a geolocation attempt
 class GeolocationResult {
@@ -299,20 +306,18 @@ class GeolocationUtils {
   }
 
   /// Try to geolocate using the local MMDB database + network interface IPs.
-  /// Works without any station connection — just needs GeoIpService initialized.
+  /// Downloads GeoIP database from station server first, then falls back to jsdelivr CDN.
   static Future<GeolocationResult?> _detectViaLocalGeoIP() async {
     final geoip = GeoIpService();
 
-    // Initialize GeoIpService from Flutter assets if not already loaded
-    // (station server loads this too, but may not have started yet)
+    // Initialize GeoIpService - try multiple sources
     if (!geoip.isInitialized) {
-      try {
-        final data = await rootBundle.load('assets/dbip-city-lite.mmdb');
-        await geoip.initFromBytes(data.buffer.asUint8List());
-      } catch (e) {
-        LogService().log('GeolocationUtils: GeoIP DB load failed: $e');
-        return null;
-      }
+      await _ensureGeoipDatabase();
+    }
+
+    if (!geoip.isInitialized) {
+      LogService().log('GeolocationUtils: GeoIP DB not available');
+      return null;
     }
 
     try {
@@ -327,8 +332,6 @@ class GeolocationUtils {
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
           final ip = addr.address;
-          // Skip private/loopback — GeoIpService handles this too but
-          // we avoid the log noise by skipping here.
           if (ip.startsWith('127.') ||
               ip.startsWith('10.') ||
               ip.startsWith('192.168.') ||
@@ -361,6 +364,76 @@ class GeolocationUtils {
     } catch (e) {
       LogService().log('GeolocationUtils: Local GeoIP lookup failed: $e');
       return null;
+    }
+  }
+
+  /// Ensure GeoIP database is available by downloading from station or fallback CDN
+  static Future<void> _ensureGeoipDatabase() async {
+    final storage = StorageConfig();
+    if (!storage.isInitialized) return;
+
+    // Use FilesystemProfileStorage for baseDir-level storage (outside encrypted profiles)
+    final baseStorage = FilesystemProfileStorage(storage.baseDir);
+    const geoipRelativePath = 'geoip/dbip-city-lite.mmdb';
+
+    // Already have it?
+    if (await baseStorage.exists(geoipRelativePath)) {
+      try {
+        final bytes = await baseStorage.readBytes(geoipRelativePath);
+        if (bytes != null) {
+          await GeoIpService().initFromBytes(bytes);
+          LogService().log('GeolocationUtils: Loaded GeoIP DB from cache');
+          return;
+        }
+      } catch (e) {
+        LogService().log('GeolocationUtils: Failed to load cached GeoIP DB: $e');
+      }
+    }
+
+    // Try station server first
+    if (!kIsWeb) {
+      try {
+        final station = StationService().getPreferredStation();
+        if (station != null && station.url.isNotEmpty) {
+          final httpUrl = station.url
+              .replaceFirst('wss://', 'https://')
+              .replaceFirst('ws://', 'http://');
+          final url = '$httpUrl/geoip/dbip-city-lite.mmdb';
+
+          LogService().log('GeolocationUtils: Downloading GeoIP DB from station...');
+          final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+
+          if (response.statusCode == 200) {
+            await baseStorage.createDirectory('geoip');
+            await baseStorage.writeBytes(geoipRelativePath, response.bodyBytes);
+            await GeoIpService().initFromBytes(response.bodyBytes);
+            LogService().log('GeolocationUtils: GeoIP DB loaded from station');
+            return;
+          }
+        }
+      } catch (e) {
+        LogService().log('GeolocationUtils: Station GeoIP download failed: $e');
+      }
+    }
+
+    // Fallback to jsdelivr CDN
+    try {
+      LogService().log('GeolocationUtils: Downloading GeoIP DB from jsdelivr...');
+      const cdnUrl = 'https://cdn.jsdelivr.net/npm/dbip-city-lite/dbip-city-lite.mmdb.gz';
+      final response = await http.get(Uri.parse(cdnUrl)).timeout(const Duration(seconds: 60));
+
+      if (response.statusCode == 200) {
+        // Decode gzip
+        final compressed = response.bodyBytes;
+        final decompressed = GZipDecoder().decodeBytes(compressed);
+
+        await baseStorage.createDirectory('geoip');
+        await baseStorage.writeBytes(geoipRelativePath, Uint8List.fromList(decompressed));
+        await GeoIpService().initFromBytes(Uint8List.fromList(decompressed));
+        LogService().log('GeolocationUtils: GeoIP DB loaded from CDN');
+      }
+    } catch (e) {
+      LogService().log('GeolocationUtils: CDN GeoIP download failed: $e');
     }
   }
 

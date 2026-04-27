@@ -107,6 +107,12 @@ class StorageConfig {
   /// Get the file browser cache directory path
   String get fileBrowserCacheDir => path.join(baseDir, 'file_browser_cache');
 
+  /// Get the GeoIP database directory path
+  String get geoipDir => path.join(baseDir, 'geoip');
+
+  /// Get the GeoIP MMDB database path
+  String get geoipMmdbPath => path.join(geoipDir, 'dbip-city-lite.mmdb');
+
   /// Get the main config file path
   String get configPath => path.join(baseDir, 'config.json');
 
