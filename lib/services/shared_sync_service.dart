@@ -350,23 +350,32 @@ class SharedSyncService {
     Map<String, String> headers,
     String filePath,
   ) async {
+    // Binary transport: the host returns raw bytes with
+    // Content-Type: application/octet-stream, or 404 if the file is
+    // missing. We send the same X-Shared-Token header — auth is
+    // unchanged.
     final result = await ConnectionManager().apiRequest(
       callsign: hostCallsign,
       method: 'GET',
       path:
           '/api/shared/folders/${folder.id}/file?path=${Uri.encodeQueryComponent(filePath)}',
-      headers: headers,
+      headers: {
+        ...headers,
+        // Stop ConnectionManager / transports from auto-decoding the
+        // body as JSON when the host happens to mark it text/...
+        'Accept': 'application/octet-stream',
+      },
     );
-    if (!result.success || result.statusCode == null ||
-        result.statusCode! >= 400) {
-      return null;
+    final code = result.statusCode;
+    if (!result.success || code == null || code >= 400) return null;
+    final data = result.responseData;
+    if (data is Uint8List) return data;
+    if (data is List<int>) return Uint8List.fromList(data);
+    if (data is String) {
+      // Shouldn't happen with octet-stream, but be defensive.
+      return Uint8List.fromList(utf8.encode(data));
     }
-    final payload = _decodeJson(result.responseData);
-    if (payload is! Map<String, dynamic>) return null;
-    if (payload['exists'] != true) return null;
-    final b64 = payload['content_b64'] as String?;
-    if (b64 == null) return null;
-    return Uint8List.fromList(base64Decode(b64));
+    return null;
   }
 
   Future<bool> _pushFile(
@@ -379,12 +388,13 @@ class SharedSyncService {
     final result = await ConnectionManager().apiRequest(
       callsign: hostCallsign,
       method: 'POST',
-      path: '/api/shared/folders/${folder.id}/file',
-      headers: headers,
-      body: jsonEncode({
-        'path': filePath,
-        'content_b64': base64Encode(bytes),
-      }),
+      path:
+          '/api/shared/folders/${folder.id}/file?path=${Uri.encodeQueryComponent(filePath)}',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/octet-stream',
+      },
+      body: bytes,
     );
     return result.success &&
         result.statusCode != null &&

@@ -19877,20 +19877,23 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         relativePath: filePath,
       );
       if (bytes == null) {
-        return shelf.Response.ok(
+        return shelf.Response.notFound(
           jsonEncode({'success': true, 'exists': false, 'path': filePath}),
           headers: headers,
         );
       }
+      // Return raw bytes. Wrapping in JSON+base64 ballooned 2.5 MB
+      // images to 3.4 MB strings and forced both ends to do
+      // synchronous base64 + jsonDecode on the main isolate, choking
+      // the event loop for seconds per file.
       return shelf.Response.ok(
-        jsonEncode({
-          'success': true,
-          'exists': true,
-          'path': filePath,
-          'size': bytes.length,
-          'content_b64': base64Encode(bytes),
-        }),
-        headers: headers,
+        bytes,
+        headers: {
+          ...headers,
+          'Content-Type': 'application/octet-stream',
+          'X-Shared-Path': filePath,
+          'X-Shared-Size': bytes.length.toString(),
+        },
       );
     } catch (e, stack) {
       LogService().log('Shared file GET error: $e');
@@ -19915,20 +19918,17 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           headers: headers,
         );
       }
-      final body = jsonDecode(await request.readAsString())
-          as Map<String, dynamic>;
-      final filePath = (body['path'] as String?)?.trim();
-      final b64 = body['content_b64'] as String?;
-      if (filePath == null || filePath.isEmpty || b64 == null) {
+      final filePath = request.url.queryParameters['path']?.trim();
+      if (filePath == null || filePath.isEmpty) {
         return shelf.Response.badRequest(
           body: jsonEncode({
             'success': false,
-            'error': 'Missing path or content_b64',
+            'error': 'Missing path query parameter',
           }),
           headers: headers,
         );
       }
-      final bytes = Uint8List.fromList(base64Decode(b64));
+      final bytes = Uint8List.fromList(await request.read().expand((c) => c).toList());
       await SharedSyncService.instance.hostApplyWrite(
         folderId: folderId,
         relativePath: filePath,
