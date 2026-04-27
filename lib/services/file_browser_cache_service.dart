@@ -3,62 +3,67 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:path/path.dart' as p;
 
 import '../models/file_browser_cache_models.dart';
+import '../platform/file_system_service.dart';
 import 'log_service.dart';
 import 'storage_config.dart';
 
-/// Singleton service for caching file browser data persistently
+/// Singleton service for caching file browser data persistently across all
+/// platforms. Storage goes through [FileSystemService] (dart:io on native,
+/// fs_shim/IndexedDB on web) so the cache works in browsers too.
 ///
-/// Provides caching for:
-/// - Directory listings (file names, sizes, modification times)
-/// - Folder size calculations
-/// - Video thumbnails (stored in ZIP archives per volume)
+/// Thumbnails are stored as raw files at thumbs/{volumeId}/{sha1}.{ext} —
+/// one file per thumbnail. The previous ZIP-per-volume layout was rewritten
+/// from scratch on every save (O(N²) re-encode); the raw-file layout makes
+/// each save O(1).
 ///
-/// Cache is organized by volume (internal, USB drives, SD cards) to allow
-/// independent invalidation when volumes are unmounted.
+/// Metadata JSON is flushed synchronously on every saveThumbnail call so a
+/// generated thumbnail is durable the instant the call returns. The previous
+/// 2-second debounced flush would silently drop thumbnails when the picker
+/// closed before the timer fired, which is why every reopen re-generated.
 class FileBrowserCacheService {
   static final FileBrowserCacheService _instance =
       FileBrowserCacheService._internal();
   factory FileBrowserCacheService() => _instance;
   FileBrowserCacheService._internal();
 
+  final FileSystemService _fs = FileSystemService.instance;
   String? _cacheDir;
   bool _initialized = false;
+  Future<void>? _initFuture;
 
-  // In-memory caches loaded from disk
+  // In-memory caches loaded from disk.
   final Map<String, VolumeCacheFile> _volumeCaches = {};
   final Map<String, ThumbnailMetaFile> _thumbnailMetas = {};
 
-  // Pending writes for batching
+  // Pending writes for batching (volume directory listings only — thumbnail
+  // meta is flushed synchronously per save).
   final Set<String> _dirtyVolumes = {};
-  final Set<String> _dirtyThumbnailMetas = {};
   bool _flushScheduled = false;
 
-  /// Initialize the cache service
+  /// Initialize the cache service. Idempotent and safe to call concurrently.
   Future<void> initialize() async {
     if (_initialized) return;
+    return _initFuture ??= _initializeOnce();
+  }
 
-    if (kIsWeb) {
-      LogService().log('FileBrowserCacheService: Web platform, disabled');
-      _initialized = true;
-      return;
-    }
-
+  Future<void> _initializeOnce() async {
     try {
+      await _fs.init();
       _cacheDir = StorageConfig().fileBrowserCacheDir;
-      final dir = Directory(_cacheDir!);
-      if (!await dir.exists()) {
-        await dir.create(recursive: true);
+      if (!await _fs.isDirectory(_cacheDir!)) {
+        await _fs.createDirectory(_cacheDir!, recursive: true);
       }
+      // Migrate away from the old ZIP-per-volume thumbnail layout. Raw
+      // files live under thumbs/{volumeId}/ now; old ZIPs are dead weight.
+      await _migrateAwayFromZip();
       _initialized = true;
       LogService().log('FileBrowserCacheService initialized at: $_cacheDir');
     } catch (e) {
@@ -66,45 +71,52 @@ class FileBrowserCacheService {
     }
   }
 
-  /// Get the volume ID for a given path
-  ///
-  /// Examples:
-  /// - /home/user/... -> "internal"
-  /// - /media/user/USB_NAME/... -> "media_USB_NAME"
-  /// - /storage/emulated/0/... -> "internal"
-  /// - /storage/XXXX-XXXX/... -> "sdcard_XXXX-XXXX"
+  Future<void> _migrateAwayFromZip() async {
+    try {
+      final entries = await _fs.list(_cacheDir!);
+      for (final entry in entries) {
+        if (entry.isFile && entry.path.endsWith('.zip')) {
+          try {
+            await _fs.delete(entry.path);
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Get the volume ID for a given path. Volumes let us invalidate
+  /// per-removable-drive without nuking everything.
   String getVolumeId(String path) {
-    // Android
+    if (kIsWeb) return 'web';
+
     if (path.startsWith('/storage/emulated/0')) {
       return 'internal';
     }
 
-    // Android SD card pattern: /storage/XXXX-XXXX
-    final sdcardMatch = RegExp(r'/storage/([A-F0-9]{4}-[A-F0-9]{4})').firstMatch(path);
+    final sdcardMatch =
+        RegExp(r'/storage/([A-F0-9]{4}-[A-F0-9]{4})').firstMatch(path);
     if (sdcardMatch != null) {
       return 'sdcard_${sdcardMatch.group(1)}';
     }
 
-    // Linux home directory
-    final home = Platform.environment['HOME'];
+    // Linux home directory — checked via env on native, no-op on web.
+    final home = _homeDir();
     if (home != null && path.startsWith(home)) {
       return 'internal';
     }
 
-    // Linux /media mounts
     final mediaMatch = RegExp(r'/media/[^/]+/([^/]+)').firstMatch(path);
     if (mediaMatch != null) {
       return 'media_${mediaMatch.group(1)}';
     }
 
-    // Linux /mnt mounts
     final mntMatch = RegExp(r'/mnt/([^/]+)').firstMatch(path);
     if (mntMatch != null) {
       return 'mnt_${mntMatch.group(1)}';
     }
 
-    // Linux /run/media mounts (Fedora, Arch, etc.)
-    final runMediaMatch = RegExp(r'/run/media/[^/]+/([^/]+)').firstMatch(path);
+    final runMediaMatch =
+        RegExp(r'/run/media/[^/]+/([^/]+)').firstMatch(path);
     if (runMediaMatch != null) {
       return 'media_${runMediaMatch.group(1)}';
     }
@@ -112,38 +124,39 @@ class FileBrowserCacheService {
     return 'default';
   }
 
-  /// Get the cache file path for a volume's directory listings
-  String _getVolumeCacheFilePath(String volumeId) {
-    return p.join(_cacheDir!, 'files_$volumeId.json');
+  String? _homeDir() {
+    if (kIsWeb) return null;
+    // Avoid a hard dart:io import here — query through StorageConfig which
+    // already abstracts platform paths. This is best-effort: a miss just
+    // means the path lands in the 'default' bucket, which is harmless.
+    final base = StorageConfig().baseDir;
+    final lastSlash = base.lastIndexOf('/');
+    return lastSlash > 0 ? base.substring(0, lastSlash) : null;
   }
 
-  /// Get the thumbnail metadata file path for a volume
-  String _getThumbnailMetaFilePath(String volumeId) {
-    return p.join(_cacheDir!, 'thumbnails_${volumeId}_meta.json');
-  }
+  String _joinPath(List<String> parts) =>
+      parts.where((p) => p.isNotEmpty).join('/');
 
-  /// Get the thumbnail ZIP archive path for a volume
-  String _getThumbnailZipPath(String volumeId) {
-    return p.join(_cacheDir!, 'thumbnails_$volumeId.zip');
-  }
+  String _getVolumeCacheFilePath(String volumeId) =>
+      _joinPath([_cacheDir!, 'files_$volumeId.json']);
 
-  /// Generate a hash key for a file path (for thumbnail naming)
-  String _hashPath(String path) {
-    return sha1.convert(utf8.encode(path)).toString();
-  }
+  String _getThumbnailMetaFilePath(String volumeId) =>
+      _joinPath([_cacheDir!, 'thumbnails_${volumeId}_meta.json']);
 
-  /// Load volume cache from disk if not already loaded
+  String _getThumbnailFilePath(
+          String volumeId, String hashKey, String extension) =>
+      _joinPath([_cacheDir!, 'thumbs', volumeId, '$hashKey.$extension']);
+
+  String _hashPath(String path) =>
+      sha1.convert(utf8.encode(path)).toString();
+
   Future<VolumeCacheFile> _loadVolumeCache(String volumeId) async {
-    if (_volumeCaches.containsKey(volumeId)) {
-      return _volumeCaches[volumeId]!;
-    }
+    if (_volumeCaches.containsKey(volumeId)) return _volumeCaches[volumeId]!;
 
     final filePath = _getVolumeCacheFilePath(volumeId);
-    final file = File(filePath);
-
-    if (await file.exists()) {
+    if (await _fs.isFile(filePath)) {
       try {
-        final content = await file.readAsString();
+        final content = await _fs.readAsString(filePath);
         final json = jsonDecode(content) as Map<String, dynamic>;
         final cache = VolumeCacheFile.fromJson(json);
         _volumeCaches[volumeId] = cache;
@@ -153,7 +166,6 @@ class FileBrowserCacheService {
       }
     }
 
-    // Create new empty cache
     final cache = VolumeCacheFile(
       version: 1,
       volumeId: volumeId,
@@ -163,18 +175,15 @@ class FileBrowserCacheService {
     return cache;
   }
 
-  /// Load thumbnail metadata from disk if not already loaded
   Future<ThumbnailMetaFile> _loadThumbnailMeta(String volumeId) async {
     if (_thumbnailMetas.containsKey(volumeId)) {
       return _thumbnailMetas[volumeId]!;
     }
 
     final filePath = _getThumbnailMetaFilePath(volumeId);
-    final file = File(filePath);
-
-    if (await file.exists()) {
+    if (await _fs.isFile(filePath)) {
       try {
-        final content = await file.readAsString();
+        final content = await _fs.readAsString(filePath);
         final json = jsonDecode(content) as Map<String, dynamic>;
         final meta = ThumbnailMetaFile.fromJson(json);
         _thumbnailMetas[volumeId] = meta;
@@ -184,7 +193,6 @@ class FileBrowserCacheService {
       }
     }
 
-    // Create new empty metadata
     final meta = ThumbnailMetaFile(
       version: 1,
       volumeId: volumeId,
@@ -194,27 +202,37 @@ class FileBrowserCacheService {
     return meta;
   }
 
-  /// Get cached directory listing
-  Future<DirectoryCache?> getDirectoryCache(String path) async {
-    if (kIsWeb || _cacheDir == null) return null;
+  Future<void> _flushThumbnailMeta(String volumeId) async {
+    final meta = _thumbnailMetas[volumeId];
+    if (meta == null) return;
+    try {
+      final json = const JsonEncoder.withIndent('  ').convert(meta.toJson());
+      await _fs.writeAsString(_getThumbnailMetaFilePath(volumeId), json);
+    } catch (e) {
+      LogService().log('Error flushing thumbnail meta $volumeId: $e');
+    }
+  }
 
+  /// Get cached directory listing.
+  Future<DirectoryCache?> getDirectoryCache(String path) async {
+    if (_cacheDir == null) return null;
     final volumeId = getVolumeId(path);
     final cache = await _loadVolumeCache(volumeId);
     return cache.directories[path];
   }
 
-  /// Save directory cache
+  /// Save directory cache (debounced flush is fine here — directory
+  /// listings re-scan on cache miss, no permanent loss).
   Future<void> saveDirectoryCache(
     String path,
     List<CachedFileEntry> entries,
     DateTime dirModified,
   ) async {
-    if (kIsWeb || _cacheDir == null) return;
+    if (_cacheDir == null) return;
 
     final volumeId = getVolumeId(path);
     final cache = await _loadVolumeCache(volumeId);
 
-    // Calculate total size
     int totalSize = 0;
     for (final entry in entries) {
       totalSize += entry.size;
@@ -228,7 +246,6 @@ class FileBrowserCacheService {
       entries: entries,
     );
 
-    // Update in-memory cache
     final newDirectories = Map<String, DirectoryCache>.from(cache.directories);
     newDirectories[path] = dirCache;
     _volumeCaches[volumeId] = VolumeCacheFile(
@@ -237,32 +254,30 @@ class FileBrowserCacheService {
       directories: newDirectories,
     );
 
-    // Mark for flush
     _dirtyVolumes.add(volumeId);
     _scheduleFlush();
   }
 
-  /// Check if directory cache is valid (not stale)
+  /// Check if directory cache is valid (not stale).
   Future<bool> isCacheValid(String path) async {
-    if (kIsWeb || _cacheDir == null) return false;
+    if (_cacheDir == null) return false;
 
     final cache = await getDirectoryCache(path);
     if (cache == null) return false;
 
     try {
-      final dir = Directory(path);
-      final stat = await dir.stat();
+      final stat = await _fs.stat(path);
       return !cache.isStale(stat.modified);
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
-  /// Get cached folder size
+  /// Get cached folder size.
   Future<int?> getCachedFolderSize(String folderPath) async {
-    if (kIsWeb || _cacheDir == null) return null;
+    if (_cacheDir == null) return null;
 
-    final parentPath = p.dirname(folderPath);
+    final parentPath = _parentOf(folderPath);
     final cache = await getDirectoryCache(parentPath);
     if (cache == null) return null;
 
@@ -270,18 +285,23 @@ class FileBrowserCacheService {
     return entry?.size;
   }
 
-  /// Save folder size to cache
-  Future<void> saveFolderSize(String folderPath, int size) async {
-    if (kIsWeb || _cacheDir == null) return;
+  String _parentOf(String path) {
+    final lastSlash = path.lastIndexOf('/');
+    if (lastSlash <= 0) return '/';
+    return path.substring(0, lastSlash);
+  }
 
-    final parentPath = p.dirname(folderPath);
+  /// Save folder size to cache.
+  Future<void> saveFolderSize(String folderPath, int size) async {
+    if (_cacheDir == null) return;
+
+    final parentPath = _parentOf(folderPath);
     final volumeId = getVolumeId(parentPath);
     final cache = await _loadVolumeCache(volumeId);
     final dirCache = cache.directories[parentPath];
 
     if (dirCache == null) return;
 
-    // Update the entry with new size
     final updatedEntries = dirCache.entries.map((entry) {
       if (entry.path == folderPath) {
         return CachedFileEntry(
@@ -315,9 +335,9 @@ class FileBrowserCacheService {
     _scheduleFlush();
   }
 
-  /// Check if a thumbnail exists in the cache
+  /// Check if a thumbnail exists in the cache and is up-to-date.
   Future<bool> hasThumbnail(String filePath, DateTime sourceModified) async {
-    if (kIsWeb || _cacheDir == null) return false;
+    if (_cacheDir == null) return false;
 
     final volumeId = getVolumeId(filePath);
     final meta = await _loadThumbnailMeta(volumeId);
@@ -325,12 +345,17 @@ class FileBrowserCacheService {
     final thumbMeta = meta.thumbnails[hashKey];
 
     if (thumbMeta == null) return false;
+    if (thumbMeta.sourceModified.isBefore(sourceModified)) return false;
 
-    // Check if source file has been modified
-    return !thumbMeta.sourceModified.isBefore(sourceModified);
+    final thumbPath =
+        _getThumbnailFilePath(volumeId, hashKey, thumbMeta.extension);
+    return _fs.isFile(thumbPath);
   }
 
-  /// Get thumbnail from cache, extracting from ZIP to temp directory
+  /// Returns a real on-disk path to the cached thumbnail. Returns null on
+  /// web (the IndexedDB-backed FileSystemService has no real path) or on
+  /// cache miss. Use [getThumbnailBytes] when you need cross-platform
+  /// access.
   Future<String?> getThumbnailTempPath(String filePath) async {
     if (kIsWeb || _cacheDir == null) return null;
 
@@ -338,65 +363,54 @@ class FileBrowserCacheService {
     final hashKey = _hashPath(filePath);
     final meta = await _loadThumbnailMeta(volumeId);
     final thumbMeta = meta.thumbnails[hashKey];
-
     if (thumbMeta == null) return null;
 
-    // Check if already extracted to temp
-    final tempPath = p.join(
-      Directory.systemTemp.path,
-      'geogram_thumbs',
-      '$hashKey.${thumbMeta.extension}',
-    );
-    final tempFile = File(tempPath);
-
-    if (await tempFile.exists()) {
-      return tempPath;
-    }
-
-    // Extract from ZIP
-    final zipPath = _getThumbnailZipPath(volumeId);
-    final zipFile = File(zipPath);
-
-    if (!await zipFile.exists()) return null;
-
-    try {
-      final bytes = await zipFile.readAsBytes();
-      final archive = ZipDecoder().decodeBytes(bytes);
-
-      final thumbFileName = '$hashKey.${thumbMeta.extension}';
-      for (final file in archive) {
-        if (file.name == thumbFileName && file.isFile) {
-          // Ensure temp directory exists
-          final tempDir = Directory(p.dirname(tempPath));
-          if (!await tempDir.exists()) {
-            await tempDir.create(recursive: true);
-          }
-
-          // Write extracted thumbnail
-          await tempFile.writeAsBytes(file.content as List<int>);
-          return tempPath;
-        }
-      }
-    } catch (e) {
-      LogService().log('Error extracting thumbnail from ZIP: $e');
-    }
-
+    final thumbPath =
+        _getThumbnailFilePath(volumeId, hashKey, thumbMeta.extension);
+    if (await _fs.isFile(thumbPath)) return thumbPath;
     return null;
   }
 
-  /// Save a thumbnail to the cache
+  /// Cross-platform thumbnail access: returns the cached bytes regardless
+  /// of platform. Web callers should use this rather than
+  /// [getThumbnailTempPath].
+  Future<Uint8List?> getThumbnailBytes(String filePath) async {
+    if (_cacheDir == null) return null;
+
+    final volumeId = getVolumeId(filePath);
+    final hashKey = _hashPath(filePath);
+    final meta = await _loadThumbnailMeta(volumeId);
+    final thumbMeta = meta.thumbnails[hashKey];
+    if (thumbMeta == null) return null;
+
+    final thumbPath =
+        _getThumbnailFilePath(volumeId, hashKey, thumbMeta.extension);
+    if (!await _fs.isFile(thumbPath)) return null;
+
+    try {
+      final bytes = await _fs.readAsBytes(thumbPath);
+      return bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+    } catch (e) {
+      LogService().log('Error reading cached thumbnail $thumbPath: $e');
+      return null;
+    }
+  }
+
+  /// Save a thumbnail to the cache. Metadata flushes synchronously before
+  /// returning so the entry is durable even if the app is killed
+  /// immediately after (the previous debounced flush silently dropped
+  /// thumbnails when the picker closed too quickly).
   Future<void> saveThumbnail(
     String filePath,
     Uint8List bytes,
     DateTime sourceModified, {
     String extension = 'png',
   }) async {
-    if (kIsWeb || _cacheDir == null) return;
+    if (_cacheDir == null) return;
 
     final volumeId = getVolumeId(filePath);
     final hashKey = _hashPath(filePath);
 
-    // Update metadata
     final meta = await _loadThumbnailMeta(volumeId);
     final thumbMeta = ThumbnailMeta(
       sourcePath: filePath,
@@ -413,130 +427,66 @@ class FileBrowserCacheService {
       thumbnails: newThumbnails,
     );
 
-    // Save to temp file for immediate use
-    final tempPath = p.join(
-      Directory.systemTemp.path,
-      'geogram_thumbs',
-      '$hashKey.$extension',
-    );
-    final tempDir = Directory(p.dirname(tempPath));
-    if (!await tempDir.exists()) {
-      await tempDir.create(recursive: true);
+    final thumbPath = _getThumbnailFilePath(volumeId, hashKey, extension);
+    try {
+      await _fs.writeAsBytes(thumbPath, bytes);
+    } catch (e) {
+      LogService().log('Error writing thumbnail file $thumbPath: $e');
+      return;
     }
-    await File(tempPath).writeAsBytes(bytes);
 
-    // Add to ZIP archive
-    await _addToThumbnailZip(volumeId, hashKey, extension, bytes);
-
-    // Mark metadata for flush
-    _dirtyThumbnailMetas.add(volumeId);
-    _scheduleFlush();
+    await _flushThumbnailMeta(volumeId);
   }
 
-  /// Add a thumbnail to the volume's ZIP archive
-  Future<void> _addToThumbnailZip(
-    String volumeId,
-    String hashKey,
-    String extension,
-    Uint8List bytes,
-  ) async {
-    final zipPath = _getThumbnailZipPath(volumeId);
-    final zipFile = File(zipPath);
-
-    Archive archive;
-    if (await zipFile.exists()) {
-      try {
-        final existingBytes = await zipFile.readAsBytes();
-        archive = ZipDecoder().decodeBytes(existingBytes);
-      } catch (e) {
-        LogService().log('Error reading existing ZIP, creating new: $e');
-        archive = Archive();
-      }
-    } else {
-      archive = Archive();
-    }
-
-    // Remove existing file with same name if present
-    final fileName = '$hashKey.$extension';
-    archive.files.removeWhere((f) => f.name == fileName);
-
-    // Add new file
-    final archiveFile = ArchiveFile(fileName, bytes.length, bytes);
-    archive.addFile(archiveFile);
-
-    // Encode and save
-    final encoded = ZipEncoder().encode(archive);
-    if (encoded != null) {
-      await zipFile.writeAsBytes(encoded);
-    }
-  }
-
-  /// Schedule a flush to disk (debounced)
   void _scheduleFlush() {
     if (_flushScheduled) return;
     _flushScheduled = true;
-
     Future.delayed(const Duration(seconds: 2), () {
       _flushScheduled = false;
       flush();
     });
   }
 
-  /// Flush all pending changes to disk
+  /// Flush pending volume-cache writes. Thumbnail metadata is already
+  /// flushed synchronously by [saveThumbnail].
   Future<void> flush() async {
-    if (kIsWeb || _cacheDir == null) return;
+    if (_cacheDir == null) return;
 
-    // Flush dirty volume caches
     for (final volumeId in _dirtyVolumes.toList()) {
       final cache = _volumeCaches[volumeId];
       if (cache != null) {
         try {
           final filePath = _getVolumeCacheFilePath(volumeId);
-          final json = const JsonEncoder.withIndent('  ').convert(cache.toJson());
-          await File(filePath).writeAsString(json);
+          final json =
+              const JsonEncoder.withIndent('  ').convert(cache.toJson());
+          await _fs.writeAsString(filePath, json);
         } catch (e) {
           LogService().log('Error flushing volume cache $volumeId: $e');
         }
       }
     }
     _dirtyVolumes.clear();
-
-    // Flush dirty thumbnail metadata
-    for (final volumeId in _dirtyThumbnailMetas.toList()) {
-      final meta = _thumbnailMetas[volumeId];
-      if (meta != null) {
-        try {
-          final filePath = _getThumbnailMetaFilePath(volumeId);
-          final json = const JsonEncoder.withIndent('  ').convert(meta.toJson());
-          await File(filePath).writeAsString(json);
-        } catch (e) {
-          LogService().log('Error flushing thumbnail meta $volumeId: $e');
-        }
-      }
-    }
-    _dirtyThumbnailMetas.clear();
   }
 
-  /// Clear all cache data for a specific volume
+  /// Clear all cache data for a specific volume.
   Future<void> clearVolumeCache(String volumeId) async {
-    if (kIsWeb || _cacheDir == null) return;
+    if (_cacheDir == null) return;
 
-    // Clear in-memory
     _volumeCaches.remove(volumeId);
     _thumbnailMetas.remove(volumeId);
     _dirtyVolumes.remove(volumeId);
-    _dirtyThumbnailMetas.remove(volumeId);
 
-    // Delete files
     try {
-      final cacheFile = File(_getVolumeCacheFilePath(volumeId));
-      if (await cacheFile.exists()) await cacheFile.delete();
+      final cachePath = _getVolumeCacheFilePath(volumeId);
+      if (await _fs.isFile(cachePath)) await _fs.delete(cachePath);
 
-      final metaFile = File(_getThumbnailMetaFilePath(volumeId));
-      if (await metaFile.exists()) await metaFile.delete();
+      final metaPath = _getThumbnailMetaFilePath(volumeId);
+      if (await _fs.isFile(metaPath)) await _fs.delete(metaPath);
 
-      final zipFile = File(_getThumbnailZipPath(volumeId));
-      if (await zipFile.exists()) await zipFile.delete();
+      final thumbsDir = _joinPath([_cacheDir!, 'thumbs', volumeId]);
+      if (await _fs.isDirectory(thumbsDir)) {
+        await _fs.delete(thumbsDir, recursive: true);
+      }
 
       LogService().log('Cleared cache for volume: $volumeId');
     } catch (e) {
@@ -544,23 +494,18 @@ class FileBrowserCacheService {
     }
   }
 
-  /// Clear all cache data
+  /// Clear all cache data.
   Future<void> clearAllCaches() async {
-    if (kIsWeb || _cacheDir == null) return;
+    if (_cacheDir == null) return;
 
     _volumeCaches.clear();
     _thumbnailMetas.clear();
     _dirtyVolumes.clear();
-    _dirtyThumbnailMetas.clear();
 
     try {
-      final dir = Directory(_cacheDir!);
-      if (await dir.exists()) {
-        await for (final entity in dir.list()) {
-          if (entity is File) {
-            await entity.delete();
-          }
-        }
+      if (await _fs.isDirectory(_cacheDir!)) {
+        await _fs.delete(_cacheDir!, recursive: true);
+        await _fs.createDirectory(_cacheDir!, recursive: true);
       }
       LogService().log('Cleared all file browser caches');
     } catch (e) {

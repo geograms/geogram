@@ -4,26 +4,33 @@
  *
  * Serialized thumbnail generator. The file browser previously fired
  * `VideoMetadataExtractor.generateThumbnail` synchronously per visible
- * tile during `build`, spawning one `media_kit` Player instance per
- * video at once — which OOM-crashed the app on folders full of HD
- * recordings. This service funnels every request through a single
- * worker, applies a hard size cap so 4 GB videos never reach
- * `Player.open`, and registers itself with the Task Monitor so the
- * user can see when it is busy.
+ * tile during build, spawning one media_kit Player per video at once —
+ * which OOM-crashed the app on folders full of HD recordings.
+ *
+ * This service funnels every request through one worker, applies a hard
+ * size cap so 4 GB videos never reach the extractor, persists results
+ * through FileBrowserCacheService (which now flushes metadata
+ * synchronously, so reopens hit the cache), and registers with the Task
+ * Monitor so the user can see it working.
+ *
+ * Off-thread story: the underlying ThumbnailExtractor uses ffmpeg in a
+ * separate OS process on desktop and a JNI background thread on Android
+ * via MethodChannel. Only the media_kit fallback runs on the UI isolate,
+ * and even that is one-at-a-time.
  */
 
 import 'dart:async';
 import 'dart:collection';
-import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
 
 import '../models/monitored_task.dart';
+import '../platform/file_system_service.dart';
 import '../util/task_monitor_helpers.dart';
-import '../util/video_metadata_extractor.dart';
 import 'file_browser_cache_service.dart';
 import 'log_service.dart';
+import 'thumbnail_extractor.dart';
 
 class _ThumbnailRequest {
   final String path;
@@ -39,10 +46,9 @@ class ThumbnailGeneratorService {
       ThumbnailGeneratorService._();
   factory ThumbnailGeneratorService() => _instance;
 
-  // Files larger than these are skipped — the picker shows the
-  // generic file icon instead. Avoids OOM crashes on huge videos
-  // (`Player.open` loads the whole container into RAM) and on RAW
-  // photos that would blow the image decoder.
+  // Files larger than these are skipped — the picker shows the generic
+  // file icon instead. Avoids OOM on huge videos and on RAW photos that
+  // would blow the image decoder.
   static const int _kMaxImageBytes = 50 * 1024 * 1024;
   static const int _kMaxVideoBytes = 500 * 1024 * 1024;
 
@@ -55,11 +61,14 @@ class ThumbnailGeneratorService {
 
   static const String _kTaskId = 'thumbnail.generator';
 
+  final FileSystemService _fs = FileSystemService.instance;
+  final FileBrowserCacheService _cache = FileBrowserCacheService();
+  final ThumbnailExtractor _extractor = createThumbnailExtractor();
+
   final Queue<_ThumbnailRequest> _queue = Queue<_ThumbnailRequest>();
   final Map<String, _ThumbnailRequest> _inflight = {};
   bool _processing = false;
 
-  final FileBrowserCacheService _cache = FileBrowserCacheService();
   bool _cacheInitialized = false;
   Future<void>? _cacheInit;
 
@@ -95,15 +104,19 @@ class ThumbnailGeneratorService {
     });
   }
 
-  bool _isImage(String path) =>
-      _kImageExts.contains(p.extension(path).toLowerCase().replaceFirst('.', ''));
-  bool _isVideo(String path) =>
-      _kVideoExts.contains(p.extension(path).toLowerCase().replaceFirst('.', ''));
+  bool _isImage(String path) => _kImageExts
+      .contains(p.extension(path).toLowerCase().replaceFirst('.', ''));
+
+  bool _isVideo(String path) => _kVideoExts
+      .contains(p.extension(path).toLowerCase().replaceFirst('.', ''));
 
   /// Returns a thumbnail path (or the source path for plain images),
-  /// or null if the file is unsupported, missing, or over the size
-  /// cap. Repeated requests for the same path share one in-flight
-  /// completer.
+  /// or null if the file is unsupported, missing, or over the size cap.
+  /// Repeated requests for the same path share one in-flight completer.
+  ///
+  /// On web the returned path is a virtual FileSystemService path, not a
+  /// real OS path — callers that need bytes for rendering should use
+  /// [FileBrowserCacheService.getThumbnailBytes].
   Future<String?> requestThumbnail(
     String path, {
     DateTime? modified,
@@ -121,18 +134,24 @@ class ThumbnailGeneratorService {
       try {
         final has = await _cache.hasThumbnail(path, modified);
         if (has) {
+          if (kIsWeb) {
+            // On web there's no real path; the picker doesn't run on web
+            // so this branch is mostly defensive — return null so callers
+            // fall back to bytes-based access.
+            return null;
+          }
           final cached = await _cache.getThumbnailTempPath(path);
           if (cached != null) return cached;
         }
       } catch (_) {}
     }
 
-    // Pre-flight size check so we never spawn a Player for a 4 GB
+    // Pre-flight size check so we never spawn an extractor for a 4 GB
     // video. The picker will fall back to the generic icon.
     try {
-      final size = await File(path).length();
-      if (_isImage(path) && size > _kMaxImageBytes) return null;
-      if (_isVideo(path) && size > _kMaxVideoBytes) return null;
+      final stat = await _fs.stat(path);
+      if (_isImage(path) && stat.size > _kMaxImageBytes) return null;
+      if (_isVideo(path) && stat.size > _kMaxVideoBytes) return null;
     } catch (_) {
       return null;
     }
@@ -166,7 +185,8 @@ class ThumbnailGeneratorService {
           _inflight.remove(req.path);
         }
         // Yield one microtask between items so the UI stays responsive
-        // — without this a folder of N videos pegs one core.
+        // — without this a folder of N videos pegs one core on the
+        // media_kit fallback path.
         await Future<void>.delayed(Duration.zero);
       }
     } finally {
@@ -176,37 +196,38 @@ class ThumbnailGeneratorService {
 
   Future<String?> _generate(_ThumbnailRequest req) async {
     if (_isImage(req.path)) {
-      // Image.file handles decode + downscaling lazily on the GPU
-      // thread once the widget paints, so the source path itself is
-      // a valid "thumbnail". No work happens here on the UI isolate.
+      // Plain images: the picker uses Image.file/Image.network on the
+      // source directly — no thumbnail bytes needed. This is unchanged
+      // from the previous behavior. On web the picker doesn't run.
       return req.path;
     }
 
     if (_isVideo(req.path)) {
-      final tempDir = Directory.systemTemp;
-      final outputPath =
-          '${tempDir.path}/thumb_${req.path.hashCode}.png';
-      final result = await VideoMetadataExtractor.generateThumbnail(
-        req.path,
-        outputPath,
-        atSeconds: 1,
-      );
-      if (result != null && _cacheInitialized && req.modified != null) {
-        try {
-          final bytes = await File(result).readAsBytes();
-          await _cache.saveThumbnail(
-            req.path,
-            Uint8List.fromList(bytes),
-            req.modified!,
-            extension: 'png',
-          );
-        } catch (e) {
-          LogService().log(
-            'ThumbnailGeneratorService: cache write failed for ${req.path}: $e',
-          );
-        }
+      final bytes = await _extractor.extractVideoFrame(req.path);
+      if (bytes == null) return null;
+
+      // No modified time → no cache key. The picker always supplies one,
+      // so this branch is only hit by future server-side callers; they
+      // can ask for bytes and skip the path round-trip.
+      if (!_cacheInitialized || req.modified == null) return null;
+
+      try {
+        await _cache.saveThumbnail(
+          req.path,
+          bytes,
+          req.modified!,
+          extension: 'png',
+        );
+      } catch (e) {
+        LogService().log(
+          'ThumbnailGeneratorService: cache write failed for ${req.path}: $e',
+        );
+        return null;
       }
-      return result;
+
+      // Cached path is null on web (no real OS path); callers there
+      // should pull bytes via FileBrowserCacheService.getThumbnailBytes.
+      return _cache.getThumbnailTempPath(req.path);
     }
 
     return null;

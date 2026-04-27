@@ -5,12 +5,16 @@ import android.content.ClipboardManager
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.hardware.usb.UsbAccessory
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.core.content.FileProvider
@@ -18,6 +22,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 import java.io.File
 
 class MainActivity : FlutterActivity() {
@@ -29,6 +34,9 @@ class MainActivity : FlutterActivity() {
     private val FILE_LAUNCHER_CHANNEL = "dev.geogram/file_launcher"
     private val FILE_VIEWER_CHANNEL = "dev.geogram/file_viewer"
     private val RECENT_FILES_CHANNEL = "dev.geogram/recent_files"
+    // Matches Dart-side ThumbnailExtractor channel name (no dev. prefix —
+    // shared with iOS / desktop AOT counterparts in the future).
+    private val THUMBNAIL_CHANNEL = "geogram/thumbnail"
     private var bluetoothClassicPlugin: BluetoothClassicPlugin? = null
     private var wifiDirectPlugin: WifiDirectPlugin? = null
     private var usbSerialPlugin: UsbSerialPlugin? = null
@@ -298,6 +306,83 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // Thumbnail extractor — runs MediaMetadataRetriever on a worker
+        // thread so the Flutter UI isolate stays free during a folder full
+        // of HD videos. Returns PNG bytes; caller decides whether to
+        // cache them.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, THUMBNAIL_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "extractVideoFrame" -> {
+                    val path = call.argument<String>("path")
+                    val atSeconds = call.argument<Int>("atSeconds") ?: 1
+                    if (path == null) {
+                        result.error("INVALID_ARGUMENT", "path is required", null)
+                        return@setMethodCallHandler
+                    }
+                    extractVideoFrameAsync(path, atSeconds, result)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    /**
+     * Extract a single video frame off the UI thread using
+     * MediaMetadataRetriever. Result.success/error must be invoked on the
+     * platform main thread, so we hop back via a Handler before returning.
+     */
+    private fun extractVideoFrameAsync(path: String, atSeconds: Int, result: MethodChannel.Result) {
+        val mainHandler = Handler(Looper.getMainLooper())
+        Thread {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(path)
+                val bitmap = retriever.getFrameAtTime(
+                    atSeconds * 1_000_000L,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                )
+                if (bitmap == null) {
+                    mainHandler.post { result.success(null) }
+                    return@Thread
+                }
+
+                // Downscale to ~480 px on the long edge so cache files
+                // stay small. Same target as the desktop ffmpeg path.
+                val maxEdge = 480
+                val scale = if (bitmap.width >= bitmap.height) {
+                    maxEdge.toFloat() / bitmap.width
+                } else {
+                    maxEdge.toFloat() / bitmap.height
+                }
+                val out = if (scale < 1f) {
+                    Bitmap.createScaledBitmap(
+                        bitmap,
+                        (bitmap.width * scale).toInt().coerceAtLeast(1),
+                        (bitmap.height * scale).toInt().coerceAtLeast(1),
+                        true,
+                    )
+                } else {
+                    bitmap
+                }
+
+                val baos = ByteArrayOutputStream()
+                out.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                val bytes = baos.toByteArray()
+
+                if (out !== bitmap) out.recycle()
+                bitmap.recycle()
+
+                mainHandler.post { result.success(bytes) }
+            } catch (e: Exception) {
+                android.util.Log.w("GeogramThumbnail", "extractVideoFrame failed for $path: ${e.message}")
+                mainHandler.post { result.success(null) }
+            } finally {
+                try {
+                    retriever.release()
+                } catch (_: Exception) {}
+            }
+        }.start()
     }
 
     /**

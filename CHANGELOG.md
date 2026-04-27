@@ -1,5 +1,18 @@
 # Geogram Desktop Changelog
 
+## 2026-04-27 - v1.39.0-beta.15
+
+### Fixes
+- File browser thumbnails: cache now actually caches across reopens. `FileBrowserCacheService.saveThumbnail` used to schedule a 2-second debounced flush of the metadata JSON; if the picker closed before the timer fired, the ZIP held the bytes but the JSON didn't reference them — so every subsequent open ran the generator from scratch. Metadata is now flushed synchronously inside `saveThumbnail`, so a thumbnail is durable the instant the call returns.
+- File browser thumbnails: storage layout is no longer O(N²). The previous ZIP-per-volume layout decoded + re-encoded the entire archive on every save, which made each save proportional to the cache size. Each thumbnail is now a single raw file at `<cacheDir>/thumbs/<volumeId>/<sha1>.<ext>` — every save is one O(1) file write. Old `.zip` cache files are deleted on first init.
+- File browser thumbnails: video frame extraction is genuinely off the UI thread now. `media_kit` is a Flutter platform plugin and cannot be moved to a Dart isolate, so a single big video would freeze the picker for several seconds even with serialization in place. The new `ThumbnailExtractor` abstraction dispatches by platform — desktop uses `ffmpeg` via `Process.run` (separate OS process, UI thread free), Android uses a `MethodChannel` to `MediaMetadataRetriever` running on a Java background thread, and `media_kit` is only the last-resort fallback.
+
+### Changes
+- Cross-platform cache: `FileBrowserCacheService` no longer imports `dart:io` — all reads / writes go through `FileSystemService` (the existing dart:io-on-native, fs_shim/IndexedDB-on-web abstraction in `lib/platform/`). The cache file compiles cleanly for the web target instead of relying on `kIsWeb` early-returns to gate broken code.
+- Web thumbnails: new `WebThumbnailExtractor` uses an HTMLVideoElement + Canvas2D pipeline to grab a frame at the requested second and return PNG bytes. Picked at compile time via the conditional import in `thumbnail_extractor.dart`.
+- Android: new `geogram/thumbnail` MethodChannel (handler in `MainActivity.kt` → `extractVideoFrameAsync`) calls `MediaMetadataRetriever.getFrameAtTime` on a worker thread, downscales to 480 px on the long edge, encodes PNG, and returns bytes. Cache size stays modest and the UI doesn't stutter.
+- New helper `FileBrowserCacheService.getThumbnailBytes` returns cached bytes regardless of platform — needed for web (no real on-disk path) and used by `MediaThumbnailUtils` for HTTP-served gallery thumbnails.
+
 ## 2026-04-26 - v1.39.0-beta.14
 
 ### Fixes

@@ -21,7 +21,7 @@ import 'package:image/image.dart' as img;
 
 import '../services/file_browser_cache_service.dart';
 import '../services/log_service.dart';
-import 'video_metadata_extractor.dart';
+import '../services/thumbnail_extractor.dart';
 
 class MediaThumbnail {
   final Uint8List bytes;
@@ -37,6 +37,8 @@ class MediaThumbnailUtils {
   // only one generation runs — the rest await the same future. Keyed
   // by `path|mtime` so an edited file re-generates.
   static final Map<String, Future<MediaThumbnail?>> _inFlight = {};
+
+  static final ThumbnailExtractor _videoExtractor = createThumbnailExtractor();
 
   static const galleryImageExts = {
     '.jpg',
@@ -99,16 +101,15 @@ class MediaThumbnailUtils {
 
       // Cache hit?
       if (await cache.hasThumbnail(sourcePath, mtime)) {
-        final cachedPath = await cache.getThumbnailTempPath(sourcePath);
-        if (cachedPath != null) {
-          final cachedFile = File(cachedPath);
-          if (await cachedFile.exists()) {
-            final bytes = await cachedFile.readAsBytes();
-            final ct = cachedPath.toLowerCase().endsWith('.png')
-                ? 'image/png'
-                : 'image/jpeg';
-            return MediaThumbnail(bytes: bytes, contentType: ct);
-          }
+        final bytes = await cache.getThumbnailBytes(sourcePath);
+        if (bytes != null) {
+          // We pre-encode video thumbnails as PNG and image thumbnails
+          // as JPEG, so the cached extension tells us the content type.
+          final cachedPath = await cache.getThumbnailTempPath(sourcePath);
+          final ct = (cachedPath != null && cachedPath.toLowerCase().endsWith('.png'))
+              ? 'image/png'
+              : 'image/jpeg';
+          return MediaThumbnail(bytes: bytes, contentType: ct);
         }
       }
 
@@ -125,22 +126,13 @@ class MediaThumbnailUtils {
         final original = await source.readAsBytes();
         bytes = await Isolate.run(() => _resizeToJpeg(original));
       } else {
-        // Video — single-frame PNG at ~1 s.
-        final tempDir = Directory.systemTemp;
-        final outPath =
-            '${tempDir.path}/media_thumb_${sourcePath.hashCode}.png';
-        final thumbPath = await VideoMetadataExtractor.generateThumbnail(
-          sourcePath,
-          outPath,
-          atSeconds: 1,
-        );
-        if (thumbPath == null) return null;
-        bytes = await File(thumbPath).readAsBytes();
+        // Video — let the platform extractor pick the off-thread path
+        // (ffmpeg subprocess on desktop, MediaMetadataRetriever on
+        // Android). Returns PNG bytes.
+        bytes = await _videoExtractor.extractVideoFrame(sourcePath);
+        if (bytes == null) return null;
         cacheExt = 'png';
         contentType = 'image/png';
-        try {
-          await File(thumbPath).delete();
-        } catch (_) {}
       }
 
       if (bytes == null) return null;
