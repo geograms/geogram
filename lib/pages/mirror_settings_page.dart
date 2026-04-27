@@ -6,10 +6,12 @@ library;
 import 'package:flutter/material.dart';
 
 import '../models/mirror_config.dart';
+import '../services/devices_service.dart';
 import '../services/mirror_auto_sync_service.dart';
 import '../services/mirror_config_service.dart';
 import '../services/mirror_sync_service.dart';
 import '../widgets/transfer/transfer_progress_widget.dart';
+import 'mirror_invite_manager_page.dart';
 import 'mirror_wizard_page.dart';
 
 /// Opens a non-dismissible modal dialog that displays real-time sync progress.
@@ -18,7 +20,7 @@ import 'mirror_wizard_page.dart';
 /// - `onProgress`: callback to feed [SyncStatus] updates into the dialog
 /// - `close`: callback to dismiss the dialog when sync is done
 ({void Function(SyncStatus) onProgress, VoidCallback close})
-    _showSyncProgressDialog(BuildContext context, {String? peerName}) {
+_showSyncProgressDialog(BuildContext context, {String? peerName}) {
   SyncStatus status = SyncStatus.idle();
   late StateSetter dialogSetState;
 
@@ -52,15 +54,14 @@ import 'mirror_wizard_page.dart';
           }
 
           return AlertDialog(
-            title: Text(peerName != null
-                ? 'Syncing with $peerName...'
-                : 'Syncing...'),
+            title: Text(
+              peerName != null ? 'Syncing with $peerName...' : 'Syncing...',
+            ),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(phaseLabel,
-                    style: Theme.of(context).textTheme.bodyMedium),
+                Text(phaseLabel, style: Theme.of(context).textTheme.bodyMedium),
                 if (status.state == 'syncing' &&
                     status.currentFile != null) ...[
                   const SizedBox(height: 4),
@@ -69,9 +70,9 @@ import 'mirror_wizard_page.dart';
                         ? '...${status.currentFile!.substring(status.currentFile!.length - 37)}'
                         : status.currentFile!,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.outline,
-                          fontFamily: 'monospace',
-                        ),
+                      color: Theme.of(context).colorScheme.outline,
+                      fontFamily: 'monospace',
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -160,6 +161,12 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
       appBar: AppBar(
         title: const Text('Mirror'),
         actions: [
+          if (_config?.enabled == true)
+            IconButton(
+              icon: const Icon(Icons.badge_outlined),
+              tooltip: 'Manage invites',
+              onPressed: _openInviteManager,
+            ),
           if (_config?.enabled == true && _config!.peers.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.sync),
@@ -212,9 +219,7 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
             : theme.colorScheme.outline,
       ),
       title: const Text('Enable Mirror'),
-      subtitle: const Text(
-        'Keep apps synchronized between your devices',
-      ),
+      subtitle: const Text('Keep apps synchronized between your devices'),
       value: _config?.enabled ?? false,
       onChanged: (value) async {
         await _configService.setEnabled(value);
@@ -262,11 +267,7 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          Icon(
-            Icons.wifi,
-            size: 16,
-            color: theme.colorScheme.primary,
-          ),
+          Icon(Icons.wifi, size: 16, color: theme.colorScheme.primary),
           const SizedBox(width: 8),
           Text(
             'WiFi Connected',
@@ -337,16 +338,9 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
         padding: const EdgeInsets.all(24),
         child: Column(
           children: [
-            Icon(
-              Icons.devices,
-              size: 48,
-              color: theme.colorScheme.outline,
-            ),
+            Icon(Icons.devices, size: 48, color: theme.colorScheme.outline),
             const SizedBox(height: 16),
-            Text(
-              'No paired devices',
-              style: theme.textTheme.titleMedium,
-            ),
+            Text('No paired devices', style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
               'Add a device to start syncing your apps',
@@ -415,10 +409,7 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
                 decoration: BoxDecoration(
                   color: peer.isOnline ? Colors.green : Colors.grey,
                   shape: BoxShape.circle,
-                  border: Border.all(
-                    color: theme.cardColor,
-                    width: 2,
-                  ),
+                  border: Border.all(color: theme.cardColor, width: 2),
                 ),
               ),
             ),
@@ -697,12 +688,18 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
     await _loadConfig();
   }
 
+  void _openInviteManager() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const MirrorInviteManagerPage()),
+    );
+    await _loadConfig();
+  }
+
   void _openPeerSettings(MirrorPeer peer) async {
     await Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => PeerSettingsPage(peer: peer),
-      ),
+      MaterialPageRoute(builder: (context) => PeerSettingsPage(peer: peer)),
     );
     await _loadConfig();
   }
@@ -721,17 +718,23 @@ class _MirrorSettingsPageState extends State<MirrorSettingsPage> {
 
     if (mounted) {
       final parts = <String>[];
-      if (result.filesAdded > 0) parts.add('+${result.filesAdded} new');
-      if (result.filesModified > 0) parts.add('~${result.filesModified} updated');
-      if (result.filesUploaded > 0) parts.add('↑${result.filesUploaded} uploaded');
-      if (result.peersSkipped > 0) parts.add('${result.peersSkipped} peer(s) skipped — no address');
+      if (result.filesAdded > 0) {
+        parts.add('+${result.filesAdded} new');
+      }
+      if (result.filesModified > 0) {
+        parts.add('~${result.filesModified} updated');
+      }
+      if (result.filesUploaded > 0) {
+        parts.add('↑${result.filesUploaded} uploaded');
+      }
+      if (result.peersSkipped > 0) {
+        parts.add('${result.peersSkipped} peer(s) skipped — no address');
+      }
       final summary = parts.isEmpty ? 'No changes.' : parts.join(', ');
       final msg = result.errors > 0
           ? 'Sync done with ${result.errors} error(s). $summary'
           : 'Sync complete. $summary';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg)),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 }
@@ -800,9 +803,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
               onPressed: _removePeer,
               icon: const Icon(Icons.delete_outline),
               label: const Text('Remove Device'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.red,
-              ),
+              style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
             ),
           ),
         ],
@@ -832,10 +833,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      _peer.name,
-                      style: theme.textTheme.titleLarge,
-                    ),
+                    Text(_peer.name, style: theme.textTheme.titleLarge),
                     const SizedBox(height: 4),
                     Row(
                       children: [
@@ -869,7 +867,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
           _buildInfoRow(
             theme,
             'Device ID',
-            _peer.peerId.substring(0, 8) + '...',
+            '${_peer.peerId.substring(0, 8)}...',
             Icons.fingerprint,
           ),
           if (_peer.lastSyncAt != null)
@@ -909,10 +907,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
               color: theme.colorScheme.outline,
             ),
           ),
-          Text(
-            value,
-            style: theme.textTheme.bodySmall,
-          ),
+          Text(value, style: theme.textTheme.bodySmall),
         ],
       ),
     );
@@ -1011,12 +1006,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
         ),
         ...kSyncableFolders.map((id) {
           final labels = kFolderLabels[id];
-          return _buildAppTile(
-            theme,
-            id,
-            labels?.$1 ?? id,
-            labels?.$2 ?? '',
-          );
+          return _buildAppTile(theme, id, labels?.$1 ?? id, labels?.$2 ?? '');
         }),
       ],
     );
@@ -1084,26 +1074,28 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
             ),
           )
         else
-          ..._peer.addresses.map((addr) => ListTile(
-                leading: Icon(
-                  addr.startsWith('http')
-                      ? Icons.language
-                      : addr.contains(':')
-                          ? Icons.lan
-                          : Icons.bluetooth,
-                  size: 20,
-                ),
-                title: Text(
-                  addr,
-                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-                ),
-                trailing: IconButton(
-                  icon: const Icon(Icons.copy, size: 18),
-                  onPressed: () {
-                    // TODO: Copy to clipboard
-                  },
-                ),
-              )),
+          ..._peer.addresses.map(
+            (addr) => ListTile(
+              leading: Icon(
+                addr.startsWith('http')
+                    ? Icons.language
+                    : addr.contains(':')
+                    ? Icons.lan
+                    : Icons.bluetooth,
+                size: 20,
+              ),
+              title: Text(
+                addr,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+              ),
+              trailing: IconButton(
+                icon: const Icon(Icons.copy, size: 18),
+                onPressed: () {
+                  // TODO: Copy to clipboard
+                },
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.all(16),
           child: OutlinedButton.icon(
@@ -1161,9 +1153,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
         title: const Text('Device Name'),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Name',
-          ),
+          decoration: const InputDecoration(labelText: 'Name'),
           autofocus: true,
         ),
         actions: [
@@ -1189,7 +1179,8 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
   }
 
   void _toggleApp(String appId, bool enabled) async {
-    final currentConfig = _peer.apps[appId] ??
+    final currentConfig =
+        _peer.apps[appId] ??
         AppSyncConfig(appId: appId, style: SyncStyle.sendReceive);
     final updated = currentConfig.copyWith(enabled: enabled);
 
@@ -1279,17 +1270,20 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
   }
 
   void _syncNow() async {
-    if (_peer.addresses.isEmpty) {
+    final knownUrl = _peer.addresses.isNotEmpty
+        ? _peer.addresses.first
+        : DevicesService().getDevice(_peer.callsign)?.url;
+
+    if (knownUrl == null || knownUrl.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No address known for this peer')),
       );
       return;
     }
 
-    final dialog =
-        _showSyncProgressDialog(context, peerName: _peer.name);
+    final dialog = _showSyncProgressDialog(context, peerName: _peer.name);
 
-    final peerUrl = 'http://${_peer.addresses.first}';
+    final peerUrl = knownUrl.contains('://') ? knownUrl : 'http://$knownUrl';
     final syncService = MirrorSyncService.instance;
     final enabledApps = _configService.getEnabledAppsForPeer(_peer.peerId);
     var totalAdded = 0;
@@ -1337,9 +1331,7 @@ class _PeerSettingsPageState extends State<PeerSettingsPage> {
       final msg = errors > 0
           ? 'Sync done with $errors error(s). $summary'
           : 'Sync complete. $summary';
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg)),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 }

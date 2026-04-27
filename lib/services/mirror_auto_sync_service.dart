@@ -18,6 +18,7 @@ import '../models/monitored_task.dart';
 import '../util/event_bus.dart';
 import '../util/task_monitor_helpers.dart';
 import 'app_service.dart';
+import 'devices_service.dart';
 import 'log_service.dart';
 import 'mirror_config_service.dart';
 import 'mirror_sync_service.dart';
@@ -45,15 +46,15 @@ class MirrorSyncAllResult {
   });
 
   Map<String, dynamic> toJson() => {
-        'files_added': filesAdded,
-        'files_modified': filesModified,
-        'files_deleted': filesDeleted,
-        'files_uploaded': filesUploaded,
-        'errors': errors,
-        'peers_skipped': peersSkipped,
-        'peers_synced': peersSynced,
-        'details': details,
-      };
+    'files_added': filesAdded,
+    'files_modified': filesModified,
+    'files_deleted': filesDeleted,
+    'files_uploaded': filesUploaded,
+    'errors': errors,
+    'peers_skipped': peersSkipped,
+    'peers_synced': peersSynced,
+    'details': details,
+  };
 }
 
 /// Service that manages periodic mirror auto-sync.
@@ -86,8 +87,9 @@ class MirrorAutoSyncService {
   /// Start listening to config changes and evaluate the timer.
   void start() {
     _configSubscription?.cancel();
-    _configSubscription =
-        MirrorConfigService.instance.configStream.listen(_evaluateTimer);
+    _configSubscription = MirrorConfigService.instance.configStream.listen(
+      _evaluateTimer,
+    );
 
     // Evaluate immediately with current config.
     final config = MirrorConfigService.instance.config;
@@ -131,7 +133,9 @@ class MirrorAutoSyncService {
   /// Evaluate whether the timer should be running based on config.
   void _evaluateTimer(MirrorConfig config) {
     final shouldRun =
-        config.enabled && config.preferences.autoSync && config.peers.isNotEmpty;
+        config.enabled &&
+        config.preferences.autoSync &&
+        config.peers.isNotEmpty;
 
     final interval = config.preferences.syncIntervalMinutes;
 
@@ -140,7 +144,9 @@ class MirrorAutoSyncService {
         _timer?.cancel();
         _timer = null;
         _active = false;
-        LogService().log('MirrorAutoSync: timer stopped (disabled or no peers)');
+        LogService().log(
+          'MirrorAutoSync: timer stopped (disabled or no peers)',
+        );
       }
       return;
     }
@@ -159,8 +165,9 @@ class MirrorAutoSyncService {
         priority: TaskPriority.low,
         callback: (_) async => await _onTick(),
       );
-      LogService()
-          .log('MirrorAutoSync: timer started (every ${_intervalMinutes}min)');
+      LogService().log(
+        'MirrorAutoSync: timer started (every ${_intervalMinutes}min)',
+      );
     }
   }
 
@@ -184,10 +191,11 @@ class MirrorAutoSyncService {
   ///
   /// Returns `(url, usedRelay)` or `null` if no address available.
   Future<(String, bool)?> _resolveUrl(MirrorPeer peer) async {
-    final direct = peer.directAddress;
+    final deviceUrl = DevicesService().getDevice(peer.callsign)?.url;
+    final direct = peer.directAddress ?? deviceUrl;
     if (direct != null && direct.isNotEmpty) {
       // Try a quick connectivity check (HEAD to /api/mirror/challenge).
-      final directUrl = 'http://$direct';
+      final directUrl = direct.contains('://') ? direct : 'http://$direct';
       try {
         final resp = await http
             .head(Uri.parse('$directUrl/api/mirror/challenge?folder=ping'))
@@ -208,7 +216,7 @@ class MirrorAutoSyncService {
 
     // Fallback: use direct even without probing (legacy behavior).
     if (direct != null && direct.isNotEmpty) {
-      return ('http://$direct', false);
+      return (direct.contains('://') ? direct : 'http://$direct', false);
     }
 
     return null;
@@ -256,11 +264,14 @@ class MirrorAutoSyncService {
           peerUrl = resolved.$1;
           usedRelay = resolved.$2;
         } else {
-          if (peer.addresses.isEmpty) {
+          final knownUrl = peer.addresses.isNotEmpty
+              ? peer.addresses.first
+              : DevicesService().getDevice(peer.callsign)?.url;
+          if (knownUrl == null || knownUrl.isEmpty) {
             skipped++;
             continue;
           }
-          peerUrl = 'http://${peer.addresses.first}';
+          peerUrl = knownUrl.contains('://') ? knownUrl : 'http://$knownUrl';
         }
 
         final enabledApps = configService.getEnabledAppsForPeer(peer.peerId);
@@ -367,9 +378,9 @@ class MirrorAutoSyncService {
 
   /// Status info for debug API.
   Map<String, dynamic> toJson() => {
-        'active': _active,
-        'interval_minutes': _intervalMinutes,
-        'is_syncing': _isSyncing,
-        'last_sync_at': _lastSyncAt?.toIso8601String(),
-      };
+    'active': _active,
+    'interval_minutes': _intervalMinutes,
+    'is_syncing': _isSyncing,
+    'last_sync_at': _lastSyncAt?.toIso8601String(),
+  };
 }

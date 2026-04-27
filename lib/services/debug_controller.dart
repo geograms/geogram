@@ -1144,6 +1144,26 @@ class DebugController {
         'params': {},
       },
       {
+        'action': 'mirror_create_invite',
+        'description': 'Generate a one-time mirror invite code',
+        'params': {},
+      },
+      {
+        'action': 'mirror_list_invitations',
+        'description': 'List mirror invitations and current access',
+        'params': {},
+      },
+      {
+        'action': 'mirror_deny_invite',
+        'description': 'Deny a pending mirror invitation',
+        'params': {'code': 'Invitation code to deny (required)'},
+      },
+      {
+        'action': 'mirror_revoke_access',
+        'description': 'Revoke mirror access for a peer',
+        'params': {'npub': 'Peer NOSTR public key to revoke (required)'},
+      },
+      {
         'action': 'profile_list',
         'description': 'List all profiles with their IDs and callsigns',
         'params': {},

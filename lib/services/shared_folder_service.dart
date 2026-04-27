@@ -4,11 +4,9 @@
  */
 
 import 'dart:convert';
-import 'dart:io';
-
-import 'package:path/path.dart' as p;
 
 import '../models/shared_folder.dart';
+import '../platform/file_system_service.dart';
 import 'log_service.dart';
 import 'profile_storage.dart';
 
@@ -79,14 +77,15 @@ class SharedFolderService {
   Future<void> _ensureLocationExists(String location) async {
     if (location.isEmpty) return;
     final basePath = _storage.basePath;
-    if (location == basePath || p.isWithin(basePath, location)) {
+    if (location == basePath ||
+        location.startsWith(basePath.endsWith('/') ? basePath : '$basePath/')) {
       final relative = location == basePath
           ? ''
-          : p.relative(location, from: basePath).replaceAll('\\', '/');
+          : location.substring(basePath.length + 1);
       await _storage.createDirectory(relative);
       return;
     }
-    await Directory(location).create(recursive: true);
+    await FileSystemService.instance.createDirectory(location, recursive: true);
   }
 
   /// Load all shared folder entries
@@ -117,8 +116,9 @@ class SharedFolderService {
               folders.add(_resolveSyncedFolderLocation(folder));
             }
           } catch (e) {
-            LogService()
-                .log('SharedFolderService: Error loading ${entry.path}: $e');
+            LogService().log(
+              'SharedFolderService: Error loading ${entry.path}: $e',
+            );
           }
         }
       }
@@ -176,8 +176,7 @@ class SharedFolderService {
 
     await _storage.writeString(relativePath, updatedFolder.toJsonString());
 
-    LogService()
-        .log('SharedFolderService: Updated entry at $relativePath');
+    LogService().log('SharedFolderService: Updated entry at $relativePath');
 
     return updatedFolder;
   }
@@ -200,8 +199,7 @@ class SharedFolderService {
         SharedFolder.fromJsonString(content, filePath: filePath),
       );
     } catch (e) {
-      LogService()
-          .log('SharedFolderService: Error loading from $filePath: $e');
+      LogService().log('SharedFolderService: Error loading from $filePath: $e');
       return null;
     }
   }
@@ -255,11 +253,9 @@ class SharedFolderService {
           final securityPath = '$folderName/extra/security.json';
           if (await profileStorage.exists(securityPath)) {
             try {
-              final secContent =
-                  await profileStorage.readString(securityPath);
+              final secContent = await profileStorage.readString(securityPath);
               if (secContent != null) {
-                final secData =
-                    jsonDecode(secContent) as Map<String, dynamic>;
+                final secData = jsonDecode(secContent) as Map<String, dynamic>;
                 visibility = secData['visibility'] as String? ?? 'public';
                 allowedReaders =
                     (secData['allowedReaders'] as List<dynamic>?)

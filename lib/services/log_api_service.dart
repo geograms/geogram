@@ -95,6 +95,7 @@ import 'alert_feedback_service.dart';
 import 'alert_sharing_service.dart';
 import 'mirror_auto_sync_service.dart';
 import 'mirror_config_service.dart';
+import 'mirror_invitation_service.dart';
 import 'mirror_sync_service.dart';
 import 'sync_version_service.dart';
 import '../models/mirror_config.dart';
@@ -19680,6 +19681,18 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       return await _handleMirrorPair(request, headers);
     }
 
+    // GET /api/mirror/invitations/validate - Check if an invite is usable
+    if (urlPath == 'api/mirror/invitations/validate' &&
+        request.method == 'GET') {
+      return await _handleMirrorInvitationValidate(request, headers);
+    }
+
+    // POST /api/mirror/invitations/redeem - Consume an invite and grant access
+    if (urlPath == 'api/mirror/invitations/redeem' &&
+        request.method == 'POST') {
+      return await _handleMirrorInvitationRedeem(request, headers);
+    }
+
     return shelf.Response.notFound(
       jsonEncode({'error': 'Mirror endpoint not found'}),
       headers: headers,
@@ -20649,6 +20662,125 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
     }
   }
 
+  /// Handle GET /api/mirror/invitations/validate - Inspect invite status.
+  Future<shelf.Response> _handleMirrorInvitationValidate(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final code = request.url.queryParameters['code']?.trim() ?? '';
+      if (code.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing code parameter',
+          }),
+          headers: headers,
+        );
+      }
+
+      final service = MirrorInvitationService.instance;
+      await service.initialize();
+      final result = await service.validateInvite(code);
+
+      final profile = ProfileService().getProfile();
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': result.success,
+          'status': result.status,
+          'error': result.error,
+          if (result.invitation != null) 'invitation': result.invitation!.toJson(),
+          'npub': profile.npub,
+          'host_callsign': profile.callsign,
+          'device_name': MirrorConfigService.instance.config?.deviceName ?? 'Unknown',
+          'platform': io.Platform.operatingSystem,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror invite validate error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Handle POST /api/mirror/invitations/redeem - Consume invite and add peer.
+  Future<shelf.Response> _handleMirrorInvitationRedeem(
+    shelf.Request request,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final body = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+      final code = (body['code'] as String?)?.trim() ?? '';
+      final guestNpub = (body['guest_npub'] as String?)?.trim() ?? '';
+      final guestCallsign = (body['guest_callsign'] as String?)?.trim() ?? '';
+      final guestName = (body['guest_name'] as String?)?.trim() ?? '';
+      final guestPlatform = (body['guest_platform'] as String?)?.trim() ?? '';
+      final guestAddress = (body['guest_address'] as String?)?.trim();
+      final apps = (body['apps'] as List<dynamic>?)
+              ?.map((value) => value.toString())
+              .toList() ??
+          const <String>[];
+
+      if (code.isEmpty ||
+          guestNpub.isEmpty ||
+          guestCallsign.isEmpty ||
+          guestName.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'Missing code or guest identity fields',
+          }),
+          headers: headers,
+        );
+      }
+
+      final service = MirrorInvitationService.instance;
+      await service.initialize();
+      final result = await service.redeemInvite(
+        code: code,
+        guestNpub: guestNpub,
+        guestCallsign: guestCallsign,
+        guestName: guestName,
+        guestPlatform: guestPlatform,
+        guestAddress: guestAddress,
+        apps: apps,
+      );
+
+      final profile = ProfileService().getProfile();
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': result.success,
+          'status': result.status,
+          'error': result.error,
+          if (result.invitation != null) 'invitation': result.invitation!.toJson(),
+          if (result.peer != null) 'peer': result.peer!.toJson(),
+          'npub': profile.npub,
+          'host_callsign': profile.callsign,
+          'device_name': MirrorConfigService.instance.config?.deviceName ?? 'Unknown',
+          'platform': io.Platform.operatingSystem,
+        }),
+        headers: headers,
+      );
+    } catch (e, stack) {
+      LogService().log('LogApiService: Mirror invite redeem error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({
+          'success': false,
+          'error': e.toString(),
+        }),
+        headers: headers,
+      );
+    }
+  }
+
   /// Get content type for file extension
   String _getContentType(String ext) {
     switch (ext) {
@@ -21557,7 +21689,9 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
               peersSkipped++;
               continue;
             }
-            final peerUrl = 'http://${peer.addresses.first}';
+            final peerUrl = peer.addresses.first.contains('://')
+                ? peer.addresses.first
+                : 'http://${peer.addresses.first}';
             final enabledApps = configService.getEnabledAppsForPeer(peer.peerId);
 
             var peerHadSync = false;
@@ -21817,6 +21951,105 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
             jsonEncode({
               'success': true,
               'message': 'Navigated to mirror wizard',
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_create_invite':
+          final inviteService = MirrorInvitationService.instance;
+          await inviteService.initialize();
+          final invite = await inviteService.createInvite();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'invite': invite.toJson(),
+              'pending': inviteService.pendingInvitations
+                  .map((entry) => entry.toJson())
+                  .toList(),
+              'peers': MirrorConfigService.instance.config?.peers
+                  .map((peer) => {
+                        'peer_id': peer.peerId,
+                        'name': peer.name,
+                        'callsign': peer.callsign,
+                        'platform': peer.platform,
+                        'addresses': peer.addresses,
+                      })
+                  .toList() ??
+                  const [],
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_list_invitations':
+          final inviteService = MirrorInvitationService.instance;
+          await inviteService.initialize();
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'invitations':
+                  inviteService.invitations.map((entry) => entry.toJson()).toList(),
+              'pending': inviteService.pendingInvitations
+                  .map((entry) => entry.toJson())
+                  .toList(),
+              'peers': MirrorConfigService.instance.config?.peers
+                  .map((peer) => {
+                        'peer_id': peer.peerId,
+                        'name': peer.name,
+                        'callsign': peer.callsign,
+                        'platform': peer.platform,
+                        'addresses': peer.addresses,
+                      })
+                  .toList() ??
+                  const [],
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_deny_invite':
+          final code = params['code'] as String?;
+          if (code == null || code.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing code parameter',
+              }),
+              headers: headers,
+            );
+          }
+          final inviteService = MirrorInvitationService.instance;
+          await inviteService.initialize();
+          final deny = await inviteService.denyInvite(code);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': deny.success,
+              'status': deny.status,
+              'error': deny.error,
+              if (deny.invitation != null)
+                'invitation': deny.invitation!.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'mirror_revoke_access':
+          final npub = params['npub'] as String?;
+          if (npub == null || npub.isEmpty) {
+            return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'Missing npub parameter',
+              }),
+              headers: headers,
+            );
+          }
+          final inviteService = MirrorInvitationService.instance;
+          await inviteService.initialize();
+          final revoke = await inviteService.revokeAccess(npub);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': revoke.success,
+              'status': revoke.status,
+              'error': revoke.error,
+              if (revoke.peer != null) 'peer': revoke.peer!.toJson(),
             }),
             headers: headers,
           );
@@ -22748,6 +22981,85 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       await service.initializeApp(sharedApp.storagePath!);
 
       switch (action) {
+        case 'shared_add':
+          final title = params['title'] as String?;
+          final location = params['location'] as String?;
+          if (title == null || title.isEmpty || location == null || location.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Missing title or location',
+              }),
+              headers: headers,
+            );
+          }
+
+          final apps = await AppService().loadApps();
+          var sharedApp = apps.where((a) => a.type == 'shared').firstOrNull;
+          sharedApp ??= await AppService().createApp(
+            title: 'Shared',
+            type: 'shared',
+          );
+          final storagePath = sharedApp.storagePath;
+          if (storagePath == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Shared app has no storage path',
+              }),
+              headers: headers,
+            );
+          }
+
+          final profileStorage = AppService().profileStorage;
+          if (profileStorage == null) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Profile storage not available',
+              }),
+              headers: headers,
+            );
+          }
+
+          final scopedStorage = ScopedProfileStorage.fromAbsolutePath(
+            profileStorage,
+            storagePath,
+          );
+          final service = SharedFolderService();
+          service.setStorage(scopedStorage);
+          await service.initializeApp(storagePath);
+
+          final visibility =
+              params['visibility'] as String? ?? 'public';
+          final description = params['description'] as String? ?? '';
+          final syncEnabled = params['syncEnabled'] == true ||
+              params['syncEnabled'] == 'true';
+
+          final folder = SharedFolder(
+            title: title,
+            location: location,
+            visibility: SharedFolderVisibility.fromValue(visibility),
+            description: description,
+            syncEnabled: syncEnabled,
+          );
+          final saved = await service.save(folder);
+
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'message': 'Added shared folder: $title → $location',
+              'entry': {
+                'id': saved.id,
+                'title': saved.title,
+                'location': saved.location,
+                'visibility': saved.visibility.value,
+                'slug': saved.sanitizedFilename,
+              },
+            }),
+            headers: headers,
+          );
+
         case 'shared_list':
           final folders = await service.loadAll();
           return shelf.Response.ok(

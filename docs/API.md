@@ -2760,6 +2760,7 @@ Triggers a debug action.
 | `atproto_search_people` | Search actors/profiles across Bluesky network | `query` (required): Search text, `limit` (optional): 1-100 |
 | `atproto_search_posts` | Search posts/content across Bluesky network | `query` (required): Search text, `limit` (optional): 1-100 |
 | `shared_list` | List all shared folder entries with metadata | None |
+| `shared_add` | Add a shared folder entry to the Shared app | `title` (required), `location` (required), `visibility` (optional), `description` (optional), `syncEnabled` (optional) |
 | `shared_test_access` | Test access control for a given pubkey | `pubkey` (optional): Hex pubkey to test. Returns accessibility per folder |
 | `shared_test_cookie` | Test cookie parsing from HTTP headers | `headers` (required): Raw HTTP headers string to parse for `geogram_nostr_pubkey` cookie |
 | `hotspot_portal_start` | Start the captive portal HTTP server + DNS | `gateway_ip` (optional): Gateway IP (default: 192.168.49.1), `station_name` (optional): Station name for portal title |
@@ -4164,6 +4165,26 @@ curl -X POST http://localhost:3456/api/debug \
 curl -X POST http://localhost:3456/api/debug \
   -H "Content-Type: application/json" \
   -d '{"action": "mirror_open_wizard"}'
+
+# Generate a one-time mirror invite code
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_create_invite"}'
+
+# List mirror invitations and current access
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_list_invitations"}'
+
+# Deny a pending mirror invite
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_deny_invite", "code": "X1SU86-ABCD"}'
+
+# Revoke access for a peer
+curl -X POST http://localhost:3456/api/debug \
+  -H "Content-Type: application/json" \
+  -d '{"action": "mirror_revoke_access", "npub": "npub1..."}'
 
 # Check auto-sync timer status
 curl -X POST http://localhost:3456/api/debug \
