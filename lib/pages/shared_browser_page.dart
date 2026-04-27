@@ -1113,11 +1113,15 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                   color: theme.colorScheme.primary,
                 ),
                 const SizedBox(width: 3),
-                Text(
-                  e.$2,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.primary,
-                    fontSize: 11,
+                Flexible(
+                  child: Text(
+                    e.$2,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                      fontSize: 11,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 3),
