@@ -26,6 +26,13 @@ class EventTileWidget extends StatefulWidget {
   final bool isPinned;
   /// Fired when the user taps the pin icon. Null hides the icon.
   final VoidCallback? onTogglePin;
+  /// Parent-supplied attention flag, normally derived from the
+  /// browser-level NowService scan ([events_browser_page]'s
+  /// `_attentionEventIds`). The tile shows the red dot when this is
+  /// true even if its own on-disk scan returns zero — the on-disk
+  /// scan can lag the live NowService set when a status file lands
+  /// in a different tier of storage than the tile's reader sees.
+  final bool hasParentAttention;
 
   const EventTileWidget({
     Key? key,
@@ -37,6 +44,7 @@ class EventTileWidget extends StatefulWidget {
     this.onDelete,
     this.isPinned = false,
     this.onTogglePin,
+    this.hasParentAttention = false,
   }) : super(key: key);
 
   @override
@@ -211,9 +219,13 @@ class _EventTileWidgetState extends State<EventTileWidget> {
                             ),
                           ),
                         const SizedBox(width: 4),
-                        // Pending access requests badge — owner-only
-                        // attention marker that the event has at least
-                        // one undecided request.
+                        // Attention badge — shown whenever either the
+                        // local on-disk scan finds unseen activity OR
+                        // the browser page's NowService-driven set
+                        // flags this event. Two sources because the
+                        // on-disk scan can return 0 while NowService
+                        // already has the live item (different storage
+                        // tiers, different timing).
                         if (_unseenActivity > 0) ...[
                           Container(
                             padding: const EdgeInsets.symmetric(
@@ -242,6 +254,19 @@ class _EventTileWidgetState extends State<EventTileWidget> {
                                   ),
                                 ),
                               ],
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                        ] else if (widget.hasParentAttention) ...[
+                          // Plain dot — no count, since the on-disk
+                          // scan didn't surface a number. The event is
+                          // known to need attention via NowService.
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.error,
+                              shape: BoxShape.circle,
                             ),
                           ),
                           const SizedBox(width: 6),

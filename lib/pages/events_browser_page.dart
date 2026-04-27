@@ -1419,6 +1419,7 @@ class _EventsBrowserPageState extends State<EventsBrowserPage> {
           isSelected: _selectedEvent?.id == event.id,
           appPath: widget.appPath,
           isPinned: EventPinService.isPinned(event),
+          hasParentAttention: _attentionEventIds.contains(event.id),
           onTogglePin: () {
             EventPinService.toggle(event);
             _filterEvents();
