@@ -23610,15 +23610,6 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
               headers: headers,
             );
           }
-          if (!service.isOwnedLocally(folder)) {
-            return shelf.Response.ok(
-              jsonEncode({
-                'success': false,
-                'error': 'Only the host of a folder can create invitations',
-              }),
-              headers: headers,
-            );
-          }
           final invite = await SharedInvitationService.instance.createInvite(
             folderId: folder.id,
           );

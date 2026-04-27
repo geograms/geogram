@@ -120,8 +120,12 @@ class SharedFolderService {
       ? AppService().currentCallsign!.trim().toUpperCase()
       : 'LOCAL';
 
+  /// True when this device is the host of [folder].
+  /// Legacy folders saved before [SharedFolder.hostCallsign] existed have
+  /// it null — treat those as owned, since a participant copy would have
+  /// the host's callsign recorded by the redeem flow.
   bool isOwnedLocally(SharedFolder folder) =>
-      folder.hostCallsign != null &&
+      folder.hostCallsign == null ||
       folder.hostCallsign!.toUpperCase() == currentCallsign;
 
   // -----------------------------

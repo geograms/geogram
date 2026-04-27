@@ -33,12 +33,14 @@ class FilesBrowserPage extends StatefulWidget {
   final String appPath;
   final String appTitle;
   final I18nService i18n;
+  final List<Widget>? extraActions;
 
   const FilesBrowserPage({
     super.key,
     required this.appPath,
     required this.appTitle,
     required this.i18n,
+    this.extraActions,
   });
 
   @override
@@ -343,7 +345,10 @@ class _FilesBrowserPageState extends State<FilesBrowserPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.appTitle),
-        actions: _pickerKey.currentState?.buildActions(),
+        actions: [
+          ...?widget.extraActions,
+          ...?_pickerKey.currentState?.buildActions(),
+        ],
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {

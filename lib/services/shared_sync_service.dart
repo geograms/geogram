@@ -75,8 +75,8 @@ class SharedSyncService {
   static const _defaultInterval = Duration(seconds: 30);
 
   MonitoredAsyncPeriodicTimer? _timer;
-  Timer? _debounceTimer;
   bool _running = false;
+  bool _pending = false;
   DateTime? _lastRunAt;
   final Map<String, SharedSyncResult> _lastResults = {};
 
@@ -100,22 +100,33 @@ class SharedSyncService {
   }
 
   Future<void> stop() async {
-    _debounceTimer?.cancel();
-    _debounceTimer = null;
     _timer?.cancel();
     _timer = null;
+    _pending = false;
     LogService().log('SharedSyncService: stopped');
   }
 
-  /// Schedule an immediate run after [debounce]. If a run is already scheduled
-  /// or in progress, this is a no-op (the next run will pick up the new state).
+  /// Mark that a sync is needed soon. Coalesces multiple requests into one
+  /// run; if a sync is in flight, a trailing run fires when it finishes.
+  /// No timer — relies on the existing tracked periodic task and the
+  /// post-sync kick. The optional [debounce] arg is ignored, kept only for
+  /// backwards compatibility with older callers.
   void requestSyncSoon({
     required String reason,
-    Duration debounce = const Duration(seconds: 1),
+    Duration debounce = Duration.zero,
   }) {
     LogService().log('SharedSyncService: requestSyncSoon ($reason)');
-    _debounceTimer?.cancel();
-    _debounceTimer = Timer(debounce, () => syncAllJoinedFolders());
+    _pending = true;
+    if (!_running) {
+      scheduleMicrotask(_drainPending);
+    }
+  }
+
+  Future<void> _drainPending() async {
+    while (_pending && !_running) {
+      _pending = false;
+      await syncAllJoinedFolders();
+    }
   }
 
   Future<void> syncAllJoinedFolders() async {

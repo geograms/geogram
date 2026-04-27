@@ -749,6 +749,18 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
           appPath: folder.location,
           appTitle: folder.title,
           i18n: _i18n,
+          extraActions: [
+            IconButton(
+              icon: const Icon(Icons.qr_code_2),
+              tooltip: 'Generate invitation',
+              onPressed: () => _showInviteDialog(folder),
+            ),
+            IconButton(
+              icon: const Icon(Icons.people_outline),
+              tooltip: 'Manage access',
+              onPressed: () => _openAccessManager(folder),
+            ),
+          ],
         ),
       ),
     );
@@ -1142,33 +1154,43 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
             style: theme.textTheme.bodySmall,
           ),
           const SizedBox(height: 2),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Icon(
-                _getVisibilityIcon(folder.visibility),
-                size: 14,
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                folder.visibility.displayName,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              if (folder.syncEnabled) ...[
-                const SizedBox(width: 8),
-                Icon(Icons.sync, size: 14, color: theme.colorScheme.primary),
-                const SizedBox(width: 4),
-                Text(
-                  'Synced',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.primary,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    _getVisibilityIcon(folder.visibility),
+                    size: 14,
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
+                  const SizedBox(width: 4),
+                  Text(
+                    folder.visibility.displayName,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              if (folder.syncEnabled)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.sync, size: 14, color: theme.colorScheme.primary),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Synced',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-              if (folder.visibility == SharedFolderVisibility.restricted) ...[
-                const SizedBox(width: 8),
+              if (folder.visibility == SharedFolderVisibility.restricted)
                 Text(
                   '(${folder.allowedGroups.length} groups, ${folder.allowedReaders.length} contacts)',
                   style: theme.textTheme.bodySmall?.copyWith(
@@ -1176,20 +1198,15 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
                     fontSize: 11,
                   ),
                 ),
-              ],
-              if (folder.description.isNotEmpty) ...[
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    folder.description,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+              if (folder.description.isNotEmpty)
+                Text(
+                  folder.description,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
-              ],
             ],
           ),
           if (folder.visibility != SharedFolderVisibility.private_)
@@ -1236,28 +1253,26 @@ class _SharedBrowserPageState extends State<SharedBrowserPage> {
               ),
             ),
           const PopupMenuDivider(),
-          if (_service.isOwnedLocally(folder)) ...[
-            PopupMenuItem(
-              value: 'invite',
-              child: Row(
-                children: const [
-                  Icon(Icons.qr_code_2, size: 18),
-                  SizedBox(width: 12),
-                  Text('Generate invitation'),
-                ],
-              ),
+          PopupMenuItem(
+            value: 'invite',
+            child: Row(
+              children: const [
+                Icon(Icons.qr_code_2, size: 18),
+                SizedBox(width: 12),
+                Text('Generate invitation'),
+              ],
             ),
-            PopupMenuItem(
-              value: 'manage_access',
-              child: Row(
-                children: const [
-                  Icon(Icons.people_outline, size: 18),
-                  SizedBox(width: 12),
-                  Text('Manage access'),
-                ],
-              ),
+          ),
+          PopupMenuItem(
+            value: 'manage_access',
+            child: Row(
+              children: const [
+                Icon(Icons.people_outline, size: 18),
+                SizedBox(width: 12),
+                Text('Manage access'),
+              ],
             ),
-          ],
+          ),
           PopupMenuItem(
             value: 'edit',
             child: Row(
