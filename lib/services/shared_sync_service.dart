@@ -701,10 +701,32 @@ class SharedSyncService {
     }
 
     try {
-      final joined = SharedFolder.fromJson(remoteFolder).copyWith(
+      // Force the joined-side copy to record who the host is and that
+      // sync is on. Without these the sync filter on the joiner side
+      // skips the folder forever — legacy folders saved by the host
+      // before the sync metadata was added would otherwise come over
+      // with hostCallsign:null + syncEnabled:false and never sync.
+      final parsedHost = hostCallsign;
+      final fromHost = SharedFolder.fromJson(remoteFolder);
+      final desired = fromHost.copyWith(
         location: '',
+        hostCallsign: fromHost.hostCallsign ?? parsedHost,
+        syncEnabled: true,
       );
-      final saved = await service.save(joined);
+
+      // If we already have a folder with this id locally (e.g. a stale
+      // legacy copy from a previous join), update it in place instead of
+      // letting save() pick a deduped filename like screenshots_1.json.
+      final existing = await service.findFolder(desired.id);
+      final SharedFolder saved;
+      if (existing != null && existing.filePath != null) {
+        saved = await service.update(desired.copyWith(
+          filePath: existing.filePath,
+          location: existing.location.isNotEmpty ? existing.location : '',
+        ));
+      } else {
+        saved = await service.save(desired);
+      }
       await setAccessToken(folderId: saved.id, token: accessToken);
       requestSyncSoon(reason: 'joined folder');
       return SharedJoinResult(success: true, folder: saved);

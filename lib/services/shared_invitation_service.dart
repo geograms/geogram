@@ -115,6 +115,28 @@ class SharedInvitationService {
       throw StateError('No active profile callsign');
     }
 
+    // Backfill hostCallsign / hostNpub / syncEnabled on legacy folders that
+    // pre-date the sync metadata. Without this, the joiner receives a folder
+    // JSON with hostCallsign=null and never syncs (its sync filter excludes
+    // folders without a host, and the joiner can't infer the host from the
+    // folder alone).
+    final folderService = await SharedFolderService.forCurrentProfile();
+    if (folderService != null) {
+      final existing = await folderService.findFolder(folderId);
+      if (existing != null) {
+        final needsUpdate = existing.hostCallsign == null ||
+            existing.hostNpub == null ||
+            !existing.syncEnabled;
+        if (needsUpdate) {
+          await folderService.update(existing.copyWith(
+            hostCallsign: existing.hostCallsign ?? profile.callsign.toUpperCase(),
+            hostNpub: existing.hostNpub ?? profile.npub,
+            syncEnabled: true,
+          ));
+        }
+      }
+    }
+
     String token;
     String code;
     do {
