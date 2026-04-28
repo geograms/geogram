@@ -663,9 +663,11 @@ void main() async {
         }
       }
 
+      print('[STARTUP] before UserLocation');
       // Initialize location service (GPS on mobile, IP-based on desktop/web)
       // Must run after ProfileService to load saved location
       await UserLocationService().initialize();
+      print('[STARTUP] after UserLocation');
       LogService().log('UserLocationService initialized (deferred)');
 
       // NOTE: StationService initialization moved after firstLaunchComplete check
@@ -683,13 +685,17 @@ void main() async {
       connectionManager.registerTransport(StationTransport());
       connectionManager.registerTransport(BluetoothClassicTransport());
       connectionManager.registerTransport(BleTransport());
+      print('[STARTUP] before ConnectionManager.initialize');
       await connectionManager.initialize();
+      print('[STARTUP] after ConnectionManager.initialize');
       LogService().log(
         'ConnectionManager initialized with USB + LAN + WebRTC + DHT + Peer Relay + Station + BT Classic + BLE transports (deferred)',
       );
 
+      print('[STARTUP] before UpdateService');
       // UpdateService may check for updates - defer it
       await UpdateService().initialize();
+      print('[STARTUP] after UpdateService');
       LogService().log('UpdateService initialized (deferred)');
 
       // Start the auto-backup timer if the user has it enabled. Done at boot
@@ -745,9 +751,11 @@ void main() async {
         LogService().log('Debug API enabled via --debug-api flag');
       }
 
+      print('[STARTUP] before LogApiService.start');
       // Only start if HTTP API is enabled in security settings or via CLI
       if (SecurityService().httpApiEnabled) {
         await LogApiService().start();
+        print('[STARTUP] after LogApiService.start');
         LogService().log(
           'Peer discovery API started on port ${LogApiService().port} (deferred)',
         );
@@ -898,35 +906,49 @@ void main() async {
         LogService().log('[PROXIMITY] Tracking disabled by user setting');
       }
 
+      print('[STARTUP] before StationService+ConferenceService');
       // StationService - skip on first launch, onboarding will start it after profile is finalized
-      if (firstLaunchComplete) {
+      if (firstLaunchComplete && !minimalStartup) {
         await StationService().initialize();
         LogService().log('StationService initialized (deferred)');
         await ConferenceService().initializeScheduledMeetings();
         LogService().log('ConferenceService schedule timers initialized');
+      } else if (minimalStartup) {
+        LogService().log('StationService+ConferenceService skipped (minimalStartup)');
       } else {
         LogService().log(
           'StationService skipped on first launch - will start after onboarding',
         );
       }
+      print('[STARTUP] after StationService+ConferenceService');
 
+      print('[STARTUP] before NetworkMonitor');
       // Initialize NetworkMonitorService to track LAN/Internet connectivity
       await NetworkMonitorService().initialize();
+      print('[STARTUP] after NetworkMonitor');
       LogService().log('NetworkMonitorService initialized');
 
       // Initialize BackupService for E2E encrypted backups
       if (!minimalStartup) {
+        print('[STARTUP] before BackupService');
         await BackupService().initialize();
+        print('[STARTUP] after BackupService');
         LogService().log('BackupService initialized');
       }
 
+      print('[STARTUP] before DMQueueService');
       // Initialize DMQueueService for background DM delivery (optimistic UI)
-      await DMQueueService().initialize();
-      LogService().log('DMQueueService initialized');
+      if (!minimalStartup) {
+        await DMQueueService().initialize();
+        LogService().log('DMQueueService initialized');
+      }
+      print('[STARTUP] after DMQueueService');
 
       // Start message retention cleanup timer (purges expired DM messages every 30 min)
-      MessageRetentionService().startCleanupTimer();
-      LogService().log('MessageRetentionService cleanup timer started');
+      if (!minimalStartup) {
+        MessageRetentionService().startCleanupTimer();
+        LogService().log('MessageRetentionService cleanup timer started');
+      }
 
       // Debug switch: skip every bridge/mesh auto-start so we can bisect
       // which one is allocating the heap that drives Android OOM. Toggle
@@ -1009,20 +1031,26 @@ void main() async {
         }
       }
 
+      print('[STARTUP] before GroupSync');
       // Ensure chat rooms exist for all device folders with chat enabled
-      GroupSyncService()
-          .ensureFolderChatRooms()
-          .then((_) {
-            LogService().log('GroupSyncService: Folder chat rooms verified');
-          })
-          .catchError((e) {
-            LogService().log(
-              'GroupSyncService: Error verifying chat rooms: $e',
-            );
-          });
+      if (!minimalStartup) {
+        GroupSyncService()
+            .ensureFolderChatRooms()
+            .then((_) {
+              LogService().log('GroupSyncService: Folder chat rooms verified');
+            })
+            .catchError((e) {
+              LogService().log(
+                'GroupSyncService: Error verifying chat rooms: $e',
+              );
+            });
+      }
+      print('[STARTUP] after GroupSync');
 
+      print('[STARTUP] firing AppStartedEvent');
       EventBus().fire(AppStartedEvent());
       LogService().log('AppStartedEvent fired');
+      print('[STARTUP] deferred init done');
     } catch (e, stackTrace) {
       LogService().log('ERROR during deferred initialization: $e');
       LogService().log('Stack trace: $stackTrace');
