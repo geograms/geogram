@@ -28,6 +28,7 @@ list(APPEND FLUTTER_FFI_PLUGIN_LIST
   flutter_pty
   flutter_zxing
   tflite_flutter
+  wasm_run_flutter
 )
 
 set(PLUGIN_BUNDLED_LIBRARIES)

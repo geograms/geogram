@@ -22,6 +22,8 @@ import 'config_service.dart';
 import 'chat_service.dart';
 import 'encrypted_storage_stub.dart' if (dart.library.ui) 'encrypted_storage_service.dart';
 import 'profile_service.dart';
+import 'wapp_installer_service.dart';
+import 'wapp_storage.dart';
 import 'profile_storage.dart';
 import 'storage_config.dart';
 import 'web_theme_service.dart';
@@ -1412,6 +1414,15 @@ class AppService {
     final results = <App>[];
     results.add(_createMinimalApp('files', _profileStorage!.basePath));
 
+    // First-run: extract bundled built-in wapps into the shared
+    // archive AND activate them for the active profile (creates
+    // <profile>/<wappId>/ folders). Idempotent on both steps.
+    await _installBundledWapps();
+
+    // Build a quick set of wapp folder names from the shared
+    // archive so the profile-root scan below can recognise them.
+    final wappFolderNames = await _archivedWappIds();
+
     final entries = await _profileStorage!.listDirectory('');
     for (final entry in entries) {
       if (entry.isDirectory) {
@@ -1420,6 +1431,15 @@ class AppService {
         if (folderName == 'logs') continue; // legacy system folder, skip
         if (folderName == 'mirror') continue; // internal sync folder, not an app
         final storagePath = _profileStorage!.getAbsolutePath(folderName);
+
+        // Wapp folder? Profile-root folder names matching a wapp in
+        // the shared archive are surfaced as type='wapp' Apps.
+        if (wappFolderNames.contains(folderName)) {
+          final wappApp = await _appFromArchivedWapp(folderName, storagePath);
+          if (wappApp != null) results.add(wappApp);
+          continue;
+        }
+
         if (singleInstanceTypesConst.contains(folderName)) {
           results.add(_createMinimalApp(folderName, storagePath));
         } else {
@@ -1431,6 +1451,88 @@ class AppService {
     }
 
     return results;
+  }
+
+  /// Built-in wapps shipped as Flutter assets. Each entry maps a
+  /// wapp folder slug (also the destination under <baseDir>/wapps/
+  /// and the per-profile data folder name) to the asset path of
+  /// its .wapp ZIP.
+  static const Map<String, String> _bundledWapps = {
+    'maps': 'assets/maps.wapp',
+    'install': 'assets/install.wapp',
+  };
+
+  Future<void> _installBundledWapps() async {
+    final installer = WappInstallerService.instance;
+    for (final entry in _bundledWapps.entries) {
+      try {
+        await installer.installFromAsset(
+          assetPath: entry.value,
+          wappId: entry.key,
+        );
+      } catch (_) {
+        // Skip silently; the wapp just won't appear this run.
+      }
+    }
+  }
+
+  /// Folder names present in the shared wapp archive
+  /// (<baseDir>/wapps/<wappId>/manifest.json). Empty when the
+  /// archive doesn't exist or has no wapps yet.
+  Future<Set<String>> _archivedWappIds() async {
+    final archive = wappArchiveStorage();
+    if (archive == null) return const {};
+    if (!await archive.directoryExists('')) return const {};
+    final entries = await archive.listDirectory('');
+    final ids = <String>{};
+    for (final e in entries) {
+      if (!e.isDirectory) continue;
+      if (await archive.exists('${e.name}/manifest.json')) {
+        ids.add(e.name);
+      }
+    }
+    return ids;
+  }
+
+  /// Build an [App] for a wapp folder under the active profile,
+  /// reading metadata from the shared archive's manifest.json.
+  /// When the manifest references an SVG icon, the absolute path
+  /// to that SVG is stored in [App.thumbnailPath] so the launcher
+  /// grid card can render it directly.
+  Future<App?> _appFromArchivedWapp(String wappId, String storagePath) async {
+    final pkg = wappPackageStorage(wappId);
+    if (pkg == null) return null;
+    try {
+      final manifest = await pkg.readJson('manifest.json');
+      if (manifest == null) return null;
+      final id = (manifest['id'] as String?) ?? wappId;
+      final desc = (manifest['description'] as String?) ?? wappId;
+      final summary = (manifest['summary'] as String?) ?? '';
+
+      // Resolve manifest.icon → absolute path to the SVG sidecar
+      // when it's a path-shaped value. Anything else (emoji char,
+      // empty) leaves thumbnailPath null and we fall back to the
+      // Material icon.
+      String? thumb;
+      final iconRaw = manifest['icon'];
+      if (iconRaw is String &&
+          iconRaw.toLowerCase().endsWith('.svg') &&
+          (iconRaw.contains('/') || iconRaw.contains('\\'))) {
+        thumb = pkg.getAbsolutePath(iconRaw);
+      }
+
+      return App(
+        id: id,
+        title: desc,
+        description: summary,
+        thumbnailPath: thumb,
+        updated: DateTime.now().toIso8601String(),
+        storagePath: storagePath,
+        type: 'wapp',
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Load apps progressively as a stream.
@@ -1457,6 +1559,14 @@ class AppService {
     // Always yield files app (no folder needed)
     yield _createMinimalApp('files', _profileStorage!.basePath);
 
+    // First-run: extract bundled built-in wapps and activate them
+    // for the active profile. Idempotent.
+    await _installBundledWapps();
+
+    // Wapp folder names from the shared archive — used to detect
+    // which profile-root folders are wapps vs built-in app types.
+    final wappFolderNames = await _archivedWappIds();
+
     // Single directory listing via abstract storage layer
     final entries = await _profileStorage!.listDirectory('');
     for (final entry in entries) {
@@ -1465,8 +1575,15 @@ class AppService {
         if (folderName == 'files') continue; // already added above
         if (folderName == 'logs') continue; // legacy system folder, skip
         if (folderName == 'mirror') continue; // internal sync folder, not an app
+
         try {
-          if (singleInstanceTypesConst.contains(folderName)) {
+          if (wappFolderNames.contains(folderName)) {
+            final storagePath =
+                _profileStorage!.getAbsolutePath(folderName);
+            final wappApp =
+                await _appFromArchivedWapp(folderName, storagePath);
+            if (wappApp != null) yield wappApp;
+          } else if (singleInstanceTypesConst.contains(folderName)) {
             // Known single-instance type — skip app.js entirely
             final storagePath = _profileStorage!.getAbsolutePath(folderName);
             yield _createMinimalApp(folderName, storagePath);

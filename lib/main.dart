@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io' show File;
 import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'models/monitored_task.dart';
 import 'services/task_monitor_service.dart';
 import 'util/cpu_measure.dart';
@@ -150,6 +152,7 @@ import 'pages/shared_browser_page.dart';
 import 'pages/teleport_browser_page.dart';
 import 'pages/conference_home_page.dart';
 import 'pages/karma_page.dart';
+import 'wapp/wapp_page.dart';
 import 'api/api.dart' hide ChatRoom;
 import 'server/karma/karma_engine.dart';
 import 'services/station_server_service.dart';
@@ -3501,6 +3504,14 @@ class _AppsPageState extends State<AppsPage> {
                                         )
                                       : appEntry.type == 'karma'
                                       ? const KarmaPage()
+                                      : appEntry.type == 'wapp'
+                                      ? WappPage(
+                                          wappId: (appEntry.storagePath ?? '')
+                                              .split(RegExp(r'[/\\]'))
+                                              .where((s) => s.isNotEmpty)
+                                              .last,
+                                          title: appEntry.title,
+                                        )
                                       : AppBrowserPage(app: appEntry);
 
                                   LogService().log(
@@ -3585,6 +3596,32 @@ class _AppGridCard extends StatelessWidget {
   /// Get gradient colors for app type icon
   LinearGradient _getTypeGradient(bool isDark) =>
       getAppTypeGradient(app.type, isDark);
+
+  /// Build the icon widget for the tile. For wapps with an SVG
+  /// referenced by manifest.icon (stored in App.thumbnailPath), render
+  /// the SVG. Otherwise fall back to the Material icon.
+  Widget _buildIconWidget({required double size}) {
+    final path = app.thumbnailPath;
+    if (!kIsWeb &&
+        path != null &&
+        path.toLowerCase().endsWith('.svg') &&
+        File(path).existsSync()) {
+      try {
+        final bytes = File(path).readAsBytesSync();
+        return Padding(
+          padding: EdgeInsets.all(size * 0.18),
+          child: SvgPicture.memory(
+            bytes,
+            fit: BoxFit.contain,
+            theme: const SvgTheme(currentColor: Colors.white),
+            placeholderBuilder: (_) =>
+                Icon(_getAppIcon(), size: size, color: Colors.white),
+          ),
+        );
+      } catch (_) {}
+    }
+    return Icon(_getAppIcon(), size: size, color: Colors.white);
+  }
 
   void _showContextMenu(BuildContext context, Offset position) {
     final i18n = I18nService();
@@ -3682,11 +3719,7 @@ class _AppGridCard extends StatelessWidget {
                             ),
                           ],
                         ),
-                        child: Icon(
-                          _getAppIcon(),
-                          size: 18,
-                          color: Colors.white,
-                        ),
+                        child: _buildIconWidget(size: 18),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -3802,6 +3835,29 @@ class _AppCard extends StatelessWidget {
   LinearGradient _getTypeGradient(bool isDark) =>
       getAppTypeGradient(app.type, isDark);
 
+  Widget _buildIconWidget({required double size}) {
+    final path = app.thumbnailPath;
+    if (!kIsWeb &&
+        path != null &&
+        path.toLowerCase().endsWith('.svg') &&
+        File(path).existsSync()) {
+      try {
+        final bytes = File(path).readAsBytesSync();
+        return Padding(
+          padding: EdgeInsets.all(size * 0.18),
+          child: SvgPicture.memory(
+            bytes,
+            fit: BoxFit.contain,
+            theme: const SvgTheme(currentColor: Colors.white),
+            placeholderBuilder: (_) =>
+                Icon(_getAppIcon(), size: size, color: Colors.white),
+          ),
+        );
+      } catch (_) {}
+    }
+    return Icon(_getAppIcon(), size: size, color: Colors.white);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -3835,7 +3891,7 @@ class _AppCard extends StatelessWidget {
                         ),
                       ],
                     ),
-                    child: Icon(_getAppIcon(), color: Colors.white, size: 24),
+                    child: _buildIconWidget(size: 24),
                   ),
                   const SizedBox(width: 14),
                   Expanded(

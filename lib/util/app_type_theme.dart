@@ -83,6 +83,8 @@ IconData getAppTypeIcon(String type) {
       return Icons.rocket_launch;
     case 'karma':
       return Icons.bolt;
+    case 'wapp':
+      return Icons.extension;
     default:
       return Icons.folder;
   }
@@ -354,6 +356,14 @@ LinearGradient getAppTypeGradient(String type, bool isDark) {
         colors: isDark
             ? [const Color(0xFFC2185B), const Color(0xFF880E4F)]
             : [const Color(0xFFE91E63), const Color(0xFFD81B60)],
+      );
+    case 'wapp':
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF1B5E20), const Color(0xFF004D40)]
+            : [const Color(0xFF26A69A), const Color(0xFF66BB6A)],
       );
     default:
       return LinearGradient(

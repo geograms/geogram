@@ -1059,3 +1059,32 @@ class P2PDownloadProgressEvent extends AppEvent {
   String toString() =>
       'P2PDownloadProgressEvent(id: $offerId, progress: ${progressPercent.toStringAsFixed(1)}%)';
 }
+
+// ── Wapp lifecycle events ──────────────────────────────────────────
+
+/// A wapp finished loading and its module_init returned successfully.
+class WappLoadedEvent extends AppEvent {
+  final String wappId;
+  final String wappName;
+  WappLoadedEvent({required this.wappId, required this.wappName});
+}
+
+/// A wapp was unloaded (page closed, dispose called).
+class WappUnloadedEvent extends AppEvent {
+  final String wappId;
+  final String wappName;
+  WappUnloadedEvent({required this.wappId, required this.wappName});
+}
+
+/// A wapp crashed during init/tick/handle_event.
+class WappCrashedEvent extends AppEvent {
+  final String wappId;
+  final String phase; // 'init' | 'tick' | 'handle_event' | 'load'
+  final Object error;
+  WappCrashedEvent({
+    required this.wappId,
+    required this.phase,
+    required this.error,
+  });
+}
+

@@ -39,6 +39,7 @@ const List<String> knownAppTypesConst = [
   'shared',
   'teleport',
   'karma',
+  'wapp',
 ];
 
 /// App types that can only have a single instance per profile
