@@ -427,6 +427,80 @@ class LanTransport extends Transport with TransportMixin {
     }
   }
 
+  /// Streaming variant of [_handleApiRequest]. Sends an arbitrary request
+  /// body as a [Stream] (no in-memory buffering on the sender) and returns
+  /// the response body as a [Stream] (no in-memory buffering on the
+  /// receiver). Used by the Shared sync engine for binary file transfers
+  /// to avoid OOM when pulling/pushing large files.
+  ///
+  /// Returns null if the device is unreachable or the URL is non-local.
+  /// Other transports do NOT implement streaming — callers should fall
+  /// back to bulk [send] when this returns null.
+  Future<LanStreamingResult?> sendStreaming({
+    required String callsign,
+    required String method,
+    required String path,
+    Map<String, String>? headers,
+    Stream<List<int>>? bodyStream,
+    int? bodyStreamLength,
+    Duration? timeout,
+  }) async {
+    if (kIsWeb) return null;
+    final deviceInfo = getDeviceInfo(callsign);
+    if (deviceInfo?.url == null) return null;
+    if (!_isLocalUrl(deviceInfo!.url!)) return null;
+
+    final uri = Uri.parse('${deviceInfo.url}$path');
+    final upperMethod = method.toUpperCase();
+
+    // Build the request: a plain http.Request for methods without a
+    // body (GET / DELETE / HEAD) — using StreamedRequest there sends
+    // chunked-transfer with no chunks and hangs the server waiting on
+    // a terminator. For methods carrying an upload stream, use
+    // StreamedRequest and pump the body in the background.
+    http.BaseRequest req;
+    if (bodyStream == null) {
+      req = http.Request(upperMethod, uri);
+    } else {
+      final streamed = http.StreamedRequest(upperMethod, uri);
+      if (bodyStreamLength != null) {
+        streamed.contentLength = bodyStreamLength;
+      }
+      unawaited(() async {
+        try {
+          await for (final chunk in bodyStream) {
+            streamed.sink.add(chunk);
+          }
+        } catch (e) {
+          streamed.sink.addError(e);
+        } finally {
+          await streamed.sink.close();
+        }
+      }());
+      req = streamed;
+    }
+    if (headers != null) {
+      req.headers.addAll(headers);
+    }
+
+    LogService().log(
+      'LanTransport: streaming $upperMethod $path to $callsign',
+    );
+
+    final effectiveTimeout = timeout ?? this.timeout;
+    try {
+      final resp = await _client.send(req).timeout(effectiveTimeout);
+      return LanStreamingResult(
+        statusCode: resp.statusCode,
+        headers: Map<String, String>.from(resp.headers),
+        bodyStream: resp.stream,
+      );
+    } catch (e) {
+      LogService().log('LanTransport: streaming send failed: $e');
+      return null;
+    }
+  }
+
   /// Register a device with its local URL
   ///
   /// Call this when a device is discovered on the local network.
@@ -452,4 +526,19 @@ class LanTransport extends Transport with TransportMixin {
       LogService().log('LanTransport: Registered $callsign at $url');
     }
   }
+}
+
+/// Result of a streaming LAN request. The body is exposed as a [Stream]
+/// so callers can pipe it directly to disk without buffering the whole
+/// payload in memory.
+class LanStreamingResult {
+  final int statusCode;
+  final Map<String, String> headers;
+  final Stream<List<int>> bodyStream;
+
+  const LanStreamingResult({
+    required this.statusCode,
+    required this.headers,
+    required this.bodyStream,
+  });
 }

@@ -3,7 +3,9 @@
  * License: Apache-2.0
  */
 
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -344,6 +346,71 @@ class SharedFolderService {
     return _readRootBytes(_resolveFileRoot(prepared.location), relPath);
   }
 
+  /// Stream a file's bytes off disk for outgoing sync. Returns null if
+  /// the file is missing OR the folder lives in encrypted profile
+  /// storage (which has no streaming API — caller should fall back to
+  /// bulk readFile for those rare cases).
+  Future<({int size, Stream<List<int>> stream})?> openReadStream({
+    required SharedFolder folder,
+    required String relativePath,
+  }) async {
+    final prepared = await ensureLocalLocation(folder);
+    final relPath = _normalizeRelativePath(relativePath);
+    final root = _resolveFileRoot(prepared.location);
+    if (root.isProfile) return null;
+    final fullPath = path.join(root.externalPath, relPath);
+    final f = File(fullPath);
+    if (!await f.exists()) return null;
+    final size = await f.length();
+    return (size: size, stream: f.openRead());
+  }
+
+  /// Stream incoming bytes to disk so a multi-MB file never sits in
+  /// memory as a single Uint8List. Falls back to bulk write when the
+  /// folder is in profile-backed storage.
+  Future<void> writeFileStream({
+    required SharedFolder folder,
+    required String relativePath,
+    required Stream<List<int>> bytes,
+  }) async {
+    final prepared = await persistLocalLocation(folder);
+    final relPath = _normalizeRelativePath(relativePath);
+    final root = _resolveFileRoot(prepared.location);
+    await _archiveBeforeChange(
+      root,
+      prepared,
+      relPath,
+      SyncVersionReason.modified,
+    );
+    if (root.isProfile) {
+      // No streaming for encrypted profile storage; buffer.
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in bytes) {
+        builder.add(chunk);
+      }
+      await root.storage!.writeBytes(
+        _joinRelative(root.relativePath, relPath),
+        builder.toBytes(),
+      );
+    } else {
+      final fullPath = path.join(root.externalPath, relPath);
+      final f = File(fullPath);
+      await f.parent.create(recursive: true);
+      final sink = f.openWrite();
+      try {
+        await sink.addStream(bytes);
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+    }
+    await SyncVersionService.instance.removeTombstone(
+      'shared',
+      _versionLabel(prepared, relPath),
+      storage: AppService().profileStorage,
+    );
+  }
+
   Future<bool> fileExists({
     required SharedFolder folder,
     required String relativePath,
@@ -372,12 +439,25 @@ class SharedFolderService {
 
   /// Snapshot of all files inside the folder's local location. Set
   /// [hash] to true to include sha1 of each file (slow on large folders).
+  /// Snapshot all files in [folder]'s local location.
+  ///
+  /// When [hash] is true, files are SHA1-hashed via streaming. To avoid
+  /// re-hashing unchanged files on every sync tick (which OOMs Android
+  /// on a 100+ file folder), pass [priorHashes] — a map of
+  /// `relPath → (size, mtime, sha1)` from the last snapshot. Files whose
+  /// size + mtime match the prior entry will reuse the cached sha1
+  /// instead of re-reading the file off disk.
   Future<Map<String, SharedFileSnapshot>> snapshotFiles(
     SharedFolder folder, {
     bool hash = false,
+    Map<String, ({int size, DateTime? modified, String sha1})>? priorHashes,
   }) async {
     final prepared = await ensureLocalLocation(folder);
-    return _listFilesAtRoot(_resolveFileRoot(prepared.location), hash: hash);
+    return _listFilesAtRoot(
+      _resolveFileRoot(prepared.location),
+      hash: hash,
+      priorHashes: priorHashes,
+    );
   }
 
   // -----------------------------
@@ -463,6 +543,7 @@ class SharedFolderService {
   Future<Map<String, SharedFileSnapshot>> _listFilesAtRoot(
     _ResolvedFileRoot root, {
     bool hash = false,
+    Map<String, ({int size, DateTime? modified, String sha1})>? priorHashes,
   }) async {
     final snapshots = <String, SharedFileSnapshot>{};
     if (root.isProfile) {
@@ -479,17 +560,28 @@ class SharedFolderService {
                 ? entry.path.substring(root.relativePath.length + 1)
                 : entry.path;
         final normalized = _normalizeRelativePath(relPath);
+        final size = entry.size ?? 0;
+        final modified = entry.modified;
         String? sha1Hash;
         if (hash) {
-          final bytes = await root.storage!.readBytes(entry.path);
-          if (bytes != null) sha1Hash = sha1.convert(bytes).toString();
+          final cached = priorHashes?[normalized];
+          if (cached != null &&
+              cached.size == size &&
+              _sameMtime(cached.modified, modified)) {
+            sha1Hash = cached.sha1;
+          } else {
+            final bytes = await root.storage!.readBytes(entry.path);
+            if (bytes != null) sha1Hash = sha1.convert(bytes).toString();
+          }
         }
         snapshots[normalized] = SharedFileSnapshot(
           path: normalized,
-          size: entry.size ?? 0,
-          modified: entry.modified,
+          size: size,
+          modified: modified,
           sha1Hash: sha1Hash,
         );
+        // Yield so the event loop can drain UI/API work between files.
+        await Future<void>.delayed(Duration.zero);
       }
       return snapshots;
     }
@@ -506,8 +598,20 @@ class SharedFolderService {
       final stat = await fs.stat(entry.path);
       String? sha1Hash;
       if (hash) {
-        final bytes = await fs.readAsBytes(entry.path);
-        sha1Hash = sha1.convert(bytes).toString();
+        final cached = priorHashes?[normalized];
+        if (cached != null &&
+            cached.size == stat.size &&
+            _sameMtime(cached.modified, stat.modified)) {
+          // Unchanged since last sync — reuse the cached digest instead
+          // of re-reading the file. This is the difference between a
+          // 100 MB folder taking 0.05 s and 5 s+ on a phone, and is
+          // what the 197-file Screenshots folder needs to not OOM.
+          sha1Hash = cached.sha1;
+        } else {
+          // Stream the file through a chunked SHA1 instead of reading
+          // the whole thing into memory.
+          sha1Hash = await _sha1OfFileStream(entry.path);
+        }
       }
       snapshots[normalized] = SharedFileSnapshot(
         path: normalized,
@@ -515,8 +619,38 @@ class SharedFolderService {
         modified: stat.modified,
         sha1Hash: sha1Hash,
       );
+      // Yield between files so the event loop can service UI / API
+      // requests during a large folder rescan.
+      await Future<void>.delayed(Duration.zero);
     }
     return snapshots;
+  }
+
+  bool _sameMtime(DateTime? a, DateTime? b) {
+    if (a == null || b == null) return false;
+    // Filesystems on Android sometimes report mtime with second-level
+    // resolution, so compare on whole seconds — a 1ms drift between
+    // listDirectory and stat shouldn't bust the cache.
+    return a.toUtc().millisecondsSinceEpoch ~/ 1000 ==
+        b.toUtc().millisecondsSinceEpoch ~/ 1000;
+  }
+
+  /// Compute SHA1 of a file by streaming chunks through a chunked
+  /// converter — never holds the full payload in memory. Returns null
+  /// if the file doesn't exist.
+  Future<String?> _sha1OfFileStream(String fullPath) async {
+    final f = File(fullPath);
+    if (!await f.exists()) return null;
+    final out = _SingleDigestSink();
+    final input = sha1.startChunkedConversion(out);
+    try {
+      await for (final chunk in f.openRead()) {
+        input.add(chunk);
+      }
+    } finally {
+      input.close();
+    }
+    return out.value.toString();
   }
 
   Future<Uint8List?> _readRootBytes(
@@ -686,4 +820,15 @@ class SharedFolderService {
     }
     return migrated;
   }
+}
+
+/// Captures the single [Digest] produced by a chunked SHA1 conversion.
+class _SingleDigestSink implements Sink<Digest> {
+  late Digest value;
+
+  @override
+  void add(Digest data) => value = data;
+
+  @override
+  void close() {}
 }

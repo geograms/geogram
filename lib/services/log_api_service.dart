@@ -19872,6 +19872,26 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           headers: headers,
         );
       }
+      // Prefer streaming straight off disk so even multi-GB files never
+      // sit in heap as a single Uint8List on the host. Falls back to a
+      // buffered read for profile-backed (encrypted SQLite) folders,
+      // which have no streaming API.
+      final streamed = await service.openReadStream(
+        folder: resolved.folder,
+        relativePath: filePath,
+      );
+      if (streamed != null) {
+        return shelf.Response.ok(
+          streamed.stream,
+          headers: {
+            ...headers,
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': streamed.size.toString(),
+            'X-Shared-Path': filePath,
+            'X-Shared-Size': streamed.size.toString(),
+          },
+        );
+      }
       final bytes = await service.readFile(
         folder: resolved.folder,
         relativePath: filePath,
@@ -19882,10 +19902,6 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           headers: headers,
         );
       }
-      // Return raw bytes. Wrapping in JSON+base64 ballooned 2.5 MB
-      // images to 3.4 MB strings and forced both ends to do
-      // synchronous base64 + jsonDecode on the main isolate, choking
-      // the event loop for seconds per file.
       return shelf.Response.ok(
         bytes,
         headers: {
@@ -19928,17 +19944,26 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           headers: headers,
         );
       }
-      final bytes = Uint8List.fromList(await request.read().expand((c) => c).toList());
-      await SharedSyncService.instance.hostApplyWrite(
+      // Stream the request body straight to disk via the shared folder
+      // service, so even a multi-GB upload never lands in heap as a
+      // single Uint8List. The folder service handles versioning archive
+      // and falls back to a buffered write only for profile-backed
+      // storage (encrypted SQLite has no streaming API).
+      final ok = await SharedSyncService.instance.hostApplyWriteStream(
         folderId: folderId,
         relativePath: filePath,
-        bytes: bytes,
+        bytes: request.read(),
       );
+      if (!ok) {
+        return shelf.Response.notFound(
+          jsonEncode({'success': false, 'error': 'Folder not found'}),
+          headers: headers,
+        );
+      }
       return shelf.Response.ok(
         jsonEncode({
           'success': true,
           'path': filePath,
-          'size': bytes.length,
         }),
         headers: headers,
       );

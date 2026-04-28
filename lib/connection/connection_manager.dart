@@ -16,6 +16,7 @@ import '../transfer/services/p2p_transfer_service.dart';
 import 'transport.dart';
 import 'transport_message.dart';
 import 'routing_strategy.dart';
+import 'transports/lan_transport.dart';
 
 /// Connection Manager singleton
 ///
@@ -280,6 +281,41 @@ class ConnectionManager {
       message,
       routingStrategy: routingStrategy,
       excludeTransports: excludeTransports,
+    );
+  }
+
+  /// Streaming variant of [apiRequest]. The request body and the response
+  /// body are both [Stream]s, so neither side has to buffer the full
+  /// payload in memory. Currently implemented only for [LanTransport]
+  /// (LAN HTTP); other transports cannot stream — for non-LAN paths,
+  /// callers must fall back to bulk [apiRequest].
+  ///
+  /// Returns null if no LAN transport can reach the callsign.
+  Future<LanStreamingResult?> streamingApiRequest({
+    required String callsign,
+    required String method,
+    required String path,
+    Map<String, String>? headers,
+    Stream<List<int>>? bodyStream,
+    int? bodyStreamLength,
+    Duration? timeout,
+  }) async {
+    final lan = _transports['lan'];
+    if (lan is! LanTransport) return null;
+    if (!lan.isAvailable) return null;
+    // Don't call lan.canReach() here — it does an HTTP GET to
+    // /api/status with a 3 s timeout, and the Shared sync engine
+    // already verified reachability once at the top of _syncFolder.
+    // Re-checking on every file inside a 200-file folder pull
+    // serialized the sync into a 200×{0.1-3 s} crawl.
+    return lan.sendStreaming(
+      callsign: callsign,
+      method: method,
+      path: path,
+      headers: headers,
+      bodyStream: bodyStream,
+      bodyStreamLength: bodyStreamLength,
+      timeout: timeout,
     );
   }
 
