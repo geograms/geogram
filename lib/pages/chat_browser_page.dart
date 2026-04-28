@@ -12,6 +12,7 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import '../models/app.dart';
 import '../models/chat_channel.dart';
+import '../models/distributed_chat.dart';
 import '../models/chat_message.dart';
 import '../models/chat_settings.dart';
 import '../models/dchat_storage.dart';
@@ -3566,7 +3567,7 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
 
   /// Show new channel dialog
   Future<void> _showNewChannelDialog() async {
-    final result = await Navigator.push<ChatChannel>(
+    final result = await Navigator.push<Object>(
       context,
       MaterialPageRoute(
         builder: (context) => NewChannelDialog(
@@ -3583,14 +3584,21 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
         });
 
         late final ChatChannel channel;
-        if (_isDistributedChannel(result)) {
+        if (result is DistributedChatInvite) {
+          if (_distributedChatService == null) {
+            throw Exception('Distributed chat is not available in this view');
+          }
+          channel = await _distributedChatService!.acceptInviteAndRequestJoin(
+            result,
+          );
+        } else if (result is ChatChannel && _isDistributedChannel(result)) {
           channel = await _distributedChatService!.createDistributedRoom(
             roomId: result.id,
             name: result.name,
             description: result.description,
             icon: result.icon,
           );
-        } else {
+        } else if (result is ChatChannel) {
           channel = await _chatService.createChannel(result);
 
           if (channel.isGroup &&
@@ -3602,6 +3610,8 @@ class _ChatBrowserPageState extends State<ChatBrowserPage> {
               chatAppPath: _localChatCollectionPath!,
             );
           }
+        } else {
+          throw Exception('Unexpected new-channel result: ${result.runtimeType}');
         }
 
         await _refreshMergedLocalChannels();

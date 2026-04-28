@@ -959,6 +959,7 @@ class _RoomManagementPageState extends State<RoomManagementPage>
     try {
       final invite = await _distributedChatService!.createInvite(
         widget.channel.id,
+        oneTime: true,
       );
       final encodedInvite = invite.encode();
       if (!mounted) {
@@ -968,8 +969,21 @@ class _RoomManagementPageState extends State<RoomManagementPage>
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Invite link'),
-          content: SizedBox(width: 420, child: SelectableText(encodedInvite)),
+          title: const Text('One-time invite link'),
+          content: SizedBox(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Works once. Share with the person you want to add — the first joiner is auto-admitted, the link then stops working.',
+                ),
+                const SizedBox(height: 12),
+                SelectableText(encodedInvite),
+              ],
+            ),
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),

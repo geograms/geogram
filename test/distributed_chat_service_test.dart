@@ -289,6 +289,38 @@ void main() {
       );
       expect(room?.config?.icon, '🛰️');
     });
+
+    test('one-time invite auto-approves first joiner and rejects re-use', () async {
+      const roomId = 'private-cell';
+      await admin.service.createDistributedRoom(
+        roomId: roomId,
+        name: 'Private Cell',
+      );
+
+      final invite = await admin.service.createInvite(roomId, oneTime: true);
+      expect(invite.oneTimeToken, isNotNull);
+      expect(invite.oneTimeToken!.length, 12);
+
+      // First joiner: auto-approved on the host as the joinRequested event
+      // is applied locally during sync.
+      await moderator.service.acceptInviteAndRequestJoin(invite);
+      await admin.service.syncRoomFromPeer(moderator.service, roomId);
+
+      final hostRoom = await admin.service.getRoom(roomId);
+      expect(hostRoom!.config!.isMember(moderator.keys.npub), isTrue,
+          reason: 'first joiner should be auto-admitted');
+      expect(hostRoom.config!.pendingApplicants, isEmpty,
+          reason: 'no manual approval queue entry expected');
+
+      // Second joiner using the same link: token already consumed → host
+      // emits joinRejected, so the second joiner does not become a member.
+      await member.service.acceptInviteAndRequestJoin(invite);
+      await admin.service.syncRoomFromPeer(member.service, roomId);
+
+      final hostRoomAfter = await admin.service.getRoom(roomId);
+      expect(hostRoomAfter!.config!.isMember(member.keys.npub), isFalse,
+          reason: 'second joiner must not be admitted');
+    });
   });
 }
 

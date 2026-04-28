@@ -5,9 +5,12 @@
 
 import 'package:flutter/material.dart';
 import '../models/chat_channel.dart';
+import '../models/distributed_chat.dart';
 import '../util/group_utils.dart';
 
 enum _GroupConversationMode { standard, decentralized }
+
+enum _NewChannelMode { create, joinByInvite }
 
 /// Full-screen page for creating a new chat channel (DM or group)
 class NewChannelDialog extends StatefulWidget {
@@ -26,6 +29,7 @@ class NewChannelDialog extends StatefulWidget {
 
 class _NewChannelDialogState extends State<NewChannelDialog> {
   final _formKey = GlobalKey<FormState>();
+  _NewChannelMode _mode = _NewChannelMode.create;
   ChatChannelType _channelType = ChatChannelType.group;
   _GroupConversationMode _groupMode = _GroupConversationMode.standard;
   bool _dailyFiles = false;
@@ -33,6 +37,7 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
   final TextEditingController _callsignController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
   final TextEditingController _iconController = TextEditingController();
+  final TextEditingController _inviteLinkController = TextEditingController();
   final List<String> _selectedParticipants = [];
   bool _isCreating = false;
 
@@ -42,12 +47,15 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
     _callsignController.dispose();
     _descriptionController.dispose();
     _iconController.dispose();
+    _inviteLinkController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    final ctaLabel = _mode == _NewChannelMode.joinByInvite ? 'Join' : 'Create';
 
     return Scaffold(
       appBar: AppBar(
@@ -70,7 +78,7 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
                         color: Colors.white,
                       ),
                     )
-                  : Text('Create'),
+                  : Text(ctaLabel),
             ),
           ),
         ],
@@ -82,27 +90,79 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Channel type selector
-              Text('Channel Type', style: theme.textTheme.titleSmall),
+              Text('Mode', style: theme.textTheme.titleSmall),
               SizedBox(height: 8),
-              SegmentedButton<ChatChannelType>(
+              SegmentedButton<_NewChannelMode>(
                 segments: const [
                   ButtonSegment(
-                    value: ChatChannelType.group,
-                    label: Text('Group'),
-                    icon: Icon(Icons.group),
+                    value: _NewChannelMode.create,
+                    label: Text('Create'),
+                    icon: Icon(Icons.add),
                   ),
                   ButtonSegment(
-                    value: ChatChannelType.direct,
-                    label: Text('Direct Message'),
-                    icon: Icon(Icons.person),
+                    value: _NewChannelMode.joinByInvite,
+                    label: Text('Join via invite'),
+                    icon: Icon(Icons.link),
                   ),
                 ],
-                selected: {_channelType},
-                onSelectionChanged: (s) =>
-                    setState(() => _channelType = s.first),
+                selected: {_mode},
+                onSelectionChanged: (s) => setState(() => _mode = s.first),
               ),
               SizedBox(height: 24),
+
+              if (_mode == _NewChannelMode.joinByInvite) ...[
+                TextFormField(
+                  controller: _inviteLinkController,
+                  decoration: InputDecoration(
+                    labelText: 'Invite link',
+                    hintText: 'geogram://dchat?payload=...',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.link),
+                  ),
+                  minLines: 3,
+                  maxLines: 5,
+                  autofocus: true,
+                  validator: (value) {
+                    final raw = value?.trim() ?? '';
+                    if (raw.isEmpty) return 'Paste an invite link';
+                    try {
+                      DistributedChatInvite.decode(raw);
+                    } catch (_) {
+                      return 'Invite link is not valid';
+                    }
+                    return null;
+                  },
+                ),
+                SizedBox(height: 12),
+                Text(
+                  'Paste a one-time invite link from a private group host. Joining is auto-approved if the link is still valid.',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ] else ...[
+                // Channel type selector
+                Text('Channel Type', style: theme.textTheme.titleSmall),
+                SizedBox(height: 8),
+                SegmentedButton<ChatChannelType>(
+                  segments: const [
+                    ButtonSegment(
+                      value: ChatChannelType.group,
+                      label: Text('Group'),
+                      icon: Icon(Icons.group),
+                    ),
+                    ButtonSegment(
+                      value: ChatChannelType.direct,
+                      label: Text('Direct Message'),
+                      icon: Icon(Icons.person),
+                    ),
+                  ],
+                  selected: {_channelType},
+                  onSelectionChanged: (s) =>
+                      setState(() => _channelType = s.first),
+                ),
+                SizedBox(height: 24),
 
               // Direct message fields
               if (_channelType == ChatChannelType.direct) ...[
@@ -264,6 +324,7 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
                     ),
                   ),
               ],
+              ],
             ],
           ),
         ),
@@ -277,6 +338,14 @@ class _NewChannelDialogState extends State<NewChannelDialog> {
     setState(() => _isCreating = true);
 
     try {
+      if (_mode == _NewChannelMode.joinByInvite) {
+        final invite = DistributedChatInvite.decode(
+          _inviteLinkController.text.trim(),
+        );
+        if (mounted) Navigator.pop(context, invite);
+        return;
+      }
+
       ChatChannel channel;
 
       if (_channelType == ChatChannelType.direct) {

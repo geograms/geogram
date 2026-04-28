@@ -28,6 +28,7 @@ import 'security_service.dart';
 import 'storage_config.dart';
 import 'user_location_service.dart';
 import 'chat_service.dart';
+import 'distributed_chat_service.dart';
 import 'profile_storage.dart';
 import 'direct_message_service.dart';
 import 'message_retention_service.dart';
@@ -71,6 +72,7 @@ import 'local_backup_service.dart';
 import '../version.dart';
 import '../models/chat_channel.dart';
 import '../models/chat_message.dart';
+import '../models/distributed_chat.dart';
 import '../models/conference_archive_entry.dart';
 import '../models/conference_schedule_entry.dart';
 import '../util/chat_format.dart';
@@ -3273,6 +3275,11 @@ class LogApiService
       // Handle shared folder debug actions
       if (action.toLowerCase().startsWith('shared_')) {
         return await _handleSharedAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle distributed chat debug actions (one-time invites, redemption)
+      if (action.toLowerCase().startsWith('dchat_')) {
+        return await _handleDchatAction(action.toLowerCase(), params, headers);
       }
 
       // Handle local backup debug actions
@@ -24030,6 +24037,158 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       }
     } catch (e, stack) {
       LogService().log('LogApiService: Shared action error: $e');
+      LogService().log('Stack: $stack');
+      return shelf.Response.internalServerError(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Build a `DistributedChatService` bound to the active profile's chat
+  /// collection. Returns null if the profile is not yet ready.
+  Future<DistributedChatService?> _buildDistributedChatService() async {
+    await _initializeChatServiceIfNeeded(createIfMissing: true);
+    final chatService = ChatService();
+    final appPath = chatService.appPath;
+    final profileStorage = AppService().profileStorage;
+    if (appPath == null || profileStorage == null) {
+      return null;
+    }
+    final profile = ProfileService().getProfile();
+    return DistributedChatService(
+      appPath: appPath,
+      storage: profileStorage,
+      profileCallsign: profile.callsign,
+      profileNpub: profile.npub,
+      profileNsec: profile.nsec.isNotEmpty ? profile.nsec : null,
+    );
+  }
+
+  Future<shelf.Response> _handleDchatAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final service = await _buildDistributedChatService();
+      if (service == null) {
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': false,
+            'error': 'Distributed chat service is not available',
+          }),
+          headers: headers,
+        );
+      }
+
+      switch (action) {
+        case 'dchat_invite_create':
+          final roomId = (params['room_id'] ?? params['room']) as String?;
+          if (roomId == null || roomId.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Missing room_id'}),
+              headers: headers,
+            );
+          }
+          final oneTimeRaw = params['one_time'];
+          final oneTime = oneTimeRaw == null
+              ? true
+              : (oneTimeRaw == true ||
+                  oneTimeRaw == 'true' ||
+                  oneTimeRaw == 1 ||
+                  oneTimeRaw == '1');
+          final invite = await service.createInvite(roomId, oneTime: oneTime);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'link': invite.encode(),
+              'invite': invite.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'dchat_invite_redeem':
+          final link = (params['link'] ?? params['invite']) as String?;
+          if (link == null || link.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Missing invite link'}),
+              headers: headers,
+            );
+          }
+          final DistributedChatInvite invite;
+          try {
+            invite = DistributedChatInvite.decode(link);
+          } catch (e) {
+            return shelf.Response.ok(
+              jsonEncode({
+                'success': false,
+                'error': 'Invalid invite link: $e',
+              }),
+              headers: headers,
+            );
+          }
+          final channel = await service.acceptInviteAndRequestJoin(invite);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'room_id': invite.roomId,
+              'channel': channel.toJson(),
+            }),
+            headers: headers,
+          );
+
+        case 'dchat_invite_list':
+          final roomId = (params['room_id'] ?? params['room']) as String?;
+          if (roomId == null || roomId.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Missing room_id'}),
+              headers: headers,
+            );
+          }
+          final tokens = await service.inviteTokens.listForRoom(roomId);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': true,
+              'tokens': tokens.map((t) => t.toJson()).toList(),
+            }),
+            headers: headers,
+          );
+
+        case 'dchat_invite_revoke':
+          final token = params['token'] as String?;
+          if (token == null || token.isEmpty) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false, 'error': 'Missing token'}),
+              headers: headers,
+            );
+          }
+          final revoked = await service.inviteTokens.revoke(token);
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': revoked != null,
+              if (revoked != null) 'token': revoked.toJson(),
+            }),
+            headers: headers,
+          );
+
+        default:
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'Unknown dchat action: $action',
+              'available': [
+                'dchat_invite_create',
+                'dchat_invite_redeem',
+                'dchat_invite_list',
+                'dchat_invite_revoke',
+              ],
+            }),
+            headers: headers,
+          );
+      }
+    } catch (e, stack) {
+      LogService().log('LogApiService: Dchat action error: $e');
       LogService().log('Stack: $stack');
       return shelf.Response.internalServerError(
         body: jsonEncode({'success': false, 'error': e.toString()}),

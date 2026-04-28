@@ -86,6 +86,8 @@ class DistributedChatInvite {
   final String distributionMode;
   final String? hostCallsign;
   final List<String> seedPeerHints;
+  final String? oneTimeToken;
+  final int? expiresAt;
 
   const DistributedChatInvite({
     required this.roomId,
@@ -98,6 +100,8 @@ class DistributedChatInvite {
     this.distributionMode = 'distributed',
     this.hostCallsign,
     this.seedPeerHints = const [],
+    this.oneTimeToken,
+    this.expiresAt,
   });
 
   Map<String, dynamic> toJson() {
@@ -112,6 +116,8 @@ class DistributedChatInvite {
       'distribution_mode': distributionMode,
       if (hostCallsign != null) 'host_callsign': hostCallsign,
       if (seedPeerHints.isNotEmpty) 'seed_peer_hints': seedPeerHints,
+      if (oneTimeToken != null) 'one_time_token': oneTimeToken,
+      if (expiresAt != null) 'expires_at': expiresAt,
     };
   }
 
@@ -129,6 +135,8 @@ class DistributedChatInvite {
       seedPeerHints: List<String>.from(
         json['seed_peer_hints'] as List? ?? const [],
       ),
+      oneTimeToken: json['one_time_token'] as String?,
+      expiresAt: (json['expires_at'] as num?)?.toInt(),
     );
   }
 

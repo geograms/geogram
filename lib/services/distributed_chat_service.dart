@@ -14,6 +14,7 @@ import '../util/nostr_event.dart';
 import '../util/nostr_key_generator.dart';
 import 'chat_service.dart' show PermissionDeniedException;
 import 'config_service.dart';
+import 'dchat_invite_token_store.dart';
 import 'dchat_room_store.dart';
 import 'profile_storage.dart';
 
@@ -49,10 +50,17 @@ class DistributedChatService {
     LoadDistributedChatRoomSecret? loadRoomSecret,
     SaveDistributedChatRoomSecret? saveRoomSecret,
     DeleteDistributedChatRoomSecret? deleteRoomSecret,
+    DChatInviteTokenStore? inviteTokenStore,
   }) : _loadRoomSecret = loadRoomSecret ?? _defaultLoadRoomSecret(appPath),
        _saveRoomSecret = saveRoomSecret ?? _defaultSaveRoomSecret(appPath),
        _deleteRoomSecret =
-           deleteRoomSecret ?? _defaultDeleteRoomSecret(appPath);
+           deleteRoomSecret ?? _defaultDeleteRoomSecret(appPath),
+       _inviteTokens =
+           inviteTokenStore ?? DChatInviteTokenStore(storage: storage);
+
+  final DChatInviteTokenStore _inviteTokens;
+
+  DChatInviteTokenStore get inviteTokens => _inviteTokens;
 
   static LoadDistributedChatRoomSecret _defaultLoadRoomSecret(String appPath) {
     return (roomId) async {
@@ -256,9 +264,22 @@ class DistributedChatService {
   Future<DistributedChatInvite> createInvite(
     String roomId, {
     List<String> seedPeerHints = const [],
+    bool oneTime = false,
+    int? expiresAt,
   }) async {
     final room = await _requireRoom(roomId);
     final config = await _requireDistributedConfig(roomId);
+
+    String? token;
+    int? effectiveExpiresAt = expiresAt;
+    if (oneTime) {
+      final record = await _inviteTokens.issue(
+        roomId: roomId,
+        expiresAt: expiresAt,
+      );
+      token = record.token;
+      effectiveExpiresAt = record.expiresAt;
+    }
 
     return DistributedChatInvite(
       roomId: roomId,
@@ -273,6 +294,8 @@ class DistributedChatService {
       seedPeerHints: seedPeerHints.isNotEmpty
           ? seedPeerHints
           : config.seedPeerHints,
+      oneTimeToken: token,
+      expiresAt: effectiveExpiresAt,
     );
   }
 
@@ -346,6 +369,7 @@ class DistributedChatService {
         'callsign': profileCallsign,
         if (message != null && message.trim().isNotEmpty)
           'message': message.trim(),
+        if (invite.oneTimeToken != null) 'one_time_token': invite.oneTimeToken,
       },
     );
     await _importControlEvent(request);
@@ -1122,6 +1146,28 @@ class DistributedChatService {
         ),
       );
     });
+
+    final token = event.payload['one_time_token'] as String?;
+    if (token == null || token.isEmpty) {
+      return;
+    }
+    if (profileNsec == null || !config.canManageApplications(profileNpub)) {
+      return;
+    }
+    final consumed = await _inviteTokens.tryConsume(
+      token: token,
+      roomId: event.roomId,
+      applicantNpub: applicantNpub,
+    );
+    if (consumed != null) {
+      await approveApplicant(event.roomId, applicantNpub);
+    } else {
+      await rejectApplicant(
+        event.roomId,
+        applicantNpub,
+        reason: 'one_time_token_invalid',
+      );
+    }
   }
 
   Future<void> _applyJoinApproved(DistributedChatControlEvent event) async {
