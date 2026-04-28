@@ -638,6 +638,20 @@ void main() async {
   // These can take time and shouldn't block the UI
   WidgetsBinding.instance.addPostFrameCallback((_) async {
     try {
+      // Debug switch: skip the heavy auto-started services (LAN scan,
+      // DHT bootstrap, BLE init, proximity, backup) so we can bisect
+      // which one is allocating the heap that drives Android OOM.
+      // Toggled via the `minimal_skip` debug action; default off.
+      final minimalStartup =
+          ConfigService().getNestedValue('debug.minimalStartup', false) ==
+              true;
+      if (minimalStartup) {
+        LogService().log(
+          'MINIMAL STARTUP: skipping StationDiscovery, P2P, BLE, '
+          'Proximity, BackupService, LocalBackupService',
+        );
+      }
+
       // Check if app recovered from a crash
       if (!kIsWeb && Platform.isAndroid) {
         final recoveredFromCrash = await CrashService().didRecoverFromCrash();
@@ -681,12 +695,16 @@ void main() async {
       // Start the auto-backup timer if the user has it enabled. Done at boot
       // so the timer fires regardless of whether the user opens the Backup
       // page in this session.
-      LocalBackupService().initialize();
-      LogService().log('LocalBackupService initialized (deferred)');
+      if (!minimalStartup) {
+        LocalBackupService().initialize();
+        LogService().log('LocalBackupService initialized (deferred)');
+      }
 
       // Start station auto-discovery (background task)
-      StationDiscoveryService().start();
-      LogService().log('StationDiscoveryService started (deferred)');
+      if (!minimalStartup) {
+        StationDiscoveryService().start();
+        LogService().log('StationDiscoveryService started (deferred)');
+      }
 
       // Start P2P DHT discovery after the desktop UI settles so the initial
       // app interaction path is not competing with the DHT bootstrap work.
@@ -705,7 +723,9 @@ void main() async {
         }
       }
 
-      if (p2pStartupDelay > Duration.zero) {
+      if (minimalStartup) {
+        LogService().log('P2PService start skipped (minimalStartup)');
+      } else if (p2pStartupDelay > Duration.zero) {
         LogService().log(
           'P2PService scheduled to start in ${p2pStartupDelay.inSeconds}s',
         );
@@ -749,7 +769,12 @@ void main() async {
 
       // For first-time users on Android, skip BLE initialization here
       // The onboarding screen will request permissions and then reinitialize BLE
-      if (!kIsWeb && Platform.isAndroid && !firstLaunchComplete) {
+      if (minimalStartup) {
+        await DevicesService().initialize(skipBLE: true);
+        LogService().log(
+          'DevicesService initialized (deferred, BLE skipped — minimalStartup)',
+        );
+      } else if (!kIsWeb && Platform.isAndroid && !firstLaunchComplete) {
         LogService().log(
           'DevicesService: Skipping BLE init for first launch - onboarding will handle permissions',
         );
@@ -813,7 +838,7 @@ void main() async {
         '[PROXIMITY] Auto-start check - disabled=$proximityDisabled, firstLaunch=${!firstLaunchComplete}',
       );
 
-      if (!proximityDisabled && firstLaunchComplete) {
+      if (!proximityDisabled && firstLaunchComplete && !minimalStartup) {
         try {
           // Get or find tracker app path
           var appPath = ConfigService().getNestedValue(
@@ -890,8 +915,10 @@ void main() async {
       LogService().log('NetworkMonitorService initialized');
 
       // Initialize BackupService for E2E encrypted backups
-      await BackupService().initialize();
-      LogService().log('BackupService initialized');
+      if (!minimalStartup) {
+        await BackupService().initialize();
+        LogService().log('BackupService initialized');
+      }
 
       // Initialize DMQueueService for background DM delivery (optimistic UI)
       await DMQueueService().initialize();
@@ -901,8 +928,20 @@ void main() async {
       MessageRetentionService().startCleanupTimer();
       LogService().log('MessageRetentionService cleanup timer started');
 
+      // Debug switch: skip every bridge/mesh auto-start so we can bisect
+      // which one is allocating the heap that drives Android OOM. Toggle
+      // via the `bridges_skip` debug action; default off.
+      final skipBridges =
+          ConfigService().getNestedValue('debug.skipBridgeAutoStart', false) ==
+              true;
+      if (skipBridges) {
+        LogService().log(
+          'BRIDGES: auto-start skipped via debug.skipBridgeAutoStart',
+        );
+      }
+
       // Auto-start APRS-IS background service
-      if (firstLaunchComplete) {
+      if (firstLaunchComplete && !skipBridges) {
         final aprsStorage = AppService().profileStorage;
         final profile = ProfileService().getProfile();
         if (aprsStorage != null && profile.fullCallsign.isNotEmpty) {

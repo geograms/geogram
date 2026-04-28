@@ -3352,6 +3352,64 @@ class LogApiService
         return await _handleKarmaAction(action.toLowerCase(), params, headers);
       }
 
+      // Toggle the bridge auto-start gate (used to bisect Android OOM
+      // suspects without rebuilding for every variant). Persisted via
+      // ConfigService so it survives a restart.
+      if (action == 'bridges_skip') {
+        final raw = params['enabled'];
+        final enabled = raw == true || raw == 'true' || raw == 1 || raw == '1';
+        ConfigService().setNestedValue(
+          'debug.skipBridgeAutoStart',
+          enabled,
+        );
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'enabled': enabled,
+            'note': 'restart the app for the change to take effect',
+          }),
+          headers: headers,
+        );
+      }
+      if (action == 'bridges_status') {
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'skipBridgeAutoStart':
+                ConfigService().getNestedValue(
+                  'debug.skipBridgeAutoStart',
+                  false,
+                ) ==
+                true,
+            'minimalStartup':
+                ConfigService().getNestedValue(
+                  'debug.minimalStartup',
+                  false,
+                ) ==
+                true,
+          }),
+          headers: headers,
+        );
+      }
+      // Toggle the broader gate: skip StationDiscovery, P2P, BLE,
+      // Proximity, BackupService, LocalBackupService at startup.
+      if (action == 'minimal_skip') {
+        final raw = params['enabled'];
+        final enabled = raw == true || raw == 'true' || raw == 1 || raw == '1';
+        ConfigService().setNestedValue(
+          'debug.minimalStartup',
+          enabled,
+        );
+        return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'enabled': enabled,
+            'note': 'restart the app for the change to take effect',
+          }),
+          headers: headers,
+        );
+      }
+
       final debugController = DebugController();
       final result = await debugController.executeAction(action, params);
 
