@@ -19,23 +19,29 @@ import 'dart:convert';
 import 'dart:io' show Directory, File, FileSystemEntity;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 
 import '../geoui/geoui_ast.dart';
 import '../geoui/geoui_parser.dart';
 import '../geoui/geoui_renderer.dart';
 import '../models/wapp_manifest.dart';
 import '../services/i18n_context.dart';
+import '../services/location_provider_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_storage.dart';
 import '../services/wapp_installer_service.dart';
 import '../services/wapp_storage.dart';
 import '../util/app_type_theme.dart';
 import '../util/event_bus.dart';
+import '../util/geolocation_utils.dart';
 import 'wapp_engine.dart';
 
 class WappPage extends StatefulWidget {
@@ -49,7 +55,18 @@ class WappPage extends StatefulWidget {
   /// description field).
   final String title;
 
-  const WappPage({super.key, required this.wappId, required this.title});
+  /// Optional file the wapp should open immediately after init —
+  /// used by the file-association launch path (see
+  /// WappFileAssociations). When set, the host sends a single
+  /// `file.open` message to the wapp once the engine has booted.
+  final WappOpenFile? openFile;
+
+  const WappPage({
+    super.key,
+    required this.wappId,
+    required this.title,
+    this.openFile,
+  });
 
   @override
   State<WappPage> createState() => _WappPageState();
@@ -58,13 +75,19 @@ class WappPage extends StatefulWidget {
 class _WappPageState extends State<WappPage>
     with TickerProviderStateMixin {
   WappManifest? _manifest;
-  final _engine = WappEngine();
+  WappEngine _engine = WappEngine();
   final List<GeoUiBlock> _screens = [];
   final List<String> _screenNames = [];
   TabController? _tabController;
   Timer? _tickTimer;
   String _status = 'Loading…';
   bool _crashed = false;
+
+  // True when [wappPackageStorage] resolved a sibling source-tree
+  // folder for this wappId. Toggles the AppBar reload button and a
+  // "(dev)" suffix on the title so the developer can see at a
+  // glance which path the package came from.
+  bool _devMode = false;
 
   // ── Wapp store state (used when a screen has a `$type="output"` or
   //    `$type="sources"` group). The install wapp pushes ui.append +
@@ -74,6 +97,21 @@ class _WappPageState extends State<WappPage>
   List<String> _storeSources = const [];
   final _sourcesInputController = TextEditingController();
 
+  // ── Location bridge (Section 12 of wapp-interfaces.md). Per-req_id
+  //    subscription state + dispose callbacks for active
+  //    location.subscribe streams; the passive listener keeps the
+  //    engine's cached gps_lat/gps_lon in sync with whatever the
+  //    rest of the host already knows.
+  final Map<String, _LocationSub> _locSubs = {};
+  StreamSubscription<LockedPosition>? _passiveLocSub;
+
+  // ── Video group (`<group $type="video">`). Lazily instantiated on
+  //    first `video.load` so wapps that never play video pay no
+  //    media_kit cost. Disposed in [dispose].
+  Player? _videoPlayer;
+  VideoController? _videoController;
+  String? _videoCurrentPath;
+
   @override
   void initState() {
     super.initState();
@@ -82,7 +120,14 @@ class _WappPageState extends State<WappPage>
 
   Future<void> _loadWapp() async {
     try {
-      // Wapp package — shared archive, read-only.
+      // Detect whether we're loading from the sibling source-tree
+      // (debug builds, source checkout) so we can show the dev
+      // affordances (title suffix + reload button).
+      _devMode = wappSourceTreePath(widget.wappId) != null;
+
+      // Wapp package — shared archive, or sibling source folder
+      // when [_devMode] is true. wappPackageStorage handles the
+      // priority for us; this method just consumes the result.
       final pkg = wappPackageStorage(widget.wappId);
       if (pkg == null) {
         setState(() => _status = 'Wapp archive unavailable.');
@@ -128,15 +173,20 @@ class _WappPageState extends State<WappPage>
       _engine.setI18n(i18n);
 
       // 5a. Wapp store debug seed: when running from a source
-      //     checkout, point the install wapp at the in-repo
-      //     wapps/binaries/ directory so the user has a working
-      //     catalog out of the box. Mirrors iwi's behaviour.
+      //     checkout, point the install wapp at the sibling
+      //     `wapps` repo's binaries/ directory so the user has a
+      //     working catalog out of the box. Layout assumed:
+      //
+      //       geograms/
+      //       ├── geogram/   ← cwd while running launch-desktop.sh
+      //       └── wapps/     ← https://github.com/.../wapps
+      //           └── binaries/index.json
       if (widget.wappId == 'install' && !_engine.hasKvKey('source')) {
         final cwd = Directory.current.path;
         final candidates = [
-          '$cwd/wapps/binaries',
-          '$cwd/../wapps/binaries',
-          '$cwd/../../wapps/binaries',
+          '$cwd/../wapps/binaries',     // sibling repo (canonical)
+          '$cwd/../../wapps/binaries',  // nested workspace fallback
+          '$cwd/wapps/binaries',        // legacy in-tree (before split)
         ];
         for (final candidate in candidates) {
           if (File('$candidate/index.json').existsSync()) {
@@ -169,8 +219,35 @@ class _WappPageState extends State<WappPage>
       // 6. Discover screens
       await _loadScreens(pkg);
 
+      // 6b. Seed engine GPS cache with whatever the host already knows
+      //     (e.g. the path-recording service is running) and listen
+      //     passively for fresh fixes. This costs nothing when no
+      //     consumer is active — the stream is silent and the cache
+      //     simply reports INT32_MIN until someone spins up GPS.
+      final initial = LocationProviderService().currentPosition;
+      if (initial != null) {
+        _engine.setLastLocation(
+            lat: initial.latitude, lon: initial.longitude);
+      }
+      _passiveLocSub = LocationProviderService().positionStream.listen((pos) {
+        _engine.setLastLocation(lat: pos.latitude, lon: pos.longitude);
+      });
+
       // 7. Drain initial outbox produced by module_init
       _drainOutbox();
+
+      // 7b. File-association launch: deliver the requested file to
+      //     the wapp via a single `file.open` message. The wapp
+      //     reads it from its inbox during the next handle_event
+      //     and decides what to do (open the audio, render the
+      //     text, refuse the mode, etc.). See Section 19 of
+      //     wapps/wapp-interfaces.md.
+      final open = widget.openFile;
+      if (open != null) {
+        _engine.sendMessage(jsonEncode(open.toJson()));
+        _engine.handleEvent();
+        _drainOutbox();
+      }
 
       // 8. Schedule tick loop
       final tickMs = manifest.tickIntervalMs;
@@ -276,6 +353,34 @@ class _WappPageState extends State<WappPage>
             // Wapp store asks the host to download + extract a .wapp
             // ZIP from a remote URL.
             unawaited(_handleWappInstall(data));
+            break;
+
+          case 'location.request':
+            unawaited(_handleLocationRequest(data));
+            break;
+
+          case 'location.subscribe':
+            unawaited(_handleLocationSubscribe(data));
+            break;
+
+          case 'location.unsubscribe':
+            _handleLocationUnsubscribe(data);
+            break;
+
+          case 'video.load':
+            _handleVideoLoad(data);
+            break;
+
+          case 'video.subtitle':
+            _handleVideoSubtitle(data);
+            break;
+
+          case 'video.play':
+          case 'video.pause':
+          case 'video.stop':
+          case 'video.seek':
+          case 'video.skip':
+            _handleVideoCommand(type, data);
             break;
 
           default:
@@ -394,6 +499,392 @@ class _WappPageState extends State<WappPage>
     }
   }
 
+  // ── Location bridge ────────────────────────────────────────────────
+  // Implements the message-channel API documented in Section 12 of
+  // wapps/wapp-interfaces.md. Wapps that only want a passive readout
+  // can keep using the cheap synchronous hal_sensor_gps_lat/lon pair
+  // (kept warm by the passive positionStream listener). Wapps that
+  // need an explicit fix or a continuous stream go through these
+  // handlers so the host can control power, permissions, and
+  // accuracy.
+
+  Future<void> _handleLocationRequest(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as String? ?? '').trim();
+    if (reqId.isEmpty) return;
+
+    if (!_locationAllowed()) {
+      _replyLocationError(reqId, 'permission_denied',
+          isUpdate: false);
+      return;
+    }
+
+    final hint = (data['accuracy'] as String? ?? 'balanced').toLowerCase();
+    final maxAgeMs = (data['max_age_ms'] as num?)?.toInt() ?? 0;
+    final timeoutMs = (data['timeout_ms'] as num?)?.toInt() ?? 15000;
+    final allowCached = data['allow_cached'] as bool? ?? true;
+
+    if (allowCached && maxAgeMs > 0) {
+      final cached = LocationProviderService().currentPosition;
+      if (cached != null &&
+          DateTime.now().difference(cached.timestamp).inMilliseconds <=
+              maxAgeMs) {
+        _engine.setLastLocation(
+            lat: cached.latitude, lon: cached.longitude);
+        _replyLocation(reqId, cached, cached: true, isUpdate: false);
+        return;
+      }
+    }
+
+    final started = DateTime.now();
+    var didTimeout = false;
+    try {
+      final result = await _detectLocationWithHint(
+        hint: hint,
+        timeout: Duration(milliseconds: timeoutMs),
+      ).timeout(
+        Duration(milliseconds: timeoutMs + 500),
+        onTimeout: () {
+          didTimeout = true;
+          return null;
+        },
+      );
+      if (result == null) {
+        // Discriminate timeout vs other failure (permission denied,
+        // hardware off, network fallback all returned nothing).
+        final elapsed = DateTime.now().difference(started).inMilliseconds;
+        final code = (didTimeout || elapsed >= timeoutMs)
+            ? 'timeout'
+            : 'no_provider';
+        _replyLocationError(reqId, code, isUpdate: false);
+        return;
+      }
+      final pos = LockedPosition.fromGeolocationResult(result);
+      _engine.setLastLocation(lat: pos.latitude, lon: pos.longitude);
+      _replyLocation(reqId, pos, cached: false, isUpdate: false);
+    } catch (e) {
+      LogService().log(
+          'WappPage[${_manifest?.id ?? widget.wappId}] location.request error: $e');
+      final code = e is TimeoutException ? 'timeout' : 'no_provider';
+      _replyLocationError(reqId, code, isUpdate: false);
+    }
+  }
+
+  Future<void> _handleLocationSubscribe(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as String? ?? '').trim();
+    if (reqId.isEmpty) return;
+
+    if (!_locationAllowed()) {
+      _replyLocationError(reqId, 'permission_denied', isUpdate: false);
+      return;
+    }
+
+    // Replace any previous subscription for this req_id.
+    _locSubs.remove(reqId)?.dispose?.call();
+
+    final hint = (data['accuracy'] as String? ?? 'balanced').toLowerCase();
+    final minIntervalMs = (data['min_interval_ms'] as num?)?.toInt() ?? 5000;
+    final minDistanceM = (data['min_distance_m'] as num?)?.toDouble() ?? 0.0;
+    final intervalSec = (minIntervalMs / 1000).ceil().clamp(1, 3600);
+
+    final sub = _LocationSub(
+      hint: hint,
+      minIntervalMs: minIntervalMs,
+      minDistanceM: minDistanceM,
+    );
+    _locSubs[reqId] = sub;
+
+    try {
+      sub.dispose = await LocationProviderService().registerConsumer(
+        intervalSeconds: intervalSec,
+        // "best" requests pure GPS; LocationProviderService treats
+        // highFidelity as bestForNavigation + distanceFilter=0.
+        highFidelity: hint == 'best',
+        onPosition: (pos) => _onSubscribedFix(reqId, pos),
+      );
+      // If we already have a fix, deliver it immediately so the wapp
+      // doesn't have to wait for the next interval.
+      final cached = LocationProviderService().currentPosition;
+      if (cached != null) {
+        _onSubscribedFix(reqId, cached, forceCached: true);
+      }
+    } catch (e) {
+      _locSubs.remove(reqId);
+      // registerConsumer throws on permission failure / disabled GPS.
+      final msg = e.toString().toLowerCase();
+      final code = msg.contains('permission')
+          ? 'permission_denied'
+          : (msg.contains('disabled') ? 'disabled' : 'no_provider');
+      _replyLocationError(reqId, code, isUpdate: false);
+    }
+  }
+
+  /// Per-subscription fan-out: applies min_interval / min_distance
+  /// throttling before forwarding the fix as a `location.update`.
+  void _onSubscribedFix(String reqId, LockedPosition pos,
+      {bool forceCached = false}) {
+    final sub = _locSubs[reqId];
+    if (sub == null) return;
+
+    _engine.setLastLocation(lat: pos.latitude, lon: pos.longitude);
+
+    final now = DateTime.now();
+    if (!forceCached) {
+      // min_interval throttle.
+      final last = sub.lastDeliveredAt;
+      if (last != null &&
+          now.difference(last).inMilliseconds < sub.minIntervalMs) {
+        return;
+      }
+      // min_distance throttle.
+      if (sub.minDistanceM > 0 && sub.lastLat != null && sub.lastLon != null) {
+        final d = Geolocator.distanceBetween(
+            sub.lastLat!, sub.lastLon!, pos.latitude, pos.longitude);
+        if (d < sub.minDistanceM) return;
+      }
+    }
+
+    sub.lastDeliveredAt = now;
+    sub.lastLat = pos.latitude;
+    sub.lastLon = pos.longitude;
+    _replyLocation(reqId, pos, cached: forceCached, isUpdate: true);
+  }
+
+  void _handleLocationUnsubscribe(Map<String, dynamic> data) {
+    final reqId = (data['req_id'] as String? ?? '').trim();
+    if (reqId.isEmpty) return;
+    _locSubs.remove(reqId)?.dispose?.call();
+  }
+
+  /// Map an accuracy hint to a concrete detection chain.
+  ///
+  /// - coarse:   skip GPS entirely (profile fallback → IP), minimal power
+  /// - balanced: default chain in GeolocationUtils — GPS where available
+  ///             with normal accuracy, else profile/IP
+  /// - fine:     GPS forced at LocationAccuracy.high (fused)
+  /// - best:     GPS forced at LocationAccuracy.bestForNavigation
+  Future<GeolocationResult?> _detectLocationWithHint({
+    required String hint,
+    required Duration timeout,
+  }) async {
+    switch (hint) {
+      case 'coarse':
+        final profile = GeolocationUtils.getProfileLocation();
+        if (profile != null) return profile;
+        return await GeolocationUtils.detectViaIP();
+
+      case 'fine':
+      case 'best':
+        if (kIsWeb) {
+          final web = await GeolocationUtils.detectViaBrowser(
+              timeout: timeout, requestPermission: true);
+          if (web != null) return web;
+          return await GeolocationUtils.detectViaIP();
+        }
+        try {
+          var permission = await Geolocator.checkPermission();
+          if (permission == LocationPermission.denied) {
+            permission = await Geolocator.requestPermission();
+          }
+          if (permission == LocationPermission.denied ||
+              permission == LocationPermission.deniedForever) {
+            return null;
+          }
+          if (!await Geolocator.isLocationServiceEnabled()) return null;
+          final pos = await Geolocator.getCurrentPosition(
+            locationSettings: LocationSettings(
+              accuracy: hint == 'best'
+                  ? LocationAccuracy.bestForNavigation
+                  : LocationAccuracy.high,
+              timeLimit: timeout,
+            ),
+          );
+          return GeolocationResult(
+            latitude: pos.latitude,
+            longitude: pos.longitude,
+            source: 'gps',
+            accuracy: pos.accuracy,
+          );
+        } catch (_) {
+          return null;
+        }
+
+      case 'balanced':
+      default:
+        return await GeolocationUtils.getCurrentLocation(timeout: timeout);
+    }
+  }
+
+  /// Manifest gate per Section 12.4: a wapp must declare
+  /// `requires.hal: ["sensor.location"]` (or `"sensor_location"` —
+  /// some manifests omit dotted form) before the engine honours any
+  /// location.* message. Refusing here mirrors the install dialog
+  /// promise.
+  bool _locationAllowed() {
+    final m = _manifest;
+    if (m == null) return false;
+    return m.halRequires.contains('sensor.location') ||
+        m.halRequires.contains('sensor_location');
+  }
+
+  void _replyLocation(
+    String reqId,
+    LockedPosition pos, {
+    required bool cached,
+    required bool isUpdate,
+  }) {
+    _engine.sendMessage(jsonEncode({
+      'type': isUpdate ? 'location.update' : 'location.response',
+      'req_id': reqId,
+      'lat': pos.latitude,
+      'lon': pos.longitude,
+      'altitude_m': pos.altitude,
+      'accuracy_m': pos.accuracy,
+      'speed_mps': pos.speed,
+      'heading_deg': pos.heading,
+      'fix_at': pos.timestamp.millisecondsSinceEpoch ~/ 1000,
+      'source': pos.source,
+      'cached': cached,
+    }));
+    _engine.handleEvent();
+    _drainOutbox();
+  }
+
+  void _replyLocationError(
+    String reqId,
+    String error, {
+    required bool isUpdate,
+  }) {
+    _engine.sendMessage(jsonEncode({
+      'type': isUpdate ? 'location.update' : 'location.response',
+      'req_id': reqId,
+      'error': error,
+    }));
+    _engine.handleEvent();
+    _drainOutbox();
+  }
+
+  // ── Video bridge (`<group $type="video">`) ────────────────────────
+  // The wapp drives playback through messages; the host owns the
+  // media_kit Player + VideoController. The wapp's GeoUI screen
+  // declares a `<group $type="video">` element which renders as a
+  // Video widget bound to [_videoController].
+
+  void _ensureVideoStack() {
+    if (_videoPlayer != null) return;
+    _videoPlayer = Player();
+    _videoController = VideoController(_videoPlayer!);
+  }
+
+  void _handleVideoLoad(Map<String, dynamic> data) {
+    final path = (data['path'] as String? ?? '').trim();
+    if (path.isEmpty) return;
+    _ensureVideoStack();
+    _videoCurrentPath = path;
+    final autoplay = data['autoplay'] != false;
+    try {
+      _videoPlayer!.open(Media(path), play: autoplay);
+    } catch (e) {
+      LogService().log(
+          'WappPage[${_manifest?.id ?? widget.wappId}] video.load failed: $e');
+    }
+    // Auto-attach a sidecar subtitle if one is sitting next to the
+    // video. Standard convention used by VLC, mpv, ExoPlayer: same
+    // basename, .srt extension (or the language-tagged variants
+    // ".en.srt" / ".eng.srt"). The wapp can override later by
+    // sending an explicit `video.subtitle` message.
+    final sidecar = _findSidecarSubtitle(path);
+    if (sidecar != null) {
+      try {
+        _videoPlayer!.setSubtitleTrack(SubtitleTrack.uri(sidecar));
+      } catch (e) {
+        LogService().log(
+            'WappPage[${_manifest?.id ?? widget.wappId}] sidecar subtitle '
+            'attach failed ($sidecar): $e');
+      }
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// Look next to [videoPath] for a same-basename subtitle file in
+  /// the formats media_kit can attach via SubtitleTrack.uri:
+  /// `.srt`, `.vtt`, `.ass`, `.ssa`, `.sub`. Also tries the common
+  /// language-tagged variants `.en.srt` / `.eng.srt`. Returns the
+  /// first match or null.
+  String? _findSidecarSubtitle(String videoPath) {
+    final dot = videoPath.lastIndexOf('.');
+    if (dot <= 0) return null;
+    final base = videoPath.substring(0, dot);
+    const exts = ['srt', 'vtt', 'ass', 'ssa', 'sub'];
+    const langs = ['', '.en', '.eng', '.und'];
+    for (final lang in langs) {
+      for (final ext in exts) {
+        final candidate = '$base$lang.$ext';
+        if (File(candidate).existsSync()) return candidate;
+      }
+    }
+    return null;
+  }
+
+  void _handleVideoSubtitle(Map<String, dynamic> data) {
+    final p = _videoPlayer;
+    if (p == null) return;
+    // `{"type":"video.subtitle","off":true}` clears the active
+    // track. Otherwise we expect a path to an SRT/VTT/etc file.
+    if (data['off'] == true) {
+      try {
+        p.setSubtitleTrack(SubtitleTrack.no());
+      } catch (_) {}
+      return;
+    }
+    final path = (data['path'] as String? ?? '').trim();
+    if (path.isEmpty) return;
+    final language = (data['language'] as String?)?.trim();
+    final title = (data['title'] as String?)?.trim();
+    try {
+      p.setSubtitleTrack(SubtitleTrack.uri(
+        path,
+        title: (title?.isNotEmpty ?? false) ? title : null,
+        language: (language?.isNotEmpty ?? false) ? language : null,
+      ));
+    } catch (e) {
+      LogService().log(
+          'WappPage[${_manifest?.id ?? widget.wappId}] video.subtitle '
+          'attach failed: $e');
+    }
+  }
+
+  void _handleVideoCommand(String type, Map<String, dynamic> data) {
+    final p = _videoPlayer;
+    if (p == null) return;
+    switch (type) {
+      case 'video.play':
+        p.play();
+        break;
+      case 'video.pause':
+        p.pause();
+        break;
+      case 'video.stop':
+        p.stop();
+        break;
+      case 'video.seek':
+        // Absolute seek to the given position in milliseconds.
+        final pos = (data['position_ms'] as num?)?.toInt();
+        if (pos != null) p.seek(Duration(milliseconds: pos));
+        break;
+      case 'video.skip':
+        // Relative jump (positive = forward, negative = backward).
+        final delta = (data['delta_ms'] as num?)?.toInt() ?? 0;
+        if (delta == 0) break;
+        final cur = p.state.position;
+        final dur = p.state.duration;
+        var target = cur + Duration(milliseconds: delta);
+        if (target < Duration.zero) target = Duration.zero;
+        if (dur > Duration.zero && target > dur) target = dur;
+        p.seek(target);
+        break;
+    }
+  }
+
   void _appendOutput(String text, String level) {
     _outputLines.add(_OutputLine(text, level));
     if (mounted) setState(() {});
@@ -409,15 +900,63 @@ class _WappPageState extends State<WappPage>
     _drainOutbox();
   }
 
-  @override
-  void dispose() {
+  /// Tear down everything that's tied to the running engine but not
+  /// to the widget itself: the tick timer, location subscriptions,
+  /// the media_kit player, and the engine instance. Used by both
+  /// [dispose] (terminal teardown) and [_reload] (transient teardown
+  /// for the dev source-tree workflow). Callers are responsible for
+  /// disposing the TabController and clearing the screen list — the
+  /// reload path keeps showing the AppBar while a new engine boots,
+  /// and the dispose path runs after the widget is already gone.
+  void _teardownEngineState() {
     _tickTimer?.cancel();
-    _tabController?.dispose();
-    final id = _manifest?.id ?? widget.wappId;
-    final name = _manifest?.name ?? widget.wappId;
+    _tickTimer = null;
+    _passiveLocSub?.cancel();
+    _passiveLocSub = null;
+    for (final sub in _locSubs.values) {
+      try {
+        sub.dispose?.call();
+      } catch (_) {}
+    }
+    _locSubs.clear();
+    try {
+      _videoPlayer?.dispose();
+    } catch (_) {}
+    _videoPlayer = null;
+    _videoController = null;
+    _videoCurrentPath = null;
     try {
       _engine.dispose();
     } catch (_) {}
+  }
+
+  /// Dev-only: tear the running wapp down and reboot it from disk
+  /// without leaving this page. Pairs with the source-tree override
+  /// in `wappPackageStorage` so the loop is "edit C → make → tap
+  /// reload". Released builds never expose the trigger.
+  Future<void> _reload() async {
+    _teardownEngineState();
+    _tabController?.dispose();
+    setState(() {
+      _screens.clear();
+      _screenNames.clear();
+      _outputLines.clear();
+      _storeSources = const [];
+      _manifest = null;
+      _crashed = false;
+      _status = 'Reloading…';
+      _tabController = null;
+    });
+    _engine = WappEngine();
+    await _loadWapp();
+  }
+
+  @override
+  void dispose() {
+    _teardownEngineState();
+    _tabController?.dispose();
+    final id = _manifest?.id ?? widget.wappId;
+    final name = _manifest?.name ?? widget.wappId;
     EventBus().fire(WappUnloadedEvent(wappId: id, wappName: name));
     super.dispose();
   }
@@ -441,6 +980,18 @@ class _WappPageState extends State<WappPage>
     }
     if (mapGroup != null) {
       return _buildMapScreen(screen, mapGroup);
+    }
+
+    // Video player (movies wapp + any wapp that opens a media file).
+    GeoUiBlock? videoGroup;
+    for (final c in screen.children) {
+      if (c.keyword == 'group' && c.type == 'video') {
+        videoGroup = c;
+        break;
+      }
+    }
+    if (videoGroup != null) {
+      return _buildVideoScreen(videoGroup);
     }
 
     // Output catalog (wapp store): scrollable list of lines pushed
@@ -541,12 +1092,103 @@ class _WappPageState extends State<WappPage>
     );
   }
 
+  /// Render a `<group $type="video">` screen using media_kit. The
+  /// `Player` is created lazily on the first `video.load` message;
+  /// before that, we show a placeholder so wapps that open the
+  /// player without an immediate file (e.g. user picked the wapp
+  /// from the launcher rather than via "Open with…") still feel
+  /// responsive.
+  Widget _buildVideoScreen(GeoUiBlock videoGroup) {
+    final controller = _videoController;
+    if (controller == null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.movie_outlined, size: 64),
+              const SizedBox(height: 12),
+              Text(
+                'No video loaded.',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Open a video file with this wapp from the file picker '
+                'to start playback.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final fitName = videoGroup.getString('fit') ?? 'contain';
+    final fit = _videoFitFromName(fitName);
+
+    return ColoredBox(
+      color: Colors.black,
+      child: Video(
+        controller: controller,
+        fit: fit,
+      ),
+    );
+  }
+
+  BoxFit _videoFitFromName(String name) {
+    switch (name) {
+      case 'cover':
+        return BoxFit.cover;
+      case 'fill':
+        return BoxFit.fill;
+      case 'fitWidth':
+        return BoxFit.fitWidth;
+      case 'fitHeight':
+        return BoxFit.fitHeight;
+      case 'none':
+        return BoxFit.none;
+      case 'scaleDown':
+        return BoxFit.scaleDown;
+      case 'contain':
+      default:
+        return BoxFit.contain;
+    }
+  }
+
+  /// Marker actions injected into the AppBar in dev mode. A
+  /// `restart_alt` icon that tears down + reboots the engine so
+  /// rebuilt source picks up without leaving the page.
+  List<Widget> _devAppBarActions() {
+    if (!_devMode) return const [];
+    return [
+      IconButton(
+        tooltip: 'Reload from source',
+        icon: const Icon(Icons.restart_alt),
+        onPressed: _reload,
+      ),
+    ];
+  }
+
+  /// AppBar title with a "(dev)" suffix when reading the wapp from
+  /// the sibling source tree, so it's obvious which path the
+  /// package came from.
+  String _titleWithDevMarker() =>
+      _devMode ? '${widget.title} (dev)' : widget.title;
+
   @override
   Widget build(BuildContext context) {
     final tabController = _tabController;
     if (tabController == null) {
       return Scaffold(
-        appBar: AppBar(title: Text(widget.title)),
+        appBar: AppBar(
+          title: Text(_titleWithDevMarker()),
+          actions: _devAppBarActions(),
+        ),
         body: Center(child: Text(_status)),
       );
     }
@@ -561,7 +1203,8 @@ class _WappPageState extends State<WappPage>
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.title),
+        title: Text(_titleWithDevMarker()),
+        actions: _devAppBarActions(),
         bottom: _screens.length > 1
             ? TabBar(
                 controller: tabController,
@@ -787,14 +1430,15 @@ class _WappPageState extends State<WappPage>
 
   /// Resolve a catalog wapp's icon. Try multiple roots in order:
   ///   1. Shared archive: <baseDir>/wapps/<name>/        (post-install)
-  ///   2. Source-tree archive: <cwd>/wapps/archive/<name>/ (pre-install
-  ///      when running from a source checkout — same trick iwi uses)
+  ///   2. Sibling source repo: <cwd>/../wapps/<name>/    (pre-install
+  ///      when running from a source checkout where the wapp repo
+  ///      lives next to geogram — see README in the wapps repo)
   /// Falls back to `Icons.extension` when no manifest+SVG is found.
   Widget _catalogIconFor(String name, double size) {
     final roots = <String>[
       if (wappArchiveBasePath() != null) '${wappArchiveBasePath()}/$name',
-      '${Directory.current.path}/wapps/archive/$name',
-      '${Directory.current.path}/../wapps/archive/$name',
+      '${Directory.current.path}/../wapps/$name',
+      '${Directory.current.path}/../../wapps/$name',
     ];
     for (final root in roots) {
       final manifestFile = File('$root/manifest.json');
@@ -956,6 +1600,78 @@ class _OutputLine {
   final String text;
   final String level;
   _OutputLine(this.text, this.level);
+}
+
+/// Opaque payload for the file-association launch path. The host
+/// hands one of these to [WappPage] when the user picks a wapp from
+/// an "Open with…" dialog (or when an external file event names the
+/// wapp directly). The wapp receives it as a `file.open` message
+/// after its engine has booted — see Section 19 of
+/// `wapps/wapp-interfaces.md`.
+class WappOpenFile {
+  /// Filesystem path or virtual URI the file lives at. The wapp
+  /// uses this to read bytes via the host's file HAL or by issuing
+  /// a `file.read_request` message back to the host.
+  final String path;
+
+  /// Display name (basename), used by the wapp for window titles
+  /// and "now playing" UI without having to parse [path].
+  final String name;
+
+  /// Lowercase extension without the dot ("mp3", "ogg", "txt"). May
+  /// be empty for files that have no extension.
+  final String extension;
+
+  /// MIME type when the host knows it (e.g. "audio/mpeg"). Empty
+  /// when the host hasn't sniffed the file.
+  final String mime;
+
+  /// Open mode requested by the user — "view" (default) or "edit".
+  /// The wapp may refuse edit mode if it didn't declare it in
+  /// `provides.file_handlers[*].modes`.
+  final String mode;
+
+  /// Size in bytes, when known. -1 means "unknown" (e.g. streamed).
+  final int size;
+
+  const WappOpenFile({
+    required this.path,
+    required this.name,
+    this.extension = '',
+    this.mime = '',
+    this.mode = 'view',
+    this.size = -1,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'type': 'file.open',
+        'path': path,
+        'name': name,
+        if (extension.isNotEmpty) 'extension': extension,
+        if (mime.isNotEmpty) 'mime': mime,
+        'mode': mode,
+        'size': size,
+      };
+}
+
+/// Per-req_id bookkeeping for an active `location.subscribe`. Keeps
+/// the dispose handle from LocationProviderService plus the throttle
+/// state needed to honour `min_interval_ms` and `min_distance_m`
+/// independently from the underlying provider's cadence.
+class _LocationSub {
+  final String hint;
+  final int minIntervalMs;
+  final double minDistanceM;
+  VoidCallback? dispose;
+  DateTime? lastDeliveredAt;
+  double? lastLat;
+  double? lastLon;
+
+  _LocationSub({
+    required this.hint,
+    required this.minIntervalMs,
+    required this.minDistanceM,
+  });
 }
 
 /// One row in the wapp store catalog, parsed from the install

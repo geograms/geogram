@@ -1460,6 +1460,7 @@ class AppService {
   static const Map<String, String> _bundledWapps = {
     'maps': 'assets/maps.wapp',
     'install': 'assets/install.wapp',
+    'movies': 'assets/movies.wapp',
   };
 
   Future<void> _installBundledWapps() async {

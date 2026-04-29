@@ -1,6 +1,0 @@
-{
-  "screen.about": "Über",
-  "screen.about_tip": "Widget-Anbieter-Demo. Diese Wapp registriert sich als Anbieter für mehrere Widget-IDs und wird vom Host ohne UI aufgerufen, wenn eine andere Wapp einen widget.request schickt. Normalerweise gibt es hier nichts zu bedienen.",
-  "group.provided_name": "Bereitgestellte Widgets",
-  "group.provided_tip": "text.greet — liefert {greeting} zu gegebenem {name}.\ntext.shout — liefert {loud} zu gegebenem {text}."
-}

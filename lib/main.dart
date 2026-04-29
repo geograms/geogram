@@ -152,6 +152,7 @@ import 'pages/shared_browser_page.dart';
 import 'pages/teleport_browser_page.dart';
 import 'pages/conference_home_page.dart';
 import 'pages/karma_page.dart';
+import 'wapp/wapp_open_with.dart';
 import 'wapp/wapp_page.dart';
 import 'api/api.dart' hide ChatRoom;
 import 'server/karma/karma_engine.dart';
@@ -3546,10 +3547,24 @@ class _AppsPageState extends State<AppsPage> {
                 },
               ),
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createNewApp,
-        icon: const Icon(Icons.add),
-        label: Text(_i18n.t('add_new_app')),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'apps_open_file',
+            tooltip: 'Open file with a wapp…',
+            onPressed: () => WappOpenWith.pickAndOpen(context),
+            child: const Icon(Icons.file_open),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            heroTag: 'apps_add',
+            onPressed: _createNewApp,
+            icon: const Icon(Icons.add),
+            label: Text(_i18n.t('add_new_app')),
+          ),
+        ],
       ),
     );
   }

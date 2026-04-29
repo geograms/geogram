@@ -1,6 +1,0 @@
-{
-  "screen.about": "About",
-  "screen.about_tip": "Widget provider demo. This wapp registers as a provider for multiple widget IDs and is invoked headlessly by the host when another wapp sends a widget.request. There is normally nothing to interact with here.",
-  "group.provided_name": "Widgets provided",
-  "group.provided_tip": "text.greet — returns {greeting} given {name}.\ntext.shout — returns {loud} given {text}."
-}

@@ -48,6 +48,12 @@ class WappEngine {
   ProfileStorage? _storage;
   bool _loaded = false;
 
+  // Cached last-known location, fed by the host (LocationProviderService
+  // → WappPage). Read by hal_sensor_gps_lat / hal_sensor_gps_lon. When
+  // unset, both HAL imports return INT32_MIN so wapps can detect "no fix".
+  double? _lastLat;
+  double? _lastLon;
+
   /// Translation tables handed over by [WappPage._reloadI18n]. Used
   /// by the `hal_i18n_get` import to resolve `@key` / bare-key lookups
   /// from the wapp's C code. An empty context (the default) means
@@ -118,6 +124,15 @@ class WappEngine {
   void kvSet(String key, String value) {
     _kv[key] = Uint8List.fromList(value.codeUnits);
     _saveKv();
+  }
+
+  /// Update the cached location read by `hal_sensor_gps_lat` /
+  /// `hal_sensor_gps_lon`. Called by the host whenever a fresh fix
+  /// becomes available so the cheap synchronous HAL pair returns
+  /// real data instead of INT32_MIN. Pass NaN to clear.
+  void setLastLocation({required double lat, required double lon}) {
+    _lastLat = lat.isFinite ? lat : null;
+    _lastLon = lon.isFinite ? lon : null;
   }
 
   void sendMessage(String msg) => _inbox.add(msg);
@@ -403,8 +418,17 @@ class WappEngine {
       WasmImport('hal', 'sensor_temperature', stubI32([], -2147483648)),
       WasmImport('hal', 'sensor_humidity', stubI32([], -2147483648)),
       WasmImport('hal', 'sensor_battery', stubI32([], -2147483648)),
-      WasmImport('hal', 'sensor_gps_lat', stubI32([], -2147483648)),
-      WasmImport('hal', 'sensor_gps_lon', stubI32([], -2147483648)),
+      // GPS lat/lon — backed by the host's cached last-known fix
+      // (see setLastLocation). Returned as int32 scaled by 1e7 per
+      // Section 12 of wapp-interfaces.md. INT32_MIN means "no fix".
+      WasmImport('hal', 'sensor_gps_lat', WasmFunction(
+        () => _lastLat == null ? -2147483648 : (_lastLat! * 1e7).round(),
+        params: [], results: [ValueTy.i32],
+      )),
+      WasmImport('hal', 'sensor_gps_lon', WasmFunction(
+        () => _lastLon == null ? -2147483648 : (_lastLon! * 1e7).round(),
+        params: [], results: [ValueTy.i32],
+      )),
       // Display (stubs)
       WasmImport('hal', 'display_width', stubI32([], 0)),
       WasmImport('hal', 'display_height', stubI32([], 0)),

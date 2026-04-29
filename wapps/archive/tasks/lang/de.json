@@ -1,5 +1,0 @@
-{
-  "screen.tasks": "Aufgaben",
-  "screen.tasks_tip": "Laufender Aufgabenmonitor — Hintergrundaufgaben pausieren, fortsetzen oder stoppen.",
-  "group.task_list_tip": "Alle im geogram-Host registrierten MonitoredTask-Einträge."
-}

@@ -9,6 +9,97 @@
 import 'package:characters/characters.dart';
 import 'package:path/path.dart' as p;
 
+/// One declaration that this wapp can open files of a particular
+/// kind. A wapp may declare multiple handlers (e.g. one for audio,
+/// one for playlists). The lookup registry indexes both
+/// [extensions] (lowercased, no leading dot) and [mimeTypes].
+class WappFileHandler {
+  /// File extensions this handler accepts, lowercased and without
+  /// the leading dot. The literal "*" means "catch-all" (lowest
+  /// priority — only chosen when no specific extension match
+  /// exists).
+  final List<String> extensions;
+
+  /// MIME types this handler accepts. Wildcards are honoured at the
+  /// type level — e.g. "audio/*" matches "audio/mpeg".
+  final List<String> mimeTypes;
+
+  /// Short verb shown in an "Open with…" picker — "Play", "Edit",
+  /// "Preview". Falls back to the wapp's title when empty.
+  final String title;
+
+  /// Modes this handler supports. Two reserved values for now:
+  ///   - "view"  — read-only display (default)
+  ///   - "edit"  — open for modification, possibly saving back
+  /// Other values are passed through unchanged so future modes can
+  /// be added without an engine update.
+  final List<String> modes;
+
+  const WappFileHandler({
+    this.extensions = const [],
+    this.mimeTypes = const [],
+    this.title = '',
+    this.modes = const ['view'],
+  });
+
+  /// True when [ext] (no dot, any case) matches this handler.
+  bool matchesExtension(String ext) {
+    final normalized = ext.toLowerCase().replaceFirst(RegExp(r'^\.'), '');
+    return extensions.contains(normalized) || extensions.contains('*');
+  }
+
+  /// True when [mime] (e.g. "audio/mpeg") matches one of this
+  /// handler's MIME entries, honouring "type/*" wildcards.
+  bool matchesMime(String mime) {
+    final m = mime.toLowerCase();
+    for (final pattern in mimeTypes) {
+      final pat = pattern.toLowerCase();
+      if (pat == m) return true;
+      if (pat.endsWith('/*')) {
+        final prefix = pat.substring(0, pat.length - 1);
+        if (m.startsWith(prefix)) return true;
+      }
+      if (pat == '*/*' || pat == '*') return true;
+    }
+    return false;
+  }
+
+  /// True when this handler advertises [mode] (case-insensitive). An
+  /// empty [mode] always matches.
+  bool supportsMode(String mode) {
+    if (mode.isEmpty) return true;
+    final lower = mode.toLowerCase();
+    for (final m in modes) {
+      if (m.toLowerCase() == lower) return true;
+    }
+    return false;
+  }
+
+  factory WappFileHandler.fromJson(Map<String, dynamic> json) {
+    List<String> readList(dynamic v) {
+      if (v is List) return v.whereType<String>().toList();
+      if (v is String) return [v];
+      return const [];
+    }
+
+    final exts = readList(json['extensions'])
+        .map((e) => e.toLowerCase().replaceFirst(RegExp(r'^\.'), ''))
+        .where((e) => e.isNotEmpty)
+        .toList();
+    final mimes = readList(json['mime'])
+        .map((m) => m.toLowerCase())
+        .where((m) => m.isNotEmpty)
+        .toList();
+    final modes = readList(json['modes']);
+    return WappFileHandler(
+      extensions: exts,
+      mimeTypes: mimes,
+      title: (json['title'] as String? ?? '').trim(),
+      modes: modes.isEmpty ? const ['view'] : modes,
+    );
+  }
+}
+
 class WappManifest {
   /// Reverse-domain identifier (e.g. "tools.geogram.maps").
   final String id;
@@ -44,6 +135,11 @@ class WappManifest {
   /// HAL capabilities required (subset of: log, kv, msg, i18n_get, ...).
   final List<String> halRequires;
 
+  /// File-type handlers this wapp registers (see [WappFileHandler]).
+  /// Indexed by [WappFileAssociations] so the host can answer
+  /// "which wapps can open *.mp3?".
+  final List<WappFileHandler> fileHandlers;
+
   WappManifest({
     required this.id,
     required this.name,
@@ -56,6 +152,7 @@ class WappManifest {
     this.providedFunctionalities = const [],
     this.tickIntervalMs = 5000,
     this.halRequires = const ['log'],
+    this.fileHandlers = const [],
   });
 
   factory WappManifest.fromJson(
@@ -91,6 +188,23 @@ class WappManifest {
         ? halList.whereType<String>().toList()
         : const <String>['log'];
 
+    // Parse provides.file_handlers — list of WappFileHandler entries
+    // declaring which extensions / MIME types this wapp can open.
+    final handlerList = provides is Map<String, dynamic>
+        ? provides['file_handlers']
+        : null;
+    final handlers = <WappFileHandler>[];
+    if (handlerList is List) {
+      for (final entry in handlerList) {
+        if (entry is Map<String, dynamic>) {
+          final h = WappFileHandler.fromJson(entry);
+          if (h.extensions.isNotEmpty || h.mimeTypes.isNotEmpty) {
+            handlers.add(h);
+          }
+        }
+      }
+    }
+
     return WappManifest(
       id: id,
       name: folderName.isNotEmpty ? folderName : id.split('.').last,
@@ -105,6 +219,7 @@ class WappManifest {
       providedFunctionalities: funcIds,
       tickIntervalMs: (json['tick_interval_ms'] as num?)?.toInt() ?? 5000,
       halRequires: hal,
+      fileHandlers: handlers,
     );
   }
 
