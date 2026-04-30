@@ -35,6 +35,7 @@ import '../geoui/geoui_renderer.dart';
 import '../models/wapp_manifest.dart';
 import '../services/i18n_context.dart';
 import '../services/location_provider_service.dart';
+import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/profile_storage.dart';
 import '../services/wapp_installer_service.dart';
@@ -120,10 +121,21 @@ class _WappPageState extends State<WappPage>
 
   Future<void> _loadWapp() async {
     try {
-      // Detect whether we're loading from the sibling source-tree
-      // (debug builds, source checkout) so we can show the dev
-      // affordances (title suffix + reload button).
-      _devMode = wappSourceTreePath(widget.wappId) != null;
+      // Show the dev affordances (title suffix + reload button) when
+      // EITHER:
+      //   - we're loading from the sibling source-tree (kDebugMode +
+      //     a checked-out wapps repo), OR
+      //   - the user flipped the global "Debug mode" toggle in the
+      //     Wapp Store (debug.wappDebugMode key in ConfigService).
+      // The reload button itself doesn't care which case is active —
+      // it just re-resolves [wappPackageStorage] and reboots the
+      // engine. That works for both the source-tree path (edit + tap
+      // reload) and the archive path (re-install / update + tap
+      // reload).
+      final manualDebug =
+          ConfigService().getNestedValue('wapp.debugMode', false) == true;
+      _devMode =
+          manualDebug || wappSourceTreePath(widget.wappId) != null;
 
       // Wapp package — shared archive, or sibling source folder
       // when [_devMode] is true. wappPackageStorage handles the
@@ -1492,11 +1504,29 @@ class _WappPageState extends State<WappPage>
   /// `set_sources` action to update its KV.
   Widget _buildSourcesScreen() {
     final cs = Theme.of(context).colorScheme;
+    final debugOn =
+        ConfigService().getNestedValue('wapp.debugMode', false) == true;
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Debug-mode toggle: flips a global ConfigService flag that
+          // every WappPage reads on load. When on, every wapp gets a
+          // reload button in its AppBar so the user can re-read the
+          // package off disk after editing or reinstalling, without
+          // closing and reopening the app.
+          SwitchListTile(
+            value: debugOn,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Debug mode'),
+            subtitle: const Text(
+              'Show a Reload button on every wapp. Reopen any wapp '
+              'for the change to take effect.',
+            ),
+            onChanged: (v) => _setWappDebugMode(v),
+          ),
+          const Divider(height: 24),
           Text(
             'Repositories',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -1574,6 +1604,25 @@ class _WappPageState extends State<WappPage>
         ],
       ),
     );
+  }
+
+  /// Persist the global wapp debug-mode flag and rebuild the screen
+  /// so the switch reflects the new state. Open wapps pick up the
+  /// change the next time they re-run [_loadWapp] — easiest way is
+  /// just to tap their Reload button (or close + reopen). The host
+  /// (this Wapp Store page) updates immediately because [_devMode]
+  /// is recomputed on every [_loadWapp]; the simpler path here is
+  /// just to update local state and let [build] re-read the flag.
+  void _setWappDebugMode(bool enabled) {
+    ConfigService().setNestedValue('wapp.debugMode', enabled);
+    // Reflect the change in our own AppBar without forcing a full
+    // wapp reload — the title gets the "(dev)" suffix and the
+    // Reload button shows up immediately.
+    if (mounted) {
+      setState(() {
+        _devMode = enabled || wappSourceTreePath(widget.wappId) != null;
+      });
+    }
   }
 
   void _onAddSource() {
