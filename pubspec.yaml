@@ -175,9 +175,7 @@ flutter:
     - sounds/upbeat/
     - sounds/world/
     - assets/worldcities.csv
-    - assets/maps.wapp
     - assets/install.wapp
-    - assets/movies.wapp
     - assets/default_profile.png
     - assets/default_profile.svg
     - assets/geogram-icon-dark.svg

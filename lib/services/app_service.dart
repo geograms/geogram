@@ -1459,9 +1459,7 @@ class AppService {
   /// and the per-profile data folder name) to the asset path of
   /// its .wapp ZIP.
   static const Map<String, String> _bundledWapps = {
-    'maps': 'assets/maps.wapp',
     'install': 'assets/install.wapp',
-    'movies': 'assets/movies.wapp',
   };
 
   Future<void> _installBundledWapps() async {
