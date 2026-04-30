@@ -16,6 +16,8 @@ import '../services/app_args.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/station_service.dart';
+import '../transfer/models/transfer_models.dart';
+import '../transfer/services/transfer_service.dart';
 import '../version.dart';
 
 /// Service for managing application updates with rollback support
@@ -408,15 +410,22 @@ class UpdateService {
       await File('$updatesDir/release.json')
           .writeAsString(const JsonEncoder.withIndent('  ').convert(releaseJson));
 
-      // Download each platform binary that we don't already have
-      // Only mirror the main platforms: Android, Linux Desktop, Windows Desktop
+      // Queue each platform binary into TransferService so the mirror
+      // shows up in the Transfer app (progress, cancel, retry) instead of
+      // running as an invisible background download. The worker pool
+      // does the actual streaming; we only enqueue here.
       const targetTypes = [
         UpdateAssetType.androidApk,
         UpdateAssetType.linuxDesktop,
         UpdateAssetType.windowsDesktop,
       ];
 
-      int downloaded = 0;
+      final svc = TransferService();
+      if (!svc.isInitialized) {
+        await svc.initialize();
+      }
+
+      int queued = 0;
       int skipped = 0;
 
       for (final assetType in targetTypes) {
@@ -431,25 +440,33 @@ class UpdateService {
         }
 
         try {
-          LogService().log('Mirroring ${assetType.name}: $filename');
-          final result = await streamDownloadToFile(
-            Uri.parse(url),
-            targetFile.path,
-            headers: {'User-Agent': 'Geogram-Updater'},
-            timeout: const Duration(minutes: 10),
+          await svc.requestDownload(
+            TransferRequest(
+              direction: TransferDirection.download,
+              callsign: 'http',
+              remotePath: Uri.parse(url).path,
+              remoteUrl: url,
+              localPath: targetFile.path,
+              priority: TransferPriority.low,
+              requestingApp: 'update_mirror',
+              metadata: {
+                'mirror': true,
+                'version': release.version,
+                'asset': assetType.name,
+                'headers': {'User-Agent': 'Geogram-Updater'},
+              },
+              timeout: const Duration(minutes: 10),
+            ),
           );
-
-          if (result.success) {
-            downloaded++;
-            LogService().log('Mirrored $filename (${(result.bytesWritten / (1024 * 1024)).toStringAsFixed(1)}MB)');
-          }
+          queued++;
+          LogService().log('Mirror queued: ${assetType.name} -> $filename');
         } catch (e) {
-          LogService().log('Failed to mirror $filename: $e');
+          LogService().log('Failed to queue mirror $filename: $e');
         }
       }
 
-      if (downloaded > 0 || skipped > 0) {
-        LogService().log('Binary mirror: $downloaded new, $skipped existing');
+      if (queued > 0 || skipped > 0) {
+        LogService().log('Binary mirror: $queued queued, $skipped existing');
       }
 
       // Clean up old version directories, keep only the latest
