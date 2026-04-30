@@ -18,14 +18,19 @@
  * delivered via the Section 18 launch protocol (`file.open`).
  */
 
+import 'dart:convert';
 import 'dart:io' show File;
 
+import 'package:archive/archive.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../services/app_service.dart';
 import '../services/log_service.dart';
 import '../services/wapp_file_associations.dart';
+import '../services/wapp_installer_service.dart';
+import '../util/event_bus.dart';
 import 'wapp_page.dart';
 
 class WappOpenWith {
@@ -54,8 +59,18 @@ class WappOpenWith {
   /// Look up handlers for [path] and either launch directly (when
   /// there's a default or a single match) or show a picker. Returns
   /// true when a wapp was launched.
+  ///
+  /// Special case: `.wapp` files are installable wapp packages. We
+  /// don't need a registered handler for those — Geogram is the
+  /// installer. Extract the manifest, hand the bytes to
+  /// [WappInstallerService], then offer to launch the new wapp.
   static Future<bool> openPath(BuildContext context, String path) async {
     final ext = _extOf(path);
+
+    if (ext == 'wapp') {
+      return _installWappFile(context, path);
+    }
+
     final assoc = WappFileAssociations.instance;
 
     // Honour the user's stored default first.
@@ -141,6 +156,119 @@ class WappOpenWith {
         ),
       ),
     ));
+  }
+
+  /// Install a `.wapp` ZIP picked from the file system. Reads the
+  /// embedded `manifest.json` to derive the wapp slug (last segment
+  /// of `id` after the final dot, e.g. `tools.geogram.terminal` →
+  /// `terminal`), hands the bytes to [WappInstallerService], then
+  /// nudges the launcher and offers to open the new wapp.
+  static Future<bool> _installWappFile(
+      BuildContext context, String path) async {
+    final filename = p.basename(path);
+    void showSnack(String msg) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
+      }
+    }
+
+    try {
+      final file = File(path);
+      if (!await file.exists()) {
+        showSnack('File not found: $filename');
+        return false;
+      }
+      final bytes = await file.readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+      ArchiveFile? manifestEntry;
+      for (final f in archive.files) {
+        if (f.isFile && f.name.replaceAll('\\', '/') == 'manifest.json') {
+          manifestEntry = f;
+          break;
+        }
+      }
+      if (manifestEntry == null) {
+        showSnack('$filename has no manifest.json');
+        return false;
+      }
+      final manifestBytes = manifestEntry.content as List<int>;
+      final manifest =
+          jsonDecode(utf8.decode(manifestBytes)) as Map<String, dynamic>;
+      final fullId = (manifest['id'] as String?)?.trim() ?? '';
+      final slug = _slugFromId(fullId, fallback: filename);
+      if (slug.isEmpty) {
+        showSnack('$filename has no usable id');
+        return false;
+      }
+      final descRaw = (manifest['description'] as String?)?.trim() ?? '';
+      final title = descRaw.isNotEmpty ? descRaw : slug;
+
+      final ok = await WappInstallerService.instance.installFromBytes(
+        wappId: slug,
+        zipBytes: bytes,
+      );
+      if (!ok) {
+        showSnack('Install failed for $filename');
+        return false;
+      }
+
+      // Notify the launcher (re-reads grid) and the file-association
+      // cache (so the new wapp's handlers light up immediately).
+      AppService().appsNotifier.value++;
+      EventBus().fire(WappLoadedEvent(wappId: slug, wappName: title));
+
+      if (!context.mounted) return true;
+      // Offer to open the freshly installed wapp.
+      final shouldOpen = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Wapp installed'),
+              content: Text('Installed "$title". Open it now?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(false),
+                  child: const Text('Later'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: const Text('Open'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (shouldOpen && context.mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => WappPage(wappId: slug, title: title),
+          ),
+        );
+      }
+      return true;
+    } catch (e) {
+      LogService().log('WappOpenWith: install failed for $filename: $e');
+      showSnack('Install failed: $e');
+      return false;
+    }
+  }
+
+  static String _slugFromId(String id, {required String fallback}) {
+    if (id.isNotEmpty) {
+      final dot = id.lastIndexOf('.');
+      final tail = dot >= 0 ? id.substring(dot + 1) : id;
+      final cleaned = tail
+          .toLowerCase()
+          .replaceAll(RegExp(r'[^a-z0-9_\-]'), '')
+          .trim();
+      if (cleaned.isNotEmpty) return cleaned;
+    }
+    // Fallback: strip trailing version + .wapp from the filename.
+    var name = fallback.toLowerCase();
+    if (name.endsWith('.wapp')) name = name.substring(0, name.length - 5);
+    final dash = name.indexOf(RegExp(r'-\d'));
+    if (dash > 0) name = name.substring(0, dash);
+    return name.replaceAll(RegExp(r'[^a-z0-9_\-]'), '');
   }
 
   static String _extOf(String path) {
