@@ -3,8 +3,7 @@ import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
-import 'package:flutter/foundation.dart'
-    show ValueNotifier, kDebugMode, kIsWeb;
+import 'package:flutter/foundation.dart' show ValueNotifier, kIsWeb;
 import 'package:mime/mime.dart';
 import '../models/app.dart';
 import 'i18n_service.dart';
@@ -1476,28 +1475,12 @@ class AppService {
     }
   }
 
-  /// Folder names of wapps the launcher should surface — anything
-  /// resolvable through [wappPackageStorage]. That covers two cases:
-  ///
-  ///   1. Production: extracted into `<baseDir>/wapps/<wappId>/` by
-  ///      [WappInstallerService] from a Flutter asset, an HTTP URL,
-  ///      or a picked .wapp file.
-  ///   2. Debug builds with a sibling `wapps/` checkout: discovered
-  ///      directly in the source tree by [wappSourceTreePath]. In
-  ///      that mode [WappInstallerService.installFromAsset] skips the
-  ///      ZIP extract step (the source tree is already authoritative)
-  ///      and just creates the per-profile data folder, so the
-  ///      shared archive directory may not exist on disk at all.
-  ///
-  /// Without the source-tree branch, dev builds running against the
-  /// sibling wapps repo would activate the per-profile folders but
-  /// the launcher would silently drop them (no manifest in the
-  /// archive). With it, we get the same launcher grid in dev as in
-  /// release.
+  /// Folder names of wapps the launcher should surface — every entry
+  /// under `<baseDir>/wapps/` with a manifest.json. The runtime always
+  /// reads from the local archive; source-tree edits become visible
+  /// only after a reinstall (Reload button or wapp store update).
   Future<Set<String>> _archivedWappIds() async {
     final ids = <String>{};
-
-    // Production / installed wapps.
     final archive = wappArchiveStorage();
     if (archive != null && await archive.directoryExists('')) {
       final entries = await archive.listDirectory('');
@@ -1508,40 +1491,7 @@ class AppService {
         }
       }
     }
-
-    // Dev builds: also pick up wapps living in the sibling source tree.
-    ids.addAll(_sourceTreeWappIds());
-
     return ids;
-  }
-
-  /// Wapp ids found in the sibling `wapps/` source tree (debug only).
-  /// Returns an empty set in release builds, on web, or when no
-  /// sibling tree is reachable.
-  Set<String> _sourceTreeWappIds() {
-    if (!kDebugMode || kIsWeb) return const {};
-    try {
-      final cwd = Directory.current.path;
-      final candidates = ['$cwd/../wapps', '$cwd/../../wapps', '$cwd/wapps'];
-      for (final root in candidates) {
-        final dir = Directory(root);
-        if (!dir.existsSync()) continue;
-        final ids = <String>{};
-        for (final e in dir.listSync()) {
-          if (e is! Directory) continue;
-          final name = e.path.split(Platform.pathSeparator).last;
-          if (name.startsWith('.')) continue;
-          if (File('${e.path}/manifest.json').existsSync()) {
-            ids.add(name);
-          }
-        }
-        if (ids.isNotEmpty) return ids;
-      }
-    } catch (_) {
-      // Filesystem probe failures are non-fatal — just means no dev
-      // tree was reachable, which is the normal release-build case.
-    }
-    return const {};
   }
 
   /// Build an [App] for a wapp folder under the active profile,

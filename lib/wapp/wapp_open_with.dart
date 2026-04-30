@@ -207,6 +207,7 @@ class WappOpenWith {
       final ok = await WappInstallerService.instance.installFromBytes(
         wappId: slug,
         zipBytes: bytes,
+        source: WappSource.file(path),
       );
       if (!ok) {
         showSnack('Install failed for $filename');

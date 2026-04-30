@@ -16,7 +16,7 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Directory, File, FileSystemEntity;
+import 'dart:io' show Directory, File;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -122,24 +122,16 @@ class _WappPageState extends State<WappPage>
   Future<void> _loadWapp() async {
     try {
       // Show the dev affordances (title suffix + reload button) when
-      // EITHER:
-      //   - we're loading from the sibling source-tree (kDebugMode +
-      //     a checked-out wapps repo), OR
-      //   - the user flipped the global "Debug mode" toggle in the
-      //     Wapp Store (debug.wappDebugMode key in ConfigService).
-      // The reload button itself doesn't care which case is active —
-      // it just re-resolves [wappPackageStorage] and reboots the
-      // engine. That works for both the source-tree path (edit + tap
-      // reload) and the archive path (re-install / update + tap
-      // reload).
-      final manualDebug =
-          ConfigService().getNestedValue('wapp.debugMode', false) == true;
+      // The Reload button is shown when the user flipped the global
+      // "Debug mode" toggle in the Wapp Store (wapp.debugMode key in
+      // ConfigService). Tapping reload re-runs the install from the
+      // recorded source (URL/path/asset/file) and reboots the engine.
       _devMode =
-          manualDebug || wappSourceTreePath(widget.wappId) != null;
+          ConfigService().getNestedValue('wapp.debugMode', false) == true;
 
-      // Wapp package — shared archive, or sibling source folder
-      // when [_devMode] is true. wappPackageStorage handles the
-      // priority for us; this method just consumes the result.
+      // Wapp package — always read from the local archive at
+      // <baseDir>/wapps/<wappId>/. Source-tree edits become visible
+      // only after a reinstall (Reload button or store update).
       final pkg = wappPackageStorage(widget.wappId);
       if (pkg == null) {
         setState(() => _status = 'Wapp archive unavailable.');
@@ -483,15 +475,19 @@ class _WappPageState extends State<WappPage>
     final full = '$baseDir$filePath';
 
     try {
-      final bytes = await _readSourceBytes(full);
-      if (bytes == null) {
-        _appendOutput('Download failed: $full', 'err');
-        return;
-      }
-      final ok = await WappInstallerService.instance.installFromBytes(
-        wappId: name,
-        zipBytes: bytes,
-      );
+      final lower = full.toLowerCase();
+      final isUrl =
+          lower.startsWith('http://') || lower.startsWith('https://');
+      final ok = isUrl
+          ? await WappInstallerService.instance.installFromUrl(
+              wappId: name,
+              url: full,
+            )
+          : await WappInstallerService.instance.installFromBytes(
+              wappId: name,
+              zipBytes: (await _readSourceBytes(full)) ?? Uint8List(0),
+              source: WappSource.file(full),
+            );
       if (!ok) {
         _appendOutput('Install failed for $name', 'err');
         return;
@@ -942,10 +938,10 @@ class _WappPageState extends State<WappPage>
     } catch (_) {}
   }
 
-  /// Dev-only: tear the running wapp down and reboot it from disk
-  /// without leaving this page. Pairs with the source-tree override
-  /// in `wappPackageStorage` so the loop is "edit C → make → tap
-  /// reload". Released builds never expose the trigger.
+  /// Dev-only: re-run the wapp install from its recorded source
+  /// (URL / path / asset / picked file), then reboot the engine.
+  /// The runtime always reads from the local archive, so reload
+  /// only sees source changes after the reinstall replaces it.
   Future<void> _reload() async {
     _teardownEngineState();
     _tabController?.dispose();
@@ -956,9 +952,18 @@ class _WappPageState extends State<WappPage>
       _storeSources = const [];
       _manifest = null;
       _crashed = false;
-      _status = 'Reloading…';
+      _status = 'Reinstalling…';
       _tabController = null;
     });
+    try {
+      final ok = await WappInstallerService.instance.reinstall(widget.wappId);
+      if (!ok && mounted) {
+        setState(() => _status = 'Reinstall failed.');
+      }
+    } catch (e) {
+      LogService().log('WappPage: reinstall failed: $e');
+      if (mounted) setState(() => _status = 'Reinstall failed: $e');
+    }
     _engine = WappEngine();
     await _loadWapp();
   }
@@ -1615,12 +1620,9 @@ class _WappPageState extends State<WappPage>
   /// just to update local state and let [build] re-read the flag.
   void _setWappDebugMode(bool enabled) {
     ConfigService().setNestedValue('wapp.debugMode', enabled);
-    // Reflect the change in our own AppBar without forcing a full
-    // wapp reload — the title gets the "(dev)" suffix and the
-    // Reload button shows up immediately.
     if (mounted) {
       setState(() {
-        _devMode = enabled || wappSourceTreePath(widget.wappId) != null;
+        _devMode = enabled;
       });
     }
   }

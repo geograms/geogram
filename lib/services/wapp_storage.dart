@@ -22,10 +22,6 @@
  * transparently.
  */
 
-import 'dart:io' show Directory, File;
-
-import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
-
 import 'app_service.dart';
 import 'profile_storage.dart';
 import 'storage_config.dart';
@@ -49,50 +45,16 @@ ProfileStorage? wappArchiveStorage() {
   return FilesystemProfileStorage(base);
 }
 
-/// When running a debug build from a source checkout, returns the
-/// absolute path of the sibling `wapps/<wappId>/` folder if it
-/// contains a manifest.json AND a built app.wasm. Else null.
+/// Read-only storage scoped to one wapp's package directory in the
+/// shared archive at `<baseDir>/wapps/<wappId>/`. Contents:
+/// manifest.json, app.wasm, screens/, media/, lang/, signature.json,
+/// source.json.
 ///
-/// Layout assumed:
-///   geograms/
-///   ├── geogram/   ← cwd while running launch-desktop.sh
-///   └── wapps/     ← https://github.com/.../wapps
-///       └── <wappId>/{manifest.json, app.wasm, screens/, ...}
-///
-/// Production builds and web targets short-circuit to null so this
-/// dev-only filesystem probe never runs in shipped binaries.
-String? wappSourceTreePath(String wappId) {
-  if (!kDebugMode || kIsWeb) return null;
-  final cwd = Directory.current.path;
-  final candidates = [
-    '$cwd/../wapps/$wappId',     // sibling repo (canonical)
-    '$cwd/../../wapps/$wappId',  // nested workspace fallback
-    '$cwd/wapps/$wappId',        // legacy in-tree
-  ];
-  for (final root in candidates) {
-    if (File('$root/manifest.json').existsSync() &&
-        File('$root/app.wasm').existsSync()) {
-      return root;
-    }
-  }
-  return null;
-}
-
-/// Read-only storage scoped to one wapp's package directory.
-///
-/// In debug builds, prefer the sibling source-tree folder (see
-/// [wappSourceTreePath]) so edits to a wapp's source are picked
-/// up on the next launch / reload without having to bump the
-/// version, repackage, and reinstall through the wapp store.
-///
-/// In release builds — and when no source folder is available —
-/// fall back to the shared archive at `<baseDir>/wapps/<wappId>/`.
-/// Contents in either case: manifest.json, app.wasm, screens/,
-/// media/, lang/, signature.json.
+/// The runtime always reads from the local archive — never from the
+/// origin source. To pick up changes from a source folder/URL, run
+/// [WappInstallerService.reinstall], which re-executes the install
+/// from the recorded source and replaces the archive.
 ProfileStorage? wappPackageStorage(String wappId) {
-  final src = wappSourceTreePath(wappId);
-  if (src != null) return FilesystemProfileStorage(src);
-
   final archive = wappArchiveStorage();
   if (archive == null) return null;
   return ScopedProfileStorage(archive, wappId);
