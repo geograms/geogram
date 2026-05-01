@@ -1184,16 +1184,17 @@ class _WappPageState extends State<WappPage>
 
   /// Render a `<group $type="video">` screen using media_kit. Per
   /// section 14 of wapp-interfaces.md, unknown `$type` groups are
-  /// "opaque containers" whose children are rendered as standard
-  /// fields/actions — so any action / field children declared on
-  /// the video group surface as overlay buttons on top of the
-  /// video, with the wapp owning what the buttons mean (via the
-  /// existing GeoUI `action` outbox messages).
+  /// opaque containers whose non-video children render as standard
+  /// widgets via [GeoUiScreenRenderer]. The host's only extra job
+  /// here is positioning the rendered children as a top-right
+  /// overlay on the video — the renderer (now aware of
+  /// `$type="menu"` etc.) decides what each child actually looks
+  /// like.
   ///
   /// The `Player` is created lazily on the first `video.load`
   /// message; before that the empty state still surfaces the
-  /// declared actions so the wapp can offer an "open file" entry
-  /// point.
+  /// declared overlay so the wapp can offer entry points (e.g.
+  /// a menu group with an "Open file" action).
   Widget _buildVideoScreen(
     GeoUiBlock videoGroup,
     GeoUiBindings bindings,
@@ -1201,14 +1202,38 @@ class _WappPageState extends State<WappPage>
   ) {
     final controller = _videoController;
 
-    // Spec-conformant child rendering: action children of the video
-    // group surface as items inside a hamburger menu in the top-
-    // right corner. Keeps the video itself unobstructed and matches
-    // the convention real-world media players use for less-frequent
-    // actions (Open file, attach subtitle, …).
-    final actionChildren = videoGroup.children
-        .where((c) => c.keyword == 'action')
+    final overlayChildren = videoGroup.children
+        .where((c) => c.keyword != 'group' || c.type != 'video')
         .toList();
+    Widget? overlay;
+    if (overlayChildren.isNotEmpty) {
+      overlay = Container(
+        decoration: BoxDecoration(
+          color: Colors.black.withAlpha(140),
+          borderRadius: BorderRadius.circular(28),
+        ),
+        child: IconTheme(
+          data: const IconThemeData(color: Colors.white),
+          child: GeoUiScreenRenderer(
+            screen: GeoUiBlock(
+              keyword: 'screen',
+              children: overlayChildren,
+            ),
+            bindings: bindings,
+            i18n: i18n,
+            padding: EdgeInsets.zero,
+            onAction: (action) {
+              _engine.sendMessage(jsonEncode({
+                'type': 'action',
+                'action': action,
+              }));
+              _engine.handleEvent();
+              _drainOutbox();
+            },
+          ),
+        ),
+      );
+    }
 
     Widget body;
     if (controller == null) {
@@ -1226,7 +1251,7 @@ class _WappPageState extends State<WappPage>
               ),
               const SizedBox(height: 4),
               Text(
-                actionChildren.isNotEmpty
+                overlay != null
                     ? 'Tap the menu (top-right) to pick a video.'
                     : 'Open a video file with this wapp from the file '
                         'picker to start playback.',
@@ -1251,53 +1276,15 @@ class _WappPageState extends State<WappPage>
       );
     }
 
-    if (actionChildren.isEmpty) return body;
+    if (overlay == null) return body;
 
     return Stack(
       fit: StackFit.expand,
       children: [
         body,
-        Positioned(
-          top: 8,
-          right: 8,
-          child: Material(
-            color: Colors.black.withAlpha(140),
-            shape: const CircleBorder(),
-            clipBehavior: Clip.antiAlias,
-            child: PopupMenuButton<String>(
-              tooltip: 'More',
-              icon: const Icon(Icons.menu, color: Colors.white),
-              onSelected: (action) {
-                _engine.sendMessage(jsonEncode({
-                  'type': 'action',
-                  'action': action,
-                }));
-                _engine.handleEvent();
-                _drainOutbox();
-              },
-              itemBuilder: (_) => [
-                for (final a in actionChildren)
-                  if ((a.name ?? '').isNotEmpty)
-                    PopupMenuItem<String>(
-                      value: a.name!,
-                      child: Text(_resolveActionLabel(a, i18n)),
-                    ),
-              ],
-            ),
-          ),
-        ),
+        Positioned(top: 8, right: 8, child: overlay),
       ],
     );
-  }
-
-  /// Resolve a GeoUI action's user-facing label. Falls back to the
-  /// action name when no label is set, runs `@key` lookups through
-  /// [i18n] when present.
-  String _resolveActionLabel(GeoUiBlock action, I18nContext? i18n) {
-    final raw =
-        (action.getString('label') ?? action.name ?? 'Action').trim();
-    if (raw.startsWith('@') && i18n != null) return i18n.resolve(raw);
-    return raw;
   }
 
   BoxFit _videoFitFromName(String name) {

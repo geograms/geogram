@@ -32,12 +32,19 @@ class GeoUiScreenRenderer extends StatefulWidget {
   /// everything passes through as-is.
   final I18nContext? i18n;
 
+  /// Outer padding around the rendered content. Defaults to the
+  /// standard screen padding (20 horizontal × 16 vertical). Hosts
+  /// rendering the renderer in tight contexts (e.g. an overlay
+  /// chip on a video) can pass [EdgeInsets.zero] to suppress it.
+  final EdgeInsetsGeometry padding;
+
   const GeoUiScreenRenderer({
     super.key,
     required this.screen,
     required this.bindings,
     this.onAction,
     this.i18n,
+    this.padding = const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
   });
 
   @override
@@ -121,7 +128,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
 
     final screenTip = _t(widget.screen.getString('tip'));
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      padding: widget.padding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -155,6 +162,13 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
   // ── Group ───────────────────────────────────────────────────────────
 
   Widget _renderGroup(GeoUiBlock group) {
+    // Spec §14.1 — popup menu primitive. Renders as a single icon
+    // button that opens a Material popup with the group's action
+    // children as items. Selection dispatches the same
+    // {type:"action","action":"<name>"} message wapps already
+    // handle.
+    if (group.type == 'menu') return _renderMenuGroup(group);
+
     final cs = Theme.of(context).colorScheme;
     final tip = _t(group.getString('tip'));
     // Group names aren't usually translatable (they're slugs more
@@ -226,6 +240,74 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       'label' => _renderLabel(block),
       _ => _renderBlock(block),
     };
+  }
+
+  // ── Menu group (`$type="menu"`) ─────────────────────────────────────
+  // Trigger button + popup containing the group's action children.
+
+  Widget _renderMenuGroup(GeoUiBlock group) {
+    final actions = group.children
+        .where((c) => c.keyword == 'action' && (c.name ?? '').isNotEmpty)
+        .toList();
+    if (actions.isEmpty) return const SizedBox.shrink();
+
+    final iconName = group.getString('icon') ?? 'menu';
+    final tip = _t(group.getString('tip')) ?? 'Menu';
+    final groupLabel = _t(group.name);
+
+    final button = PopupMenuButton<String>(
+      tooltip: tip,
+      icon: Icon(_iconFromName(iconName)),
+      onSelected: (name) => widget.onAction?.call(name),
+      itemBuilder: (_) => [
+        for (final a in actions)
+          PopupMenuItem<String>(
+            value: a.name!,
+            child: Text(_t(a.getString('label')) ?? a.name!),
+          ),
+      ],
+    );
+
+    if (groupLabel == null || groupLabel.isEmpty) return button;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        button,
+        const SizedBox(width: 4),
+        Text(groupLabel),
+      ],
+    );
+  }
+
+  /// Whitelist of Material icon names a wapp may name in
+  /// `<group $type="menu" icon="...">`. Anything outside the list
+  /// falls back to `Icons.menu` so wapps can't surprise the user
+  /// with an arbitrary glyph.
+  IconData _iconFromName(String name) {
+    switch (name) {
+      case 'menu':
+        return Icons.menu;
+      case 'more_vert':
+        return Icons.more_vert;
+      case 'more_horiz':
+        return Icons.more_horiz;
+      case 'settings':
+        return Icons.settings;
+      case 'add':
+        return Icons.add;
+      case 'edit':
+        return Icons.edit;
+      case 'tune':
+        return Icons.tune;
+      case 'filter_list':
+        return Icons.filter_list;
+      case 'sort':
+        return Icons.sort;
+      case 'apps':
+        return Icons.apps;
+      default:
+        return Icons.menu;
+    }
   }
 
   // ── Field ───────────────────────────────────────────────────────────
