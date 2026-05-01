@@ -19,7 +19,6 @@ import 'dart:convert';
 import 'dart:io' show Directory, File;
 import 'dart:typed_data';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -34,6 +33,7 @@ import '../geoui/geoui_ast.dart';
 import '../geoui/geoui_parser.dart';
 import '../geoui/geoui_renderer.dart';
 import '../models/wapp_manifest.dart';
+import '../services/app_service.dart';
 import '../services/i18n_context.dart';
 import '../services/location_provider_service.dart';
 import '../services/config_service.dart';
@@ -41,6 +41,7 @@ import '../services/log_service.dart';
 import '../services/profile_storage.dart';
 import '../services/wapp_installer_service.dart';
 import '../services/wapp_storage.dart';
+import '../widgets/file_folder_picker.dart';
 import '../util/app_type_theme.dart';
 import '../util/event_bus.dart';
 import '../util/geolocation_utils.dart';
@@ -796,37 +797,40 @@ class _WappPageState extends State<WappPage>
     final extensions = (data['extensions'] as List?)
         ?.map((e) => e.toString().toLowerCase())
         .where((e) => e.isNotEmpty)
-        .toList();
+        .toSet();
     final title = (data['title'] as String?) ?? 'Pick a file';
     final mode = (data['mode'] as String?) ?? 'view';
+    if (!mounted) return;
     try {
-      final result = await FilePicker.platform.pickFiles(
-        allowMultiple: false,
-        type: (extensions != null && extensions.isNotEmpty)
-            ? FileType.custom
-            : FileType.any,
+      final picked = await FileFolderPicker.show(
+        context,
+        title: title,
+        allowMultiSelect: false,
         allowedExtensions: extensions,
-        dialogTitle: title,
+        // Encrypted profiles surface their files through this
+        // ProfileStorage; passing it lets the picker browse inside
+        // the active profile's storage backend, not just the OS
+        // filesystem.
+        profileStorage: AppService().profileStorage,
       );
-      if (result == null || result.files.isEmpty) return;
-      final picked = result.files.first.path;
-      if (picked == null) return;
-      final dot = picked.lastIndexOf('.');
-      final ext = dot >= 0 ? picked.substring(dot + 1).toLowerCase() : '';
-      final name = picked.contains('/')
-          ? picked.substring(picked.lastIndexOf('/') + 1)
-          : picked;
-      int size = -1;
-      try {
-        size = File(picked).lengthSync();
-      } catch (_) {}
+      if (picked == null || picked.isEmpty) return;
+      final path = picked.first;
+      final dot = path.lastIndexOf('.');
+      final ext = dot >= 0 ? path.substring(dot + 1).toLowerCase() : '';
+      final slash = path.lastIndexOf('/');
+      final name = slash >= 0 ? path.substring(slash + 1) : path;
       _engine.sendMessage(jsonEncode({
         'type': 'file.open',
-        'path': picked,
+        'path': path,
         'name': name,
         'extension': ext,
         'mode': mode,
-        'size': size,
+        // Size is optional in the file.open protocol. We deliberately
+        // don't reach into dart:io File here — that breaks on web
+        // and on encrypted profiles where the path is virtual. The
+        // wapp can request a size via the (future) file.stat
+        // round-trip if it ever needs one.
+        'size': -1,
       }));
       _engine.handleEvent();
       _drainOutbox();
