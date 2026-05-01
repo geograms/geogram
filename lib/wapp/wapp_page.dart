@@ -20,7 +20,7 @@ import 'dart:io' show Directory, File;
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -85,10 +85,10 @@ class _WappPageState extends State<WappPage>
   String _status = 'Loading…';
   bool _crashed = false;
 
-  // True when [wappPackageStorage] resolved a sibling source-tree
-  // folder for this wappId. Toggles the AppBar reload button and a
-  // "(dev)" suffix on the title so the developer can see at a
-  // glance which path the package came from.
+  // True when the user has flipped the global Wapp Store debug
+  // toggle. Surfaces the AppBar Reload button + "(dev)" title
+  // suffix. The button always reinstalls from the recorded source
+  // (folder for type=path, ZIP for type=file/url).
   bool _devMode = false;
 
   // ── Wapp store state (used when a screen has a `$type="output"` or
@@ -1003,18 +1003,18 @@ class _WappPageState extends State<WappPage>
     } catch (_) {}
   }
 
-  /// Dev-only: copy the latest wapp content into the archive, then
-  /// reboot the engine. Source priority:
-  ///   1. Sibling source tree (`<cwd>/../wapps/<wappId>/`) — the dev
-  ///      iteration loop. Edit + `make` + tap Reload → the build
-  ///      artefacts land in the archive immediately.
-  ///   2. Recorded source from `source.json` (URL / asset / picked
-  ///      file) — for end-user installs and CI builds where there
-  ///      is no source tree alongside the running binary.
+  /// Re-execute the install from the source recorded in
+  /// `source.json` (URL / file / asset / path), then reboot the
+  /// engine. Wapps come from a hosted location — the wapp store
+  /// repository the user configured — and Reload re-fetches that
+  /// same location. Re-fetching, not local-folder probing, is what
+  /// keeps the install model honest: the runtime archive is always
+  /// a copy of what the hosted source last published.
   ///
-  /// The runtime always reads from `<baseDir>/wapps/<wappId>/`. The
-  /// source-tree probe is only ever consulted from this method —
-  /// `wappPackageStorage` itself stays archive-only.
+  /// Concretely: a wapp installed from `geograms/wapps` with a path
+  /// source `binaries/<wappId>/<wappId>-X.Y.Z.wapp` will, on Reload,
+  /// re-read that .wapp file. Run `wapps/build-archive.sh <wappId>`
+  /// after editing source to refresh the file.
   Future<void> _reload() async {
     _teardownEngineState();
     _tabController?.dispose();
@@ -1029,17 +1029,9 @@ class _WappPageState extends State<WappPage>
       _tabController = null;
     });
     try {
-      final sourceTree = _findSiblingSourceTree(widget.wappId);
-      final ok = sourceTree != null
-          ? await WappInstallerService.instance.installFromPath(
-              wappId: widget.wappId,
-              sourceDir: sourceTree,
-            )
-          : await WappInstallerService.instance.reinstall(widget.wappId);
+      final ok = await WappInstallerService.instance.reinstall(widget.wappId);
       if (!ok && mounted) {
-        setState(() => _status = sourceTree != null
-            ? 'Reinstall from $sourceTree failed.'
-            : 'Reinstall failed (no source on file).');
+        setState(() => _status = 'Reinstall failed (no source on file).');
       }
     } catch (e) {
       LogService().log('WappPage: reinstall failed: $e');
@@ -1047,26 +1039,6 @@ class _WappPageState extends State<WappPage>
     }
     _engine = WappEngine();
     await _loadWapp();
-  }
-
-  /// Look for a sibling `wapps/<wappId>/manifest.json` under the
-  /// running binary's cwd. Mirrors the canonical layout
-  /// `geograms/{geogram,wapps}/`. Returns null in release builds, on
-  /// web, or when no candidate is reachable.
-  String? _findSiblingSourceTree(String wappId) {
-    if (!kDebugMode || kIsWeb) return null;
-    try {
-      final cwd = Directory.current.path;
-      final candidates = [
-        '$cwd/../wapps/$wappId',
-        '$cwd/../../wapps/$wappId',
-        '$cwd/wapps/$wappId',
-      ];
-      for (final root in candidates) {
-        if (File('$root/manifest.json').existsSync()) return root;
-      }
-    } catch (_) {}
-    return null;
   }
 
   @override
@@ -1375,9 +1347,8 @@ class _WappPageState extends State<WappPage>
     ];
   }
 
-  /// AppBar title with a "(dev)" suffix when reading the wapp from
-  /// the sibling source tree, so it's obvious which path the
-  /// package came from.
+  /// AppBar title with a "(dev)" suffix when the wapp store debug
+  /// toggle is on, so the Reload button is visible.
   String _titleWithDevMarker() =>
       _devMode ? '${widget.title} (dev)' : widget.title;
 
