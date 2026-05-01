@@ -19,6 +19,7 @@ import 'dart:convert';
 import 'dart:io' show Directory, File;
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -385,6 +386,10 @@ class _WappPageState extends State<WappPage>
           case 'video.seek':
           case 'video.skip':
             _handleVideoCommand(type, data);
+            break;
+
+          case 'file.pick':
+            unawaited(_handleFilePick(data));
             break;
 
           default:
@@ -771,6 +776,66 @@ class _WappPageState extends State<WappPage>
     _drainOutbox();
   }
 
+  /// Open an OS file picker on behalf of a wapp and deliver the
+  /// selection back as `file.open` (same protocol as the file-
+  /// association launch). Wapps emit:
+  ///
+  /// ```json
+  /// {
+  ///   "type": "file.pick",
+  ///   "title": "Pick a video",
+  ///   "extensions": ["mp4","mkv",...],
+  ///   "mode": "view"
+  /// }
+  /// ```
+  ///
+  /// The host shows the picker, then on selection sends the wapp:
+  /// `{"type":"file.open","path":...,"name":...,"extension":...,"mode":...}`.
+  /// On cancel the host sends nothing.
+  Future<void> _handleFilePick(Map<String, dynamic> data) async {
+    final extensions = (data['extensions'] as List?)
+        ?.map((e) => e.toString().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    final title = (data['title'] as String?) ?? 'Pick a file';
+    final mode = (data['mode'] as String?) ?? 'view';
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        allowMultiple: false,
+        type: (extensions != null && extensions.isNotEmpty)
+            ? FileType.custom
+            : FileType.any,
+        allowedExtensions: extensions,
+        dialogTitle: title,
+      );
+      if (result == null || result.files.isEmpty) return;
+      final picked = result.files.first.path;
+      if (picked == null) return;
+      final dot = picked.lastIndexOf('.');
+      final ext = dot >= 0 ? picked.substring(dot + 1).toLowerCase() : '';
+      final name = picked.contains('/')
+          ? picked.substring(picked.lastIndexOf('/') + 1)
+          : picked;
+      int size = -1;
+      try {
+        size = File(picked).lengthSync();
+      } catch (_) {}
+      _engine.sendMessage(jsonEncode({
+        'type': 'file.open',
+        'path': picked,
+        'name': name,
+        'extension': ext,
+        'mode': mode,
+        'size': size,
+      }));
+      _engine.handleEvent();
+      _drainOutbox();
+    } catch (e) {
+      LogService().log(
+          'WappPage[${_manifest?.id ?? widget.wappId}] file.pick failed: $e');
+    }
+  }
+
   // ── Video bridge (`<group $type="video">`) ────────────────────────
   // The wapp drives playback through messages; the host owns the
   // media_kit Player + VideoController. The wapp's GeoUI screen
@@ -1044,7 +1109,7 @@ class _WappPageState extends State<WappPage>
       }
     }
     if (videoGroup != null) {
-      return _buildVideoScreen(videoGroup);
+      return _buildVideoScreen(videoGroup, bindings, i18n);
     }
 
     // Output catalog (wapp store): scrollable list of lines pushed
@@ -1145,16 +1210,59 @@ class _WappPageState extends State<WappPage>
     );
   }
 
-  /// Render a `<group $type="video">` screen using media_kit. The
-  /// `Player` is created lazily on the first `video.load` message;
-  /// before that, we show a placeholder so wapps that open the
-  /// player without an immediate file (e.g. user picked the wapp
-  /// from the launcher rather than via "Open with…") still feel
-  /// responsive.
-  Widget _buildVideoScreen(GeoUiBlock videoGroup) {
+  /// Render a `<group $type="video">` screen using media_kit. Per
+  /// section 14 of wapp-interfaces.md, unknown `$type` groups are
+  /// "opaque containers" whose children are rendered as standard
+  /// fields/actions — so any action / field children declared on
+  /// the video group surface as overlay buttons on top of the
+  /// video, with the wapp owning what the buttons mean (via the
+  /// existing GeoUI `action` outbox messages).
+  ///
+  /// The `Player` is created lazily on the first `video.load`
+  /// message; before that the empty state still surfaces the
+  /// declared actions so the wapp can offer an "open file" entry
+  /// point.
+  Widget _buildVideoScreen(
+    GeoUiBlock videoGroup,
+    GeoUiBindings bindings,
+    I18nContext? i18n,
+  ) {
     final controller = _videoController;
+
+    // Spec-conformant child rendering: any non-video children of
+    // the video group are rendered as standard widgets via
+    // GeoUiScreenRenderer. Wraps in a synthetic screen so the
+    // existing renderer takes care of action layout, i18n, etc.
+    final overlayChildren = videoGroup.children
+        .where((c) => c.keyword != 'group' || c.type != 'video')
+        .toList();
+    Widget? overlay;
+    if (overlayChildren.isNotEmpty) {
+      final synthetic = GeoUiBlock(
+        keyword: 'screen',
+        children: overlayChildren,
+      );
+      overlay = Material(
+        color: Colors.transparent,
+        child: GeoUiScreenRenderer(
+          screen: synthetic,
+          bindings: bindings,
+          i18n: i18n,
+          onAction: (action) {
+            _engine.sendMessage(jsonEncode({
+              'type': 'action',
+              'action': action,
+            }));
+            _engine.handleEvent();
+            _drainOutbox();
+          },
+        ),
+      );
+    }
+
+    Widget body;
     if (controller == null) {
-      return Center(
+      body = Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Column(
@@ -1168,8 +1276,10 @@ class _WappPageState extends State<WappPage>
               ),
               const SizedBox(height: 4),
               Text(
-                'Open a video file with this wapp from the file picker '
-                'to start playback.',
+                overlay != null
+                    ? 'Use the controls above to pick a video.'
+                    : 'Open a video file with this wapp from the file '
+                        'picker to start playback.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -1179,17 +1289,55 @@ class _WappPageState extends State<WappPage>
           ),
         ),
       );
+    } else {
+      final fitName = videoGroup.getString('fit') ?? 'contain';
+      final fit = _videoFitFromName(fitName);
+      body = ColoredBox(
+        color: Colors.black,
+        child: Video(
+          controller: controller,
+          fit: fit,
+        ),
+      );
     }
 
-    final fitName = videoGroup.getString('fit') ?? 'contain';
-    final fit = _videoFitFromName(fitName);
+    if (overlay == null) return body;
 
-    return ColoredBox(
-      color: Colors.black,
-      child: Video(
-        controller: controller,
-        fit: fit,
-      ),
+    // Place declared actions in a row at the top of the video
+    // surface. Translucent so the video stays visible underneath
+    // and media_kit's bottom-mounted controls keep working.
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        body,
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withAlpha(140),
+                  Colors.transparent,
+                ],
+              ),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Theme(
+              data: Theme.of(context).copyWith(
+                textTheme: Theme.of(context).textTheme.apply(
+                      bodyColor: Colors.white,
+                      displayColor: Colors.white,
+                    ),
+              ),
+              child: overlay,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
