@@ -1255,10 +1255,7 @@ class _WappPageState extends State<WappPage>
               ),
               const SizedBox(height: 4),
               Text(
-                overlay != null
-                    ? 'Tap the menu (top-right) to pick a video.'
-                    : 'Open a video file with this wapp from the file '
-                        'picker to start playback.',
+                'Use the menu in the title bar to pick a video.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -1330,6 +1327,32 @@ class _WappPageState extends State<WappPage>
   String _titleWithDevMarker() =>
       _devMode ? '${widget.title} (dev)' : widget.title;
 
+  /// Spec §14.2 — extract a screen's `<group $type="header-actions">`
+  /// children and render them as host AppBar widgets, so wapps can
+  /// publish multiple icon-actions next to their title.
+  List<Widget> _wappHeaderActions(GeoUiBlock screen, I18nContext? i18n) {
+    GeoUiBlock? group;
+    for (final c in screen.children) {
+      if (c.keyword == 'group' && c.type == 'header-actions') {
+        group = c;
+        break;
+      }
+    }
+    if (group == null) return const [];
+    return buildGeoUiAppBarActions(
+      children: group.children,
+      i18n: i18n,
+      onAction: (name) {
+        _engine.sendMessage(jsonEncode({
+          'type': 'action',
+          'action': name,
+        }));
+        _engine.handleEvent();
+        _drainOutbox();
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final tabController = _tabController;
@@ -1351,27 +1374,43 @@ class _WappPageState extends State<WappPage>
       },
     );
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_titleWithDevMarker()),
-        actions: _devAppBarActions(),
-        bottom: _screens.length > 1
-            ? TabBar(
-                controller: tabController,
-                isScrollable: true,
-                tabs: _screenNames
-                    .map((n) => Tab(text: i18n?.resolve(n) ?? n))
-                    .toList(),
-              )
-            : null,
-      ),
-      body: TabBarView(
-        controller: tabController,
-        physics: const NeverScrollableScrollPhysics(),
-        children: [
-          for (final s in _screens) _buildScreen(s, bindings, i18n),
-        ],
-      ),
+    // Header actions are tied to the visible screen, so the AppBar
+    // re-renders on every tab switch. AnimatedBuilder listens to the
+    // tab animation; the rebuild is cheap (Material widgets only).
+    return AnimatedBuilder(
+      animation: tabController.animation ?? tabController,
+      builder: (context, _) {
+        final activeIndex =
+            tabController.index.clamp(0, _screens.length - 1);
+        final activeScreen = _screens[activeIndex];
+        final wappActions = _wappHeaderActions(activeScreen, i18n);
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(_titleWithDevMarker()),
+            actions: [
+              ...wappActions,
+              ..._devAppBarActions(),
+            ],
+            bottom: _screens.length > 1
+                ? TabBar(
+                    controller: tabController,
+                    isScrollable: true,
+                    tabs: _screenNames
+                        .map((n) => Tab(text: i18n.resolve(n)))
+                        .toList(),
+                  )
+                : null,
+          ),
+          body: TabBarView(
+            controller: tabController,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              for (final s in _screens) _buildScreen(s, bindings, i18n),
+            ],
+          ),
+        );
+      },
     );
   }
 

@@ -162,6 +162,9 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
   // ── Group ───────────────────────────────────────────────────────────
 
   Widget _renderGroup(GeoUiBlock group) {
+    // Spec §14.2 — header-actions are hoisted into the host's AppBar
+    // by the wapp page; rendering them inline would duplicate them.
+    if (group.type == 'header-actions') return const SizedBox.shrink();
     // Spec §14.1 — popup menu primitive. Renders as a single icon
     // button that opens a Material popup with the group's action
     // children as items. Selection dispatches the same
@@ -279,36 +282,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
     );
   }
 
-  /// Whitelist of Material icon names a wapp may name in
-  /// `<group $type="menu" icon="...">`. Anything outside the list
-  /// falls back to `Icons.menu` so wapps can't surprise the user
-  /// with an arbitrary glyph.
-  IconData _iconFromName(String name) {
-    switch (name) {
-      case 'menu':
-        return Icons.menu;
-      case 'more_vert':
-        return Icons.more_vert;
-      case 'more_horiz':
-        return Icons.more_horiz;
-      case 'settings':
-        return Icons.settings;
-      case 'add':
-        return Icons.add;
-      case 'edit':
-        return Icons.edit;
-      case 'tune':
-        return Icons.tune;
-      case 'filter_list':
-        return Icons.filter_list;
-      case 'sort':
-        return Icons.sort;
-      case 'apps':
-        return Icons.apps;
-      default:
-        return Icons.menu;
-    }
-  }
+  IconData _iconFromName(String name) => geoUiResolveIcon(name);
 
   // ── Field ───────────────────────────────────────────────────────────
 
@@ -808,4 +782,132 @@ Future<void> showGeoUiDialog({
       ),
     ),
   );
+}
+
+/// Whitelist of Material icon names wapps may reference in their
+/// `.ui.json` (menu trigger icons, header-action icons, …). Anything
+/// outside the list falls back to `Icons.menu` so wapps can't reach
+/// into arbitrary Material icons by surprise.
+IconData geoUiResolveIcon(String name) {
+  switch (name) {
+    case 'menu':
+      return Icons.menu;
+    case 'more_vert':
+      return Icons.more_vert;
+    case 'more_horiz':
+      return Icons.more_horiz;
+    case 'settings':
+      return Icons.settings;
+    case 'add':
+      return Icons.add;
+    case 'edit':
+      return Icons.edit;
+    case 'tune':
+      return Icons.tune;
+    case 'filter_list':
+      return Icons.filter_list;
+    case 'sort':
+      return Icons.sort;
+    case 'apps':
+      return Icons.apps;
+    case 'refresh':
+      return Icons.refresh;
+    case 'search':
+      return Icons.search;
+    case 'share':
+      return Icons.share;
+    case 'save':
+      return Icons.save;
+    case 'delete':
+      return Icons.delete;
+    case 'info':
+      return Icons.info_outline;
+    case 'help':
+      return Icons.help_outline;
+    case 'download':
+      return Icons.download;
+    case 'upload':
+      return Icons.upload;
+    case 'play':
+      return Icons.play_arrow;
+    case 'pause':
+      return Icons.pause;
+    case 'stop':
+      return Icons.stop;
+    case 'open':
+      return Icons.folder_open;
+    case 'close':
+      return Icons.close;
+    case 'check':
+      return Icons.check;
+    case 'star':
+      return Icons.star_outline;
+    case 'favorite':
+      return Icons.favorite_border;
+    case 'visibility':
+      return Icons.visibility;
+    default:
+      return Icons.menu;
+  }
+}
+
+/// Render a `<group $type="header-actions">`'s direct children as a
+/// list of host AppBar action widgets. Spec §14.2 — each child is
+/// either a single `<action icon="…">` (rendered as IconButton) or a
+/// nested `<group $type="menu">` (rendered as the same PopupMenuButton
+/// the inline renderer would produce). Anything else is silently
+/// dropped so future child kinds don't break older hosts.
+///
+/// The list order matches the AppBar `actions` slot, which Flutter
+/// renders right-aligned next to the title.
+List<Widget> buildGeoUiAppBarActions({
+  required List<GeoUiBlock> children,
+  required GeoUiActionCallback onAction,
+  I18nContext? i18n,
+}) {
+  String? translate(String? raw) {
+    if (raw == null) return null;
+    return i18n?.resolve(raw) ?? raw;
+  }
+
+  final widgets = <Widget>[];
+  for (final block in children) {
+    if (block.keyword == 'action') {
+      final name = block.name;
+      if (name == null || name.isEmpty) continue;
+      final iconName = block.getString('icon');
+      if (iconName == null) continue; // header-actions are icon-only
+      final tip = translate(block.getString('tip')) ??
+          translate(block.getString('label')) ??
+          name;
+      widgets.add(IconButton(
+        tooltip: tip,
+        icon: Icon(geoUiResolveIcon(iconName)),
+        onPressed: () => onAction(name),
+      ));
+      continue;
+    }
+    if (block.keyword == 'group' && block.type == 'menu') {
+      final actions = block.children
+          .where((c) => c.keyword == 'action' && (c.name ?? '').isNotEmpty)
+          .toList();
+      if (actions.isEmpty) continue;
+      final iconName = block.getString('icon') ?? 'menu';
+      final tip = translate(block.getString('tip')) ?? 'Menu';
+      widgets.add(PopupMenuButton<String>(
+        tooltip: tip,
+        icon: Icon(geoUiResolveIcon(iconName)),
+        onSelected: onAction,
+        itemBuilder: (_) => [
+          for (final a in actions)
+            PopupMenuItem<String>(
+              value: a.name!,
+              child: Text(translate(a.getString('label')) ?? a.name!),
+            ),
+        ],
+      ));
+      continue;
+    }
+  }
+  return widgets;
 }
