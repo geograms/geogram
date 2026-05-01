@@ -19,7 +19,7 @@ import 'dart:convert';
 import 'dart:io' show Directory, File;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -938,10 +938,18 @@ class _WappPageState extends State<WappPage>
     } catch (_) {}
   }
 
-  /// Dev-only: re-run the wapp install from its recorded source
-  /// (URL / path / asset / picked file), then reboot the engine.
-  /// The runtime always reads from the local archive, so reload
-  /// only sees source changes after the reinstall replaces it.
+  /// Dev-only: copy the latest wapp content into the archive, then
+  /// reboot the engine. Source priority:
+  ///   1. Sibling source tree (`<cwd>/../wapps/<wappId>/`) — the dev
+  ///      iteration loop. Edit + `make` + tap Reload → the build
+  ///      artefacts land in the archive immediately.
+  ///   2. Recorded source from `source.json` (URL / asset / picked
+  ///      file) — for end-user installs and CI builds where there
+  ///      is no source tree alongside the running binary.
+  ///
+  /// The runtime always reads from `<baseDir>/wapps/<wappId>/`. The
+  /// source-tree probe is only ever consulted from this method —
+  /// `wappPackageStorage` itself stays archive-only.
   Future<void> _reload() async {
     _teardownEngineState();
     _tabController?.dispose();
@@ -956,9 +964,17 @@ class _WappPageState extends State<WappPage>
       _tabController = null;
     });
     try {
-      final ok = await WappInstallerService.instance.reinstall(widget.wappId);
+      final sourceTree = _findSiblingSourceTree(widget.wappId);
+      final ok = sourceTree != null
+          ? await WappInstallerService.instance.installFromPath(
+              wappId: widget.wappId,
+              sourceDir: sourceTree,
+            )
+          : await WappInstallerService.instance.reinstall(widget.wappId);
       if (!ok && mounted) {
-        setState(() => _status = 'Reinstall failed.');
+        setState(() => _status = sourceTree != null
+            ? 'Reinstall from $sourceTree failed.'
+            : 'Reinstall failed (no source on file).');
       }
     } catch (e) {
       LogService().log('WappPage: reinstall failed: $e');
@@ -966,6 +982,26 @@ class _WappPageState extends State<WappPage>
     }
     _engine = WappEngine();
     await _loadWapp();
+  }
+
+  /// Look for a sibling `wapps/<wappId>/manifest.json` under the
+  /// running binary's cwd. Mirrors the canonical layout
+  /// `geograms/{geogram,wapps}/`. Returns null in release builds, on
+  /// web, or when no candidate is reachable.
+  String? _findSiblingSourceTree(String wappId) {
+    if (!kDebugMode || kIsWeb) return null;
+    try {
+      final cwd = Directory.current.path;
+      final candidates = [
+        '$cwd/../wapps/$wappId',
+        '$cwd/../../wapps/$wappId',
+        '$cwd/wapps/$wappId',
+      ];
+      for (final root in candidates) {
+        if (File('$root/manifest.json').existsSync()) return root;
+      }
+    } catch (_) {}
+    return null;
   }
 
   @override
