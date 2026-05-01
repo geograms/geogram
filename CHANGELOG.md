@@ -1,5 +1,35 @@
 # Geogram Desktop Changelog
 
+## 2026-05-01 - v1.39.0
+
+First stable cut of the 1.39 line. Everything in betas 1–15 plus the
+work below.
+
+### Wapps
+- Wapp runtime integrated into the main launcher: install `.wapp` packages from the Wapp Store and run them in their own page with the shared HAL (system, KV, file, network, …). The launcher also surfaces source-tree wapps in debug builds so authors can iterate without packaging.
+- Source / archive / runtime separation. Editing a wapp's source folder and pressing Reload inside the wapp page reinstalls from the recorded source — folder-copy for open trees, ZIP for distribution. No more relaunching geogram to iterate on a wapp.
+- GeoUI gains two action-surface primitives: `<group $type="menu">` collapses children into a popup, and `<group $type="header-actions">` hoists icon-buttons / popups into the host title bar so wapps can publish multiple title-bar actions per screen. The icon whitelist grew to cover refresh, share, save, play/pause/stop, open, close, etc.
+- New Movies wapp (local video player with title-bar menu for file pick + subtitle pick).
+- `file.pick` HAL routes through Geogram's `FileFolderPicker`, so wapps work in encrypted profiles too — no `dart:io` calls inside the host wapp engine on a wapp's behalf.
+- Wapps spec doubled in size: §17 documents folder vs ZIP install sources and `source.json` semantics; §14.1–14.2 document the `menu` and `header-actions` primitives.
+
+### Shared
+- Self-contained sync: an invite link alone (sharable out-of-band) is enough to connect — no Mirror peering required. `shared_join` consolidated into `SharedSyncService.joinByCode`.
+- Streaming binary file transport with per-cycle batching and a LAN-only gate. The main isolate no longer chokes on large files.
+- Joined folders now carry `hostCallsign` + `syncEnabled` metadata end-to-end. Invite/manage available on every folder.
+
+### Distributed chat
+- One-time invite links + a Join-via-invite UI.
+
+### File browser
+- Folder-size cache is persistent and lazy. The picker renders cached entries instantly on every reopen and only re-walks subtrees whose `mtime` advanced. Linux root-mtime churn (`/run`, `/tmp`, `/sys`) no longer wipes the snapshot every visit; opening `/` is near-instant after the first walk.
+- Stable subtrees (`/usr`, `/home`, `/opt`) cost a single `stat` per visit; only changed branches recurse.
+
+### Stability
+- Single rate-limiter shared across `FlutterError` and `PlatformDispatcher.onError` — duplicate crash reports are gone.
+- Android: debug keystore committed to the repo so every beta picks up the same auto-update signature (no more "must reinstall" between betas).
+- Android startup: minimal-startup gate + tracing infrastructure to bisect first-run OOMs.
+
 ## 2026-04-27 - v1.39.0-beta.15
 
 ### Fixes
