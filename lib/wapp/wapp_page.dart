@@ -1201,36 +1201,14 @@ class _WappPageState extends State<WappPage>
   ) {
     final controller = _videoController;
 
-    // Spec-conformant child rendering: any non-video children of
-    // the video group are rendered as standard widgets via
-    // GeoUiScreenRenderer. Wraps in a synthetic screen so the
-    // existing renderer takes care of action layout, i18n, etc.
-    final overlayChildren = videoGroup.children
-        .where((c) => c.keyword != 'group' || c.type != 'video')
+    // Spec-conformant child rendering: action children of the video
+    // group surface as items inside a hamburger menu in the top-
+    // right corner. Keeps the video itself unobstructed and matches
+    // the convention real-world media players use for less-frequent
+    // actions (Open file, attach subtitle, …).
+    final actionChildren = videoGroup.children
+        .where((c) => c.keyword == 'action')
         .toList();
-    Widget? overlay;
-    if (overlayChildren.isNotEmpty) {
-      final synthetic = GeoUiBlock(
-        keyword: 'screen',
-        children: overlayChildren,
-      );
-      overlay = Material(
-        color: Colors.transparent,
-        child: GeoUiScreenRenderer(
-          screen: synthetic,
-          bindings: bindings,
-          i18n: i18n,
-          onAction: (action) {
-            _engine.sendMessage(jsonEncode({
-              'type': 'action',
-              'action': action,
-            }));
-            _engine.handleEvent();
-            _drainOutbox();
-          },
-        ),
-      );
-    }
 
     Widget body;
     if (controller == null) {
@@ -1248,8 +1226,8 @@ class _WappPageState extends State<WappPage>
               ),
               const SizedBox(height: 4),
               Text(
-                overlay != null
-                    ? 'Use the controls above to pick a video.'
+                actionChildren.isNotEmpty
+                    ? 'Tap the menu (top-right) to pick a video.'
                     : 'Open a video file with this wapp from the file '
                         'picker to start playback.',
                 textAlign: TextAlign.center,
@@ -1273,44 +1251,53 @@ class _WappPageState extends State<WappPage>
       );
     }
 
-    if (overlay == null) return body;
+    if (actionChildren.isEmpty) return body;
 
-    // Place declared actions in a row at the top of the video
-    // surface. Translucent so the video stays visible underneath
-    // and media_kit's bottom-mounted controls keep working.
     return Stack(
       fit: StackFit.expand,
       children: [
         body,
         Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withAlpha(140),
-                  Colors.transparent,
-                ],
-              ),
-            ),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Theme(
-              data: Theme.of(context).copyWith(
-                textTheme: Theme.of(context).textTheme.apply(
-                      bodyColor: Colors.white,
-                      displayColor: Colors.white,
+          top: 8,
+          right: 8,
+          child: Material(
+            color: Colors.black.withAlpha(140),
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: PopupMenuButton<String>(
+              tooltip: 'More',
+              icon: const Icon(Icons.menu, color: Colors.white),
+              onSelected: (action) {
+                _engine.sendMessage(jsonEncode({
+                  'type': 'action',
+                  'action': action,
+                }));
+                _engine.handleEvent();
+                _drainOutbox();
+              },
+              itemBuilder: (_) => [
+                for (final a in actionChildren)
+                  if ((a.name ?? '').isNotEmpty)
+                    PopupMenuItem<String>(
+                      value: a.name!,
+                      child: Text(_resolveActionLabel(a, i18n)),
                     ),
-              ),
-              child: overlay,
+              ],
             ),
           ),
         ),
       ],
     );
+  }
+
+  /// Resolve a GeoUI action's user-facing label. Falls back to the
+  /// action name when no label is set, runs `@key` lookups through
+  /// [i18n] when present.
+  String _resolveActionLabel(GeoUiBlock action, I18nContext? i18n) {
+    final raw =
+        (action.getString('label') ?? action.name ?? 'Action').trim();
+    if (raw.startsWith('@') && i18n != null) return i18n.resolve(raw);
+    return raw;
   }
 
   BoxFit _videoFitFromName(String name) {
