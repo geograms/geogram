@@ -238,7 +238,6 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     return bestIndex;
   }
   final Map<String, int> _folderSizeCache = {};  // In-memory cache for current session
-  final Set<String> _calculatingFolders = {};
   final Map<String, String?> _thumbnailCache = {};  // path -> thumbnail path
   final Set<String> _loadingThumbnails = {};
   final List<FileSystemItem> _clipboardItems = [];
@@ -654,52 +653,49 @@ class FileFolderPickerState extends State<FileFolderPicker> {
       return;
     }
 
-    try {
-      final dirPath = _currentDirectory.path;
+    final dirPath = _currentDirectory.path;
 
-      // Request permissions when accessing Android external storage
-      // (not needed for app's private folders)
-      if (Platform.isAndroid && _isAndroidExternalStorage(dirPath)) {
-        await _requestAndroidMediaPermissions();
-      }
+    // Request permissions when accessing Android external storage
+    // (not needed for app's private folders)
+    if (Platform.isAndroid && _isAndroidExternalStorage(dirPath)) {
+      await _requestAndroidMediaPermissions();
+    }
 
-      // Try to load from persistent cache first
-      if (_cacheInitialized) {
-        final cachedDir = await _cacheService.getDirectoryCache(dirPath);
-        if (cachedDir != null) {
-          // Check if cache is still valid
-          final dirStat = await _currentDirectory.stat();
-          if (!cachedDir.isStale(dirStat.modified)) {
-            // Use cached entries - instant load!
-            final items = cachedDir.entries
-                .where((e) => _showHidden || !e.name.startsWith('.'))
-                .map((e) => e.toFileSystemItem())
-                .toList();
+    // Phase 1 — instant render from cache (no isStale gate; root-level
+    // mtime churn on Linux would otherwise discard the snapshot every visit).
+    if (_cacheInitialized) {
+      final cachedDir = await _cacheService.getDirectoryCache(dirPath);
+      if (cachedDir != null) {
+        final items = cachedDir.entries
+            .where((e) => _showHidden || !e.name.startsWith('.'))
+            .map((e) => e.toFileSystemItem())
+            .toList();
 
-            // Populate in-memory folder size cache from persistent cache
-            // and trigger background calculation for folders with unknown size
-            for (final entry in cachedDir.entries) {
-              if (entry.isDirectory && entry.size > 0) {
-                _folderSizeCache[entry.path] = entry.size;
-              } else if (entry.isDirectory && (_folderSizeCache[entry.path] ?? 0) == 0) {
-                _calculateFolderSize(entry.path);
-              }
-            }
-
-            _sortItems(items);
-
-            if (mounted) {
-              setState(() {
-                _items = items;
-                _isLoading = false;
-              });
-            }
-            return;
+        for (final entry in cachedDir.entries) {
+          if (entry.isDirectory && entry.size > 0) {
+            _folderSizeCache[entry.path] = entry.size;
           }
         }
-      }
 
-      // No valid cache - scan directory
+        _sortItems(items);
+
+        if (mounted) {
+          setState(() {
+            _items = items;
+            _isLoading = false;
+          });
+        }
+
+        // Phase 2 — lazy mtime-driven refresh in the background.
+        unawaited(_refreshDirectoryInBackground(dirPath));
+        return;
+      }
+    }
+
+    // Cold path — first-ever visit, no cache. Scan directory inline so the
+    // user sees rows as they materialise (sizes start unknown and land via
+    // the same lazy refresh as warm paths).
+    try {
       final items = <FileSystemItem>[];
       final cachedEntries = <CachedFileEntry>[];
       DateTime? dirModified;
@@ -713,24 +709,8 @@ class FileFolderPickerState extends State<FileFolderPicker> {
         final stat = await entity.stat();
         final isDir = entity is Directory;
 
-        int size = stat.size;
-        if (isDir) {
-          // Check in-memory cache first, then persistent cache
-          size = _folderSizeCache[entity.path] ?? 0;
-          if (size == 0 && _cacheInitialized) {
-            final cachedSize = await _cacheService.getCachedFolderSize(entity.path);
-            if (cachedSize != null && cachedSize > 0) {
-              size = cachedSize;
-              _folderSizeCache[entity.path] = size;
-            }
-          }
-          if (size == 0) {
-            // Calculate in background
-            _calculateFolderSize(entity.path);
-          }
-        }
+        final size = isDir ? 0 : stat.size;
 
-        // Add to cache entries (always, even hidden files)
         cachedEntries.add(CachedFileEntry(
           name: name,
           path: entity.path,
@@ -739,7 +719,6 @@ class FileFolderPickerState extends State<FileFolderPicker> {
           modified: stat.modified,
         ));
 
-        // Skip hidden files if not showing them (for display only)
         if (!_showHidden && name.startsWith('.')) continue;
 
         items.add(FileSystemItem(
@@ -752,7 +731,6 @@ class FileFolderPickerState extends State<FileFolderPicker> {
         ));
       }
 
-      // Save to persistent cache in background
       if (_cacheInitialized && dirModified != null) {
         _cacheService.saveDirectoryCache(dirPath, cachedEntries, dirModified);
       }
@@ -765,6 +743,10 @@ class FileFolderPickerState extends State<FileFolderPicker> {
           _isLoading = false;
         });
       }
+
+      if (_cacheInitialized) {
+        unawaited(_refreshDirectoryInBackground(dirPath));
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -776,52 +758,113 @@ class FileFolderPickerState extends State<FileFolderPicker> {
     }
   }
 
-  Future<void> _calculateFolderSize(String folderPath) async {
-    // Skip folder size calculation for paths inside profile storage
+  /// Lazy mtime-driven refresh: list this directory once, decide per child
+  /// whether the cached size still matches (stat.modified unchanged) or
+  /// needs recomputation via the cache service. Walks only the subtrees
+  /// whose mtime advanced — stable subtrees cost a single stat each.
+  Future<void> _refreshDirectoryInBackground(String dirPath) async {
+    if (!_cacheInitialized) return;
     if (widget.profileStorage != null) {
       final basePath = widget.profileStorage!.basePath;
-      if (folderPath == basePath || p.isWithin(basePath, folderPath)) return;
+      if (dirPath == basePath || p.isWithin(basePath, dirPath)) return;
     }
-    if (_calculatingFolders.contains(folderPath)) return;
-    _calculatingFolders.add(folderPath);
-    if (mounted) setState(() {});
 
-    int totalSize = 0;
     try {
-      final dir = Directory(folderPath);
-      await for (final entity in dir.list(recursive: true, followLinks: false)) {
-        if (entity is File) {
-          try {
-            totalSize += await entity.length();
-          } catch (_) {}
+      final dir = Directory(dirPath);
+      final dirStat = await dir.stat();
+
+      final cachedDir = await _cacheService.getDirectoryCache(dirPath);
+      final cachedByPath = <String, CachedFileEntry>{};
+      if (cachedDir != null) {
+        for (final e in cachedDir.entries) {
+          cachedByPath[e.path] = e;
         }
       }
-    } catch (_) {}
+      final structureChanged = cachedDir == null ||
+          !cachedDir.directoryModified.isAtSameMomentAs(dirStat.modified);
 
-    _folderSizeCache[folderPath] = totalSize;
-    _calculatingFolders.remove(folderPath);
+      final freshEntries = <CachedFileEntry>[];
+      final freshItems = <FileSystemItem>[];
 
-    // Save to persistent cache
-    if (_cacheInitialized && totalSize > 0) {
-      _cacheService.saveFolderSize(folderPath, totalSize);
-    }
-
-    // Update UI if still viewing this directory
-    if (mounted && _currentDirectory.path == p.dirname(folderPath)) {
-      setState(() {
-        final index = _items.indexWhere((item) => item.path == folderPath);
-        if (index >= 0) {
-          final oldItem = _items[index];
-          _items[index] = FileSystemItem(
-            path: oldItem.path,
-            name: oldItem.name,
-            isDirectory: oldItem.isDirectory,
-            size: totalSize,
-            modified: oldItem.modified,
-            type: oldItem.type,
-          );
+      await for (final entity in dir.list()) {
+        if (!mounted || _currentDirectory.path != dirPath) return;
+        final name = p.basename(entity.path);
+        final isDir = entity is Directory;
+        FileStat stat;
+        try {
+          stat = await entity.stat();
+        } catch (_) {
+          continue;
         }
-      });
+
+        int size;
+        if (isDir) {
+          final cached = cachedByPath[entity.path];
+          if (cached != null &&
+              cached.modified.isAtSameMomentAs(stat.modified) &&
+              cached.size > 0) {
+            size = cached.size;
+          } else {
+            size = await _cacheService.refreshFolderSize(entity.path);
+          }
+          if (size > 0) _folderSizeCache[entity.path] = size;
+        } else {
+          size = stat.size;
+        }
+
+        freshEntries.add(CachedFileEntry(
+          name: name,
+          path: entity.path,
+          isDirectory: isDir,
+          size: size,
+          modified: stat.modified,
+        ));
+
+        if (_showHidden || !name.startsWith('.')) {
+          freshItems.add(FileSystemItem(
+            path: entity.path,
+            name: name,
+            isDirectory: isDir,
+            size: size,
+            modified: stat.modified,
+            type: stat.type,
+          ));
+        }
+
+        if (!mounted || _currentDirectory.path != dirPath) return;
+        // Live-update the matching row when only sizes/mtimes drifted.
+        if (!structureChanged) {
+          final idx = _items.indexWhere((it) => it.path == entity.path);
+          if (idx >= 0 && _items[idx].size != size) {
+            setState(() {
+              final old = _items[idx];
+              _items[idx] = FileSystemItem(
+                path: old.path,
+                name: old.name,
+                isDirectory: old.isDirectory,
+                size: size,
+                modified: stat.modified,
+                type: old.type,
+              );
+            });
+          }
+        }
+      }
+
+      if (!mounted || _currentDirectory.path != dirPath) return;
+
+      // Files were added or removed — replace the rendered list wholesale.
+      if (structureChanged) {
+        _sortItems(freshItems);
+        setState(() {
+          _items = freshItems;
+        });
+      }
+
+      await _cacheService.saveDirectoryCache(
+          dirPath, freshEntries, dirStat.modified);
+    } catch (_) {
+      // Cached render already on screen — silent failure is fine.
     }
   }
 
@@ -1061,30 +1104,6 @@ class FileFolderPickerState extends State<FileFolderPicker> {
   }
 
   Widget _buildSizeDisplay(ThemeData theme, FileSystemItem item) {
-    if (item.isDirectory && _calculatingFolders.contains(item.path)) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(
-              strokeWidth: 1.5,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(width: 4),
-          Text(
-            'calculating...',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              fontStyle: FontStyle.italic,
-            ),
-          ),
-        ],
-      );
-    }
-
     return Text(
       _formatBytes(item.size),
       style: theme.textTheme.bodySmall?.copyWith(

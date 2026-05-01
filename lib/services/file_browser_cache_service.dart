@@ -291,6 +291,89 @@ class FileBrowserCacheService {
     return path.substring(0, lastSlash);
   }
 
+  /// Recursively compute the total size of a folder, reusing cached
+  /// per-child sizes whose recorded `modified` timestamp still matches
+  /// the live mtime.
+  ///
+  /// One non-recursive `list()` per directory; each subdirectory either
+  /// reuses its cached entry (mtime unchanged) or recurses (mtime
+  /// advanced). Files contribute `stat.size`. The result writes back
+  /// through `saveDirectoryCache`, so subsequent calls hit the cache
+  /// and the picker can render last-known sizes near-instantly.
+  ///
+  /// `seen` is an optional cycle-breaker for symlinked roots; callers
+  /// may omit it.
+  Future<int> refreshFolderSize(
+    String path, {
+    Set<String>? seen,
+  }) async {
+    if (_cacheDir == null) return 0;
+    seen ??= <String>{};
+    if (seen.contains(path)) return 0;
+    seen.add(path);
+
+    final List<FsEntity> entities;
+    try {
+      entities = await _fs.list(path);
+    } catch (_) {
+      return 0;
+    }
+
+    DateTime? dirModified;
+    try {
+      dirModified = (await _fs.stat(path)).modified;
+    } catch (_) {}
+
+    // Index any existing cached entries by path so we can short-circuit
+    // when the child mtime hasn't advanced.
+    final existing = await getDirectoryCache(path);
+    final cachedByPath = <String, CachedFileEntry>{};
+    if (existing != null) {
+      for (final e in existing.entries) {
+        cachedByPath[e.path] = e;
+      }
+    }
+
+    final newEntries = <CachedFileEntry>[];
+    var total = 0;
+    for (final ent in entities) {
+      int size;
+      DateTime modified;
+      try {
+        final st = await _fs.stat(ent.path);
+        modified = st.modified;
+        if (ent.isDirectory) {
+          final cached = cachedByPath[ent.path];
+          if (cached != null && cached.modified.isAtSameMomentAs(modified)) {
+            size = cached.size;
+          } else {
+            size = await refreshFolderSize(ent.path, seen: seen);
+          }
+        } else {
+          size = st.size;
+        }
+      } catch (_) {
+        size = 0;
+        modified = DateTime.fromMillisecondsSinceEpoch(0);
+      }
+
+      newEntries.add(CachedFileEntry(
+        name: ent.name,
+        path: ent.path,
+        isDirectory: ent.isDirectory,
+        size: size,
+        modified: modified,
+      ));
+      total += size;
+    }
+
+    if (dirModified != null) {
+      await saveDirectoryCache(path, newEntries, dirModified);
+    }
+
+    return total;
+  }
+
   /// Save folder size to cache.
   Future<void> saveFolderSize(String folderPath, int size) async {
     if (_cacheDir == null) return;
