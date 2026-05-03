@@ -137,10 +137,13 @@ class WebSocketService {
 
       _channel = WebSocketChannel.connect(uri);
 
-      // On web, we need to wait for the connection to establish
-      // The ready future completes when the WebSocket is ready to send/receive
+      // On web, we need to wait for the connection to establish.
+      // The ready future completes when the WebSocket is ready to send/receive.
+      // Bound the wait so an unreachable host can't stall callers on the OS
+      // TCP timeout (which can be 30–120 s and was hiding LAN devices behind
+      // dead-station connect attempts in the Devices browser).
       try {
-        await _channel!.ready;
+        await _channel!.ready.timeout(const Duration(seconds: 8));
         LogService().log('✓ WebSocket ready (connection established)');
         _recordHeartbeat('socket_connected', connected: true);
         _consecutivePingMisses = 0;
@@ -148,6 +151,9 @@ class WebSocketService {
         _lastPongAt = null;
       } catch (e) {
         LogService().log('WebSocket ready failed: $e');
+        try {
+          await _channel?.sink.close();
+        } catch (_) {}
         _channel = null;
         _recordHeartbeat('socket_connect_failed', message: e.toString(), connected: false);
         return false;

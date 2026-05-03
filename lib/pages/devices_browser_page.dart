@@ -19,7 +19,6 @@ import '../services/station_cache_service.dart';
 import '../services/chat_notification_service.dart';
 import '../services/callsign_generator.dart';
 import '../services/direct_message_service.dart';
-import '../services/station_discovery_service.dart';
 import '../services/station_service.dart';
 import '../services/websocket_service.dart';
 import '../services/network_monitor_service.dart';
@@ -60,7 +59,6 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
   final ChatNotificationService _chatNotificationService =
       ChatNotificationService();
   final DirectMessageService _dmService = DirectMessageService();
-  final StationDiscoveryService _discoveryService = StationDiscoveryService();
   final StationService _stationService = StationService();
   final WebSocketService _wsService = WebSocketService();
   final NetworkMonitorService _networkMonitor = NetworkMonitorService();
@@ -947,58 +945,48 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
     return aMethods.containsAll(bMethods);
   }
 
-  /// Full scan: localhost ports, LAN, and connect to preferred station
-  /// This is triggered by the Refresh button
+  /// Full scan: LAN first, station relay in the background.
+  ///
+  /// LAN device visibility must never wait on a station connect: a slow or
+  /// unreachable station (default p2p.radio) used to hang this for tens of
+  /// seconds because the WebSocket connect lacked an app-level timeout. The
+  /// station relay's contribution to the device list arrives via the
+  /// existing `mirrors_update` and `_fetchStationClients` flows whenever the
+  /// connection succeeds.
   Future<void> _scanAndRefresh() async {
     if (_isScanning) return;
 
     setState(() => _isScanning = true);
     LogService().log(
-      'DevicesBrowserPage: Starting full scan (localhost, LAN, station)',
+      'DevicesBrowserPage: Starting scan (LAN first, station in background)',
     );
 
     try {
-      // Step 1: Run network discovery scan (includes localhost and LAN)
-      // This scans localhost ports, and LAN for devices
-      LogService().log(
-        'DevicesBrowserPage: Step 1 - Running network discovery scan',
-      );
-      await _discoveryService.discover();
-
-      // Step 2: Try to connect to preferred station if not already connected
-      LogService().log(
-        'DevicesBrowserPage: Step 2 - Checking station connection',
-      );
+      // Kick off station connect in the background — do NOT await.
       final connectedStation = _stationService.getConnectedStation();
       if (connectedStation == null || !connectedStation.isConnected) {
-        // Find preferred station
         final allStations = _stationService.getAllStations();
         final preferredStation = allStations
             .where((s) => s.status == 'preferred')
             .firstOrNull;
-
-        if (preferredStation != null) {
+        final target = preferredStation ??
+            (allStations.isNotEmpty ? allStations.first : null);
+        if (target != null) {
           LogService().log(
-            'DevicesBrowserPage: Connecting to preferred station: ${preferredStation.name}',
+            'DevicesBrowserPage: Connecting to ${target.name} in background',
           );
-          await _stationService.connectStation(preferredStation.url);
-        } else if (allStations.isNotEmpty) {
-          // Connect to first available station if no preferred
-          LogService().log(
-            'DevicesBrowserPage: Connecting to first available station: ${allStations.first.name}',
-          );
-          await _stationService.connectStation(allStations.first.url);
+          unawaited(_stationService.connectStation(target.url));
         }
       }
 
-      // Step 3: Refresh device list (fetches from station and checks reachability)
-      LogService().log('DevicesBrowserPage: Step 3 - Refreshing device list');
+      // refreshAllDevices runs its own LAN sweep via _performFullLocalScan,
+      // populates DevicesService, and pushes updates through devicesStream
+      // so the page re-renders as devices are found.
       await _devicesService.refreshAllDevices(force: true);
 
-      // Update local device list
       _devices = _filterRemoteDevices(_devicesService.getAllDevices());
       LogService().log(
-        'DevicesBrowserPage: Full scan complete, found ${_devices.length} devices',
+        'DevicesBrowserPage: LAN scan complete, found ${_devices.length} devices',
       );
     } catch (e) {
       LogService().log('DevicesBrowserPage: Error during scan: $e');
