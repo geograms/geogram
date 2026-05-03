@@ -107,11 +107,16 @@ class WappManifest {
   /// On-disk folder name (last segment of [dirPath]).
   final String name;
 
-  /// Human-readable display name. Read from manifest.description.
+  /// Short launcher label (1–3 words). Read from manifest.title.
   final String title;
 
-  /// Long-form description. Read from manifest.summary.
+  /// One-line explanation, used in list views (catalog row, picker).
+  /// Read from manifest.description.
   final String description;
+
+  /// Paragraph-long explanation for detail / about views. Read from
+  /// manifest.summary.
+  final String summary;
 
   /// "app" by default; can be "system", "addon", etc.
   final String kind;
@@ -145,6 +150,7 @@ class WappManifest {
     required this.name,
     required this.title,
     required this.description,
+    this.summary = '',
     required this.kind,
     this.icon,
     required this.dirPath,
@@ -162,8 +168,24 @@ class WappManifest {
   }) {
     final id = json['id'] as String? ?? '';
     final folderName = p.basename(dirPath);
-    final manifestDescription = json['description'] as String? ?? '';
-    final manifestSummary = json['summary'] as String? ?? '';
+    // New schema (preferred):
+    //   title        — short launcher label
+    //   description  — one-line explanation
+    //   summary      — paragraph-long explanation
+    // Legacy schema (pre-rename, still produced by older wapps):
+    //   description  — was the title
+    //   summary      — was the long description
+    // Detect legacy by absence of an explicit `title` field.
+    final hasTitle =
+        json['title'] is String && (json['title'] as String).isNotEmpty;
+    final manifestTitle = hasTitle
+        ? (json['title'] as String)
+        : ((json['description'] as String?) ?? '');
+    final manifestDescription = hasTitle
+        ? ((json['description'] as String?) ?? '')
+        // Legacy: short description doesn't exist — collapse to empty.
+        : '';
+    final manifestSummary = (json['summary'] as String?) ?? '';
 
     // Parse provides.functionalities — bare strings or {id: "..."} objects.
     final provides = json['provides'];
@@ -208,10 +230,9 @@ class WappManifest {
     return WappManifest(
       id: id,
       name: folderName.isNotEmpty ? folderName : id.split('.').last,
-      title: manifestDescription.isNotEmpty ? manifestDescription : folderName,
-      description: manifestSummary.isNotEmpty
-          ? manifestSummary
-          : manifestDescription,
+      title: manifestTitle.isNotEmpty ? manifestTitle : folderName,
+      description: manifestDescription,
+      summary: manifestSummary,
       kind: json['kind'] as String? ?? 'app',
       icon: json['icon'] as String?,
       dirPath: dirPath,

@@ -1506,8 +1506,21 @@ class AppService {
       final manifest = await pkg.readJson('manifest.json');
       if (manifest == null) return null;
       final id = (manifest['id'] as String?) ?? wappId;
-      final desc = (manifest['description'] as String?) ?? wappId;
-      final summary = (manifest['summary'] as String?) ?? '';
+      // Schema:
+      //   title       — short launcher label (1–3 words)
+      //   description — one-line explanation (used in lists)
+      //   summary     — paragraph (not surfaced on the launcher card)
+      // Legacy fallback (pre-rename): when there's no explicit `title`,
+      // older wapps had the title sitting in `description`, in which case
+      // there's no separate one-liner to display.
+      final hasTitle = manifest['title'] is String &&
+          (manifest['title'] as String).isNotEmpty;
+      final title = hasTitle
+          ? (manifest['title'] as String)
+          : ((manifest['description'] as String?) ?? wappId);
+      final description = hasTitle
+          ? ((manifest['description'] as String?) ?? '')
+          : '';
 
       // Resolve manifest.icon → absolute path to the SVG sidecar
       // when it's a path-shaped value. Anything else (emoji char,
@@ -1523,8 +1536,8 @@ class AppService {
 
       return App(
         id: id,
-        title: desc,
-        description: summary,
+        title: title,
+        description: description,
         thumbnailPath: thumb,
         updated: DateTime.now().toIso8601String(),
         storagePath: storagePath,

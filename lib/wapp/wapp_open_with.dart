@@ -201,8 +201,12 @@ class WappOpenWith {
         showSnack('$filename has no usable id');
         return false;
       }
-      final descRaw = (manifest['description'] as String?)?.trim() ?? '';
-      final title = descRaw.isNotEmpty ? descRaw : slug;
+      // Prefer manifest.title; fall back to legacy manifest.description.
+      final titleRaw = (manifest['title'] as String?)?.trim() ?? '';
+      final legacyTitle = (manifest['description'] as String?)?.trim() ?? '';
+      final title = titleRaw.isNotEmpty
+          ? titleRaw
+          : (legacyTitle.isNotEmpty ? legacyTitle : slug);
 
       final ok = await WappInstallerService.instance.installFromBytes(
         wappId: slug,

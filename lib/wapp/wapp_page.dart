@@ -1417,6 +1417,7 @@ class _WappPageState extends State<WappPage>
   /// Render the wapp store catalog as proper cards. The install
   /// wapp emits structured text via `ui.append`:
   ///   "  name  vX.Y.Z  (NKB)  [optional status]"   ← entry
+  ///   "    title:Display Name"                      ← title (optional)
   ///   "    description text"                        ← description
   ///   "    @sourceHost"                             ← source chip
   ///   "    by:npub1…"                               ← publisher chip
@@ -1457,7 +1458,9 @@ class _WappPageState extends State<WappPage>
         if (line.text.startsWith('    ') && wapps.isNotEmpty) {
           final meta = line.text.trimLeft();
           final last = wapps.last;
-          if (meta.startsWith('@')) {
+          if (meta.startsWith('title:')) {
+            last.title = meta.substring(6);
+          } else if (meta.startsWith('@')) {
             last.sourceHost = meta.substring(1);
           } else if (meta.startsWith('by:')) {
             last.publisherNpub = meta.substring(3);
@@ -1529,7 +1532,7 @@ class _WappPageState extends State<WappPage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    wapp.name,
+                    wapp.title.isNotEmpty ? wapp.title : wapp.name,
                     style: const TextStyle(
                         fontWeight: FontWeight.w600, fontSize: 15),
                   ),
@@ -1900,12 +1903,13 @@ class _LocationSub {
 /// One row in the wapp store catalog, parsed from the install
 /// wapp's structured `ui.append` log lines.
 class _CatalogWapp {
-  final String name;
+  final String name;        // folder slug, e.g. "movies"
   final String version;
   final String size;
   final bool installed;
   final bool updateAvailable;
   // Mutable: filled in by follow-up indented log lines.
+  String title = '';        // human display name; falls back to [name]
   String description = '';
   String sourceHost = '';
   String publisherNpub = '';
