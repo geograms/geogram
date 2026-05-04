@@ -108,12 +108,6 @@ class _WappPageState extends State<WappPage>
   // Per-target attribute overrides (e.g. layout = "list"|"grid"),
   // mutated via {"type":"ui.attr","target":"…","attr":"…","value":…}.
   final Map<String, Map<String, String>> _cardsAttrs = {};
-  // Icon resolution cache. Keyed by the raw `icon_path` value from the
-  // wapp's ui.data item (e.g. "wapp:maps" or "/abs/path/x.svg"); value
-  // is the loaded bytes (null = resolution failed, do not retry). The
-  // build path reads from here only — no synchronous filesystem work
-  // during paint. Refilled when ui.data arrives.
-  final Map<String, Uint8List?> _cardIconBytes = {};
 
   // ── Location bridge (Section 12 of wapp-interfaces.md). Per-req_id
   //    subscription state + dispose callbacks for active
@@ -363,22 +357,12 @@ class _WappPageState extends State<WappPage>
             final target = data['target']?.toString();
             if (target != null && target.isNotEmpty) {
               final list = data['items'] as List?;
-              final items = list == null
+              _cardsData[target] = list == null
                   ? <Map<String, dynamic>>[]
                   : list
                       .whereType<Map>()
                       .map((m) => Map<String, dynamic>.from(m))
                       .toList();
-              _cardsData[target] = items;
-              // Pre-resolve and cache icon bytes off the build path.
-              // Doing this in itemBuilder during paint serializes
-              // hundreds of syscalls onto the UI thread and starves
-              // the raster path (FL_IS_COMPOSITOR spam on Linux).
-              for (final item in items) {
-                final p = (item['icon_path'] as String?) ?? '';
-                if (p.isEmpty || _cardIconBytes.containsKey(p)) continue;
-                _cardIconBytes[p] = _loadCardIconBytes(p);
-              }
               changed = true;
             }
             break;
@@ -1565,28 +1549,41 @@ class _WappPageState extends State<WappPage>
       if (iconPath.isEmpty) {
         return Icon(Icons.extension, size: size, color: cs.onSurfaceVariant);
       }
-      // Bytes are pre-resolved when ui.data arrives (see _drainOutbox)
-      // so paint stays I/O-free. Anything missing from the cache means
-      // resolution failed; show the fallback glyph.
-      final bytes = _cardIconBytes[iconPath];
-      if (bytes == null) {
+      // Generic resolution scheme: `wapp:<slug>` maps to the icon of
+      // an installed wapp by walking that wapp's manifest.icon entry
+      // under the shared archive. Lets the install wapp reference
+      // catalog entries' icons without knowing absolute paths.
+      String resolved = iconPath;
+      if (iconPath.startsWith('wapp:')) {
+        final slug = iconPath.substring(5);
+        final found = _resolveInstalledWappIcon(slug);
+        if (found == null) {
+          return Icon(Icons.extension,
+              size: size, color: cs.onSurfaceVariant);
+        }
+        resolved = found;
+      }
+      final f = File(resolved);
+      if (!f.existsSync()) {
         return Icon(Icons.extension, size: size, color: cs.onSurfaceVariant);
       }
-      final isSvg = iconPath.toLowerCase().endsWith('.svg') ||
-          iconPath.startsWith('wapp:');
-      if (isSvg) {
-        return Padding(
-          padding: EdgeInsets.all(size * 0.15),
-          child: SvgPicture.memory(
-            bytes,
-            fit: BoxFit.contain,
-            theme: SvgTheme(currentColor: cs.onSurface),
-            placeholderBuilder: (_) => Icon(Icons.extension,
-                size: size, color: cs.onSurfaceVariant),
-          ),
-        );
+      try {
+        if (resolved.toLowerCase().endsWith('.svg')) {
+          return Padding(
+            padding: EdgeInsets.all(size * 0.15),
+            child: SvgPicture.memory(
+              Uint8List.fromList(f.readAsBytesSync()),
+              fit: BoxFit.contain,
+              theme: SvgTheme(currentColor: cs.onSurface),
+              placeholderBuilder: (_) => Icon(Icons.extension,
+                  size: size, color: cs.onSurfaceVariant),
+            ),
+          );
+        }
+        return Image.file(f, fit: BoxFit.contain);
+      } catch (_) {
+        return Icon(Icons.extension, size: size, color: cs.onSurfaceVariant);
       }
-      return Image.memory(bytes, fit: BoxFit.contain);
     }
 
     final iconBox = Container(
@@ -1782,30 +1779,6 @@ class _WappPageState extends State<WappPage>
   /// null when the wapp is not installed or its icon is missing.
   /// Falls back to scanning the sibling source `wapps/` checkout so
   /// catalog rendering works during local development.
-  /// Load icon bytes once for a card item. Called from the ui.data
-  /// handler so the build path stays I/O-free. Returns null when the
-  /// icon can't be resolved or read; the build path falls back to a
-  /// generic glyph in that case. Supports raw absolute/relative paths
-  /// and the `wapp:<slug>` scheme (resolves to that wapp's manifest
-  /// icon).
-  Uint8List? _loadCardIconBytes(String iconPath) {
-    if (iconPath.isEmpty) return null;
-    String resolved = iconPath;
-    if (iconPath.startsWith('wapp:')) {
-      final slug = iconPath.substring(5);
-      final found = _resolveInstalledWappIcon(slug);
-      if (found == null) return null;
-      resolved = found;
-    }
-    try {
-      final f = File(resolved);
-      if (!f.existsSync()) return null;
-      return f.readAsBytesSync();
-    } catch (_) {
-      return null;
-    }
-  }
-
   String? _resolveInstalledWappIcon(String slug) {
     final roots = <String>[
       if (wappArchiveBasePath() != null) '${wappArchiveBasePath()}/$slug',
