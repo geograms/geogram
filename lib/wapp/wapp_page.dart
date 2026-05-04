@@ -455,6 +455,10 @@ class _WappPageState extends State<WappPage>
             _handleSignSchnorr(data);
             break;
 
+          case 'tests.run':
+            unawaited(_handleTestsRun(data));
+            break;
+
           case 'location.request':
             unawaited(_handleLocationRequest(data));
             break;
@@ -947,6 +951,77 @@ class _WappPageState extends State<WappPage>
       _sendOutboxResponse('sign.schnorr', reqId, -3,
           extras: {'error': '$e'});
     }
+  }
+
+  // ── tests.run ────────────────────────────────────────────────────
+  // Boot a throw-away WappEngine on the target wapp's tests.wasm,
+  // call module_run_tests, and forward every tests.case +
+  // tests.complete message back to the requester. Self-tests are
+  // always allowed; running tests on a different wapp requires the
+  // `tests.invoke` permission. See wapps/wapp-interfaces.md §20 for
+  // the wire protocol.
+
+  Future<void> _handleTestsRun(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final selfId = widget.wappId;
+    final rawTarget = (data['target'] as String? ?? '').trim();
+    final target = rawTarget.isEmpty ? selfId : rawTarget;
+    final isSelf = target == selfId;
+
+    if (!isSelf && !_wappHasPerm('tests.invoke')) {
+      _emitTestsComplete(reqId, -1, error: 'missing permission tests.invoke');
+      return;
+    }
+
+    final pkg = wappPackageStorage(target);
+    if (pkg == null) {
+      _emitTestsComplete(reqId, -3,
+          error: 'wapp archive unavailable for $target');
+      return;
+    }
+
+    Uint8List? bytes;
+    try {
+      bytes = await pkg.readBytes('tests.wasm');
+    } catch (e) {
+      _emitTestsComplete(reqId, -3, error: 'read failed: $e');
+      return;
+    }
+    if (bytes == null || bytes.isEmpty) {
+      _emitTestsComplete(reqId, -2, error: 'no tests.wasm in $target');
+      return;
+    }
+
+    final runner = WappEngine();
+    try {
+      await runner.load(bytes);
+      runner.kvSet('__tests_req_id', reqId.toString());
+      runner.runTests();
+      for (final msg in runner.drainOutbox()) {
+        _engine.sendMessage(msg);
+      }
+    } catch (e) {
+      _emitTestsComplete(reqId, -3, error: 'runner crashed: $e');
+    } finally {
+      runner.dispose();
+    }
+  }
+
+  /// Emit a single `tests.complete` into the requester's inbox. Used
+  /// when the runner can't even start (missing tests.wasm, permission
+  /// denied, load error). The wapp's normal handler treats this as
+  /// the terminal message, no `tests.case` precede it.
+  void _emitTestsComplete(int reqId, int status, {String? error}) {
+    final m = <String, dynamic>{
+      'type': 'tests.complete',
+      'req_id': reqId,
+      'status': status,
+      'passed': 0,
+      'failed': 0,
+      'duration_ms': 0,
+      'error': error,
+    };
+    _engine.sendMessage(jsonEncode(m));
   }
 
   // ── Location bridge ────────────────────────────────────────────────

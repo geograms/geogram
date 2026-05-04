@@ -484,6 +484,19 @@ class WappEngine {
   void handleEvent() { _instance?.getFunction('module_handle_event')?.call([]); }
   void destroy() { _instance?.getFunction('module_destroy')?.call([]); }
 
+  /// Whether this engine's wasm exports `module_run_tests`. True for a
+  /// tests.wasm built via the SDK's `make tests` target.
+  bool get hasTests => _instance?.getFunction('module_run_tests') != null;
+
+  /// Invoke the test runner. Wapps emit one `tests.case` outbox
+  /// message per case plus a final `tests.complete`; drain via
+  /// [drainOutbox] right after this call returns. No-op when the
+  /// module does not export `module_run_tests`.
+  void runTests() {
+    final fn = _instance?.getFunction('module_run_tests');
+    if (fn != null) fn.call([]);
+  }
+
   int get tickIntervalMs {
     final fn = _instance?.getFunction('module_tick_interval_ms');
     if (fn == null) return 5000;
