@@ -1581,7 +1581,11 @@ class _WappPageState extends State<WappPage>
             crossAxisCount: cols,
             mainAxisSpacing: 10,
             crossAxisSpacing: 10,
-            childAspectRatio: 0.78,
+            // Cards used to be ~282 px tall (aspect 0.78). Trimmed
+            // to ~200 px (aspect 1.12) by shrinking the icon, the
+            // description max-lines, and the surrounding padding —
+            // ~30% shorter so more wapps fit on screen at once.
+            childAspectRatio: 1.12,
           ),
           itemBuilder: (_, i) => _buildWappCatalogGridCard(wapps[i], cs),
         );
@@ -1606,21 +1610,17 @@ class _WappPageState extends State<WappPage>
         side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 14, 10, 10),
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                gradient: getAppTypeGradient(
-                    'wapp', Theme.of(context).brightness == Brightness.dark),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: _catalogIconFor(wapp.name, 32),
+              width: 48,
+              height: 48,
+              decoration: appTypeIconDecoration(context, 'wapp', radius: 12),
+              child: _catalogIconFor(wapp.name, 24),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 6),
             Text(
               wapp.title.isNotEmpty ? wapp.title : wapp.name,
               style: const TextStyle(
@@ -1629,13 +1629,12 @@ class _WappPageState extends State<WappPage>
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
-            const SizedBox(height: 2),
             Text(
               'v${wapp.version}',
               style:
                   TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             Expanded(
               child: wapp.description.isNotEmpty
                   ? Text(
@@ -1643,24 +1642,24 @@ class _WappPageState extends State<WappPage>
                       style: TextStyle(
                           fontSize: 10.5,
                           color: cs.onSurfaceVariant,
-                          height: 1.3),
-                      maxLines: 3,
+                          height: 1.25),
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       textAlign: TextAlign.center,
                     )
                   : const SizedBox.shrink(),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
             SizedBox(
               width: double.infinity,
-              height: 32,
+              height: 28,
               child: FilledButton.icon(
                 onPressed: isInstalled && !wapp.updateAvailable
                     ? null
                     : () => _sendCommand('install ${wapp.name}'),
-                icon: Icon(actionIcon, size: 14),
+                icon: Icon(actionIcon, size: 13),
                 label: Text(actionLabel,
-                    style: const TextStyle(fontSize: 12)),
+                    style: const TextStyle(fontSize: 11)),
                 style: FilledButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                 ),
@@ -1696,11 +1695,7 @@ class _WappPageState extends State<WappPage>
             Container(
               width: 48,
               height: 48,
-              decoration: BoxDecoration(
-                gradient: getAppTypeGradient(
-                    'wapp', Theme.of(context).brightness == Brightness.dark),
-                borderRadius: BorderRadius.circular(12),
-              ),
+              decoration: appTypeIconDecoration(context, 'wapp', radius: 12),
               child: _catalogIconFor(wapp.name, 22),
             ),
             const SizedBox(width: 12),

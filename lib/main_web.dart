@@ -301,7 +301,14 @@ class _WebHomePageState extends State<WebHomePage> {
                     itemBuilder: (context, index) {
                       final app = _apps[index];
                       final isDark = theme.brightness == Brightness.dark;
-                      final gradient = getAppTypeGradient(app.type, isDark);
+                      // Wapps follow the user's theme primary; other types
+                      // keep their fixed per-type gradient.
+                      final gradient = app.type == 'wapp'
+                          ? LinearGradient(colors: [
+                              theme.colorScheme.primary,
+                              theme.colorScheme.primary,
+                            ])
+                          : getAppTypeGradient(app.type, isDark);
                       final icon = getAppTypeIcon(app.type);
                       final unread = app.type == 'chat'
                           ? _chatNotificationService.totalUnreadCount
