@@ -3594,17 +3594,9 @@ class _AppGridCard extends StatelessWidget {
   /// Get appropriate icon based on app type
   IconData _getAppIcon() => getAppTypeIcon(app.type);
 
-  /// Get gradient colors for app type icon. The `wapp` type is
-  /// special: we collapse the gradient to a single solid colour
-  /// taken from the user's theme primary so wapp tiles follow the
-  /// theme picker instead of the legacy fixed-green fill.
-  LinearGradient _getTypeGradient(BuildContext context, bool isDark) {
-    if (app.type == 'wapp') {
-      final c = Theme.of(context).colorScheme.primary;
-      return LinearGradient(colors: [c, c]);
-    }
-    return getAppTypeGradient(app.type, isDark);
-  }
+  /// Get gradient colors for app type icon
+  LinearGradient _getTypeGradient(bool isDark) =>
+      getAppTypeGradient(app.type, isDark);
 
   /// Build the icon widget for the tile. For wapps with an SVG
   /// referenced by manifest.icon (stored in App.thumbnailPath), render
@@ -3683,7 +3675,7 @@ class _AppGridCard extends StatelessWidget {
     final i18n = I18nService();
     final isAndroid = !kIsWeb && Platform.isAndroid;
     final isDark = theme.brightness == Brightness.dark;
-    final gradient = _getTypeGradient(context, isDark);
+    final gradient = _getTypeGradient(isDark);
 
     return Card(
       elevation: 0,
@@ -3840,16 +3832,9 @@ class _AppCard extends StatelessWidget {
   /// Get appropriate icon based on app type
   IconData _getAppIcon() => getAppTypeIcon(app.type);
 
-  /// Get gradient colors for app type icon. Wapps use a solid theme
-  /// primary fill (single-stop gradient) so the picker carries
-  /// through; everything else keeps its legacy per-type gradient.
-  LinearGradient _getTypeGradient(BuildContext context, bool isDark) {
-    if (app.type == 'wapp') {
-      final c = Theme.of(context).colorScheme.primary;
-      return LinearGradient(colors: [c, c]);
-    }
-    return getAppTypeGradient(app.type, isDark);
-  }
+  /// Get gradient colors for app type icon
+  LinearGradient _getTypeGradient(bool isDark) =>
+      getAppTypeGradient(app.type, isDark);
 
   Widget _buildIconWidget({required double size}) {
     final path = app.thumbnailPath;
@@ -3878,7 +3863,7 @@ class _AppCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final gradient = _getTypeGradient(context, isDark);
+    final gradient = _getTypeGradient(isDark);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),

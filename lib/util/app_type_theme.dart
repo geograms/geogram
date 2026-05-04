@@ -90,35 +90,6 @@ IconData getAppTypeIcon(String type) {
   }
 }
 
-/// Build the rounded icon background used by app/collection tiles.
-///
-/// For most types this is the per-type gradient defined below
-/// (chat → blue, email → cyan, …). The `wapp` type is special: a
-/// single solid fill driven by the user's theme primary so that a
-/// custom theme picker actually shows through, instead of the
-/// fixed teal/green that used to look out of place.
-///
-/// Use this helper instead of `BoxDecoration(gradient: getAppType…)`
-/// in any new tile widget so theme propagation stays consistent.
-BoxDecoration appTypeIconDecoration(
-  BuildContext context,
-  String type, {
-  required double radius,
-}) {
-  final theme = Theme.of(context);
-  final cs = theme.colorScheme;
-  if (type == 'wapp') {
-    return BoxDecoration(
-      color: cs.primary,
-      borderRadius: BorderRadius.circular(radius),
-    );
-  }
-  return BoxDecoration(
-    gradient: getAppTypeGradient(type, theme.brightness == Brightness.dark),
-    borderRadius: BorderRadius.circular(radius),
-  );
-}
-
 /// Get the gradient colors for an app/collection type
 LinearGradient getAppTypeGradient(String type, bool isDark) {
   switch (type) {
