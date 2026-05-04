@@ -28,6 +28,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../geoui/geoui_ast.dart';
 import '../geoui/geoui_parser.dart';
@@ -115,10 +116,42 @@ class _WappPageState extends State<WappPage>
   VideoController? _videoController;
   String? _videoCurrentPath;
 
+  // ── Catalog view mode (Wapp Store). Toggled by the user with the
+  //    list/grid buttons above the catalog cards. Persisted via
+  //    SharedPreferences so it survives reloads across sessions. The
+  //    key is namespaced to the wappId so other wapps that may grow
+  //    a similar toggle in the future don't share state.
+  bool _catalogViewIsGrid = false;
+  static const String _kCatalogViewPrefPrefix = 'wapp_catalog_view_grid:';
+
   @override
   void initState() {
     super.initState();
+    _loadCatalogViewPref();
     unawaited(_loadWapp());
+  }
+
+  Future<void> _loadCatalogViewPref() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final v =
+          prefs.getBool('$_kCatalogViewPrefPrefix${widget.wappId}') ?? false;
+      if (mounted && v != _catalogViewIsGrid) {
+        setState(() => _catalogViewIsGrid = v);
+      }
+    } catch (_) {
+      // Best-effort — if prefs fail, fall back to list view.
+    }
+  }
+
+  Future<void> _setCatalogViewIsGrid(bool grid) async {
+    if (_catalogViewIsGrid == grid) return;
+    setState(() => _catalogViewIsGrid = grid);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(
+          '$_kCatalogViewPrefPrefix${widget.wappId}', grid);
+    } catch (_) {}
   }
 
   Future<void> _loadWapp() async {
@@ -1488,10 +1521,154 @@ class _WappPageState extends State<WappPage>
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(12),
-      itemCount: wapps.length,
-      itemBuilder: (_, i) => _buildWappCatalogCard(wapps[i], cs),
+    return Column(
+      children: [
+        _buildCatalogViewToggle(cs),
+        Expanded(
+          child: _catalogViewIsGrid
+              ? _buildWappCatalogGrid(wapps, cs)
+              : ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: wapps.length,
+                  itemBuilder: (_, i) =>
+                      _buildWappCatalogCard(wapps[i], cs),
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// Tiny right-aligned toolbar above the catalog with two icon
+  /// buttons that switch the rendering between a vertical list of
+  /// wide cards and a Play-Store-style grid of square tiles.
+  Widget _buildCatalogViewToggle(ColorScheme cs) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          IconButton(
+            tooltip: 'List view',
+            isSelected: !_catalogViewIsGrid,
+            onPressed: _catalogViewIsGrid
+                ? () => _setCatalogViewIsGrid(false)
+                : null,
+            icon: const Icon(Icons.view_list),
+          ),
+          IconButton(
+            tooltip: 'Grid view',
+            isSelected: _catalogViewIsGrid,
+            onPressed: _catalogViewIsGrid
+                ? null
+                : () => _setCatalogViewIsGrid(true),
+            icon: const Icon(Icons.grid_view),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Responsive grid: 2 columns on narrow, 3 on tablet, 4 on wide.
+  Widget _buildWappCatalogGrid(List<_CatalogWapp> wapps, ColorScheme cs) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final cols = w < 480 ? 2 : (w < 760 ? 3 : 4);
+        return GridView.builder(
+          padding: const EdgeInsets.all(12),
+          itemCount: wapps.length,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cols,
+            mainAxisSpacing: 10,
+            crossAxisSpacing: 10,
+            childAspectRatio: 0.78,
+          ),
+          itemBuilder: (_, i) => _buildWappCatalogGridCard(wapps[i], cs),
+        );
+      },
+    );
+  }
+
+  Widget _buildWappCatalogGridCard(_CatalogWapp wapp, ColorScheme cs) {
+    final isInstalled = wapp.installed;
+    final actionLabel = wapp.updateAvailable
+        ? 'Update'
+        : (isInstalled ? 'Installed' : 'Install');
+    final actionIcon = wapp.updateAvailable
+        ? Icons.upgrade
+        : (isInstalled ? Icons.check : Icons.download);
+
+    return Card(
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 14, 10, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                gradient: getAppTypeGradient(
+                    'wapp', Theme.of(context).brightness == Brightness.dark),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: _catalogIconFor(wapp.name, 32),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              wapp.title.isNotEmpty ? wapp.title : wapp.name,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w600, fontSize: 13),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'v${wapp.version}',
+              style:
+                  TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: wapp.description.isNotEmpty
+                  ? Text(
+                      wapp.description,
+                      style: TextStyle(
+                          fontSize: 10.5,
+                          color: cs.onSurfaceVariant,
+                          height: 1.3),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    )
+                  : const SizedBox.shrink(),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              height: 32,
+              child: FilledButton.icon(
+                onPressed: isInstalled && !wapp.updateAvailable
+                    ? null
+                    : () => _sendCommand('install ${wapp.name}'),
+                icon: Icon(actionIcon, size: 14),
+                label: Text(actionLabel,
+                    style: const TextStyle(fontSize: 12)),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
