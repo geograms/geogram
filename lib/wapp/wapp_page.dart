@@ -42,6 +42,7 @@ import '../services/profile_storage.dart';
 import '../services/wapp_installer_service.dart';
 import '../services/wapp_storage.dart';
 import '../widgets/file_folder_picker.dart';
+import '../util/app_type_theme.dart';
 import '../util/event_bus.dart';
 import '../util/geolocation_utils.dart';
 import 'wapp_engine.dart';
@@ -99,15 +100,12 @@ class _WappPageState extends State<WappPage>
   List<String> _storeSources = const [];
   final _sourcesInputController = TextEditingController();
 
-  // Generic card-list state. Any wapp can push a list of structured
-  // items via {"type":"ui.data","target":"<group-name>","items":[…]}
-  // and the host's `$type="cards"` group renders them. The wapp owns
-  // the data and any visual hints (icon path, title, action labels).
-  // No wapp-specific code in the host; this is a generic primitive.
-  final Map<String, List<Map<String, dynamic>>> _cardsData = {};
-  // Per-target attribute overrides (e.g. layout = "list"|"grid"),
-  // mutated via {"type":"ui.attr","target":"…","attr":"…","value":…}.
-  final Map<String, Map<String, String>> _cardsAttrs = {};
+  // Wapp-driven layout for the catalog (`$type="output"` group).
+  // Default is "list"; the install wapp flips it to "grid" via a
+  // {"type":"ui.layout","target":"output-list","mode":"grid"} message.
+  // The host stays dumb: no SharedPreferences, no defaults, no toggle
+  // UI — every visual decision lives in the wapp.
+  String _outputLayoutMode = 'list';
 
   // ── Location bridge (Section 12 of wapp-interfaces.md). Per-req_id
   //    subscription state + dispose callbacks for active
@@ -350,36 +348,19 @@ class _WappPageState extends State<WappPage>
             changed = true;
             break;
 
-          case 'ui.data':
-            // Generic card-list data push. Replaces (not appends) the
-            // items associated with `target`. The host's `$type="cards"`
-            // group renders one card per item.
-            final target = data['target']?.toString();
-            if (target != null && target.isNotEmpty) {
-              final list = data['items'] as List?;
-              _cardsData[target] = list == null
-                  ? <Map<String, dynamic>>[]
-                  : list
-                      .whereType<Map>()
-                      .map((m) => Map<String, dynamic>.from(m))
-                      .toList();
-              changed = true;
-            }
-            break;
-
-          case 'ui.attr':
-            // Generic per-group attribute override. The wapp can flip
-            // a named attribute on a `cards` (or future) group at
-            // runtime — e.g. layout from "list" to "grid". Only string
-            // values are supported; the renderer reads the override
-            // before falling back to the static UI declaration.
-            final t = data['target']?.toString();
-            final a = data['attr']?.toString();
-            final v = data['value']?.toString();
-            if (t != null && a != null && v != null &&
-                t.isNotEmpty && a.isNotEmpty) {
-              (_cardsAttrs[t] ??= {})[a] = v;
-              changed = true;
+          case 'ui.layout':
+            // Wapp asks the host to switch the rendering of an
+            // output group. Today only `output-list` is recognised
+            // and the only valid modes are "list" and "grid".
+            // Everything else (toggle buttons, persistence, defaults)
+            // is the wapp's responsibility — the host just honours
+            // whichever mode the wapp last sent.
+            if (data['target'] == 'output-list') {
+              final mode = data['mode']?.toString();
+              if (mode == 'list' || mode == 'grid') {
+                _outputLayoutMode = mode!;
+                changed = true;
+              }
             }
             break;
 
@@ -1130,17 +1111,14 @@ class _WappPageState extends State<WappPage>
       return _buildVideoScreen(videoGroup, bindings, i18n);
     }
 
-    // Generic card-list group. The wapp pushes structured items via
-    // ui.data and the host renders them as a list or grid of cards.
-    // This is a generic primitive — any wapp can use it.
-    final cardsGroup = screen.children.firstWhere(
-      (c) => c.keyword == 'group' && c.type == 'cards',
+    // Output catalog (wapp store): scrollable list of lines pushed
+    // by the wapp via {"type":"ui.append","item":{...}}.
+    final outputGroup = screen.children.firstWhere(
+      (c) => c.keyword == 'group' && c.type == 'output',
       orElse: () => GeoUiBlock(
           keyword: '', name: null, type: null, decls: {}, children: []),
     );
-    if (cardsGroup.keyword == 'group') {
-      return _buildCardsScreen(cardsGroup);
-    }
+    if (outputGroup.keyword == 'group') return _buildOutputScreen();
 
     // Sources manager (wapp store Settings): repository list editor.
     final sourcesGroup = screen.children.firstWhere(
@@ -1459,35 +1437,73 @@ class _WappPageState extends State<WappPage>
     );
   }
 
-  /// Render a generic `$type="cards"` group as a list/grid of cards.
-  /// The wapp pushes data via `ui.data` and (optionally) flips the
-  /// layout via `ui.attr`. The host stays generic — no knowledge of
-  /// what the wapp's items represent.
-  ///
-  /// Item schema (all fields optional):
-  ///   id          — stable identifier, used as Object key
-  ///   icon_path   — absolute or wapp-relative path to an SVG/PNG
-  ///   title       — primary line
-  ///   subtitle    — small line under the title (e.g. "v1.2.3")
-  ///   description — body text, max ~2 lines
-  ///   chips       — list of {label,icon} small chips
-  ///   actions     — list of {name,label,icon,disabled,primary}
-  Widget _buildCardsScreen(GeoUiBlock group) {
+  /// Render the wapp store catalog as proper cards. The install
+  /// wapp emits structured text via `ui.append`:
+  ///   "  name  vX.Y.Z  (NKB)  [optional status]"   ← entry
+  ///   "    title:Display Name"                      ← title (optional)
+  ///   "    description text"                        ← description
+  ///   "    @sourceHost"                             ← source chip
+  ///   "    by:npub1…"                               ← publisher chip
+  /// We regex-lift those into [_CatalogWapp] entries and render a
+  /// list of cards with an Install/Installed/Update button.
+  Widget _buildOutputScreen() {
     final cs = Theme.of(context).colorScheme;
-    final target = group.name ?? group.getString('target') ?? '';
-    final items = _cardsData[target] ?? const <Map<String, dynamic>>[];
-    // Layout: static attribute from the UI declaration, optionally
-    // overridden at runtime via ui.attr.
-    final staticLayout = group.getString('layout') ?? 'list';
-    final layout = _cardsAttrs[target]?['layout'] ?? staticLayout;
+    final wapps = <_CatalogWapp>[];
 
-    if (items.isEmpty) {
+    for (final line in _outputLines) {
+      if (line.level == 'out') {
+        final match =
+            RegExp(r'^\s{2}(\S+)\s+v(\S+)(?:\s+\(([^)]+)\))?(.*)$')
+                .firstMatch(line.text);
+        if (match != null) {
+          final name = match.group(1)!;
+          final version = match.group(2)!;
+          final size = match.group(3) ?? '';
+          final status = match.group(4)?.trim() ?? '';
+          // Override the wapp's `[installed]` claim with the actual
+          // filesystem state: only true when the package is in the
+          // shared archive AND has an app.wasm. This avoids stale
+          // KV in the install wapp's own state from leaking false
+          // "installed" badges.
+          final base = wappArchiveBasePath();
+          final actuallyInstalled = base != null &&
+              File('$base/$name/app.wasm').existsSync();
+          wapps.add(_CatalogWapp(
+            name: name,
+            version: version,
+            size: size,
+            updateAvailable: status.contains('[update:'),
+            installed: actuallyInstalled,
+            installer: WappInstallerService.instance,
+          ));
+          continue;
+        }
+        if (line.text.startsWith('    ') && wapps.isNotEmpty) {
+          final meta = line.text.trimLeft();
+          final last = wapps.last;
+          if (meta.startsWith('title:')) {
+            last.title = meta.substring(6);
+          } else if (meta.startsWith('@')) {
+            last.sourceHost = meta.substring(1);
+          } else if (meta.startsWith('by:')) {
+            last.publisherNpub = meta.substring(3);
+          } else if (last.description.isEmpty) {
+            last.description = meta;
+          }
+          continue;
+        }
+      }
+    }
+
+    if (wapps.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Text(
-            group.getString('empty') ??
-                'Nothing to show yet.',
+            'No catalog entries yet.\n\n'
+            'Open the Settings tab and add a repository URL — '
+            'this wapp will fetch the index and list available '
+            'wapps here.',
             textAlign: TextAlign.center,
             style: TextStyle(color: cs.onSurfaceVariant),
           ),
@@ -1495,21 +1511,21 @@ class _WappPageState extends State<WappPage>
       );
     }
 
-    if (layout == 'grid') {
+    if (_outputLayoutMode == 'grid') {
       return LayoutBuilder(
         builder: (context, constraints) {
           final w = constraints.maxWidth;
           final cols = w < 480 ? 2 : (w < 760 ? 3 : 4);
           return GridView.builder(
             padding: const EdgeInsets.all(12),
-            itemCount: items.length,
+            itemCount: wapps.length,
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: cols,
               mainAxisSpacing: 10,
               crossAxisSpacing: 10,
               childAspectRatio: 1.12,
             ),
-            itemBuilder: (_, i) => _buildCard(items[i], cs, grid: true),
+            itemBuilder: (_, i) => _buildWappCatalogGridCard(wapps[i], cs),
           );
         },
       );
@@ -1517,225 +1533,104 @@ class _WappPageState extends State<WappPage>
 
     return ListView.builder(
       padding: const EdgeInsets.all(12),
-      itemCount: items.length,
-      itemBuilder: (_, i) => _buildCard(items[i], cs, grid: false),
+      itemCount: wapps.length,
+      itemBuilder: (_, i) => _buildWappCatalogCard(wapps[i], cs),
     );
   }
 
-  /// Render one card from a `ui.data` item map. Generic layout —
-  /// title + optional subtitle + optional description + optional
-  /// chips row + optional action buttons. Icons render from
-  /// `icon_path` (absolute or wapp-relative). The icon container
-  /// uses the theme's surfaceContainerHigh — no fixed colour.
-  Widget _buildCard(
-    Map<String, dynamic> item,
-    ColorScheme cs, {
-    required bool grid,
-  }) {
-    final title = (item['title'] as String?) ?? '';
-    final subtitle = (item['subtitle'] as String?) ?? '';
-    final description = (item['description'] as String?) ?? '';
-    final iconPath = (item['icon_path'] as String?) ?? '';
-    final chipsRaw = item['chips'] as List?;
-    final actionsRaw = item['actions'] as List?;
-    final actions = actionsRaw == null
-        ? const <Map<String, dynamic>>[]
-        : actionsRaw
-            .whereType<Map>()
-            .map((m) => Map<String, dynamic>.from(m))
-            .toList();
+  /// Compact grid tile used when the wapp asks for `mode:"grid"`.
+  /// Mirrors the data of [_buildWappCatalogCard] but with a square-
+  /// ish layout — large icon on top, then title, version, two-line
+  /// description, and a full-width install button.
+  Widget _buildWappCatalogGridCard(_CatalogWapp wapp, ColorScheme cs) {
+    final isInstalled = wapp.installed;
+    final actionLabel = wapp.updateAvailable
+        ? 'Update'
+        : (isInstalled ? 'Installed' : 'Install');
+    final actionIcon = wapp.updateAvailable
+        ? Icons.upgrade
+        : (isInstalled ? Icons.check : Icons.download);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    Widget iconWidget(double size) {
-      if (iconPath.isEmpty) {
-        return Icon(Icons.extension, size: size, color: cs.onSurfaceVariant);
-      }
-      // Generic resolution scheme: `wapp:<slug>` maps to the icon of
-      // an installed wapp by walking that wapp's manifest.icon entry
-      // under the shared archive. Lets the install wapp reference
-      // catalog entries' icons without knowing absolute paths.
-      String resolved = iconPath;
-      if (iconPath.startsWith('wapp:')) {
-        final slug = iconPath.substring(5);
-        final found = _resolveInstalledWappIcon(slug);
-        if (found == null) {
-          return Icon(Icons.extension,
-              size: size, color: cs.onSurfaceVariant);
-        }
-        resolved = found;
-      }
-      final f = File(resolved);
-      if (!f.existsSync()) {
-        return Icon(Icons.extension, size: size, color: cs.onSurfaceVariant);
-      }
-      try {
-        if (resolved.toLowerCase().endsWith('.svg')) {
-          return Padding(
-            padding: EdgeInsets.all(size * 0.15),
-            child: SvgPicture.memory(
-              Uint8List.fromList(f.readAsBytesSync()),
-              fit: BoxFit.contain,
-              theme: SvgTheme(currentColor: cs.onSurface),
-              placeholderBuilder: (_) => Icon(Icons.extension,
-                  size: size, color: cs.onSurfaceVariant),
-            ),
-          );
-        }
-        return Image.file(f, fit: BoxFit.contain);
-      } catch (_) {
-        return Icon(Icons.extension, size: size, color: cs.onSurfaceVariant);
-      }
-    }
-
-    final iconBox = Container(
-      width: grid ? 48 : 48,
-      height: grid ? 48 : 48,
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(12),
+    return Card(
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
       ),
-      child: iconWidget(grid ? 48 : 48),
-    );
-
-    final titleW = Text(
-      title,
-      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
-      textAlign: grid ? TextAlign.center : TextAlign.start,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-    );
-
-    final subtitleW = subtitle.isEmpty
-        ? const SizedBox.shrink()
-        : Text(
-            subtitle,
-            style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
-            textAlign: grid ? TextAlign.center : TextAlign.start,
-          );
-
-    final descriptionW = description.isEmpty
-        ? const SizedBox.shrink()
-        : Text(
-            description,
-            style: TextStyle(
-                fontSize: 12, color: cs.onSurfaceVariant, height: 1.25),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: grid ? TextAlign.center : TextAlign.start,
-          );
-
-    Widget chipFor(Map<String, dynamic> chip) {
-      final label = (chip['label'] as String?) ?? '';
-      final iconName = (chip['icon'] as String?) ?? '';
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          color: cs.surfaceContainerHighest.withAlpha(120),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            if (iconName.isNotEmpty) ...[
-              Icon(_iconForName(iconName) ?? Icons.label_outline,
-                  size: 11, color: cs.onSurfaceVariant),
-              const SizedBox(width: 3),
-            ],
-            Text(label,
-                style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant)),
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                gradient: getAppTypeGradient('wapp', isDark),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: _catalogIconFor(wapp.name, 24),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              wapp.title.isNotEmpty ? wapp.title : wapp.name,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w600, fontSize: 13),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              'v${wapp.version}',
+              style: TextStyle(fontSize: 10, color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 4),
+            Expanded(
+              child: wapp.description.isNotEmpty
+                  ? Text(
+                      wapp.description,
+                      style: TextStyle(
+                          fontSize: 10.5,
+                          color: cs.onSurfaceVariant,
+                          height: 1.25),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    )
+                  : const SizedBox.shrink(),
+            ),
+            const SizedBox(height: 4),
+            SizedBox(
+              width: double.infinity,
+              height: 28,
+              child: FilledButton.icon(
+                onPressed: isInstalled && !wapp.updateAvailable
+                    ? null
+                    : () => _sendCommand('install ${wapp.name}'),
+                icon: Icon(actionIcon, size: 13),
+                label: Text(actionLabel,
+                    style: const TextStyle(fontSize: 11)),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                ),
+              ),
+            ),
           ],
         ),
-      );
-    }
+      ),
+    );
+  }
 
-    final chipsW = (chipsRaw == null || chipsRaw.isEmpty)
-        ? const SizedBox.shrink()
-        : Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Wrap(
-              spacing: 6,
-              runSpacing: 4,
-              alignment: grid ? WrapAlignment.center : WrapAlignment.start,
-              children: [
-                for (final c in chipsRaw.whereType<Map>())
-                  chipFor(Map<String, dynamic>.from(c)),
-              ],
-            ),
-          );
-
-    Widget actionButton(Map<String, dynamic> a) {
-      final name = (a['name'] as String?) ?? '';
-      final label = (a['label'] as String?) ?? name;
-      final iconName = (a['icon'] as String?) ?? '';
-      final disabled = (a['disabled'] as bool?) ?? false;
-      final ic = iconName.isNotEmpty ? _iconForName(iconName) : null;
-      void fire() {
-        _engine.sendMessage(jsonEncode({
-          'type': 'action',
-          'action': name,
-        }));
-        _engine.handleEvent();
-        _drainOutbox();
-      }
-
-      if (grid) {
-        return SizedBox(
-          width: double.infinity,
-          height: 28,
-          child: FilledButton.icon(
-            onPressed: disabled ? null : fire,
-            icon: Icon(ic ?? Icons.play_arrow, size: 13),
-            label: Text(label, style: const TextStyle(fontSize: 11)),
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-            ),
-          ),
-        );
-      }
-      return FilledButton.icon(
-        onPressed: disabled ? null : fire,
-        icon: Icon(ic ?? Icons.play_arrow, size: 16),
-        label: Text(label),
-        style: FilledButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        ),
-      );
-    }
-
-    final actionsW = actions.isEmpty
-        ? const SizedBox.shrink()
-        : (grid
-            ? actionButton(actions.first)
-            : Wrap(
-                spacing: 8,
-                children: [for (final a in actions) actionButton(a)],
-              ));
-
-    if (grid) {
-      return Card(
-        elevation: 0,
-        margin: EdgeInsets.zero,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: cs.outlineVariant.withAlpha(80)),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              iconBox,
-              const SizedBox(height: 6),
-              titleW,
-              subtitleW,
-              const SizedBox(height: 4),
-              Expanded(child: descriptionW),
-              const SizedBox(height: 4),
-              actionsW,
-            ],
-          ),
-        ),
-      );
-    }
+  Widget _buildWappCatalogCard(_CatalogWapp wapp, ColorScheme cs) {
+    final isInstalled = wapp.installed;
+    final actionLabel = wapp.updateAvailable
+        ? 'Update'
+        : (isInstalled ? 'Installed' : 'Install');
+    final actionIcon = wapp.updateAvailable
+        ? Icons.upgrade
+        : (isInstalled ? Icons.check : Icons.download);
 
     return Card(
       elevation: 0,
@@ -1749,41 +1644,121 @@ class _WappPageState extends State<WappPage>
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            iconBox,
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                gradient: getAppTypeGradient(
+                    'wapp', Theme.of(context).brightness == Brightness.dark),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: _catalogIconFor(wapp.name, 22),
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  titleW,
-                  if (subtitle.isNotEmpty) const SizedBox(height: 2),
-                  subtitleW,
-                  if (description.isNotEmpty) const SizedBox(height: 6),
-                  descriptionW,
-                  chipsW,
+                  Text(
+                    wapp.title.isNotEmpty ? wapp.title : wapp.name,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 15),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Text('v${wapp.version}',
+                          style: TextStyle(
+                              fontSize: 11, color: cs.onSurfaceVariant)),
+                      if (wapp.size.isNotEmpty) ...[
+                        Text(' · ',
+                            style: TextStyle(
+                                fontSize: 11, color: cs.onSurfaceVariant)),
+                        Text(wapp.size,
+                            style: TextStyle(
+                                fontSize: 11, color: cs.onSurfaceVariant)),
+                      ],
+                    ],
+                  ),
+                  if (wapp.description.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      wapp.description,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: cs.onSurfaceVariant,
+                          height: 1.3),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                  if (wapp.sourceHost.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Wrap(
+                        spacing: 6,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: cs.surfaceContainerHighest
+                                  .withAlpha(120),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  wapp.sourceHost == 'local'
+                                      ? Icons.folder_outlined
+                                      : Icons.cloud_outlined,
+                                  size: 11,
+                                  color: cs.onSurfaceVariant,
+                                ),
+                                const SizedBox(width: 3),
+                                Text(wapp.sourceHost,
+                                    style: TextStyle(
+                                        fontSize: 10,
+                                        color: cs.onSurfaceVariant)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
-            if (actions.isNotEmpty) ...[
-              const SizedBox(width: 10),
-              actionsW,
-            ],
+            const SizedBox(width: 10),
+            FilledButton.icon(
+              onPressed: isInstalled && !wapp.updateAvailable
+                  ? null
+                  : () => _sendCommand('install ${wapp.name}'),
+              icon: Icon(actionIcon, size: 16),
+              label: Text(actionLabel),
+              style: FilledButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  /// Resolve `wapp:<slug>` icon paths against the shared archive.
-  /// Returns the absolute path of the wapp's manifest.icon entry, or
-  /// null when the wapp is not installed or its icon is missing.
-  /// Falls back to scanning the sibling source `wapps/` checkout so
-  /// catalog rendering works during local development.
-  String? _resolveInstalledWappIcon(String slug) {
+  /// Resolve a catalog wapp's icon. Try multiple roots in order:
+  ///   1. Shared archive: <baseDir>/wapps/<name>/        (post-install)
+  ///   2. Sibling source repo: <cwd>/../wapps/<name>/    (pre-install
+  ///      when running from a source checkout where the wapp repo
+  ///      lives next to geogram — see README in the wapps repo)
+  /// Falls back to `Icons.extension` when no manifest+SVG is found.
+  Widget _catalogIconFor(String name, double size) {
     final roots = <String>[
-      if (wappArchiveBasePath() != null) '${wappArchiveBasePath()}/$slug',
-      '${Directory.current.path}/../wapps/$slug',
-      '${Directory.current.path}/../../wapps/$slug',
+      if (wappArchiveBasePath() != null) '${wappArchiveBasePath()}/$name',
+      '${Directory.current.path}/../wapps/$name',
+      '${Directory.current.path}/../../wapps/$name',
     ];
     for (final root in roots) {
       final manifestFile = File('$root/manifest.json');
@@ -1796,40 +1771,41 @@ class _WappPageState extends State<WappPage>
         if (!icon.toLowerCase().endsWith('.svg')) continue;
         if (!icon.contains('/') && !icon.contains('\\')) continue;
         final svgFile = File('$root/$icon');
-        if (svgFile.existsSync()) return svgFile.path;
+        if (!svgFile.existsSync()) continue;
+        return Padding(
+          padding: EdgeInsets.all(size * 0.18),
+          child: SvgPicture.memory(
+            Uint8List.fromList(svgFile.readAsBytesSync()),
+            fit: BoxFit.contain,
+            theme: const SvgTheme(currentColor: Colors.white),
+            placeholderBuilder: (_) =>
+                Icon(Icons.extension, size: size, color: Colors.white),
+          ),
+        );
       } catch (_) {}
     }
-    return null;
+    return Icon(Icons.extension, size: size, color: Colors.white);
   }
 
-  /// Resolve a Material icon name to an IconData, used by the card
-  /// renderer for action buttons and chips. Returns null when the
-  /// name is unknown.
-  IconData? _iconForName(String name) {
-    switch (name) {
-      case 'download':
-        return Icons.download;
-      case 'upgrade':
-        return Icons.upgrade;
-      case 'check':
-        return Icons.check;
-      case 'play':
-      case 'play_arrow':
-        return Icons.play_arrow;
-      case 'install':
-        return Icons.download;
-      case 'delete':
-        return Icons.delete_outline;
-      case 'open':
-        return Icons.open_in_new;
-      case 'cloud':
-        return Icons.cloud_outlined;
-      case 'folder':
-        return Icons.folder_outlined;
-    }
-    return null;
-  }
+  /// Send a command to the running wapp. The protocol matches iwi:
+  /// `{"command":"<cmd>","fields":{...}}` — the wapp reads
+  /// `data['command']` in `module_handle_event` and acts.
+  void _sendCommand(String cmd) {
+    final scalarFields = <String, dynamic>{};
+    // Mirror the source URL into the message so wapps can read it
+    // back without round-tripping through KV.
+    final source = _engine.kvKeys.contains('source')
+        ? _storeSources.join('\n')
+        : '';
+    if (source.isNotEmpty) scalarFields['source'] = source;
 
+    _engine.sendMessage(jsonEncode({
+      'command': cmd,
+      'fields': scalarFields,
+    }));
+    _engine.handleEvent();
+    _drainOutbox();
+  }
 
   /// Render the wapp store sources manager. The install wapp pushes
   /// the current source list as `store.sources` and listens for a
@@ -2052,6 +2028,32 @@ class _LocationSub {
   });
 }
 
+/// One row in the wapp store catalog, parsed from the install
+/// wapp's structured `ui.append` log lines.
+class _CatalogWapp {
+  final String name;        // folder slug, e.g. "movies"
+  final String version;
+  final String size;
+  final bool installed;
+  final bool updateAvailable;
+  // Mutable: filled in by follow-up indented log lines.
+  String title = '';        // human display name; falls back to [name]
+  String description = '';
+  String sourceHost = '';
+  String publisherNpub = '';
+  // Reference kept for future enrichment (signature reads, etc.).
+  // ignore: unused_field
+  final WappInstallerService installer;
+
+  _CatalogWapp({
+    required this.name,
+    required this.version,
+    required this.size,
+    required this.installed,
+    required this.updateAvailable,
+    required this.installer,
+  });
+}
 
 /// Minimal GeoUI binding: in-memory map. Stage 2 will round-trip
 /// values through the WappEngine KV so WASM can observe them.
