@@ -145,6 +145,13 @@ class WappManifest {
   /// "which wapps can open *.mp3?".
   final List<WappFileHandler> fileHandlers;
 
+  /// Top-level permission tokens declared in manifest.permissions.
+  /// Generic strings (e.g. "storage", "network") plus scoped grants
+  /// like "collection.forum.read" / "collection.forum.write" /
+  /// "identity.read" / "sign". Outbox handlers consult this list
+  /// before honouring sensitive requests.
+  final List<String> permissions;
+
   WappManifest({
     required this.id,
     required this.name,
@@ -159,6 +166,7 @@ class WappManifest {
     this.tickIntervalMs = 5000,
     this.halRequires = const ['log'],
     this.fileHandlers = const [],
+    this.permissions = const [],
   });
 
   factory WappManifest.fromJson(
@@ -210,6 +218,11 @@ class WappManifest {
         ? halList.whereType<String>().toList()
         : const <String>['log'];
 
+    final permsRaw = json['permissions'];
+    final perms = permsRaw is List
+        ? permsRaw.whereType<String>().toList()
+        : const <String>[];
+
     // Parse provides.file_handlers — list of WappFileHandler entries
     // declaring which extensions / MIME types this wapp can open.
     final handlerList = provides is Map<String, dynamic>
@@ -241,8 +254,14 @@ class WappManifest {
       tickIntervalMs: (json['tick_interval_ms'] as num?)?.toInt() ?? 5000,
       halRequires: hal,
       fileHandlers: handlers,
+      permissions: perms,
     );
   }
+
+  /// True when the manifest declared the given permission token. Falls
+  /// back to false if the token is missing — outbox handlers use this
+  /// to gate sensitive operations like file writes or signing.
+  bool hasPermission(String token) => permissions.contains(token);
 
   /// Absolute path to the SVG icon, when manifest.icon points to one.
   /// Returns null for emoji icons or missing entries.

@@ -38,12 +38,14 @@ import '../services/i18n_context.dart';
 import '../services/location_provider_service.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
+import '../services/profile_service.dart';
 import '../services/profile_storage.dart';
 import '../services/wapp_installer_service.dart';
 import '../services/wapp_storage.dart';
 import '../widgets/file_folder_picker.dart';
 import '../util/event_bus.dart';
 import '../util/geolocation_utils.dart';
+import '../util/nostr_crypto.dart';
 import 'wapp_engine.dart';
 
 class WappPage extends StatefulWidget {
@@ -419,6 +421,40 @@ class _WappPageState extends State<WappPage>
             unawaited(_handleWappInstall(data));
             break;
 
+          // ── Generic primitives any wapp can use, gated by manifest
+          //    permissions. The wapp emits a request with a req_id and
+          //    a scope token (e.g. "collection.forum") and gets back
+          //    a `<type>.response` message with the same req_id. The
+          //    wapp must declare the matching permission token in its
+          //    manifest.permissions array — see WappManifest.
+          case 'profile.read':
+            unawaited(_handleProfileRead(data));
+            break;
+          case 'profile.write':
+            unawaited(_handleProfileWrite(data));
+            break;
+          case 'profile.list':
+            unawaited(_handleProfileList(data));
+            break;
+          case 'profile.exists':
+            unawaited(_handleProfileExists(data));
+            break;
+          case 'profile.size':
+            unawaited(_handleProfileSize(data));
+            break;
+          case 'profile.mkdir':
+            unawaited(_handleProfileMkdir(data));
+            break;
+          case 'profile.remove':
+            unawaited(_handleProfileRemove(data));
+            break;
+          case 'identity.get':
+            _handleIdentityGet(data);
+            break;
+          case 'sign.schnorr':
+            _handleSignSchnorr(data);
+            break;
+
           case 'location.request':
             unawaited(_handleLocationRequest(data));
             break;
@@ -568,6 +604,348 @@ class _WappPageState extends State<WappPage>
       EventBus().fire(WappLoadedEvent(wappId: name, wappName: name));
     } catch (e) {
       _appendOutput('Install error: $e', 'err');
+    }
+  }
+
+  // ── Generic outbox primitives (profile / identity / sign) ─────────
+  // Each request carries a numeric req_id and (for profile.*) a scope
+  // token like "collection.forum" plus a relative path. The handler
+  // validates the wapp's manifest grants the matching permission
+  // ("collection.forum.read" / ".write" / "identity.read" / "sign"),
+  // resolves the path to a profile-relative path, performs the op via
+  // AppService().profileStorage / ProfileService / NostrCrypto, and
+  // emits a `<type>.response` message back to the wapp with the same
+  // req_id. Status code: 0=ok, -1=denied, -2=not found, -3=other.
+
+  /// Map a scope token to its profile-relative root path. Returns null
+  /// for unknown scopes. Today only "collection.<id>" is supported;
+  /// the path resolves to "collections/<id>/" inside the active
+  /// profile.
+  String? _resolveScopeRoot(String scope) {
+    if (scope.startsWith('collection.')) {
+      final id = scope.substring('collection.'.length);
+      if (id.isEmpty) return null;
+      return 'collections/$id';
+    }
+    return null;
+  }
+
+  /// Reject obviously bad relative paths — empty, absolute, contains
+  /// `..` segments. The host trusts no wapp input; even with the
+  /// permission grant, a wapp can only touch paths under the granted
+  /// root. Returns the trimmed path or null on rejection.
+  String? _safeRelPath(String? raw) {
+    final s = (raw ?? '').trim();
+    if (s.isEmpty) return '';
+    if (s.startsWith('/') || s.startsWith('\\')) return null;
+    final segs = s.split(RegExp(r'[\\/]+'));
+    for (final seg in segs) {
+      if (seg == '..' || seg == '.') return null;
+    }
+    return s;
+  }
+
+  /// Returns true when the manifest grants the given permission token
+  /// (e.g. "collection.forum.read"). Logs a denial when missing so
+  /// developers can spot manifest typos.
+  bool _wappHasPerm(String token) {
+    final m = _manifest;
+    if (m == null) return false;
+    final ok = m.hasPermission(token);
+    if (!ok) {
+      LogService().log(
+          'WappPage[${m.id}] denied: missing permission "$token"');
+    }
+    return ok;
+  }
+
+  /// Send a {type: "<base>.response", req_id, status, ...extras} reply
+  /// back to the wapp. The wapp reads it via hal_msg_recv inside its
+  /// next module_handle_event invocation.
+  void _sendOutboxResponse(
+    String baseType,
+    int reqId,
+    int status, {
+    Map<String, Object?> extras = const {},
+  }) {
+    _engine.sendMessage(jsonEncode({
+      'type': '$baseType.response',
+      'req_id': reqId,
+      'status': status,
+      ...extras,
+    }));
+    _engine.handleEvent();
+  }
+
+  /// Resolve `scope` + `path` against the granted root, also checking
+  /// the right read/write permission. Returns the profile-relative
+  /// path on success. On failure, sends the denial response itself
+  /// and returns null so callers can early-exit.
+  String? _resolveScopedPath(
+    Map<String, dynamic> data,
+    String baseType,
+    int reqId, {
+    required bool needWrite,
+  }) {
+    final scope = (data['scope'] as String? ?? '').trim();
+    final root = _resolveScopeRoot(scope);
+    if (root == null) {
+      _sendOutboxResponse(baseType, reqId, -1, extras: {
+        'error': 'unknown scope',
+      });
+      return null;
+    }
+    final perm = needWrite ? '$scope.write' : '$scope.read';
+    if (!_wappHasPerm(perm)) {
+      _sendOutboxResponse(baseType, reqId, -1, extras: {
+        'error': 'missing permission $perm',
+      });
+      return null;
+    }
+    final rel = _safeRelPath(data['path'] as String?);
+    if (rel == null) {
+      _sendOutboxResponse(baseType, reqId, -1, extras: {
+        'error': 'invalid path',
+      });
+      return null;
+    }
+    return rel.isEmpty ? root : '$root/$rel';
+  }
+
+  /// Active ProfileStorage or null when no profile is loaded yet.
+  /// When null, profile.* handlers respond with status -3 so the wapp
+  /// can show a clear "profile not ready" state instead of hanging.
+  ProfileStorage? _profileStorageOrNull() => AppService().profileStorage;
+
+  Future<void> _handleProfileRead(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final full = _resolveScopedPath(data, 'profile.read', reqId,
+        needWrite: false);
+    if (full == null) return;
+    final ps = _profileStorageOrNull();
+    if (ps == null) {
+      _sendOutboxResponse('profile.read', reqId, -3,
+          extras: {'error': 'profile storage unavailable'});
+      return;
+    }
+    try {
+      final s = await ps.readString(full);
+      if (s == null) {
+        _sendOutboxResponse('profile.read', reqId, -2);
+        return;
+      }
+      _sendOutboxResponse('profile.read', reqId, 0, extras: {'data': s});
+    } catch (e) {
+      _sendOutboxResponse('profile.read', reqId, -3,
+          extras: {'error': '$e'});
+    }
+  }
+
+  Future<void> _handleProfileWrite(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final full = _resolveScopedPath(data, 'profile.write', reqId,
+        needWrite: true);
+    if (full == null) return;
+    final ps = _profileStorageOrNull();
+    if (ps == null) {
+      _sendOutboxResponse('profile.write', reqId, -3,
+          extras: {'error': 'profile storage unavailable'});
+      return;
+    }
+    final mode = (data['mode'] as String? ?? 'write').trim();
+    final body = (data['data'] as String?) ?? '';
+    try {
+      if (mode == 'append') {
+        await ps.appendString(full, body);
+      } else {
+        await ps.writeString(full, body);
+      }
+      _sendOutboxResponse('profile.write', reqId, 0);
+    } catch (e) {
+      _sendOutboxResponse('profile.write', reqId, -3,
+          extras: {'error': '$e'});
+    }
+  }
+
+  Future<void> _handleProfileList(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final full = _resolveScopedPath(data, 'profile.list', reqId,
+        needWrite: false);
+    if (full == null) return;
+    final ps = _profileStorageOrNull();
+    if (ps == null) {
+      _sendOutboxResponse('profile.list', reqId, -3,
+          extras: {'error': 'profile storage unavailable'});
+      return;
+    }
+    try {
+      final entries = await ps.listDirectory(full);
+      _sendOutboxResponse('profile.list', reqId, 0, extras: {
+        'entries': [
+          for (final e in entries)
+            {
+              'name': e.name,
+              'is_dir': e.isDirectory,
+              if (e.size != null) 'size': e.size,
+            }
+        ],
+      });
+    } catch (e) {
+      _sendOutboxResponse('profile.list', reqId, -3,
+          extras: {'error': '$e'});
+    }
+  }
+
+  Future<void> _handleProfileExists(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final full = _resolveScopedPath(data, 'profile.exists', reqId,
+        needWrite: false);
+    if (full == null) return;
+    final ps = _profileStorageOrNull();
+    if (ps == null) {
+      _sendOutboxResponse('profile.exists', reqId, -3,
+          extras: {'error': 'profile storage unavailable'});
+      return;
+    }
+    try {
+      final isFile = await ps.exists(full);
+      final isDir = isFile ? false : await ps.directoryExists(full);
+      _sendOutboxResponse('profile.exists', reqId, 0, extras: {
+        'exists': isFile || isDir,
+        'is_dir': isDir,
+      });
+    } catch (e) {
+      _sendOutboxResponse('profile.exists', reqId, -3,
+          extras: {'error': '$e'});
+    }
+  }
+
+  Future<void> _handleProfileSize(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final full = _resolveScopedPath(data, 'profile.size', reqId,
+        needWrite: false);
+    if (full == null) return;
+    final ps = _profileStorageOrNull();
+    if (ps == null) {
+      _sendOutboxResponse('profile.size', reqId, -3,
+          extras: {'error': 'profile storage unavailable'});
+      return;
+    }
+    try {
+      final bytes = await ps.readBytes(full);
+      _sendOutboxResponse('profile.size', reqId, 0, extras: {
+        'size': bytes?.length ?? 0,
+        'exists': bytes != null,
+      });
+    } catch (e) {
+      _sendOutboxResponse('profile.size', reqId, -3,
+          extras: {'error': '$e'});
+    }
+  }
+
+  Future<void> _handleProfileMkdir(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final full = _resolveScopedPath(data, 'profile.mkdir', reqId,
+        needWrite: true);
+    if (full == null) return;
+    final ps = _profileStorageOrNull();
+    if (ps == null) {
+      _sendOutboxResponse('profile.mkdir', reqId, -3,
+          extras: {'error': 'profile storage unavailable'});
+      return;
+    }
+    try {
+      await ps.createDirectory(full);
+      _sendOutboxResponse('profile.mkdir', reqId, 0);
+    } catch (e) {
+      _sendOutboxResponse('profile.mkdir', reqId, -3,
+          extras: {'error': '$e'});
+    }
+  }
+
+  Future<void> _handleProfileRemove(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final full = _resolveScopedPath(data, 'profile.remove', reqId,
+        needWrite: true);
+    if (full == null) return;
+    final ps = _profileStorageOrNull();
+    if (ps == null) {
+      _sendOutboxResponse('profile.remove', reqId, -3,
+          extras: {'error': 'profile storage unavailable'});
+      return;
+    }
+    try {
+      if (await ps.exists(full)) {
+        await ps.delete(full);
+      } else if (await ps.directoryExists(full)) {
+        await ps.deleteDirectory(full, recursive: false);
+      } else {
+        _sendOutboxResponse('profile.remove', reqId, -2);
+        return;
+      }
+      _sendOutboxResponse('profile.remove', reqId, 0);
+    } catch (e) {
+      _sendOutboxResponse('profile.remove', reqId, -3,
+          extras: {'error': '$e'});
+    }
+  }
+
+  void _handleIdentityGet(Map<String, dynamic> data) {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    if (!_wappHasPerm('identity.read')) {
+      _sendOutboxResponse('identity.get', reqId, -1, extras: {
+        'error': 'missing permission identity.read',
+      });
+      return;
+    }
+    try {
+      final p = ProfileService().getProfile();
+      _sendOutboxResponse('identity.get', reqId, 0, extras: {
+        'callsign': p.callsign,
+        'npub': p.npub,
+      });
+    } catch (e) {
+      _sendOutboxResponse('identity.get', reqId, -3,
+          extras: {'error': '$e'});
+    }
+  }
+
+  void _handleSignSchnorr(Map<String, dynamic> data) {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    if (!_wappHasPerm('sign')) {
+      _sendOutboxResponse('sign.schnorr', reqId, -1, extras: {
+        'error': 'missing permission sign',
+      });
+      return;
+    }
+    final messageHex = (data['message_hex'] as String? ?? '').trim();
+    if (messageHex.isEmpty || messageHex.length != 64) {
+      _sendOutboxResponse('sign.schnorr', reqId, -3, extras: {
+        'error': 'message_hex must be a 32-byte hex digest',
+      });
+      return;
+    }
+    try {
+      final p = ProfileService().getProfile();
+      if (p.nsec.isEmpty) {
+        _sendOutboxResponse('sign.schnorr', reqId, -1, extras: {
+          'error': 'no nsec on active profile',
+        });
+        return;
+      }
+      // ProfileService stores nsec as bech32 ("nsec1..."); NostrCrypto
+      // wants the raw hex private key. Decode if needed.
+      String hexKey = p.nsec;
+      if (hexKey.startsWith('nsec1')) {
+        hexKey = NostrCrypto.decodeNsec(hexKey);
+      }
+      final sig = NostrCrypto.schnorrSign(messageHex, hexKey);
+      _sendOutboxResponse('sign.schnorr', reqId, 0, extras: {
+        'signature_hex': sig,
+      });
+    } catch (e) {
+      _sendOutboxResponse('sign.schnorr', reqId, -3,
+          extras: {'error': '$e'});
     }
   }
 
