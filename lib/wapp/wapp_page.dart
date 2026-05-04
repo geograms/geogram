@@ -80,6 +80,15 @@ class _WappPageState extends State<WappPage>
     with TickerProviderStateMixin {
   WappManifest? _manifest;
   WappEngine _engine = WappEngine();
+  // Field bindings live on the State so the outbox `ui.set_field`
+  // handler can push values into the form. Recreated on engine
+  // reload (see _reload).
+  late _WappFieldBindings _bindings = _WappFieldBindings(
+    _engine,
+    onChange: () {
+      if (mounted) setState(() {});
+    },
+  );
   final List<GeoUiBlock> _screens = [];
   final List<String> _screenNames = [];
   TabController? _tabController;
@@ -421,6 +430,22 @@ class _WappPageState extends State<WappPage>
             unawaited(_handleWappInstall(data));
             break;
 
+          case 'wapps.list_installed':
+            // Generic primitive: enumerate every wapp in the shared
+            // archive and return manifest snapshots. Any wapp that
+            // wants to act as a launcher / admin / backup tool can
+            // call this. Used by the App Creator's Projects tab.
+            unawaited(_handleWappsListInstalled(data));
+            break;
+
+          case 'ui.set_field':
+            // Generic primitive: push a value into a named form
+            // field. Reverse of the form→KV auto-mirror — lets a
+            // wapp pre-fill (or clear) the form when the user picks
+            // a saved draft / project / preset.
+            _handleUiSetField(data);
+            break;
+
           // ── Generic primitives any wapp can use, gated by manifest
           //    permissions. The wapp emits a request with a req_id and
           //    a scope token (e.g. "collection.forum") and gets back
@@ -609,6 +634,78 @@ class _WappPageState extends State<WappPage>
     } catch (e) {
       _appendOutput('Install error: $e', 'err');
     }
+  }
+
+  /// Walk the shared wapp archive and emit a manifest snapshot for
+  /// every installed wapp. Generic — any wapp can call this.
+  ///
+  /// Response:
+  ///   {"type":"wapps.list_installed.response","req_id":N,"status":0,
+  ///    "items":[{"id":"...","name":"<slug>","title":"...",
+  ///              "version":"...","kind":"app|system",
+  ///              "description":"...","summary":"...","icon":"..."}, ...]}
+  Future<void> _handleWappsListInstalled(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final archive = wappArchiveStorage();
+    if (archive == null) {
+      _engine.sendMessage(jsonEncode({
+        'type': 'wapps.list_installed.response',
+        'req_id': reqId,
+        'status': -3,
+        'error': 'archive unavailable',
+        'items': const [],
+      }));
+      return;
+    }
+    final items = <Map<String, dynamic>>[];
+    try {
+      final entries = await archive.listDirectory('');
+      for (final e in entries) {
+        if (!e.isDirectory) continue;
+        final slug = e.name;
+        final mf = await archive.readJson('$slug/manifest.json');
+        if (mf == null) continue;
+        items.add({
+          'id': (mf['id'] as String?) ?? slug,
+          'name': slug,
+          'title': (mf['title'] as String?) ??
+              (mf['description'] as String?) ?? slug,
+          'version': (mf['version'] as String?) ?? '',
+          'kind': (mf['kind'] as String?) ?? 'app',
+          'description': (mf['description'] as String?) ?? '',
+          'summary': (mf['summary'] as String?) ?? '',
+          'icon': (mf['icon'] as String?) ?? '',
+        });
+      }
+    } catch (e) {
+      _engine.sendMessage(jsonEncode({
+        'type': 'wapps.list_installed.response',
+        'req_id': reqId,
+        'status': -3,
+        'error': '$e',
+        'items': const [],
+      }));
+      return;
+    }
+    items.sort((a, b) => (a['title'] as String)
+        .toLowerCase()
+        .compareTo((b['title'] as String).toLowerCase()));
+    _engine.sendMessage(jsonEncode({
+      'type': 'wapps.list_installed.response',
+      'req_id': reqId,
+      'status': 0,
+      'items': items,
+    }));
+  }
+
+  /// Push a value into a named form field. Goes through the existing
+  /// _WappFieldBindings.setValue so the form widget re-renders and
+  /// the wapp KV stays in sync.
+  void _handleUiSetField(Map<String, dynamic> data) {
+    final name = data['name']?.toString();
+    if (name == null || name.isEmpty) return;
+    final value = data['value'];
+    _bindings.setValue(name, value ?? '');
   }
 
   // ── Generic outbox primitives (profile / identity / sign) ─────────
@@ -1553,6 +1650,12 @@ class _WappPageState extends State<WappPage>
       if (mounted) setState(() => _status = 'Reinstall failed: $e');
     }
     _engine = WappEngine();
+    _bindings = _WappFieldBindings(
+      _engine,
+      onChange: () {
+        if (mounted) setState(() {});
+      },
+    );
     await _loadWapp();
   }
 
@@ -1881,12 +1984,7 @@ class _WappPageState extends State<WappPage>
     }
 
     final i18n = _engine.i18n;
-    final bindings = _WappFieldBindings(
-      _engine,
-      onChange: () {
-        if (mounted) setState(() {});
-      },
-    );
+    final bindings = _bindings;
 
     // Header actions are tied to the visible screen, so the AppBar
     // re-renders on every tab switch. AnimatedBuilder listens to the
