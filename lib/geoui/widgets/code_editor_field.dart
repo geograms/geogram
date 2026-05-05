@@ -72,11 +72,12 @@ class CodeEditorField extends StatefulWidget {
 
 class _CodeEditorFieldState extends State<CodeEditorField> {
   late final SyntaxHighlightController _controller;
-  // Local scroll controller for the editor's SingleChildScrollView.
-  // Without it the wrapping Scrollbar falls through to the
-  // PrimaryScrollController, which has no position attached at the
-  // top level and throws on scroll notifications.
   final ScrollController _scrollController = ScrollController();
+  // True while didUpdateWidget is pushing a host-driven value into the
+  // controller. Suppresses the outward onChanged callback so a
+  // setValue → setState → didUpdateWidget → _onTextChanged → setValue
+  // re-entrant loop can't call setState during a build.
+  bool _suppressCallback = false;
 
   // Matched between the editor and the gutter so line numbers align.
   // Pulled from the widget so each wapp can pick its own size via
@@ -96,8 +97,8 @@ class _CodeEditorFieldState extends State<CodeEditorField> {
   }
 
   void _onTextChanged() {
+    if (_suppressCallback) return;
     widget.onChanged(_controller.text);
-    // A rebuild is needed so the line-number gutter catches up.
     if (mounted) setState(() {});
   }
 
@@ -118,7 +119,9 @@ class _CodeEditorFieldState extends State<CodeEditorField> {
     // we must not reset.
     if (oldWidget.initialValue != widget.initialValue &&
         widget.initialValue != _controller.text) {
+      _suppressCallback = true;
       _controller.text = widget.initialValue;
+      _suppressCallback = false;
     }
   }
 

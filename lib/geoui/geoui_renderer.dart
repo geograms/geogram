@@ -402,8 +402,9 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
     );
   }
 
-  double? _numBinding(String key) {
-    final v = widget.bindings.getValue(key);
+  double? _numBinding(String key) => _toDouble(widget.bindings.getValue(key));
+
+  static double? _toDouble(dynamic v) {
     if (v is num) return v.toDouble();
     if (v is String) return double.tryParse(v);
     return null;
@@ -442,7 +443,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
     final min = block.getNumber('min');
     final max = block.getNumber('max');
     final val = widget.bindings.getValue(name);
-    final numVal = val is int ? val.toDouble() : (val as double? ?? min ?? 0);
+    final numVal = _toDouble(val) ?? min ?? 0;
 
     if (min != null && max != null) {
       return _renderSliderField(block);
@@ -477,7 +478,7 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
     final max = block.getNumber('max')!;
     final step = block.getNumber('step');
     final val = widget.bindings.getValue(fieldName);
-    final numVal = val is int ? val.toDouble() : (val as double? ?? min);
+    final numVal = _toDouble(val) ?? min;
     final divisions = step != null ? ((max - min) / step).round() : null;
     final displayVal =
         isInt ? numVal.round().toString() : numVal.toStringAsFixed(1);
