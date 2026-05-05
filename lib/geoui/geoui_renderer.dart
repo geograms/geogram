@@ -355,7 +355,11 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       readOnly: readOnly,
       // Wapp-owned typography: font_size / font_family / line_height
       // come from the block's decls so each wapp picks its own look.
-      fontSize: field.getNumber('font_size') ?? 16,
+      // A binding named pref_editor_font_size overrides the static decl
+      // so a wapp can expose a live font-size control in its Settings.
+      fontSize: (_numBinding('pref_editor_font_size') ??
+          field.getNumber('font_size') ??
+          16),
       fontFamily: field.getString('font_family') ?? 'monospace',
       lineHeight: field.getNumber('line_height') ?? 1.5,
       onChanged: (v) => widget.bindings.setValue(name, v),
@@ -390,10 +394,19 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       label: label,
       tip: tip,
       lines: lines,
-      fontSize: field.getNumber('font_size') ?? 14,
+      fontSize: (_numBinding('pref_log_font_size') ??
+          field.getNumber('font_size') ??
+          14),
       fontFamily: field.getString('font_family') ?? 'monospace',
       lineHeight: field.getNumber('line_height') ?? 1.5,
     );
+  }
+
+  double? _numBinding(String key) {
+    final v = widget.bindings.getValue(key);
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v);
+    return null;
   }
 
   Widget _renderBoolField(String name, String label, String? tip) {

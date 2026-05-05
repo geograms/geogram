@@ -3084,6 +3084,7 @@ class _WappFieldBindings implements GeoUiBindings {
   void setValue(String name, dynamic value) {
     _values[name] = value;
     if (value is String) engine.kvSet(name, value);
+    if (value is num) engine.kvSet(name, value.toString());
     onChange();
   }
 }
