@@ -353,6 +353,11 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       languageId: languageId,
       initialValue: current,
       readOnly: readOnly,
+      // Wapp-owned typography: font_size / font_family / line_height
+      // come from the block's decls so each wapp picks its own look.
+      fontSize: field.getNumber('font_size') ?? 16,
+      fontFamily: field.getString('font_family') ?? 'monospace',
+      lineHeight: field.getNumber('line_height') ?? 1.5,
       onChanged: (v) => widget.bindings.setValue(name, v),
     );
   }
@@ -385,6 +390,9 @@ class _GeoUiScreenRendererState extends State<GeoUiScreenRenderer> {
       label: label,
       tip: tip,
       lines: lines,
+      fontSize: field.getNumber('font_size') ?? 14,
+      fontFamily: field.getString('font_family') ?? 'monospace',
+      lineHeight: field.getNumber('line_height') ?? 1.5,
     );
   }
 

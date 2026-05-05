@@ -12,7 +12,6 @@
 
 import 'package:flutter/material.dart';
 
-import '../../services/wapp_editor_settings.dart';
 import '../../widgets/syntax_highlight_controller.dart';
 
 class CodeEditorField extends StatefulWidget {
@@ -42,6 +41,17 @@ class CodeEditorField extends StatefulWidget {
   /// nothing-burger.
   final bool readOnly;
 
+  /// Editor font size. Wapps set it via the `font_size` decl on
+  /// `\$type:"code"` blocks — that's how a wapp owns the look of its
+  /// own editor surface without round-tripping through host settings.
+  final double fontSize;
+
+  /// Editor font family, same wapp-owned model.
+  final String fontFamily;
+
+  /// Multiplied with fontSize to compute line height.
+  final double lineHeight;
+
   const CodeEditorField({
     super.key,
     required this.fieldName,
@@ -51,6 +61,9 @@ class CodeEditorField extends StatefulWidget {
     required this.onChanged,
     this.tip,
     this.readOnly = false,
+    this.fontSize = 16,
+    this.fontFamily = 'monospace',
+    this.lineHeight = 1.5,
   });
 
   @override
@@ -66,11 +79,11 @@ class _CodeEditorFieldState extends State<CodeEditorField> {
   final ScrollController _scrollController = ScrollController();
 
   // Matched between the editor and the gutter so line numbers align.
-  // Read from WappEditorSettings on every build so user changes take
-  // effect on the next rebuild without notifier plumbing.
-  double get _fontSize => WappEditorSettings().fontSize;
-  double get _lineHeight => WappEditorSettings().lineHeight;
-  String get _fontFamily => WappEditorSettings().fontFamily;
+  // Pulled from the widget so each wapp can pick its own size via
+  // the `font_size` / `font_family` / `line_height` decls.
+  double get _fontSize => widget.fontSize;
+  double get _lineHeight => widget.lineHeight;
+  String get _fontFamily => widget.fontFamily;
 
   @override
   void initState() {

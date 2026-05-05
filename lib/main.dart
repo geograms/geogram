@@ -164,7 +164,6 @@ import 'pages/welcome_page.dart';
 import 'pages/security_settings_page.dart';
 import 'pages/storage_settings_page.dart';
 import 'pages/task_settings_page.dart';
-import 'pages/wapp_editor_settings_page.dart';
 import 'pages/theme_settings_page.dart';
 import 'pages/mirror_settings_page.dart';
 import 'pages/mirror_wizard_page.dart';
@@ -2656,19 +2655,6 @@ class _HomePageState extends State<HomePage> {
                       context,
                       MaterialPageRoute(
                         builder: (context) => const TaskSettingsPage(),
-                      ),
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.code),
-                  title: const Text('Editor'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const WappEditorSettingsPage(),
                       ),
                     );
                   },

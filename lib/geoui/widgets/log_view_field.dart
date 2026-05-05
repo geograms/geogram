@@ -13,8 +13,6 @@
 
 import 'package:flutter/material.dart';
 
-import '../../services/wapp_editor_settings.dart';
-
 class LogViewField extends StatefulWidget {
   /// GeoUI field name — used as the key when appending lines from
   /// the host side. The host looks up the matching field and pushes
@@ -38,6 +36,16 @@ class LogViewField extends StatefulWidget {
   /// common case.
   final VoidCallback? onTick;
 
+  /// Log font size. Wapps set it via `font_size` on `\$type:"log"`
+  /// blocks so the wapp owns its log surface look.
+  final double fontSize;
+
+  /// Log font family.
+  final String fontFamily;
+
+  /// Multiplied with fontSize for the line height.
+  final double lineHeight;
+
   const LogViewField({
     super.key,
     required this.fieldName,
@@ -45,6 +53,9 @@ class LogViewField extends StatefulWidget {
     required this.lines,
     this.tip,
     this.onTick,
+    this.fontSize = 14,
+    this.fontFamily = 'monospace',
+    this.lineHeight = 1.5,
   });
 
   @override
@@ -106,8 +117,8 @@ class _LogViewFieldState extends State<LogViewField> {
                     child: Text(
                       '(no output)',
                       style: TextStyle(
-                        fontFamily: WappEditorSettings().fontFamily,
-                        fontSize: WappEditorSettings().logFontSize,
+                        fontFamily: widget.fontFamily,
+                        fontSize: widget.fontSize,
                         color: Colors.white.withAlpha(100),
                       ),
                     ),
@@ -122,9 +133,9 @@ class _LogViewFieldState extends State<LogViewField> {
                       itemBuilder: (context, i) => Text(
                         lines[i],
                         style: TextStyle(
-                          fontFamily: WappEditorSettings().fontFamily,
-                          fontSize: WappEditorSettings().logFontSize,
-                          height: WappEditorSettings().lineHeight,
+                          fontFamily: widget.fontFamily,
+                          fontSize: widget.fontSize,
+                          height: widget.lineHeight,
                           color: Colors.white,
                         ),
                       ),
