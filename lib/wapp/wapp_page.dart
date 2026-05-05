@@ -559,6 +559,15 @@ class _WappPageState extends State<WappPage>
             // the editor tabs.
             unawaited(_handleWappsReadSource(data));
             break;
+          case 'wapps.list_lang':
+            unawaited(_handleWappsListLang(data));
+            break;
+          case 'wapps.read_lang':
+            unawaited(_handleWappsReadLang(data));
+            break;
+          case 'wapps.write_lang':
+            unawaited(_handleWappsWriteLang(data));
+            break;
 
           // ── Generic primitives any wapp can use, gated by manifest
           //    permissions. The wapp emits a request with a req_id and
@@ -909,6 +918,104 @@ class _WappPageState extends State<WappPage>
       'source_ui': srcUi,
       'source_lang': srcLang,
     });
+  }
+
+  /// List lang/*.json files for a wapp slug.
+  /// Out: {"type":"wapps.list_lang","slug":"<slug>","req_id":N}
+  /// In:  {"type":"wapps.list_lang.response","req_id":N,"langs":["en","fr"]}
+  Future<void> _handleWappsListLang(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final slug = data['slug']?.toString() ?? '';
+    final archive = wappArchiveStorage();
+    if (archive == null || slug.isEmpty || slug.contains('..')) {
+      _engine.sendMessage(jsonEncode({
+        'type': 'wapps.list_lang.response',
+        'req_id': reqId,
+        'langs': <String>[],
+      }));
+      _engine.handleEvent();
+      _drainOutbox();
+      return;
+    }
+    final entries = await archive.listDirectory('$slug/lang');
+    final langs = entries
+        .where((e) => e.path.endsWith('.json'))
+        .map((e) {
+          final name = e.path.split('/').last;
+          return name.substring(0, name.length - 5);
+        })
+        .toList()
+      ..sort();
+    _engine.sendMessage(jsonEncode({
+      'type': 'wapps.list_lang.response',
+      'req_id': reqId,
+      'langs': langs,
+    }));
+    _engine.handleEvent();
+    _drainOutbox();
+  }
+
+  /// Read a specific lang file from a wapp's archive.
+  /// Out: {"type":"wapps.read_lang","slug":"...","lang":"fr","req_id":N}
+  /// In:  {"type":"wapps.read_lang.response","req_id":N,"lang":"fr","content":"..."}
+  Future<void> _handleWappsReadLang(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final slug = data['slug']?.toString() ?? '';
+    final lang = data['lang']?.toString() ?? 'en';
+    final archive = wappArchiveStorage();
+    if (archive == null || slug.isEmpty || slug.contains('..') ||
+        lang.isEmpty || lang.contains('/')) {
+      _engine.sendMessage(jsonEncode({
+        'type': 'wapps.read_lang.response',
+        'req_id': reqId,
+        'lang': lang,
+        'content': '',
+      }));
+      _engine.handleEvent();
+      _drainOutbox();
+      return;
+    }
+    final content =
+        (await archive.readString('$slug/lang/$lang.json')) ?? '';
+    _engine.sendMessage(jsonEncode({
+      'type': 'wapps.read_lang.response',
+      'req_id': reqId,
+      'lang': lang,
+      'content': content,
+    }));
+    _engine.handleEvent();
+    _drainOutbox();
+  }
+
+  /// Write a lang file into a wapp's archive.
+  /// Out: {"type":"wapps.write_lang","slug":"...","lang":"fr","content":"...","req_id":N}
+  /// In:  {"type":"wapps.write_lang.response","req_id":N,"ok":true}
+  Future<void> _handleWappsWriteLang(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final slug = data['slug']?.toString() ?? '';
+    final lang = data['lang']?.toString() ?? '';
+    final content = data['content']?.toString() ?? '';
+    final archive = wappArchiveStorage();
+    bool ok = false;
+    if (archive != null && slug.isNotEmpty && !slug.contains('..') &&
+        lang.isNotEmpty && !lang.contains('/') && content.isNotEmpty) {
+      try {
+        await archive.createDirectory('$slug/lang');
+        await archive.writeBytes(
+            '$slug/lang/$lang.json',
+            Uint8List.fromList(content.codeUnits));
+        ok = true;
+      } catch (e) {
+        LogService().log('WappPage: write_lang failed: $e');
+      }
+    }
+    _engine.sendMessage(jsonEncode({
+      'type': 'wapps.write_lang.response',
+      'req_id': reqId,
+      'ok': ok,
+    }));
+    _engine.handleEvent();
+    _drainOutbox();
   }
 
   // ── Generic outbox primitives (profile / identity / sign) ─────────
