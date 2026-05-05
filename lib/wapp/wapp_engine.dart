@@ -1,12 +1,43 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
+
+import 'dart:io'
+    if (dart.library.html) '../platform/io_stub.dart'
+    show File, FileMode, Process;
 
 import 'package:wasm_run/wasm_run.dart';
 
 import '../services/i18n_context.dart';
 import '../services/profile_storage.dart';
 import '../services/wapp_event_broker.dart';
+
+/// State for a single hal_process_exec subprocess. Lives in
+/// [WappEngine._procs] keyed by handle. The wapp polls
+/// hal_process_poll until [exitCode] is set, drains stdout/stderr
+/// at any time, then calls hal_process_free to release the entry.
+class _WappProcState {
+  Process? proc;
+  int? exitCode;
+  final List<int> stdoutBuf = <int>[];
+  final List<int> stderrBuf = <int>[];
+  StreamSubscription<List<int>>? stdoutSub;
+  StreamSubscription<List<int>>? stderrSub;
+}
+
+/// State for a single hal_file_* handle. Lives in [WappEngine._files]
+/// keyed by handle. Reads slurp the whole file at open and serve from
+/// the buffer; writes accumulate and flush at close. Fine for the
+/// source-code-sized files wapps actually use.
+class _WappFileState {
+  _WappFileState({required this.path, required this.mode});
+  final String path;
+  final int mode; // 0 = read, 1 = write (truncate), 2 = append
+  Uint8List? readBuf;
+  int readOffset = 0;
+  final List<int> writeBuf = <int>[];
+}
 
 /// Log entry from a WASM module.
 class WappLogEntry {
@@ -47,6 +78,17 @@ class WappEngine {
   final Map<String, Uint8List> _kv = {};
   ProfileStorage? _storage;
   bool _loaded = false;
+
+  // hal_process_* state. Handles are positive ints; 0 is reserved
+  // (the C side treats 0 as a valid handle but we skip it to leave
+  // room for "absent" sentinels in callers).
+  final Map<int, _WappProcState> _procs = {};
+  int _nextProcHandle = 1;
+
+  // hal_file_* state. Handles are positive ints, same convention as
+  // _procs.
+  final Map<int, _WappFileState> _files = {};
+  int _nextFileHandle = 1;
 
   // Cached last-known location, fed by the host (LocationProviderService
   // → WappPage). Read by hal_sensor_gps_lat / hal_sensor_gps_lon. When
@@ -122,7 +164,9 @@ class WappEngine {
 
   /// Set a KV key directly (before module is loaded).
   void kvSet(String key, String value) {
-    _kv[key] = Uint8List.fromList(value.codeUnits);
+    // utf8 (not codeUnits) — same reason _writeStr uses utf8: any
+    // char > 0x7F otherwise gets truncated to its low byte.
+    _kv[key] = Uint8List.fromList(utf8.encode(value));
     _saveKv();
   }
 
@@ -357,6 +401,197 @@ class WappEngine {
       results: [ValueTy.i32],
     );
 
+    // ── Process HAL (host subprocess, no sandbox) ──
+    //
+    // See wapps/hal/geogram_wasm_hal.h for the full spec. Runs an
+    // arbitrary host binary on behalf of the wapp. Async polling
+    // mirroring hal_http_*: exec returns a handle, the wapp polls
+    // until done, drains stdout/stderr at any time, frees when
+    // finished.
+
+    final halProcessExec = WasmFunction(
+      (int argvPtr, int argvLen, int cwdPtr, int cwdLen) {
+        final argvJson = _readStr(argvPtr, argvLen);
+        final cwd = cwdLen > 0 ? _readStr(cwdPtr, cwdLen) : null;
+        List<String> argv;
+        try {
+          final parsed = jsonDecode(argvJson);
+          if (parsed is! List || parsed.isEmpty) return -1;
+          argv = parsed.map((e) => e.toString()).toList();
+        } catch (_) {
+          return -1;
+        }
+        final h = _nextProcHandle++;
+        final s = _WappProcState();
+        _procs[h] = s;
+        // Spawn asynchronously — return the handle immediately so
+        // the wapp can poll on the next tick.
+        Process.start(
+          argv.first,
+          argv.skip(1).toList(),
+          workingDirectory: (cwd != null && cwd.isNotEmpty) ? cwd : null,
+          runInShell: false,
+        ).then((p) {
+          s.proc = p;
+          s.stdoutSub = p.stdout.listen(s.stdoutBuf.addAll);
+          s.stderrSub = p.stderr.listen(s.stderrBuf.addAll);
+          p.exitCode.then((c) => s.exitCode = c);
+        }).catchError((e) {
+          // Spawn failed (binary missing, permission, etc). Mark
+          // the entry as exited with a non-zero code so the wapp's
+          // poll loop terminates cleanly. Stash the error message
+          // into stderr so the wapp can surface it.
+          s.exitCode = 127;
+          s.stderrBuf.addAll(utf8.encode('$e\n'));
+        });
+        return h;
+      },
+      params: [ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+    final halProcessPoll = WasmFunction(
+      (int h) {
+        final s = _procs[h];
+        if (s == null) return -1;
+        return s.exitCode == null ? 0 : 1;
+      },
+      params: [ValueTy.i32], results: [ValueTy.i32],
+    );
+    final halProcessExitCode = WasmFunction(
+      (int h) {
+        final s = _procs[h];
+        if (s == null) return -1;
+        return s.exitCode ?? -1;
+      },
+      params: [ValueTy.i32], results: [ValueTy.i32],
+    );
+    int drainBuf(List<int> buf, int bufPtr, int bufLen) {
+      final n = buf.length < bufLen ? buf.length : bufLen;
+      if (n == 0) return 0;
+      final mem = _memory!.view;
+      for (var i = 0; i < n; i++) mem[bufPtr + i] = buf[i];
+      buf.removeRange(0, n);
+      return n;
+    }
+    final halProcessReadStdout = WasmFunction(
+      (int h, int bufPtr, int bufLen) {
+        final s = _procs[h];
+        if (s == null) return 0;
+        return drainBuf(s.stdoutBuf, bufPtr, bufLen);
+      },
+      params: [ValueTy.i32, ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+    final halProcessReadStderr = WasmFunction(
+      (int h, int bufPtr, int bufLen) {
+        final s = _procs[h];
+        if (s == null) return 0;
+        return drainBuf(s.stderrBuf, bufPtr, bufLen);
+      },
+      params: [ValueTy.i32, ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+    final halProcessFree = WasmFunction.voidReturn(
+      (int h) {
+        final s = _procs.remove(h);
+        if (s == null) return;
+        s.stdoutSub?.cancel();
+        s.stderrSub?.cancel();
+        if (s.exitCode == null) {
+          // Still running — best-effort kill.
+          try { s.proc?.kill(); } catch (_) {}
+        }
+      },
+      params: [ValueTy.i32],
+    );
+
+    // ── File HAL (host filesystem, no sandbox) ──
+    //
+    // Absolute paths, full filesystem access — same trust model as
+    // hal_process_exec. Reads slurp the whole file at open and serve
+    // from a buffer; writes accumulate and flush at close. The host
+    // creates parent directories on write/append open as a
+    // convenience so wapps don't need a separate mkdir round-trip.
+
+    final halFileOpen = WasmFunction(
+      (int pathPtr, int pathLen, int mode) {
+        final path = _readStr(pathPtr, pathLen);
+        if (path.isEmpty || mode < 0 || mode > 2) return -1;
+        final s = _WappFileState(path: path, mode: mode);
+        if (mode == 0) {
+          try {
+            s.readBuf = File(path).readAsBytesSync();
+          } catch (_) {
+            return -1;
+          }
+        } else {
+          // Write or append — make sure the parent dir exists so the
+          // close-time flush doesn't fail on a missing directory.
+          try {
+            final parent = File(path).parent;
+            if (!parent.existsSync()) parent.createSync(recursive: true);
+          } catch (_) {
+            return -1;
+          }
+        }
+        final h = _nextFileHandle++;
+        _files[h] = s;
+        return h;
+      },
+      params: [ValueTy.i32, ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+    final halFileRead = WasmFunction(
+      (int h, int bufPtr, int bufLen) {
+        final s = _files[h];
+        if (s == null || s.mode != 0) return -1;
+        final buf = s.readBuf;
+        if (buf == null) return -1;
+        final remain = buf.length - s.readOffset;
+        if (remain <= 0) return 0;
+        final n = remain < bufLen ? remain : bufLen;
+        final mem = _memory!.view;
+        for (var i = 0; i < n; i++) {
+          mem[bufPtr + i] = buf[s.readOffset + i];
+        }
+        s.readOffset += n;
+        return n;
+      },
+      params: [ValueTy.i32, ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+    final halFileWrite = WasmFunction(
+      (int h, int bufPtr, int bufLen) {
+        final s = _files[h];
+        if (s == null || s.mode == 0) return -1;
+        if (bufLen <= 0) return 0;
+        final mem = _memory!.view;
+        for (var i = 0; i < bufLen; i++) {
+          s.writeBuf.add(mem[bufPtr + i]);
+        }
+        return bufLen;
+      },
+      params: [ValueTy.i32, ValueTy.i32, ValueTy.i32],
+      results: [ValueTy.i32],
+    );
+    final halFileClose = WasmFunction.voidReturn(
+      (int h) {
+        final s = _files.remove(h);
+        if (s == null) return;
+        if (s.mode == 1) {
+          try {
+            File(s.path).writeAsBytesSync(s.writeBuf);
+          } catch (_) {}
+        } else if (s.mode == 2) {
+          try {
+            File(s.path).writeAsBytesSync(s.writeBuf,
+                mode: FileMode.append);
+          } catch (_) {}
+        }
+      },
+      params: [ValueTy.i32],
+    );
+
     // ── Stubs (return sentinel values) ──
 
     WasmFunction stubVoid(List<ValueTy> p) =>
@@ -394,21 +629,24 @@ class WappEngine {
       WasmImport('hal', 'msg_available', halMsgAvailable),
       WasmImport('hal', 'msg_recv', halMsgRecv),
       WasmImport('hal', 'msg_send', halMsgSend),
-      // File (stubs — TODO: implement on top of _storage once sync/async
-      // ABI question is resolved. FilesystemProfileStorage exposes sync
-      // variants that would work for desktop; encrypted/browser backends
-      // need either a redesign of hal_file_* to be async-polling like
-      // hal_http_*, or a host-side read-ahead cache.)
-      WasmImport('hal', 'file_open', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32], -1)),
-      WasmImport('hal', 'file_read', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32], -1)),
-      WasmImport('hal', 'file_write', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32], -1)),
-      WasmImport('hal', 'file_close', stubVoid([ValueTy.i32])),
+      // File (host filesystem, no sandbox — see geogram_wasm_hal.h)
+      WasmImport('hal', 'file_open', halFileOpen),
+      WasmImport('hal', 'file_read', halFileRead),
+      WasmImport('hal', 'file_write', halFileWrite),
+      WasmImport('hal', 'file_close', halFileClose),
       // HTTP (stubs)
       WasmImport('hal', 'http_request', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32, ValueTy.i32], -1)),
       WasmImport('hal', 'http_poll', stubI32([ValueTy.i32], -1)),
       WasmImport('hal', 'http_read_response', stubI32([ValueTy.i32, ValueTy.i32, ValueTy.i32], 0)),
       WasmImport('hal', 'http_status', stubI32([ValueTy.i32], -1)),
       WasmImport('hal', 'http_free', stubVoid([ValueTy.i32])),
+      // Process (host subprocess, no sandbox — see geogram_wasm_hal.h)
+      WasmImport('hal', 'process_exec', halProcessExec),
+      WasmImport('hal', 'process_poll', halProcessPoll),
+      WasmImport('hal', 'process_exit_code', halProcessExitCode),
+      WasmImport('hal', 'process_read_stdout', halProcessReadStdout),
+      WasmImport('hal', 'process_read_stderr', halProcessReadStderr),
+      WasmImport('hal', 'process_free', halProcessFree),
       // LoRa (stubs)
       WasmImport('hal', 'lora_available_hw', stubI32([], 0)),
       WasmImport('hal', 'lora_send', stubI32([ValueTy.i32, ValueTy.i32], -1)),
@@ -511,6 +749,29 @@ class WappEngine {
 
   void dispose() {
     if (_loaded) { destroy(); _loaded = false; }
+    // Tear down any subprocesses the wapp left running. Mirrors
+    // hal_process_free per handle but tolerant of failure since
+    // dispose runs in best-effort cleanup.
+    for (final s in _procs.values) {
+      s.stdoutSub?.cancel();
+      s.stderrSub?.cancel();
+      if (s.exitCode == null) {
+        try { s.proc?.kill(); } catch (_) {}
+      }
+    }
+    _procs.clear();
+    // Flush any open write/append files. Reads can be dropped — no
+    // visible side effects.
+    for (final s in _files.values) {
+      if (s.mode == 1) {
+        try { File(s.path).writeAsBytesSync(s.writeBuf); } catch (_) {}
+      } else if (s.mode == 2) {
+        try {
+          File(s.path).writeAsBytesSync(s.writeBuf, mode: FileMode.append);
+        } catch (_) {}
+      }
+    }
+    _files.clear();
     _byId.remove(engineId);
     WappEventBroker.instance.unregisterEngine(engineId);
     _stopwatch.stop();

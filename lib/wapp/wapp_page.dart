@@ -1235,6 +1235,11 @@ class _WappPageState extends State<WappPage>
     } finally {
       runner.dispose();
     }
+    // Let the wapp's module_handle_event consume the tests.case +
+    // tests.complete messages we just queued — without this they
+    // sit in the inbox until the next tick.
+    _engine.handleEvent();
+    _drainOutbox();
   }
 
   /// Emit a single `tests.complete` into the requester's inbox. Used
@@ -1252,6 +1257,8 @@ class _WappPageState extends State<WappPage>
       'error': error,
     };
     _engine.sendMessage(jsonEncode(m));
+    _engine.handleEvent();
+    _drainOutbox();
   }
 
   // ── Location bridge ────────────────────────────────────────────────

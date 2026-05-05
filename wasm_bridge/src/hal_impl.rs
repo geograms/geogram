@@ -47,6 +47,12 @@ pub fn build_imports(store: &mut Store, env: &FunctionEnv<HalState>) -> Imports 
             "http_read_response" => Function::new_typed_with_env(store, env, hal_http_read_response),
             "http_status" => Function::new_typed_with_env(store, env, hal_http_status),
             "http_free" => Function::new_typed_with_env(store, env, hal_http_free),
+            "process_exec" => Function::new_typed_with_env(store, env, hal_process_exec),
+            "process_poll" => Function::new_typed_with_env(store, env, hal_process_poll),
+            "process_exit_code" => Function::new_typed_with_env(store, env, hal_process_exit_code),
+            "process_read_stdout" => Function::new_typed_with_env(store, env, hal_process_read_stdout),
+            "process_read_stderr" => Function::new_typed_with_env(store, env, hal_process_read_stderr),
+            "process_free" => Function::new_typed_with_env(store, env, hal_process_free),
             "lora_available_hw" => Function::new_typed_with_env(store, env, hal_lora_available_hw),
             "lora_send" => Function::new_typed_with_env(store, env, hal_lora_send),
             "lora_available" => Function::new_typed_with_env(store, env, hal_lora_available),
@@ -248,6 +254,16 @@ fn hal_http_poll(_env: FunctionEnvMut<HalState>, _req_id: i32) -> i32 { -1 }
 fn hal_http_read_response(_env: FunctionEnvMut<HalState>, _req_id: i32, _buf_ptr: u32, _buf_len: u32) -> i32 { 0 }
 fn hal_http_status(_env: FunctionEnvMut<HalState>, _req_id: i32) -> i32 { -1 }
 fn hal_http_free(_env: FunctionEnvMut<HalState>, _req_id: i32) {}
+
+// ── Process (host subprocess) — stubs (FFI runtime, not used by
+//    desktop wapps; the live runtime is wapp_engine.dart). ──
+
+fn hal_process_exec(_env: FunctionEnvMut<HalState>, _argv_ptr: u32, _argv_len: u32, _cwd_ptr: u32, _cwd_len: u32) -> i32 { -1 }
+fn hal_process_poll(_env: FunctionEnvMut<HalState>, _handle: i32) -> i32 { -1 }
+fn hal_process_exit_code(_env: FunctionEnvMut<HalState>, _handle: i32) -> i32 { -1 }
+fn hal_process_read_stdout(_env: FunctionEnvMut<HalState>, _handle: i32, _buf_ptr: u32, _buf_len: u32) -> u32 { 0 }
+fn hal_process_read_stderr(_env: FunctionEnvMut<HalState>, _handle: i32, _buf_ptr: u32, _buf_len: u32) -> u32 { 0 }
+fn hal_process_free(_env: FunctionEnvMut<HalState>, _handle: i32) {}
 
 // ── LoRa — no hardware on desktop ──
 
