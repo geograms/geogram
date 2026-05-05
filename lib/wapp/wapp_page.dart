@@ -2171,23 +2171,50 @@ class _WappPageState extends State<WappPage>
         final wappActions = _wappHeaderActions(activeScreen, i18n);
 
         if (_stackNav) {
-          // Stack-navigation mode — single screen visible, no tab
-          // bar. The wapp drives navigation via `ui.select_screen`;
-          // the AppBar's leading back-arrow returns to the entry
-          // screen (index 0) when we're deeper.
-          final canGoBack = tabController.index != 0;
+          // Stack-navigation: the first declared screen is the
+          // entry — rendered alone with no tab bar, no back arrow.
+          // Every other screen is a peer "tab" inside the editor
+          // flow. When the wapp navigates from the entry to any
+          // peer, we show a tab strip across the peers and a back
+          // arrow that returns to the entry.
+          final onEntry = tabController.index == 0;
+          final peerNames = _screenNames.skip(1).toList();
+          final peerActiveIdx =
+              (tabController.index - 1).clamp(0, peerNames.length - 1);
+
           return Scaffold(
             appBar: AppBar(
-              leading: canGoBack
-                  ? IconButton(
+              leading: onEntry
+                  ? null
+                  : IconButton(
                       icon: const Icon(Icons.arrow_back),
                       onPressed: () => setState(() {
                         tabController.index = 0;
                       }),
-                    )
-                  : null,
+                    ),
               title: Text(_titleWithDevMarker()),
               actions: [...wappActions, ..._devAppBarActions()],
+              bottom: (!onEntry && peerNames.length > 1)
+                  ? PreferredSize(
+                      preferredSize: const Size.fromHeight(48),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (var i = 0; i < peerNames.length; i++)
+                              _PeerTab(
+                                label: i18n.resolve(peerNames[i]),
+                                active: i == peerActiveIdx,
+                                onTap: () => setState(() {
+                                  tabController.index = i + 1;
+                                }),
+                              ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : null,
             ),
             body: _buildScreen(activeScreen, bindings, i18n),
           );
@@ -2846,5 +2873,45 @@ class _WappFieldBindings implements GeoUiBindings {
     _values[name] = value;
     if (value is String) engine.kvSet(name, value);
     onChange();
+  }
+}
+
+/// One tab in the stack-nav peer strip — a flat label with a bottom
+/// underline when active. Lighter-weight than Material's TabBar, and
+/// works without a TabController of its own.
+class _PeerTab extends StatelessWidget {
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+  const _PeerTab({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: active ? cs.primary : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+            color: active ? cs.primary : cs.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
   }
 }
