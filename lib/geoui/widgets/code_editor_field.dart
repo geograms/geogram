@@ -12,6 +12,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../services/wapp_editor_settings.dart';
 import '../../widgets/syntax_highlight_controller.dart';
 
 class CodeEditorField extends StatefulWidget {
@@ -65,9 +66,11 @@ class _CodeEditorFieldState extends State<CodeEditorField> {
   final ScrollController _scrollController = ScrollController();
 
   // Matched between the editor and the gutter so line numbers align.
-  static const double _fontSize = 13;
-  static const double _lineHeight = 1.45;
-  static const String _fontFamily = 'monospace';
+  // Read from WappEditorSettings on every build so user changes take
+  // effect on the next rebuild without notifier plumbing.
+  double get _fontSize => WappEditorSettings().fontSize;
+  double get _lineHeight => WappEditorSettings().lineHeight;
+  String get _fontFamily => WappEditorSettings().fontFamily;
 
   @override
   void initState() {

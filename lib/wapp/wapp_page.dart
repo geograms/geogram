@@ -394,6 +394,43 @@ class _WappPageState extends State<WappPage>
             changed = true;
             break;
 
+          case 'ui.snackbar':
+            // Generic transient toast. Any wapp can emit
+            //   {"type":"ui.snackbar","text":"...",
+            //    "level":"info|success|warn|error",
+            //    "duration_ms": <optional>}
+            // and the host shows a SnackBar via ScaffoldMessenger.
+            final snackText = data['text']?.toString() ?? '';
+            if (snackText.isNotEmpty && mounted) {
+              final levelStr =
+                  (data['level']?.toString() ?? 'info').toLowerCase();
+              final cs = Theme.of(context).colorScheme;
+              final bg = switch (levelStr) {
+                'success' => Colors.green.shade700,
+                'warn' || 'warning' => Colors.orange.shade800,
+                'error' || 'err' => cs.error,
+                _ => cs.inverseSurface,
+              };
+              final fg = switch (levelStr) {
+                'success' || 'warn' || 'warning' || 'error' || 'err' =>
+                    Colors.white,
+                _ => cs.onInverseSurface,
+              };
+              final ms = (data['duration_ms'] as num?)?.toInt() ?? 3000;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    snackText,
+                    style: TextStyle(color: fg),
+                  ),
+                  backgroundColor: bg,
+                  duration: Duration(milliseconds: ms),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+            break;
+
           case 'ui.log.append':
             // Append text to a `$type:"log"` field. Generic — any
             // wapp with a log-typed form field can stream output

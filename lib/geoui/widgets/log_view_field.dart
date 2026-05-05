@@ -13,6 +13,8 @@
 
 import 'package:flutter/material.dart';
 
+import '../../services/wapp_editor_settings.dart';
+
 class LogViewField extends StatefulWidget {
   /// GeoUI field name — used as the key when appending lines from
   /// the host side. The host looks up the matching field and pushes
@@ -104,8 +106,8 @@ class _LogViewFieldState extends State<LogViewField> {
                     child: Text(
                       '(no output)',
                       style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 12,
+                        fontFamily: WappEditorSettings().fontFamily,
+                        fontSize: WappEditorSettings().logFontSize,
                         color: Colors.white.withAlpha(100),
                       ),
                     ),
@@ -119,10 +121,10 @@ class _LogViewFieldState extends State<LogViewField> {
                       itemCount: lines.length,
                       itemBuilder: (context, i) => Text(
                         lines[i],
-                        style: const TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 12,
-                          height: 1.4,
+                        style: TextStyle(
+                          fontFamily: WappEditorSettings().fontFamily,
+                          fontSize: WappEditorSettings().logFontSize,
+                          height: WappEditorSettings().lineHeight,
                           color: Colors.white,
                         ),
                       ),
