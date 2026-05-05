@@ -58,6 +58,11 @@ class CodeEditorField extends StatefulWidget {
 
 class _CodeEditorFieldState extends State<CodeEditorField> {
   late final SyntaxHighlightController _controller;
+  // Local scroll controller for the editor's SingleChildScrollView.
+  // Without it the wrapping Scrollbar falls through to the
+  // PrimaryScrollController, which has no position attached at the
+  // top level and throws on scroll notifications.
+  final ScrollController _scrollController = ScrollController();
 
   // Matched between the editor and the gutter so line numbers align.
   static const double _fontSize = 13;
@@ -105,6 +110,7 @@ class _CodeEditorFieldState extends State<CodeEditorField> {
   void dispose() {
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -145,7 +151,9 @@ class _CodeEditorFieldState extends State<CodeEditorField> {
               border: Border.all(color: cs.outlineVariant.withAlpha(80)),
             ),
             child: Scrollbar(
+              controller: _scrollController,
               child: SingleChildScrollView(
+                controller: _scrollController,
                 child: IntrinsicHeight(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
