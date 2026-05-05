@@ -1123,9 +1123,15 @@ class GeogramApp extends StatefulWidget {
   State<GeogramApp> createState() => _GeogramAppState();
 }
 
+// Exposed top-level so debug-API callers (log_api_service) can push
+// routes from outside the widget tree — used by wapp_open to
+// programmatically navigate to a WappPage for headless verification.
+final GlobalKey<NavigatorState> rootNavigatorKey =
+    GlobalKey<NavigatorState>();
+
 class _GeogramAppState extends State<GeogramApp> with WidgetsBindingObserver {
   final AppThemeService _themeService = AppThemeService();
-  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  GlobalKey<NavigatorState> get _navigatorKey => rootNavigatorKey;
   EventSubscription<DMNotificationTappedEvent>? _dmNotificationSubscription;
   EventSubscription<EmailNotificationTappedEvent>?
   _emailNotificationSubscription;

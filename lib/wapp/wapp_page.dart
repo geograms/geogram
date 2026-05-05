@@ -72,6 +72,27 @@ class WappPage extends StatefulWidget {
     this.openFile,
   });
 
+  // Debug API hook: the most-recently-mounted WappPage State. Lets
+  // log_api_service.dart drive the active wapp from outside the
+  // widget tree (send actions, snapshot UI state) without coupling
+  // every caller to the internal _WappPageState type.
+  static _WappPageState? activeState;
+
+  /// Snapshot of the active wapp's UI state for debugging/testing.
+  /// Returns null when no wapp is currently mounted.
+  static Map<String, dynamic>? debugSnapshot() =>
+      activeState?._debugSnapshot();
+
+  /// Send an action message to the active wapp, as if the user had
+  /// tapped a button with that action name. Returns true when an
+  /// active wapp consumed the message.
+  static bool debugSendAction(String name) {
+    final s = activeState;
+    if (s == null) return false;
+    s._debugSendAction(name);
+    return true;
+  }
+
   @override
   State<WappPage> createState() => _WappPageState();
 }
@@ -92,6 +113,11 @@ class _WappPageState extends State<WappPage>
   final List<GeoUiBlock> _screens = [];
   final List<String> _screenNames = [];
   TabController? _tabController;
+  // When the wapp drives navigation explicitly via `ui.select_screen`,
+  // hide the TabBar and render a single screen at a time with a
+  // back-arrow on the AppBar. Wapps that never emit `ui.select_screen`
+  // stay on the default tabbed layout for backwards compatibility.
+  bool _stackNav = false;
   Timer? _tickTimer;
   String _status = 'Loading…';
   bool _crashed = false;
@@ -144,6 +170,7 @@ class _WappPageState extends State<WappPage>
   @override
   void initState() {
     super.initState();
+    WappPage.activeState = this;
     unawaited(_loadWapp());
   }
 
@@ -446,6 +473,23 @@ class _WappPageState extends State<WappPage>
             _handleUiSetField(data);
             break;
 
+          case 'ui.select_screen':
+            // Generic primitive: switch the active tab to the
+            // screen with the given name. Lets a wapp navigate
+            // between its own screens (e.g. master → detail) in
+            // response to a card tap.
+            _handleUiSelectScreen(data);
+            break;
+
+          case 'wapps.read_source':
+            // Generic primitive: read a wapp's source files
+            // (source.c, screens/home.ui.json, lang/en.json) from
+            // the shared archive. Powers the App Creator's Edit
+            // flow — selecting a card loads that wapp's code into
+            // the editor tabs.
+            unawaited(_handleWappsReadSource(data));
+            break;
+
           // ── Generic primitives any wapp can use, gated by manifest
           //    permissions. The wapp emits a request with a req_id and
           //    a scope token (e.g. "collection.forum") and gets back
@@ -655,6 +699,8 @@ class _WappPageState extends State<WappPage>
         'error': 'archive unavailable',
         'items': const [],
       }));
+      _engine.handleEvent();
+      _drainOutbox();
       return;
     }
     final items = <Map<String, dynamic>>[];
@@ -685,6 +731,8 @@ class _WappPageState extends State<WappPage>
         'error': '$e',
         'items': const [],
       }));
+      _engine.handleEvent();
+      _drainOutbox();
       return;
     }
     items.sort((a, b) => (a['title'] as String)
@@ -696,6 +744,11 @@ class _WappPageState extends State<WappPage>
       'status': 0,
       'items': items,
     }));
+    /* Without this, the response sits in the wapp inbox until the
+     * next tick — and a wapp with tick_interval_ms=0 (App Creator)
+     * would never see it. */
+    _engine.handleEvent();
+    _drainOutbox();
   }
 
   /// Push a value into a named form field. Goes through the existing
@@ -706,6 +759,86 @@ class _WappPageState extends State<WappPage>
     if (name == null || name.isEmpty) return;
     final value = data['value'];
     _bindings.setValue(name, value ?? '');
+  }
+
+  /// Switch the active screen to the one with the given name. Also
+  /// flips the page into stack-navigation mode (no tab bar, single
+  /// visible screen, back-arrow when not on the entry screen).
+  void _handleUiSelectScreen(Map<String, dynamic> data) {
+    final name = data['name']?.toString();
+    if (name == null || name.isEmpty) return;
+    final idx = _screenNames.indexOf(name);
+    if (idx < 0) return;
+    final c = _tabController;
+    if (c == null) return;
+    setState(() {
+      _stackNav = true;
+      if (idx != c.index) c.index = idx;
+    });
+  }
+
+  /// Read a wapp's source files from the shared archive. Returns
+  /// source.c, screens/home.ui.json, and lang/en.json contents.
+  ///
+  /// Request:
+  ///   {"type":"wapps.read_source","slug":"<folder>","req_id":N}
+  ///
+  /// Response:
+  ///   {"type":"wapps.read_source.response","req_id":N,"status":0,
+  ///    "slug":"...","source":"...","source_ui":"...","source_lang":"..."}
+  Future<void> _handleWappsReadSource(Map<String, dynamic> data) async {
+    final reqId = (data['req_id'] as num?)?.toInt() ?? 0;
+    final slug = data['slug']?.toString() ?? '';
+    void deliver(Map<String, dynamic> body) {
+      _engine.sendMessage(jsonEncode(body));
+      _engine.handleEvent();
+      _drainOutbox();
+    }
+    if (slug.isEmpty || slug.contains('..') || slug.contains('/')) {
+      deliver({
+        'type': 'wapps.read_source.response',
+        'req_id': reqId,
+        'status': -1,
+        'error': 'invalid slug',
+      });
+      return;
+    }
+    final archive = wappArchiveStorage();
+    if (archive == null) {
+      deliver({
+        'type': 'wapps.read_source.response',
+        'req_id': reqId,
+        'status': -3,
+        'error': 'archive unavailable',
+      });
+      return;
+    }
+    String src = '';
+    String srcUi = '';
+    String srcLang = '';
+    try {
+      src = (await archive.readString('$slug/main.c')) ?? '';
+      srcUi =
+          (await archive.readString('$slug/screens/home.ui.json')) ?? '';
+      srcLang = (await archive.readString('$slug/lang/en.json')) ?? '';
+    } catch (e) {
+      deliver({
+        'type': 'wapps.read_source.response',
+        'req_id': reqId,
+        'status': -3,
+        'error': '$e',
+      });
+      return;
+    }
+    deliver({
+      'type': 'wapps.read_source.response',
+      'req_id': reqId,
+      'status': 0,
+      'slug': slug,
+      'source': src,
+      'source_ui': srcUi,
+      'source_lang': srcLang,
+    });
   }
 
   // ── Generic outbox primitives (profile / identity / sign) ─────────
@@ -1661,12 +1794,52 @@ class _WappPageState extends State<WappPage>
 
   @override
   void dispose() {
+    if (identical(WappPage.activeState, this)) {
+      WappPage.activeState = null;
+    }
     _teardownEngineState();
     _tabController?.dispose();
     final id = _manifest?.id ?? widget.wappId;
     final name = _manifest?.name ?? widget.wappId;
     EventBus().fire(WappUnloadedEvent(wappId: id, wappName: name));
     super.dispose();
+  }
+
+  // ── Debug API hooks (called from log_api_service.dart) ──────────
+  // These exist to support headless verification: the test driver
+  // sends action messages and reads back the rendered cards data /
+  // form values without going through the UI. Same JSON shape as
+  // the wapp protocol so the test layer doesn't need a separate
+  // model.
+
+  Map<String, dynamic> _debugSnapshot() {
+    final c = _tabController;
+    final activeIdx = c == null
+        ? -1
+        : c.index.clamp(0, _screenNames.isEmpty ? 0 : _screenNames.length - 1);
+    return {
+      'wapp_id': widget.wappId,
+      'title': widget.title,
+      'status': _status,
+      'crashed': _crashed,
+      'screens': List<String>.from(_screenNames),
+      'active_screen':
+          activeIdx >= 0 && activeIdx < _screenNames.length
+              ? _screenNames[activeIdx]
+              : null,
+      'cards': _cardsData
+          .map((k, v) => MapEntry(k, List<Map<String, dynamic>>.from(v))),
+      'fields': _bindings._values,
+    };
+  }
+
+  void _debugSendAction(String name) {
+    _engine.sendMessage(jsonEncode({
+      'type': 'action',
+      'action': name,
+    }));
+    _engine.handleEvent();
+    _drainOutbox();
   }
 
   /// Per-screen builder. Detects special group `$type` values that
@@ -1997,6 +2170,31 @@ class _WappPageState extends State<WappPage>
         final activeScreen = _screens[activeIndex];
         final wappActions = _wappHeaderActions(activeScreen, i18n);
 
+        if (_stackNav) {
+          // Stack-navigation mode — single screen visible, no tab
+          // bar. The wapp drives navigation via `ui.select_screen`;
+          // the AppBar's leading back-arrow returns to the entry
+          // screen (index 0) when we're deeper.
+          final canGoBack = tabController.index != 0;
+          return Scaffold(
+            appBar: AppBar(
+              leading: canGoBack
+                  ? IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () => setState(() {
+                        tabController.index = 0;
+                      }),
+                    )
+                  : null,
+              title: Text(_titleWithDevMarker()),
+              actions: [...wappActions, ..._devAppBarActions()],
+            ),
+            body: _buildScreen(activeScreen, bindings, i18n),
+          );
+        }
+
+        // Default tabbed layout — wapps that never call
+        // ui.select_screen keep the TabBar.
         return Scaffold(
           appBar: AppBar(
             title: Text(_titleWithDevMarker()),

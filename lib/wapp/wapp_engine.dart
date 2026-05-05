@@ -147,11 +147,17 @@ class WappEngine {
 
   String _readStr(int ptr, int len) {
     final mem = _memory!.view;
-    return String.fromCharCodes(mem.buffer.asUint8List(ptr, len));
+    // Wapp memory holds UTF-8 — codeUnits truncates non-ASCII bytes
+    // back to mojibake. Always decode as UTF-8.
+    return utf8.decode(mem.buffer.asUint8List(ptr, len), allowMalformed: true);
   }
 
   int _writeStr(int ptr, int maxLen, String s) {
-    final bytes = s.codeUnits;
+    // Same reasoning as _readStr — wapps see UTF-8 bytes. codeUnits
+    // would silently drop the high byte of any char outside 0x00-0xFF
+    // (e.g. em-dash U+2014 → 0x14, breaking JSON parsing on the wapp
+    // side). utf8.encode keeps multi-byte sequences intact.
+    final bytes = utf8.encode(s);
     final n = bytes.length < maxLen ? bytes.length : maxLen;
     final mem = _memory!.view;
     for (var i = 0; i < n; i++) mem[ptr + i] = bytes[i];

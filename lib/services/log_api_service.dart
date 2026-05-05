@@ -9,6 +9,7 @@ import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart' show MaterialPageRoute;
 import 'package:path/path.dart' as path;
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -23,6 +24,8 @@ import 'debug_controller.dart';
 import 'now_service.dart';
 import '../models/now_item.dart';
 import 'task_monitor_service.dart';
+import '../wapp/wapp_page.dart';
+import '../main.dart' show rootNavigatorKey;
 import 'power_aware_service.dart';
 import 'security_service.dart';
 import 'storage_config.dart';
@@ -3335,6 +3338,13 @@ class LogApiService
       // Handle task monitor debug actions
       if (action.toLowerCase().startsWith('task_')) {
         return _handleTaskAction(action.toLowerCase(), params, headers);
+      }
+
+      // Handle wapp UI debug actions (snapshot the active wapp,
+      // send actions to it, etc.). Lets headless tests verify a
+      // wapp's rendered UI without driving the Flutter widget tree.
+      if (action.toLowerCase().startsWith('wapp_')) {
+        return _handleWappAction(action.toLowerCase(), params, headers);
       }
 
       // Handle thumbnail subsystem debug actions
@@ -27442,6 +27452,88 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         headers: headers,
       );
     }
+  }
+
+  /// Wapp UI debug actions. Lets headless tests verify whatever wapp
+  /// is currently mounted in WappPage — read its rendered cards
+  /// data, the visible tab list, the form field values, and inject
+  /// action button presses.
+  ///
+  /// Endpoints:
+  ///   wapp_status                     — full snapshot of the active wapp
+  ///   wapp_action?name=<action_name>  — fire an action button programmatically
+  shelf.Response _handleWappAction(
+    String action,
+    Map<String, dynamic> params,
+    Map<String, String> headers,
+  ) {
+    switch (action) {
+      case 'wapp_open':
+        final wappId = params['id']?.toString() ?? '';
+        if (wappId.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'id parameter required'}),
+            headers: headers,
+          );
+        }
+        final nav = rootNavigatorKey.currentState;
+        if (nav == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'navigator not ready'}),
+            headers: headers,
+          );
+        }
+        nav.push(MaterialPageRoute(
+          builder: (_) => WappPage(
+            wappId: wappId,
+            title: params['title']?.toString() ?? wappId,
+          ),
+        ));
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'opened': wappId}),
+          headers: headers,
+        );
+
+      case 'wapp_status':
+        final snap = WappPage.debugSnapshot();
+        if (snap == null) {
+          return shelf.Response.ok(
+            jsonEncode({
+              'success': false,
+              'error': 'no wapp mounted',
+            }),
+            headers: headers,
+          );
+        }
+        return shelf.Response.ok(
+          jsonEncode({'success': true, ...snap}),
+          headers: headers,
+        );
+
+      case 'wapp_action':
+        final name = params['name']?.toString() ?? '';
+        if (name.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'name parameter required'}),
+            headers: headers,
+          );
+        }
+        final ok = WappPage.debugSendAction(name);
+        if (!ok) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'no wapp mounted'}),
+            headers: headers,
+          );
+        }
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'action': name}),
+          headers: headers,
+        );
+    }
+    return shelf.Response.ok(
+      jsonEncode({'success': false, 'error': 'unknown wapp action: $action'}),
+      headers: headers,
+    );
   }
 }
 
