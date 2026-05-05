@@ -1875,6 +1875,22 @@ class _WappPageState extends State<WappPage>
       return _buildVideoScreen(videoGroup, bindings, i18n);
     }
 
+    // Side-by-side split: a `<group $type="split">` with two child
+    // panes. Each pane is itself a normal GeoUI block (a cards
+    // group, a field, or a `<group $type="pane">` wrapping multiple
+    // children). Powers IDE-style layouts: file tree on the left,
+    // editor + compile output on the right.
+    GeoUiBlock? splitGroup;
+    for (final c in screen.children) {
+      if (c.keyword == 'group' && c.type == 'split') {
+        splitGroup = c;
+        break;
+      }
+    }
+    if (splitGroup != null) {
+      return _buildSplitScreen(splitGroup, bindings, i18n);
+    }
+
     // Generic card-list group. The wapp pushes structured items via
     // ui.data and the host renders them as a list or grid of cards.
     // This is a generic primitive — any wapp can use it.
@@ -2307,11 +2323,130 @@ class _WappPageState extends State<WappPage>
       );
     }
 
+    if (layout == 'tree') {
+      return ListView.builder(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        itemCount: items.length,
+        itemBuilder: (_, i) => _buildTreeRow(items[i], cs),
+      );
+    }
+
     return ListView.builder(
       padding: const EdgeInsets.all(12),
       itemCount: items.length,
       itemBuilder: (_, i) => _buildCard(items[i], cs, grid: false),
     );
+  }
+
+  /// Compact single-line tree row. Indents by the number of `/` in
+  /// the item id so a wapp can ship a flat items list whose paths
+  /// imply hierarchy (e.g. "main.c", "screens/home.ui.json").
+  Widget _buildTreeRow(Map<String, dynamic> item, ColorScheme cs) {
+    final id = (item['id'] as String?) ?? '';
+    final title = (item['title'] as String?) ??
+        (id.contains('/') ? id.split('/').last : id);
+    final subtitle = (item['subtitle'] as String?) ?? '';
+    final depth = '/'.allMatches(id).length;
+    final actionsRaw = item['actions'] as List?;
+    final firstAction = actionsRaw == null || actionsRaw.isEmpty
+        ? null
+        : Map<String, dynamic>.from(actionsRaw.first as Map);
+    final isActive = subtitle == 'editing';
+    final iconData = id.endsWith('/')
+        ? Icons.folder_outlined
+        : Icons.insert_drive_file_outlined;
+
+    return InkWell(
+      onTap: firstAction == null
+          ? null
+          : () {
+              _engine.sendMessage(jsonEncode({
+                'type': 'action',
+                'action': firstAction['name']?.toString() ?? '',
+              }));
+              _engine.handleEvent();
+              _drainOutbox();
+            },
+      child: Container(
+        padding: EdgeInsets.fromLTRB(8.0 + depth * 16.0, 6, 8, 6),
+        color: isActive ? cs.primary.withAlpha(28) : null,
+        child: Row(
+          children: [
+            Icon(iconData,
+                size: 16,
+                color: isActive ? cs.primary : cs.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                title,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+                  color: isActive ? cs.primary : cs.onSurface,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Render a `<group $type="split">` as two side-by-side panes.
+  /// Pane content is whatever GeoUI block was declared as a child —
+  /// a cards group, a single field, or a `<group $type="pane">`
+  /// wrapper holding multiple fields.
+  Widget _buildSplitScreen(
+    GeoUiBlock group,
+    GeoUiBindings bindings,
+    I18nContext? i18n,
+  ) {
+    final ratio = group.getNumber('ratio') ?? 0.30;
+    final cs = Theme.of(context).colorScheme;
+    final children = group.children;
+    if (children.isEmpty) return const SizedBox.shrink();
+    if (children.length < 2) {
+      return _buildPane(children.first, bindings, i18n);
+    }
+    final leftFlex = (ratio * 100).clamp(5, 95).round();
+    final rightFlex = 100 - leftFlex;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(
+          flex: leftFlex,
+          child: _buildPane(children[0], bindings, i18n),
+        ),
+        VerticalDivider(width: 1, color: cs.outlineVariant.withAlpha(120)),
+        Expanded(
+          flex: rightFlex,
+          child: _buildPane(children[1], bindings, i18n),
+        ),
+      ],
+    );
+  }
+
+  /// Render one pane of a split. The pane is a normal GeoUI block —
+  /// either a single-block container (cards group, field, action) or
+  /// a `<group $type="pane">` whose own children are rendered as a
+  /// stacked column. Either way we wrap the contents in a synthetic
+  /// `screen` block and recurse into _buildScreen so cards / fields /
+  /// actions all dispatch through their existing renderers.
+  Widget _buildPane(
+    GeoUiBlock pane,
+    GeoUiBindings bindings,
+    I18nContext? i18n,
+  ) {
+    final List<GeoUiBlock> contents = (pane.type == 'pane')
+        ? pane.children
+        : [pane];
+    final synthetic = GeoUiBlock(
+      keyword: 'screen',
+      name: pane.name,
+      children: contents,
+    );
+    return _buildScreen(synthetic, bindings, i18n);
   }
 
   /// Render one card from a `ui.data` item map. Generic layout —
