@@ -394,6 +394,39 @@ class _WappPageState extends State<WappPage>
             changed = true;
             break;
 
+          case 'ui.log.append':
+            // Append text to a `$type:"log"` field. Generic — any
+            // wapp with a log-typed form field can stream output
+            // through this primitive. The wapp identifies the field
+            // by name; the host owns the bindings list it backs.
+            // Either `name`/`field` and either `text`/`line` is
+            // accepted so wapps can match the spec literal or older
+            // examples without breaking.
+            final logField = (data['name'] ?? data['field']) as String?;
+            final logText =
+                (data['text'] ?? data['line']) as String? ?? '';
+            if (logField != null &&
+                logField.isNotEmpty &&
+                logText.isNotEmpty) {
+              final stored = _bindings.getValue(logField);
+              final list = stored is List<String>
+                  ? stored
+                  : <String>[];
+              // Split on newlines so multi-line writes become one
+              // visible row per line. Drop an empty trailing element
+              // when the text ended with \n.
+              final parts = logText.split('\n');
+              for (var i = 0; i < parts.length; i++) {
+                if (i == parts.length - 1 && parts[i].isEmpty) break;
+                list.add(parts[i]);
+              }
+              if (stored is! List<String>) {
+                _bindings.setValue(logField, list);
+              }
+              changed = true;
+            }
+            break;
+
           case 'ui.data':
             // Generic card-list data push. Replaces (not appends) the
             // items associated with `target`. The host's `$type="cards"`
