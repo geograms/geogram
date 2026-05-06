@@ -139,6 +139,8 @@ import '../util/feedback_comment_utils.dart';
 import '../p2p/p2p_service.dart';
 import '../p2p/dht_topics.dart';
 import '../p2p/reachability/reachability_service.dart';
+import '../p2p/relay/relay_promotion_controller.dart';
+import '../p2p/relay/serverless_relay_mediator.dart';
 import '../teleport/nostr/nostr_signaling_channel.dart';
 import 'serverless_settings_service.dart';
 import 'webrtc_config.dart';
@@ -21358,6 +21360,18 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         request.method == 'GET') {
       return _handleServerlessSessions(headers);
     }
+    if (urlPath == 'api/p2p/serverless/relay/promote' &&
+        request.method == 'POST') {
+      return await _handleServerlessRelayPromote(request, headers);
+    }
+    if (urlPath == 'api/p2p/serverless/relay/demote' &&
+        request.method == 'POST') {
+      return await _handleServerlessRelayDemote(headers);
+    }
+    if (urlPath == 'api/p2p/serverless/relay/sessions' &&
+        request.method == 'GET') {
+      return _handleServerlessRelaySessions(headers);
+    }
 
     // POST /api/p2p/offer - Receive offer from sender (called by remote instance)
     if (urlPath == 'api/p2p/offer' && request.method == 'POST') {
@@ -21633,6 +21647,77 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           'signaling_initialized':
               WebRTCSignalingService().toString().isNotEmpty,
           'nostr_signaling_started': NostrSignalingChannel().isStarted,
+        }),
+        headers: headers);
+  }
+
+  Future<shelf.Response> _handleServerlessRelayPromote(
+      shelf.Request request, Map<String, String> headers) async {
+    try {
+      final body = await request.readAsString();
+      bool enable = true;
+      if (body.isNotEmpty) {
+        final data = jsonDecode(body) as Map<String, dynamic>;
+        enable = data['enable'] as bool? ?? true;
+      }
+      final c = RelayPromotionController();
+      if (enable) {
+        await c.forcePromote();
+      } else {
+        await c.forceDemote();
+      }
+      return shelf.Response.ok(
+          jsonEncode({
+            'success': true,
+            'promoted': c.isPromoted,
+            'last_reason': c.lastReason,
+          }),
+          headers: headers);
+    } catch (e) {
+      return shelf.Response.badRequest(
+          body: jsonEncode({'success': false, 'error': e.toString()}),
+          headers: headers);
+    }
+  }
+
+  Future<shelf.Response> _handleServerlessRelayDemote(
+      Map<String, String> headers) async {
+    final c = RelayPromotionController();
+    await c.forceDemote();
+    return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'promoted': c.isPromoted,
+          'last_reason': c.lastReason,
+        }),
+        headers: headers);
+  }
+
+  shelf.Response _handleServerlessRelaySessions(Map<String, String> headers) {
+    // Mediator (consumer-side, PR3) and the station-side mixin (server-side,
+    // PR4) both contribute. Mediator session list is exposed via the
+    // ServerlessRelayMediator singleton. Station-side sessions live on the
+    // station class instance — exposed via RelayPromotionController, which
+    // holds a reference to the active RelayServer adapter.
+    final mediator = ServerlessRelayMediator();
+    final mediatorSessions = mediator.activeRelays.entries
+        .map((e) => {
+              'callsign': e.key,
+              'state': e.value.state.name,
+              'host': e.value.host,
+              'port': e.value.port,
+            })
+        .toList();
+    return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'mediator_started': mediator.isStarted,
+          'mediator_sessions': mediatorSessions,
+          'promotion': {
+            'started': RelayPromotionController().isStarted,
+            'promoted': RelayPromotionController().isPromoted,
+            'last_reason': RelayPromotionController().lastReason,
+          },
         }),
         headers: headers);
   }

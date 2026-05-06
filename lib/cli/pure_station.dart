@@ -43,6 +43,7 @@ import '../api/endpoints/chat_api_paths.dart';
 import '../server/mixins/chat_moderation_mixin.dart';
 import '../server/mixins/chat_modification_mixin.dart';
 import '../server/mixins/chat_nip05_mixin.dart';
+import '../server/mixins/serverless_relay_mixin.dart';
 import '../util/chat_scripts.dart';
 import '../util/nostr_login_scripts.dart';
 import '../util/nostr_bundle.dart';
@@ -741,8 +742,12 @@ class PureTileCache {
 }
 
 /// Pure Dart station server for CLI mode
-class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin, HomepageMixin
+class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatModificationMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin, HomepageMixin, ServerlessRelayMixin
     implements StationCommandInterface, AcmeChallengeHandler {
+  @override
+  void relayLog(String level, String message) =>
+      _log(level, message);
+
   HttpServer? _httpServer;
   HttpServer? _httpsServer;
   SMTPServer? _smtpServer;

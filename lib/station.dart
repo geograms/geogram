@@ -66,6 +66,7 @@ import 'server/mixins/email_handler_mixin.dart';
 import 'server/mixins/console_command_mixin.dart';
 import 'server/mixins/chat_moderation_mixin.dart';
 import 'server/mixins/chat_nip05_mixin.dart';
+import 'server/mixins/serverless_relay_mixin.dart';
 import 'server/mixins/conference_mixin.dart';
 import 'server/mixins/blog_handler_mixin.dart';
 import 'server/mixins/device_proxy_mixin.dart';
@@ -628,7 +629,7 @@ class PureTileCache {
 }
 
 /// Unified station server for CLI and Android modes
-class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin, HomepageMixin, ContentBrowseMixin, ContributorSubmitMixin
+class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMixin, ChatNip05Mixin, ChatModerationMixin, ConferenceMixin, XmppServerMixin, KarmaMixin, DeviceProxyMixin, MirrorNotifyMixin, HomepageMixin, ContentBrowseMixin, ContributorSubmitMixin, ServerlessRelayMixin
     implements StationCommandInterface, AcmeChallengeHandler {
 
   // Wire the ContentBrowseMixin to the station's per-callsign
@@ -637,6 +638,12 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
   @override
   ProfileStorage get contentBrowseStorage =>
       FilesystemProfileStorage('$_dataDir/devices/${_settings.callsign}');
+
+  /// ServerlessRelayMixin contract: route relay log lines through the
+  /// station's existing log helper so they appear alongside other station logs.
+  @override
+  void relayLog(String level, String message) =>
+      _log(level, message);
 
   @override
   ProfileStorage get contributorStorage => contentBrowseStorage;

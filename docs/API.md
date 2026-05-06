@@ -5198,3 +5198,33 @@ for confirming Phase-2 acceptance (signaling source: `NostrDM`, ICE state:
 ```bash
 curl http://localhost:8080/api/p2p/serverless/sessions
 ```
+
+### POST /api/p2p/serverless/relay/promote
+
+Manual override of `RelayPromotionController` (BT-DHT-v2 §10). Promotes
+the local node to the relay tier without waiting for the §10.1 promotion
+criteria — useful for testing without battery / Wi-Fi conditions.
+
+```bash
+curl -X POST http://localhost:8080/api/p2p/serverless/relay/promote \
+  -H 'Content-Type: application/json' \
+  -d '{"enable": true}'
+```
+
+### POST /api/p2p/serverless/relay/demote
+
+Force-demote.
+
+```bash
+curl -X POST http://localhost:8080/api/p2p/serverless/relay/demote
+```
+
+### GET /api/p2p/serverless/relay/sessions
+
+List active relay-mediated sessions. Includes both consumer-side sessions
+(opened via `ServerlessRelayMediator` after ICE failure) and the
+promotion controller's current state.
+
+```bash
+curl http://localhost:8080/api/p2p/serverless/relay/sessions
+```
