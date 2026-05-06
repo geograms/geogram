@@ -2614,23 +2614,76 @@ class _WappPageState extends State<WappPage>
   /// Render one pane of a split. The pane is a normal GeoUI block —
   /// either a single-block container (cards group, field, action) or
   /// a `<group $type="pane">` whose own children are rendered as a
-  /// stacked column. Either way we wrap the contents in a synthetic
-  /// `screen` block and recurse into _buildScreen so cards / fields /
-  /// actions all dispatch through their existing renderers.
+  /// stacked column.
+  ///
+  /// When the type is `pane` and children are mixed (fields/actions
+  /// above a cards/split block), the non-expandable children render
+  /// as a header column via GeoUiScreenRenderer, and the first
+  /// cards/split child expands to fill the remaining space below.
   Widget _buildPane(
     GeoUiBlock pane,
     GeoUiBindings bindings,
     I18nContext? i18n,
   ) {
-    final List<GeoUiBlock> contents = (pane.type == 'pane')
-        ? pane.children
-        : [pane];
-    final synthetic = GeoUiBlock(
-      keyword: 'screen',
-      name: pane.name,
-      children: contents,
+    if (pane.type != 'pane') {
+      final synthetic = GeoUiBlock(
+        keyword: 'screen',
+        name: pane.name,
+        children: [pane],
+      );
+      return _buildScreen(synthetic, bindings, i18n);
+    }
+
+    // Separate plain header blocks (fields, actions, labelled groups)
+    // from the first expandable block (cards, split, nested pane).
+    final header = <GeoUiBlock>[];
+    GeoUiBlock? expandable;
+    for (final c in pane.children) {
+      if (expandable == null &&
+          c.keyword == 'group' &&
+          (c.type == 'cards' || c.type == 'split' || c.type == 'pane')) {
+        expandable = c;
+      } else {
+        header.add(c);
+      }
+    }
+
+    if (expandable == null) {
+      // All plain children — delegate to _buildScreen as before.
+      final synthetic = GeoUiBlock(
+        keyword: 'screen',
+        name: pane.name,
+        children: pane.children,
+      );
+      return _buildScreen(synthetic, bindings, i18n);
+    }
+
+    void dispatch(String action) {
+      _engine.sendMessage(jsonEncode({'type': 'action', 'action': action}));
+      _engine.handleEvent();
+      _drainOutbox();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (header.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: GeoUiScreenRenderer(
+              screen: GeoUiBlock(
+                keyword: 'screen',
+                name: null,
+                children: header,
+              ),
+              bindings: bindings,
+              i18n: i18n,
+              onAction: dispatch,
+            ),
+          ),
+        Expanded(child: _buildPane(expandable, bindings, i18n)),
+      ],
     );
-    return _buildScreen(synthetic, bindings, i18n);
   }
 
   /// Render one card from a `ui.data` item map. Generic layout —
