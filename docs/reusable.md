@@ -12026,3 +12026,167 @@ await svc.update((s) => s
   ..relayMode = true
   ..batteryThresholdPct = 60);
 ```
+
+#### Nip44V2
+
+Pure-Dart NIP-44 v2 encryption (secp256k1 ECDH → HKDF-SHA256 → ChaCha20 +
+HMAC-SHA256). Drop-in replacement for the `nostr_bundle.dart` JS path,
+currently used only by the WebRTC NOSTR-DM signaling channel pending a
+follow-up cleanup migration.
+
+**File:** `lib/util/nip44_v2.dart`
+
+```dart
+import 'package:geogram/util/nip44_v2.dart';
+
+final ciphertext = Nip44V2.encrypt(
+  'hello',
+  ourSecKeyHex,    // 64 hex chars (private key)
+  theirPubKeyHex,  // 64 hex chars (x-only public key)
+);
+final plaintext = Nip44V2.decrypt(
+  ciphertext,
+  theirSecKeyHex,
+  ourPubKeyHex,
+);
+```
+
+`Nip44V2.conversationKey(secHex, pubHex)` returns the 32-byte HKDF-extract
+output; symmetric (alice/bob produce the same key from either direction).
+Throws `FormatException` on tampered MACs. Round-trip + tamper-detection
+tests live in `test/nip44_v2_test.dart`.
+
+#### NostrSignalingChannel
+
+WebRTC SDP/ICE signaling over NIP-44 NOSTR DMs (kind-30078,
+`["d", "geogram-signaling-v1"]`). Subscribes across every read-enabled
+relay configured in `NostrClientService` and publishes to every
+write-enabled relay.
+
+**File:** `lib/teleport/nostr/nostr_signaling_channel.dart`
+
+```dart
+final ch = NostrSignalingChannel();
+await ch.start();
+ch.incomingSignals.listen((sig) {
+  // sig: WebRTCSignal (offer/answer/iceCandidate/bye)
+});
+await ch.sendSignal(toNpub: 'npub1...', signal: offerSignal);
+```
+
+Used as the 4th path in `WebRTCSignalingService` (WS → PeerRelay → NostrDM
+→ DHT) and gated on `ServerlessSettings.nostrSignalingEnabled`.
+
+`NostrClientService` exposes two helpers built specifically for this
+channel:
+- `subscribeAll(filter, subscriptionId: …)` — adds a NIP-01 REQ on every
+  read-enabled relay.
+- `publishSigned(NostrEvent)` — fan-out publish to every write-enabled
+  relay. Returns the count.
+- `rawEvents` — `Stream<NostrEvent>` of every event seen on any relay
+  (before feed dedup). Listeners filter and dedup by `event.id`.
+
+#### RelayMessage codec
+
+Wire format for the BT-DHT-v2 §10.4 self-bootstrapping relay protocol.
+Used by both consumer (`RelayClient`) and station-side
+(`ServerlessRelayMixin`).
+
+**File:** `lib/p2p/relay/relay_protocol.dart`
+
+```dart
+final frame = RelayMessage(
+  type: RelayMessageType.data,
+  sessionId: sessionIdBytes,    // exactly 16 bytes
+  payload: appBytes,            // ≤ 1 MiB
+);
+final wire = frame.encode();
+
+final (frames, leftover) = RelayMessage.decodeAll(buffer);
+```
+
+Frame: `1B type | 16B session id | 4B BE length | payload`. Codec round-trip
+tests in `test/relay_protocol_test.dart`.
+
+#### RelayClient
+
+Consumer-side TCP client for the spec relay protocol. Used by
+`ServerlessRelayMediator` when WebRTC ICE fails and a manual relay is
+configured.
+
+**File:** `lib/p2p/relay/relay_client.dart`
+
+```dart
+final c = RelayClient(host: '1.2.3.4', port: 9876);
+await c.connect();
+final rtt = await c.ping();           // latency probe (HELLO/PONG)
+await c.openSession(
+  localNpubHex: '…',
+  remoteNpubHex: '…',
+  sessionId: random16Bytes,
+);
+c.incoming.listen((bytes) { /* … */ });
+c.send(payloadBytes);
+await c.disconnect();
+```
+
+#### ServerlessRelayMixin
+
+Server-side of the §10 relay tier. Mixed into both `PureStationServer`
+(CLI) and `StationServer` (Desktop) per CLAUDE.md "never duplicate
+station code". Implementing classes provide:
+
+```dart
+@override
+void relayLog(String level, String message) => _log(level, message);
+```
+
+The mixin handles bind/accept, session matching by `(npubA, npubB,
+sessionId)`, 5-minute idle timeouts, max-session caps, and 24-hour
+rolling bandwidth accounting against `ServerlessSettings`.
+
+**File:** `lib/server/mixins/serverless_relay_mixin.dart`
+
+#### RelayPromotionController
+
+Evaluates BT-DHT-v2 §10.1 promotion criteria once per minute (and on
+reachability changes). When all criteria pass — reachability OK, opt-in
+on, Wi-Fi, non-metered, plugged-or-battery>threshold — calls
+`server.startServingRelay(port)` and announces on `RELAY_TOPIC`.
+Demotes immediately when any criterion fails.
+
+**File:** `lib/p2p/relay/relay_promotion_controller.dart`
+
+```dart
+final c = RelayPromotionController();
+c.setServer(myStation);   // anything implementing RelayServer
+await c.start();
+await c.forcePromote();   // bypass criteria for testing
+```
+
+Battery and connectivity probes use conditional imports
+(`battery_probe_io.dart` / `_stub.dart`,
+`connectivity_probe_io.dart` / `_stub.dart`); `unknown` returns make the
+host ineligible rather than mis-promoting.
+
+#### ServerlessRelayMediator
+
+Listens to `WebRTCPeerManager.onIceFailed` and opens a relay-mediated
+session against `ServerlessSettings.manualRelayHostPort` (or, in PR4+,
+DHT-discovered relays from `RELAY_TOPIC`). Logs/exposes its state via the
+`/api/p2p/serverless/relay/sessions` debug endpoint.
+
+**File:** `lib/p2p/relay/serverless_relay_mediator.dart`
+
+#### ConnectionManager runtime transport gating
+
+For tests and debug overrides only: `disableTransport(id)` and
+`enableTransport(id)` hide a transport from routing without
+unregistering. Live state is at
+`/api/p2p/serverless/transports{,/disable,/enable,/force-only}`.
+
+```dart
+ConnectionManager().disableTransport('lan');     // skip LAN even if reachable
+ConnectionManager().enableTransport('lan');      // restore
+ConnectionManager().disabledTransportIds;        // current set
+```

@@ -21372,6 +21372,22 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         request.method == 'GET') {
       return _handleServerlessRelaySessions(headers);
     }
+    if (urlPath == 'api/p2p/serverless/transports' &&
+        request.method == 'GET') {
+      return _handleListTransports(headers);
+    }
+    if (urlPath == 'api/p2p/serverless/transports/disable' &&
+        request.method == 'POST') {
+      return await _handleDisableTransport(request, headers);
+    }
+    if (urlPath == 'api/p2p/serverless/transports/enable' &&
+        request.method == 'POST') {
+      return await _handleEnableTransport(request, headers);
+    }
+    if (urlPath == 'api/p2p/serverless/transports/force-only' &&
+        request.method == 'POST') {
+      return await _handleForceOnlyTransport(request, headers);
+    }
 
     // POST /api/p2p/offer - Receive offer from sender (called by remote instance)
     if (urlPath == 'api/p2p/offer' && request.method == 'POST') {
@@ -21691,6 +21707,139 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           'last_reason': c.lastReason,
         }),
         headers: headers);
+  }
+
+  shelf.Response _handleListTransports(Map<String, String> headers) {
+    final cm = ConnectionManager();
+    final out = <Map<String, dynamic>>[];
+    for (final t in cm.transports) {
+      out.add({
+        'id': t.id,
+        'name': t.name,
+        'priority': t.priority,
+        'available': t.isAvailable,
+        'initialized': t.isInitialized,
+        'runtime_disabled': cm.disabledTransportIds.contains(t.id),
+      });
+    }
+    out.sort((a, b) =>
+        (a['priority'] as int).compareTo(b['priority'] as int));
+    return shelf.Response.ok(
+      jsonEncode({
+        'success': true,
+        'count': out.length,
+        'disabled_count': cm.disabledTransportIds.length,
+        'transports': out,
+      }),
+      headers: headers,
+    );
+  }
+
+  Future<shelf.Response> _handleDisableTransport(
+      shelf.Request request, Map<String, String> headers) async {
+    try {
+      final body = await request.readAsString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final id = data['id'] as String?;
+      if (id == null || id.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({'success': false, 'error': 'id is required'}),
+          headers: headers,
+        );
+      }
+      ConnectionManager().disableTransport(id);
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'disabled': id,
+          'currently_disabled':
+              ConnectionManager().disabledTransportIds.toList(),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleEnableTransport(
+      shelf.Request request, Map<String, String> headers) async {
+    try {
+      final body = await request.readAsString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final id = data['id'] as String?;
+      final all = data['all'] as bool? ?? false;
+      final cm = ConnectionManager();
+      if (all) {
+        for (final tid in cm.disabledTransportIds.toList()) {
+          cm.enableTransport(tid);
+        }
+      } else if (id != null && id.isNotEmpty) {
+        cm.enableTransport(id);
+      } else {
+        return shelf.Response.badRequest(
+          body: jsonEncode(
+              {'success': false, 'error': 'id or all=true is required'}),
+          headers: headers,
+        );
+      }
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'currently_disabled': cm.disabledTransportIds.toList(),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  /// Disables every transport NOT in the supplied keep-list. Convenience
+  /// for tests: `{"keep": ["webrtc", "dht"]}` pins routing to the
+  /// serverless P2P path.
+  Future<shelf.Response> _handleForceOnlyTransport(
+      shelf.Request request, Map<String, String> headers) async {
+    try {
+      final body = await request.readAsString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final keepList = (data['keep'] as List?)?.cast<String>() ?? const [];
+      if (keepList.isEmpty) {
+        return shelf.Response.badRequest(
+          body: jsonEncode(
+              {'success': false, 'error': 'keep list must be non-empty'}),
+          headers: headers,
+        );
+      }
+      final cm = ConnectionManager();
+      final keep = keepList.toSet();
+      for (final t in cm.transports) {
+        if (!keep.contains(t.id)) {
+          cm.disableTransport(t.id);
+        } else {
+          cm.enableTransport(t.id);
+        }
+      }
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'kept': keepList,
+          'currently_disabled': cm.disabledTransportIds.toList(),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
   }
 
   shelf.Response _handleServerlessRelaySessions(Map<String, String> headers) {

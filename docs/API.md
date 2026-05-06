@@ -5228,3 +5228,47 @@ promotion controller's current state.
 ```bash
 curl http://localhost:8080/api/p2p/serverless/relay/sessions
 ```
+
+### GET /api/p2p/serverless/transports
+
+List every registered `Transport` with its priority, availability, and
+runtime-disabled flag. Sorted by priority ascending (highest priority first).
+Useful as the first call in any test runbook to confirm which paths are
+candidates.
+
+```bash
+curl http://localhost:8080/api/p2p/serverless/transports | jq
+```
+
+### POST /api/p2p/serverless/transports/disable
+
+Hide a transport from routing without unregistering it. The transport stays
+initialized — `enableTransport` reverts the change. Used by the live test
+to force the serverless WebRTC/DHT path even when LAN/USB would normally
+win on priority.
+
+```bash
+curl -X POST http://localhost:8080/api/p2p/serverless/transports/disable \
+  -H 'Content-Type: application/json' -d '{"id": "lan"}'
+```
+
+### POST /api/p2p/serverless/transports/enable
+
+Re-enable a runtime-disabled transport. Pass `{"all": true}` to clear all
+disables in one shot.
+
+```bash
+curl -X POST http://localhost:8080/api/p2p/serverless/transports/enable \
+  -H 'Content-Type: application/json' -d '{"all": true}'
+```
+
+### POST /api/p2p/serverless/transports/force-only
+
+Convenience: disable every transport NOT in the `keep` list. Equivalent to
+issuing one `disable` per other transport. Pin routing to the serverless
+path with:
+
+```bash
+curl -X POST http://localhost:8080/api/p2p/serverless/transports/force-only \
+  -H 'Content-Type: application/json' -d '{"keep": ["webrtc", "dht"]}'
+```

@@ -173,9 +173,36 @@ class ConnectionManager {
   /// Get all registered transports
   List<Transport> get transports => _transports.values.toList();
 
-  /// Get available transports (on this platform)
-  List<Transport> get availableTransports =>
-      _transports.values.where((t) => t.isAvailable).toList();
+  /// Runtime-disabled transport IDs (debug-only override). When a transport
+  /// id is in this set the routing strategy treats it as unavailable —
+  /// useful for forcing the serverless WebRTC/DHT path during testing
+  /// even when LAN/USB would normally win on priority.
+  final Set<String> _disabledTransports = <String>{};
+
+  /// Disable a transport at runtime without unregistering it. Reversible
+  /// via [enableTransport]. The transport stays initialized — only
+  /// routing skips it.
+  void disableTransport(String id) {
+    _disabledTransports.add(id);
+    LogService().log('ConnectionManager: transport "$id" disabled at runtime');
+  }
+
+  /// Re-enable a previously runtime-disabled transport.
+  void enableTransport(String id) {
+    if (_disabledTransports.remove(id)) {
+      LogService().log('ConnectionManager: transport "$id" re-enabled');
+    }
+  }
+
+  /// IDs of transports currently disabled at runtime.
+  Set<String> get disabledTransportIds =>
+      Set.unmodifiable(_disabledTransports);
+
+  /// Get available transports (on this platform). Excludes any transport
+  /// that has been runtime-disabled via [disableTransport].
+  List<Transport> get availableTransports => _transports.values
+      .where((t) => t.isAvailable && !_disabledTransports.contains(t.id))
+      .toList();
 
   /// Set the routing strategy
   void setRoutingStrategy(RoutingStrategy strategy) {
