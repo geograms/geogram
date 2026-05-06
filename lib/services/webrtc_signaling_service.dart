@@ -38,8 +38,11 @@ class WebRTCSignalingService {
   /// Stream controller for incoming WebRTC signals
   final _signalController = StreamController<WebRTCSignal>.broadcast();
 
-  /// Pending offers waiting for answers (sessionId -> completer)
-  final Map<String, Completer<WebRTCSignal>> _pendingOffers = {};
+  /// Pending offers waiting for answers (sessionId -> tracker).
+  /// We keep the original offer alongside the completer so the WebSocket
+  /// `webrtc_error: target_not_connected` handler can transparently retry
+  /// the same offer over a different signaling channel (NOSTR-DM, DHT).
+  final Map<String, _PendingOffer> _pendingOffers = {};
 
   /// Subscription to WebSocket messages
   StreamSubscription<Map<String, dynamic>>? _wsSubscription;
@@ -99,9 +102,9 @@ class WebRTCSignalingService {
     _signalController.close();
 
     // Cancel any pending offers
-    for (final completer in _pendingOffers.values) {
-      if (!completer.isCompleted) {
-        completer.completeError(
+    for (final pending in _pendingOffers.values) {
+      if (!pending.completer.isCompleted) {
+        pending.completer.completeError(
           StateError('Signaling service disposed while waiting for answer'),
         );
       }
@@ -146,13 +149,15 @@ class WebRTCSignalingService {
 
     // Create completer for the answer
     final completer = Completer<WebRTCSignal>();
-    _pendingOffers[sessionId] = completer;
+    final pending = _PendingOffer(completer: completer, offer: offer);
+    _pendingOffers[sessionId] = pending;
 
     try {
-      // Send the offer
-      await _sendSignal(offer);
+      // Send the offer (records which path it took on the pending tracker)
+      await _sendSignal(offer, pending: pending);
       LogService().log(
-        'WebRTCSignaling: Sent offer to $toCallsign (session: $sessionId)',
+        'WebRTCSignaling: Sent offer to $toCallsign (session: $sessionId)'
+        ' via ${pending.lastPath ?? "unknown"}',
       );
 
       // Wait for answer with timeout
@@ -229,59 +234,85 @@ class WebRTCSignalingService {
     );
   }
 
-  /// Send a signal via WebSocket when connected, otherwise over DHT rendezvous.
-  Future<void> _sendSignal(WebRTCSignal signal) async {
-    if (_wsService.isConnected) {
+  /// Send a signal via the first available signaling path.
+  ///
+  /// Order: WebSocket → peer relay → NOSTR-DM → DHT.
+  ///
+  /// Pass [pending] when sending an offer so the WebSocket-side
+  /// `webrtc_error: target_not_connected` handler can transparently
+  /// retry on the next path. [skipPaths] excludes already-failed paths
+  /// during such retries.
+  Future<void> _sendSignal(
+    WebRTCSignal signal, {
+    _PendingOffer? pending,
+    Set<String> skipPaths = const {},
+  }) async {
+    if (!skipPaths.contains('ws') && _wsService.isConnected) {
       _wsService.sendWebRTCSignal(signal.toJson());
+      pending?.lastPath = 'ws';
+      pending?.triedPaths.add('ws');
       return;
     }
 
-    final sentViaRelay = await _peerRelayService.sendSignalingMessage(
-      signal.toCallsign,
-      signal.toJson(),
-    );
-    if (sentViaRelay) {
-      LogService().log(
-        'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via peer relay',
+    if (!skipPaths.contains('relay')) {
+      final sentViaRelay = await _peerRelayService.sendSignalingMessage(
+        signal.toCallsign,
+        signal.toJson(),
       );
-      return;
+      if (sentViaRelay) {
+        LogService().log(
+          'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via peer relay',
+        );
+        pending?.lastPath = 'relay';
+        pending?.triedPaths.add('relay');
+        return;
+      }
     }
 
     // BT-DHT-v2 §8: NIP-44 NOSTR DM. Works whenever we know the peer's
     // npub and at least one configured NOSTR relay is connected — i.e.
     // the serverless path that doesn't require Geogram station infrastructure.
-    final settings = ServerlessSettingsService().current;
-    if (settings.enableServerless && settings.nostrSignalingEnabled) {
-      final theirNpub = _resolveNpubForCallsign(signal.toCallsign);
-      if (theirNpub != null) {
-        final n = await NostrSignalingChannel().sendSignal(
-          toNpub: theirNpub,
-          signal: signal,
-        );
-        if (n > 0) {
-          LogService().log(
-            'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} '
-            'via NOSTR DM ($n relays)',
+    if (!skipPaths.contains('nostr')) {
+      final settings = ServerlessSettingsService().current;
+      if (settings.enableServerless && settings.nostrSignalingEnabled) {
+        final theirNpub = _resolveNpubForCallsign(signal.toCallsign);
+        if (theirNpub != null) {
+          final n = await NostrSignalingChannel().sendSignal(
+            toNpub: theirNpub,
+            signal: signal,
           );
-          return;
+          if (n > 0) {
+            LogService().log(
+              'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} '
+              'via NOSTR DM ($n relays)',
+            );
+            pending?.lastPath = 'nostr';
+            pending?.triedPaths.add('nostr');
+            return;
+          }
         }
       }
     }
 
-    final sentViaDht = await P2PService().sendSignalingMessage(
-      signal.toCallsign,
-      signal.toJson(),
-    );
-    if (!sentViaDht) {
-      LogService().log(
-        'WebRTCSignaling: No signaling path for ${signal.type.name} to ${signal.toCallsign}',
+    if (!skipPaths.contains('dht')) {
+      final sentViaDht = await P2PService().sendSignalingMessage(
+        signal.toCallsign,
+        signal.toJson(),
       );
-      throw StateError('No signaling path to ${signal.toCallsign}');
+      if (sentViaDht) {
+        LogService().log(
+          'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via DHT rendezvous',
+        );
+        pending?.lastPath = 'dht';
+        pending?.triedPaths.add('dht');
+        return;
+      }
     }
 
     LogService().log(
-      'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via DHT rendezvous',
+      'WebRTCSignaling: No signaling path for ${signal.type.name} to ${signal.toCallsign} (skipped: $skipPaths)',
     );
+    throw StateError('No signaling path to ${signal.toCallsign}');
   }
 
   /// Look up the recipient's bech32 npub by callsign via DevicesService.
@@ -299,7 +330,54 @@ class WebRTCSignalingService {
 
   /// Handle incoming WebSocket messages.
   void _handleWebSocketMessage(Map<String, dynamic> message) {
+    // The station can relay back `webrtc_error` when the target peer
+    // isn't on the same WebSocket. Treat `target_not_connected` as a
+    // signal to retry the offer over the next available path
+    // (NOSTR-DM, DHT) — the station-WebSocket path is then implicitly
+    // out of the running for this session.
+    if (message['type'] == 'webrtc_error') {
+      final err = message['error'] as String?;
+      final sessionId = message['session_id'] as String?;
+      if (err == 'target_not_connected' && sessionId != null) {
+        final pending = _pendingOffers[sessionId];
+        // Stations relay back webrtc_error once per delivery attempt and
+        // can emit ~8 of them per offer. Only fire ONE retry: gate on
+        // `retryStarted` so duplicate errors are absorbed silently.
+        if (pending != null &&
+            !pending.completer.isCompleted &&
+            !pending.retryStarted) {
+          pending.retryStarted = true;
+          pending.triedPaths.add('ws');
+          unawaited(_retryPendingOffer(sessionId, pending));
+        }
+      }
+      return;
+    }
     _handleIncomingSignal(message, source: 'WebSocket');
+  }
+
+  /// Re-send a pending offer over the next available signaling path,
+  /// skipping any path that already failed for this session. Errors the
+  /// completer when no further path is available.
+  Future<void> _retryPendingOffer(
+    String sessionId,
+    _PendingOffer pending,
+  ) async {
+    try {
+      LogService().log(
+        'WebRTCSignaling: Retrying offer to ${pending.offer.toCallsign} '
+        '(session: $sessionId, skip: ${pending.triedPaths})',
+      );
+      await _sendSignal(pending.offer, pending: pending,
+          skipPaths: Set.of(pending.triedPaths));
+    } catch (e) {
+      _pendingOffers.remove(sessionId);
+      if (!pending.completer.isCompleted) {
+        pending.completer.completeError(StateError(
+          'No remaining signaling path to ${pending.offer.toCallsign}: $e',
+        ));
+      }
+    }
   }
 
   /// Handle incoming DHT rendezvous messages.
@@ -315,9 +393,9 @@ class WebRTCSignalingService {
   /// Handle incoming NOSTR-DM signals (already decrypted into WebRTCSignal).
   void _handleNostrSignal(WebRTCSignal signal) {
     if (signal.type == WebRTCSignalType.answer) {
-      final completer = _pendingOffers.remove(signal.sessionId);
-      if (completer != null && !completer.isCompleted) {
-        completer.complete(signal);
+      final pending = _pendingOffers.remove(signal.sessionId);
+      if (pending != null && !pending.completer.isCompleted) {
+        pending.completer.complete(signal);
         LogService().log(
           'WebRTCSignaling: Received answer from ${signal.fromCallsign} '
           'via NostrDM (session: ${signal.sessionId})',
@@ -346,9 +424,9 @@ class WebRTCSignalingService {
 
       // Check if this is an answer to a pending offer
       if (signal.type == WebRTCSignalType.answer) {
-        final completer = _pendingOffers.remove(signal.sessionId);
-        if (completer != null && !completer.isCompleted) {
-          completer.complete(signal);
+        final pending = _pendingOffers.remove(signal.sessionId);
+        if (pending != null && !pending.completer.isCompleted) {
+          pending.completer.complete(signal);
           LogService().log(
             'WebRTCSignaling: Received answer from ${signal.fromCallsign} via $source (session: ${signal.sessionId})',
           );
@@ -376,4 +454,20 @@ class WebRTCSignalingService {
         _peerRelayService.canRelayTo(callsign) ||
         P2PService().canSignalPeer(callsign);
   }
+}
+
+/// Tracks an in-flight offer so the WebSocket-error handler can retry
+/// it on the next signaling channel. [triedPaths] accumulates the
+/// channels we've already attempted; [lastPath] is the most recent.
+class _PendingOffer {
+  _PendingOffer({required this.completer, required this.offer});
+  final Completer<WebRTCSignal> completer;
+  final WebRTCSignal offer;
+  final Set<String> triedPaths = {};
+  String? lastPath;
+
+  /// True once we've fired a retry for this session. Stops duplicate
+  /// `webrtc_error` messages (stations emit ~8 of them) from queueing
+  /// 8× NOSTR publishes and tripping relay rate limits.
+  bool retryStarted = false;
 }
