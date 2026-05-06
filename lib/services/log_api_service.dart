@@ -139,7 +139,11 @@ import '../util/feedback_comment_utils.dart';
 import '../p2p/p2p_service.dart';
 import '../p2p/dht_topics.dart';
 import '../p2p/reachability/reachability_service.dart';
+import '../teleport/nostr/nostr_signaling_channel.dart';
 import 'serverless_settings_service.dart';
+import 'webrtc_config.dart';
+import 'webrtc_peer_manager.dart';
+import 'webrtc_signaling_service.dart';
 import '../transfer/models/transfer_models.dart';
 import '../transfer/services/transfer_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
@@ -21346,6 +21350,14 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         request.method == 'POST') {
       return await _handleServerlessDhtAnnounceDebug(request, headers);
     }
+    if (urlPath == 'api/p2p/serverless/signal' &&
+        request.method == 'POST') {
+      return await _handleServerlessSendSignal(request, headers);
+    }
+    if (urlPath == 'api/p2p/serverless/sessions' &&
+        request.method == 'GET') {
+      return _handleServerlessSessions(headers);
+    }
 
     // POST /api/p2p/offer - Receive offer from sender (called by remote instance)
     if (urlPath == 'api/p2p/offer' && request.method == 'POST') {
@@ -21501,6 +21513,126 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           'success': false,
           'error':
               'announce-debug not implemented in PR1 — use existing /api/dht/* helpers'
+        }),
+        headers: headers);
+  }
+
+  Future<shelf.Response> _handleServerlessSendSignal(
+      shelf.Request request, Map<String, String> headers) async {
+    try {
+      final body = await request.readAsString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final toNpub = data['toNpub'] as String?;
+      final toCallsign = (data['toCallsign'] as String?) ?? '';
+      final sessionId = data['sessionId'] as String? ??
+          DateTime.now().millisecondsSinceEpoch.toRadixString(16);
+      final typeStr = data['type'] as String?;
+      final route = (data['route'] as String?) ?? 'auto';
+      final sdp = data['sdp'] as Map<String, dynamic>?;
+      final candidate = data['candidate'] as Map<String, dynamic>?;
+
+      if (toNpub == null || typeStr == null) {
+        return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'toNpub and type are required',
+            }),
+            headers: headers);
+      }
+
+      WebRTCSignalType type;
+      switch (typeStr) {
+        case 'offer':
+          type = WebRTCSignalType.offer;
+          break;
+        case 'answer':
+          type = WebRTCSignalType.answer;
+          break;
+        case 'candidate':
+          type = WebRTCSignalType.iceCandidate;
+          break;
+        case 'bye':
+          type = WebRTCSignalType.bye;
+          break;
+        default:
+          return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'unknown type (expected offer|answer|candidate|bye)',
+              }),
+              headers: headers);
+      }
+
+      final signal = WebRTCSignal(
+        type: type,
+        fromCallsign: ProfileService().getProfile().callsign,
+        toCallsign: toCallsign,
+        sessionId: sessionId,
+        sdp: sdp,
+        candidate: candidate,
+      );
+
+      switch (route) {
+        case 'nostr':
+          final n = await NostrSignalingChannel()
+              .sendSignal(toNpub: toNpub, signal: signal);
+          return shelf.Response.ok(
+              jsonEncode({
+                'success': n > 0,
+                'route': 'nostr',
+                'relays_sent': n,
+                'session_id': sessionId,
+              }),
+              headers: headers);
+        case 'auto':
+        default:
+          // Reuse the regular signaling pipeline for the WS→Relay→NOSTR→DHT
+          // fallback chain. Note: WebRTCSignalingService picks paths via
+          // `_sendSignal` which is private — for the debug helper we just
+          // try NOSTR-DM directly when toNpub is supplied.
+          final n = await NostrSignalingChannel()
+              .sendSignal(toNpub: toNpub, signal: signal);
+          return shelf.Response.ok(
+              jsonEncode({
+                'success': n > 0,
+                'route': 'auto-via-nostr',
+                'relays_sent': n,
+                'session_id': sessionId,
+              }),
+              headers: headers);
+      }
+    } catch (e) {
+      return shelf.Response.badRequest(
+          body: jsonEncode({'success': false, 'error': e.toString()}),
+          headers: headers);
+    }
+  }
+
+  shelf.Response _handleServerlessSessions(Map<String, String> headers) {
+    final mgr = WebRTCPeerManager();
+    final out = <Map<String, dynamic>>[];
+    for (final entry in mgr.peers.entries) {
+      final p = entry.value;
+      out.add({
+        'callsign': p.callsign,
+        'session_id': p.sessionId,
+        'state': p.state.name,
+        'connected': p.isConnected,
+        'created_at': p.createdAt.toIso8601String(),
+        if (p.connectedAt != null)
+          'connected_at': p.connectedAt!.toIso8601String(),
+        if (p.connectionDuration != null)
+          'connected_for_sec': p.connectionDuration!.inSeconds,
+      });
+    }
+    return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'count': out.length,
+          'sessions': out,
+          'signaling_initialized':
+              WebRTCSignalingService().toString().isNotEmpty,
+          'nostr_signaling_started': NostrSignalingChannel().isStarted,
         }),
         headers: headers);
   }

@@ -5165,3 +5165,36 @@ group id bytes. The legacy hash field is present only while
 ### POST /api/p2p/serverless/dht/announce-debug
 
 Reserved for PR2+. Returns HTTP 501 in PR1.
+
+### POST /api/p2p/serverless/signal
+
+Send a single WebRTC signaling frame to `toNpub` via the BT-DHT-v2 NOSTR-DM
+path (kind 30078, NIP-44 v2). Useful for end-to-end testing the NOSTR
+signaling channel without driving the full WebRTC stack.
+
+```bash
+curl -X POST http://localhost:8080/api/p2p/serverless/signal \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "toNpub": "npub1...recipient...",
+    "toCallsign": "X1BOB",
+    "type": "offer",
+    "sessionId": "abc123",
+    "sdp": {"type": "offer", "sdp": "v=0..."},
+    "route": "nostr"
+  }'
+```
+
+`route` accepts `nostr` (force NOSTR-DM, the only path implemented in PR2)
+or `auto`. Response includes the number of relays the EVENT frame was sent
+to.
+
+### GET /api/p2p/serverless/sessions
+
+List active WebRTC peer connections managed by `WebRTCPeerManager`. Useful
+for confirming Phase-2 acceptance (signaling source: `NostrDM`, ICE state:
+`connected`).
+
+```bash
+curl http://localhost:8080/api/p2p/serverless/sessions
+```

@@ -13,6 +13,15 @@ library;
 /// Without station STUN, WebRTC uses host candidates only (LAN-only).
 const List<Map<String, dynamic>> defaultStunServers = [];
 
+/// STUN servers used by the BT-DHT-v2 serverless P2P path when no station
+/// STUN is in scope (§9.1: "use a privacy-respecting public server. Avoid
+/// Google STUN. Mozilla's stun.services.mozilla.com is acceptable.").
+/// Used by `WebRTCConfig.serverless()`. Open question §17 to revisit:
+/// derive STUN reply from a relay-tier peer once that lands.
+const List<Map<String, dynamic>> serverlessStunServers = [
+  {'urls': 'stun:stun.services.mozilla.com'},
+];
+
 /// STUN server info received from a station
 class StationStunInfo {
   final bool enabled;
@@ -111,6 +120,13 @@ class WebRTCConfig {
       {'urls': 'stun:$stationHost:$stunPort'},
     ];
     return WebRTCConfig(iceServers: servers);
+  }
+
+  /// Configuration for the BT-DHT-v2 serverless path (§9.1). Uses a
+  /// privacy-respecting public STUN server when no station STUN is
+  /// available; no TURN servers (relay tier supersedes per §10).
+  factory WebRTCConfig.serverless() {
+    return const WebRTCConfig(iceServers: serverlessStunServers);
   }
 
   /// Convert to RTCConfiguration map for flutter_webrtc

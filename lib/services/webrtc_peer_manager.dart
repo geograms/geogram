@@ -79,6 +79,11 @@ class WebRTCPeerManager {
   /// Stream of incoming messages from peers
   Stream<WebRTCMessage> get messages => _messageController.stream;
 
+  /// Read-only snapshot of active peer connections, keyed by uppercase
+  /// callsign. Used by the debug API to list current sessions.
+  Map<String, WebRTCPeerConnection> get peers =>
+      Map.unmodifiable(_peers);
+
   /// Set the WebRTC configuration
   void setConfig(WebRTCConfig config) {
     _config = config;

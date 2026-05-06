@@ -27,6 +27,11 @@ import 'dht_node.dart';
 import 'dht_topics.dart';
 import 'k_bucket.dart';
 import 'node_capability.dart';
+import '../teleport/nostr/nostr_client_service.dart';
+import '../teleport/nostr/nostr_signaling_channel.dart';
+import '../services/signing_service.dart';
+import '../util/nostr_crypto.dart';
+import '../util/nostr_event.dart';
 
 const String _kNodeCachePath = 'p2p/dht_cache.json';
 const String _kNodeIdPath = 'p2p/node_id.bin';
@@ -192,11 +197,14 @@ class P2PService {
 
         _dht!.onPeerFound.listen((e) => _addDiscoveredPeer(e.$2));
 
-        // BT-DHT-v2 §6.7: surface blocked-DHT networks. Logs + state flag
-        // ship in PR1; NOSTR-presence publishing lands with the rest of
-        // the kind-30078 plumbing in PR2.
+        // BT-DHT-v2 §6.7: surface blocked-DHT networks. When blocked,
+        // publish a kind-30078 replaceable presence event so peers can
+        // still find us via NOSTR.
         _dht!.onDhtBlocked.listen((blocked) {
           _dhtBlocked = blocked;
+          if (blocked) {
+            unawaited(_publishNostrPresence());
+          }
         });
 
         // Set geogram identity on the DHT node for custom queries
@@ -534,6 +542,49 @@ class P2PService {
     }
     if (kEnableLegacyTopics) out.add(DhtTopics.legacyNpubHash(npub));
     return out;
+  }
+
+  /// BT-DHT-v2 §6.7 fallback: when the DHT is blocked, publish a
+  /// kind-30078 replaceable presence event tagged
+  /// `["d", "geogram-presence-v1"]` so peers who already know our npub can
+  /// still locate a candidate endpoint via NOSTR. Best-effort — failure
+  /// here doesn't block app startup.
+  Future<void> _publishNostrPresence() async {
+    try {
+      final profile = ProfileService().getProfile();
+      if (profile.npub.isEmpty) return;
+      final ourPubHex = NostrCrypto.decodeNpub(profile.npub);
+      final endpoint = _publicHttpUrl;
+      final payload = {
+        'callsign': profile.callsign,
+        'npub': profile.npub,
+        if (endpoint != null) 'http_url': endpoint,
+        if (_capability?.publicIp != null) 'public_ip': _capability!.publicIp,
+        if (_capability?.publicPort != null)
+          'public_port': _capability!.publicPort,
+        'ts': DateTime.now().millisecondsSinceEpoch,
+      };
+      final event = NostrEvent(
+        pubkey: ourPubHex,
+        createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        kind: NostrEventKind.applicationSpecificData,
+        tags: [
+          ['d', kPresenceDTag],
+          ['t', 'geogram-presence'],
+        ],
+        content: jsonEncode(payload),
+      );
+      final signed = await SigningService().signEvent(event, profile);
+      if (signed == null) {
+        LogService().log('P2P: NOSTR presence sign failed');
+        return;
+      }
+      final n = NostrClientService().publishSigned(signed);
+      LogService().log(
+          'P2P: NOSTR presence published to $n relay(s) (DHT blocked fallback)');
+    } catch (e) {
+      LogService().log('P2P: NOSTR presence publish error: $e');
+    }
   }
 
   Future<void> _refreshPublicHttpAnnounce() async {

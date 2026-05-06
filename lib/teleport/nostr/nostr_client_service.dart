@@ -123,6 +123,50 @@ class NostrClientService {
   /// Stream of NOSTR client bridge events.
   Stream<NostrClientEvent> get events => _eventController.stream;
 
+  /// Raw NOSTR events seen on any connected relay, before feed dedup or
+  /// follow-set filtering. Consumers (e.g. WebRTC NOSTR-DM signaling
+  /// channel) filter by kind + tags + pubkey themselves. The same event
+  /// can fire here multiple times if it arrives on more than one relay —
+  /// listeners must dedup by `event.id`.
+  final StreamController<NostrEvent> _rawEventsController =
+      StreamController<NostrEvent>.broadcast();
+  Stream<NostrEvent> get rawEvents => _rawEventsController.stream;
+
+  /// Publish an already-signed NOSTR event to every connected write-enabled
+  /// relay. Returns the number of relays the EVENT frame was sent to (best
+  /// effort — does not wait for OK acks).
+  int publishSigned(NostrEvent signed) {
+    var sent = 0;
+    for (final entry in _clients.entries) {
+      final config = _configs[entry.key];
+      if (config != null && config.write && entry.value.isConnected) {
+        entry.value.publish(signed);
+        sent++;
+      }
+    }
+    return sent;
+  }
+
+  /// Add a NIP-01 REQ filter on every read-enabled relay using the same
+  /// [subscriptionId]. Intended for narrow auxiliary subscriptions like the
+  /// WebRTC NOSTR-DM signaling channel; events arrive via [rawEvents].
+  /// Returns the number of relays the subscribe frame was sent to.
+  ///
+  /// New relay connections inherit the subscription via the relay client's
+  /// own active-subscriptions map, so callers do not need to re-call on
+  /// reconnect. Calling again with the same id replaces the filter.
+  int subscribeAll(Map<String, dynamic> filter,
+      {required String subscriptionId}) {
+    var sent = 0;
+    for (final entry in _clients.entries) {
+      final config = _configs[entry.key];
+      if (config == null || !config.read) continue;
+      entry.value.subscribe(filter, subscriptionId: subscriptionId);
+      sent++;
+    }
+    return sent;
+  }
+
   /// All configured relays.
   List<NostrRelayConfig> get relays => _configs.values.toList();
 
@@ -404,6 +448,11 @@ class NostrClientService {
   }
 
   void _handleEvent(String relayId, NostrEvent event) {
+    // Fan out to raw listeners before dedup so signaling and similar
+    // narrow filters see every arrival (they dedup by event.id locally).
+    if (!_rawEventsController.isClosed) {
+      _rawEventsController.add(event);
+    }
     // Dedup by event ID
     if (event.id != null && _seenEventIds.contains(event.id)) return;
     if (event.id != null) {

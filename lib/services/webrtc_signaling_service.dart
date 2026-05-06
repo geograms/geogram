@@ -7,7 +7,10 @@ library;
 import 'dart:async';
 import 'dart:math';
 import '../p2p/p2p_service.dart';
+import '../teleport/nostr/nostr_signaling_channel.dart';
+import 'devices_service.dart';
 import 'peer_relay_service.dart';
+import 'serverless_settings_service.dart';
 import 'webrtc_config.dart';
 import 'websocket_service.dart';
 import 'profile_service.dart';
@@ -47,6 +50,9 @@ class WebRTCSignalingService {
   /// Subscription to peer relay signaling messages
   StreamSubscription<Map<String, dynamic>>? _relaySubscription;
 
+  /// Subscription to NIP-44 NOSTR-DM signaling messages (BT-DHT-v2 §8).
+  StreamSubscription<WebRTCSignal>? _nostrSubscription;
+
   /// Whether the service is initialized
   bool _initialized = false;
 
@@ -68,6 +74,18 @@ class WebRTCSignalingService {
       _handleDhtMessage,
     );
 
+    // BT-DHT-v2 §8: NOSTR NIP-44 DM signaling. Gated on the master switch
+    // so users with serverless P2P disabled do not pay the relay
+    // subscription cost.
+    final settings = ServerlessSettingsService();
+    if (settings.current.enableServerless &&
+        settings.current.nostrSignalingEnabled) {
+      unawaited(NostrSignalingChannel().start());
+      _nostrSubscription =
+          NostrSignalingChannel().incomingSignals.listen(_handleNostrSignal);
+      LogService().log('WebRTCSignalingService: NOSTR-DM path enabled');
+    }
+
     _initialized = true;
     LogService().log('WebRTCSignalingService: Initialized');
   }
@@ -77,6 +95,7 @@ class WebRTCSignalingService {
     _wsSubscription?.cancel();
     _relaySubscription?.cancel();
     _dhtSubscription?.cancel();
+    _nostrSubscription?.cancel();
     _signalController.close();
 
     // Cancel any pending offers
@@ -228,6 +247,27 @@ class WebRTCSignalingService {
       return;
     }
 
+    // BT-DHT-v2 §8: NIP-44 NOSTR DM. Works whenever we know the peer's
+    // npub and at least one configured NOSTR relay is connected — i.e.
+    // the serverless path that doesn't require Geogram station infrastructure.
+    final settings = ServerlessSettingsService().current;
+    if (settings.enableServerless && settings.nostrSignalingEnabled) {
+      final theirNpub = _resolveNpubForCallsign(signal.toCallsign);
+      if (theirNpub != null) {
+        final n = await NostrSignalingChannel().sendSignal(
+          toNpub: theirNpub,
+          signal: signal,
+        );
+        if (n > 0) {
+          LogService().log(
+            'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} '
+            'via NOSTR DM ($n relays)',
+          );
+          return;
+        }
+      }
+    }
+
     final sentViaDht = await P2PService().sendSignalingMessage(
       signal.toCallsign,
       signal.toJson(),
@@ -244,6 +284,19 @@ class WebRTCSignalingService {
     );
   }
 
+  /// Look up the recipient's bech32 npub by callsign via DevicesService.
+  /// Returns null when the device isn't known or has no npub recorded.
+  String? _resolveNpubForCallsign(String callsign) {
+    try {
+      final dev = DevicesService().getDevice(callsign);
+      final npub = dev?.npub;
+      if (npub == null || npub.isEmpty) return null;
+      return npub.startsWith('npub1') ? npub : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Handle incoming WebSocket messages.
   void _handleWebSocketMessage(Map<String, dynamic> message) {
     _handleIncomingSignal(message, source: 'WebSocket');
@@ -257,6 +310,26 @@ class WebRTCSignalingService {
   /// Handle incoming peer relay messages.
   void _handleRelayMessage(Map<String, dynamic> message) {
     _handleIncomingSignal(message, source: 'PeerRelay');
+  }
+
+  /// Handle incoming NOSTR-DM signals (already decrypted into WebRTCSignal).
+  void _handleNostrSignal(WebRTCSignal signal) {
+    if (signal.type == WebRTCSignalType.answer) {
+      final completer = _pendingOffers.remove(signal.sessionId);
+      if (completer != null && !completer.isCompleted) {
+        completer.complete(signal);
+        LogService().log(
+          'WebRTCSignaling: Received answer from ${signal.fromCallsign} '
+          'via NostrDM (session: ${signal.sessionId})',
+        );
+        return;
+      }
+    }
+    _signalController.add(signal);
+    LogService().log(
+      'WebRTCSignaling: Received ${signal.type.name} from '
+      '${signal.fromCallsign} via NostrDM (session: ${signal.sessionId})',
+    );
   }
 
   void _handleIncomingSignal(
