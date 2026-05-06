@@ -14,7 +14,7 @@ win on a connected phone.
 
 - Geogram desktop builds, launches via `./launch-desktop.sh`.
 - Geogram Android builds, deploys via `./launch-android.sh`. The Android
-  debug API listens on `127.0.0.1:3456` over `adb forward` (per
+  debug API listens on `127.0.0.1:3458` over `adb forward` (per
   `feedback_phone_port_3456.md`).
 - Both instances on commit `a70a59e3` (or later) — `git log --oneline`
   should include the four `ServerlessP2P PR1..PR4` commits.
@@ -47,8 +47,18 @@ POST /api/p2p/serverless/signal                → send one WebRTC signal via NO
 GET  /api/p2p/serverless/sessions              → active WebRTC sessions
 ```
 
-Desktop: `http://localhost:8080` (or whatever `--port` you launched with).
-Android: `http://127.0.0.1:3456` after `adb forward tcp:3456 tcp:3456`.
+Desktop and Android both bind their debug API to **port 3456** by default.
+When both run on the same laptop you cannot point `adb forward` at local
+3456 because the desktop already owns it. Pick a different local port
+(this runbook uses **3458**) for the Android forward:
+
+```bash
+adb forward tcp:3458 tcp:3456    # local 3458 → Android 3456
+```
+
+So in the rest of this document:
+- Desktop API: `http://localhost:3456`
+- Android API: `http://127.0.0.1:3458`
 
 ---
 
@@ -56,11 +66,11 @@ Android: `http://127.0.0.1:3456` after `adb forward tcp:3456 tcp:3456`.
 
 ```bash
 # Desktop
-DESKTOP=$(curl -s http://localhost:8080/api/status | jq -r '{callsign, npub}')
+DESKTOP=$(curl -s http://localhost:3456/api/status | jq -r '{callsign, npub}')
 echo "$DESKTOP"
 
 # Android
-ANDROID=$(curl -s http://127.0.0.1:3456/api/status | jq -r '{callsign, npub}')
+ANDROID=$(curl -s http://127.0.0.1:3458/api/status | jq -r '{callsign, npub}')
 echo "$ANDROID"
 ```
 
@@ -76,10 +86,10 @@ table within 60s of launch.
 
 ```bash
 # Desktop
-curl -s http://localhost:8080/api/p2p/serverless/status | jq
+curl -s http://localhost:3456/api/p2p/serverless/status | jq
 
 # Android
-curl -s http://127.0.0.1:3456/api/p2p/serverless/status | jq
+curl -s http://127.0.0.1:3458/api/p2p/serverless/status | jq
 ```
 
 Pass conditions:
@@ -96,12 +106,12 @@ Both devices should agree on the spec-derived peer topic:
 
 ```bash
 # Compute PEER_TOPIC(android_npub) on the desktop.
-curl -s -X POST http://localhost:8080/api/p2p/serverless/dht/topic \
+curl -s -X POST http://localhost:3456/api/p2p/serverless/dht/topic \
   -H 'Content-Type: application/json' \
   -d "{\"kind\":\"peer\",\"input\":\"$ANDROID_NPUB\"}" | jq
 
 # Compute PEER_TOPIC(android_npub) on the Android — same input.
-curl -s -X POST http://127.0.0.1:3456/api/p2p/serverless/dht/topic \
+curl -s -X POST http://127.0.0.1:3458/api/p2p/serverless/dht/topic \
   -H 'Content-Type: application/json' \
   -d "{\"kind\":\"peer\",\"input\":\"$ANDROID_NPUB\"}" | jq
 ```
@@ -127,11 +137,11 @@ actually exercises WebRTC + DHT.
 
 ```bash
 # Inspect current transports on both ends.
-curl -s http://localhost:8080/api/p2p/serverless/transports | jq
-curl -s http://127.0.0.1:3456/api/p2p/serverless/transports | jq
+curl -s http://localhost:3456/api/p2p/serverless/transports | jq
+curl -s http://127.0.0.1:3458/api/p2p/serverless/transports | jq
 
 # Force-only WebRTC + DHT on BOTH devices.
-for HOST in localhost:8080 127.0.0.1:3456; do
+for HOST in localhost:3456 127.0.0.1:3458; do
   curl -s -X POST http://$HOST/api/p2p/serverless/transports/force-only \
     -H 'Content-Type: application/json' \
     -d '{"keep": ["webrtc", "dht"]}' | jq
@@ -158,7 +168,7 @@ full WebRTC stack.
 SESSION_ID=$(printf '%016x' $RANDOM$RANDOM)
 
 # Desktop → Android: send a synthetic offer.
-curl -s -X POST http://localhost:8080/api/p2p/serverless/signal \
+curl -s -X POST http://localhost:3456/api/p2p/serverless/signal \
   -H 'Content-Type: application/json' \
   -d "{
     \"toNpub\": \"$ANDROID_NPUB\",
@@ -202,8 +212,8 @@ path.
 After ~15s:
 
 ```bash
-curl -s http://localhost:8080/api/p2p/serverless/sessions | jq
-curl -s http://127.0.0.1:3456/api/p2p/serverless/sessions | jq
+curl -s http://localhost:3456/api/p2p/serverless/sessions | jq
+curl -s http://127.0.0.1:3458/api/p2p/serverless/sessions | jq
 ```
 
 Pass conditions (one or both sides):
@@ -235,7 +245,7 @@ that's Phase-3 territory and indicates this network pair can't go direct
 Both devices come back to normal routing.
 
 ```bash
-for HOST in localhost:8080 127.0.0.1:3456; do
+for HOST in localhost:3456 127.0.0.1:3458; do
   curl -s -X POST http://$HOST/api/p2p/serverless/transports/enable \
     -H 'Content-Type: application/json' -d '{"all": true}' | jq
 done

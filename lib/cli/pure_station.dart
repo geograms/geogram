@@ -28,6 +28,7 @@ import '../api/handlers/place_handler.dart';
 import '../api/handlers/feedback_handler.dart';
 import '../api/handlers/feedback_delete_helper.dart';
 import '../server/handlers/road_handler.dart';
+import '../server/handlers/serverless_p2p_handler.dart';
 import '../server/ssl_certificate_manager.dart';
 import '../api/common/station_info.dart';
 import '../services/nip05_registry_service.dart';
@@ -2776,6 +2777,11 @@ class PureStationServer with HeartbeatMixin, EmailHandlerMixin, ConsoleCommandMi
       if (path.startsWith('/api/karma/')) {
         await handleKarmaRequest(request);
         return;
+      } else if (path.startsWith('/api/p2p/serverless/')) {
+        // BT-DHT-v2 serverless P2P. Routed before any callsign-shaped
+        // matchers below because `/api/p2p/serverless/...` would
+        // otherwise be misread as a /{callsign}/api/... proxy path.
+        await ServerlessP2pHandler.dispatchHttpRequest(request);
       } else if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
       } else if (path.startsWith('/blossom')) {

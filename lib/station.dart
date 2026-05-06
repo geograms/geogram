@@ -67,6 +67,7 @@ import 'server/mixins/console_command_mixin.dart';
 import 'server/mixins/chat_moderation_mixin.dart';
 import 'server/mixins/chat_nip05_mixin.dart';
 import 'server/mixins/serverless_relay_mixin.dart';
+import 'server/handlers/serverless_p2p_handler.dart';
 import 'server/mixins/conference_mixin.dart';
 import 'server/mixins/blog_handler_mixin.dart';
 import 'server/mixins/device_proxy_mixin.dart';
@@ -2654,6 +2655,11 @@ class StationServer with RateLimitMixin, HealthWatchdogMixin, HeartbeatMixin, Em
 
       if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
+      } else if (path.startsWith('/api/p2p/serverless/')) {
+        // BT-DHT-v2 serverless P2P debug API. Routed early because
+        // `/api/p2p/...` would otherwise be misread as `/{callsign}/api/...`
+        // by the device-proxy matchers further down the chain.
+        await ServerlessP2pHandler.dispatchHttpRequest(request);
       } else if (path.startsWith('/blossom')) {
         await _handleBlossomRequest(request);
       } else if (path == '/api/geoip') {

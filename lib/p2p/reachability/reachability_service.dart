@@ -27,10 +27,12 @@ class ReachabilityService {
 
   ReachabilityState _state = ReachabilityState.notReachable(note: 'idle');
   bool _running = false;
+  bool _detecting = false;
   int? _chosenPort;
 
   MonitoredPeriodicTimer? _renewTimer;
   MonitoredPeriodicTimer? _recheckTimer;
+  MonitoredIsolateHandle? _detectHandle;
 
   ReachabilityState get currentState => _state;
   Stream<ReachabilityState> get onChange => _changes.stream;
@@ -38,13 +40,31 @@ class ReachabilityService {
 
   /// [chosenPort] is the externally-announced port (UDP). Pass null to let
   /// the service pick a randomized high port (49152..65535) per spec §6.3.
+  ///
+  /// Returns immediately. The actual IPv6/UPnP probe runs as a background
+  /// fire-and-forget task tracked by TaskMonitor under
+  /// `reachability.detect`. `start()` MUST NOT block the main isolate
+  /// during app boot — UPnP SSDP timeouts can be 3+ seconds and a chain
+  /// of bind/SOAP calls easily totals 10+ seconds, freezing the UI on
+  /// Android if awaited.
   Future<void> start({int? chosenPort}) async {
     if (_running) return;
     _running = true;
     _chosenPort = chosenPort ?? _randomHighPort();
     _log.info(
         'Reachability: starting detection on port $_chosenPort');
-    await _detect();
+
+    _detectHandle ??= MonitoredIsolateHandle(
+      id: 'reachability.detect',
+      name: 'Reachability detection',
+      description: 'IPv6 + UPnP-IGD probe (BT-DHT-v2 §7)',
+      serviceName: 'ReachabilityService',
+      priority: TaskPriority.low,
+    );
+
+    // Fire-and-forget. _detect yields between probes via async I/O; the
+    // periodic recheck timer keeps it warm for network-change events.
+    unawaited(_runDetect());
 
     _recheckTimer = MonitoredPeriodicTimer(
       id: 'reachability.recheck',
@@ -53,8 +73,25 @@ class ReachabilityService {
       serviceName: 'ReachabilityService',
       interval: const Duration(minutes: 15),
       priority: TaskPriority.low,
-      callback: (_) => _detect(),
+      callback: (_) => unawaited(_runDetect()),
     );
+  }
+
+  /// Wraps [_detect] with TaskMonitor reporting + reentrancy guard so the
+  /// task list reflects each probe attempt and overlapping calls don't pile up.
+  Future<void> _runDetect() async {
+    if (_detecting) return;
+    _detecting = true;
+    _detectHandle?.markRunning();
+    try {
+      await _detect();
+      _detectHandle?.markIdle();
+    } catch (e) {
+      _log.warn('Reachability: detection error: $e');
+      _detectHandle?.markError(e);
+    } finally {
+      _detecting = false;
+    }
   }
 
   Future<void> stop() async {
@@ -70,19 +107,26 @@ class ReachabilityService {
         await upnpDeletePortMapping(externalPort: _chosenPort!);
       } catch (_) {}
     }
+    _detectHandle?.dispose();
+    _detectHandle = null;
     _state = ReachabilityState.notReachable(note: 'stopped');
     _emit();
   }
 
-  /// Force-rerun the detection chain.
+  /// Force-rerun the detection chain. Used by debug API / network-change
+  /// hooks. Yields and is reentrancy-safe.
   Future<ReachabilityState> refresh() async {
-    await _detect();
+    await _runDetect();
     return _state;
   }
 
   Future<void> _detect() async {
     final port = _chosenPort ?? _randomHighPort();
     _chosenPort = port;
+
+    // Yield once before any I/O so callers in tight startup paths can
+    // continue rendering before we touch the network stack.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
 
     // 1. IPv6
     try {
@@ -102,6 +146,9 @@ class ReachabilityService {
     } catch (e) {
       _log.warn('Reachability: IPv6 probe error: $e');
     }
+
+    // Yield between probes to keep the event loop responsive.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
 
     // 2. UPnP-IGD
     try {

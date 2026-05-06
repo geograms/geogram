@@ -31,6 +31,7 @@ import '../../services/webrtc_config.dart';
 import '../../util/nip44_v2.dart';
 import '../../util/nostr_crypto.dart';
 import '../../util/nostr_event.dart';
+import 'models/nostr_relay_config.dart';
 import 'nostr_client_service.dart';
 
 const String kSignalingDTag = 'geogram-signaling-v1';
@@ -67,10 +68,34 @@ class NostrSignalingChannel {
 
     final ourPubHex = NostrCrypto.decodeNpub(profile.npub);
 
+    final clients = NostrClientService();
+
+    // Bootstrap default relays if the user hasn't configured any. The
+    // serverless P2P signaling path can't function without at least one
+    // connected relay, and on a fresh install no relays are populated
+    // until the user visits the NOSTR settings page. `addRelay` just
+    // persists the config — we then call `connect` explicitly so the
+    // websocket actually opens. Already-configured relays will have been
+    // connected by `NostrClientService.autoStart` at app boot.
+    if (clients.relays.isEmpty) {
+      for (final relay in NostrRelayConfig.defaults) {
+        await clients.addRelay(relay);
+        if (relay.enabled) clients.connect(relay.id);
+      }
+      _log.info(
+          'NostrSignaling: bootstrapped ${NostrRelayConfig.defaults.length} default relays for serverless P2P');
+    } else {
+      // Ensure pre-configured-but-disconnected relays are dialed.
+      for (final relay in clients.relays) {
+        if (relay.enabled && !clients.isConnected(relay.id)) {
+          clients.connect(relay.id);
+        }
+      }
+    }
+
     // Open a narrow signaling-only subscription on every read-enabled
     // relay. Persists across reconnects (relay clients re-emit their
     // active subscription set on each reconnect).
-    final clients = NostrClientService();
     final n = clients.subscribeAll({
       'kinds': [NostrEventKind.applicationSpecificData],
       '#p': [ourPubHex],
@@ -110,6 +135,12 @@ class NostrSignalingChannel {
     required String toNpub,
     required WebRTCSignal signal,
   }) async {
+    // Lazy self-start so a direct sendSignal call (e.g. from
+    // /api/p2p/serverless/signal in tests) ensures relays are
+    // bootstrapped + connected even if WebRTCSignalingService.initialize
+    // hasn't fired yet.
+    if (!_started) await start();
+
     final profile = ProfileService().getProfile();
     if (profile.nsec.isEmpty || profile.npub.isEmpty) {
       _log.warn('NostrSignaling: cannot send — profile missing keys');
@@ -156,9 +187,19 @@ class NostrSignalingChannel {
       _log.warn('NostrSignaling: signing failed');
       return 0;
     }
-    final sent = NostrClientService().publishSigned(signed);
+    // Relays connect asynchronously after addRelay. Retry briefly so the
+    // first signal isn't lost when this is the bootstrap call that just
+    // installed defaults.
+    var sent = NostrClientService().publishSigned(signed);
+    var attempt = 0;
+    while (sent == 0 && attempt < 3) {
+      await Future<void>.delayed(const Duration(seconds: 1));
+      sent = NostrClientService().publishSigned(signed);
+      attempt++;
+    }
     _log.info(
-        'NostrSignaling: sent ${signal.type.name} to ${_shortNpub(toNpub)} via $sent relay(s)');
+        'NostrSignaling: sent ${signal.type.name} to ${_shortNpub(toNpub)} via $sent relay(s)'
+        '${attempt > 0 ? " (after ${attempt}s wait)" : ""}');
     return sent;
   }
 

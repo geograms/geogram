@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+
+import '../server/handlers/serverless_p2p_handler.dart';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -803,6 +805,13 @@ class StationServerService with KarmaMixin, ConferenceMixin {
       if (path.startsWith('/api/karma/')) {
         await handleKarmaRequest(request);
         return;
+      } else if (path.startsWith('/api/p2p/serverless/')) {
+        // BT-DHT-v2 serverless P2P debug API. Routed BEFORE the device
+        // proxy/content matchers because `/api/p2p/...` would otherwise
+        // be misinterpreted as a callsign path (parts[0]='api',
+        // parts[1]='p2p' isn't 'api'/'meet' so `_isDeviceContentPath`
+        // greedy-matches the prefix).
+        await ServerlessP2pHandler.dispatchHttpRequest(request);
       } else if (path == '/api/status' || path == '/status') {
         await _handleStatus(request);
       } else if (path == '/api/geoip') {

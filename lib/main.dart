@@ -4,6 +4,7 @@ import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'models/monitored_task.dart';
+import 'util/task_monitor_helpers.dart';
 import 'services/task_monitor_service.dart';
 import 'util/cpu_measure.dart';
 import 'package:flutter/services.dart';
@@ -698,22 +699,44 @@ void main() async {
         'ConnectionManager initialized with USB + LAN + WebRTC + DHT + Peer Relay + Station + BT Classic + BLE transports (deferred)',
       );
 
-      // Serverless P2P (BT-DHT-v2 §7): start reachability detection so the
-      // DHT and WebRTC paths can announce a known reachable address. Gated
-      // on the master switch in ServerlessSettings.
-      try {
-        final settings = await ServerlessSettingsService().load();
-        if (settings.enableServerless) {
-          unawaited(
-              ReachabilityService().start(chosenPort: settings.chosenDhtPort));
-          unawaited(ServerlessRelayMediator().start());
-          LogService().log('ReachabilityService started (serverless P2P)');
-        } else {
-          LogService().log('ReachabilityService skipped (serverless disabled)');
+      // Serverless P2P (BT-DHT-v2 §7): defer the entire boot so it cannot
+      // block the first frame. UPnP SSDP M-SEARCH alone has a 3s timeout
+      // and the IPv6 → UPnP chain can total 10+ seconds on networks where
+      // UPnP isn't available — awaiting that on the main isolate during
+      // `runApp` freezes the UI on Android.
+      //
+      // The whole flow is registered with TaskMonitor under
+      // `serverless_p2p.boot` so users can see when it ran via the task
+      // monitor page; downstream services (`ReachabilityService`,
+      // `ServerlessRelayMediator`) register their own handles.
+      print('[STARTUP] serverless P2P deferred boot scheduled (8s)');
+      unawaited(Future<void>.delayed(const Duration(seconds: 8), () async {
+        print('[STARTUP] serverless P2P deferred boot firing');
+        final bootHandle = MonitoredIsolateHandle(
+          id: 'serverless_p2p.boot',
+          name: 'Serverless P2P boot',
+          description:
+              'BT-DHT-v2: load settings, start reachability + relay mediator',
+          serviceName: 'ServerlessP2P',
+          priority: TaskPriority.low,
+        );
+        bootHandle.markRunning();
+        try {
+          final settings = await ServerlessSettingsService().load();
+          if (settings.enableServerless) {
+            unawaited(
+                ReachabilityService().start(chosenPort: settings.chosenDhtPort));
+            unawaited(ServerlessRelayMediator().start());
+            LogService().log('Serverless P2P: deferred boot complete');
+          } else {
+            LogService().log('Serverless P2P: disabled in settings, skipped');
+          }
+          bootHandle.markIdle();
+        } catch (e) {
+          LogService().log('Serverless P2P: boot error: $e');
+          bootHandle.markError(e);
         }
-      } catch (e) {
-        LogService().log('ReachabilityService init error: $e');
-      }
+      }));
 
       print('[STARTUP] before UpdateService');
       // UpdateService may check for updates - defer it
