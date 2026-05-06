@@ -2070,12 +2070,21 @@ class _WappPageState extends State<WappPage>
     if (target == null || target.keyword.isEmpty) {
       return {'error': 'screen not found: $screenName'};
     }
+    // Convert a GeoUiValue to a plain JSON-encodable Dart value.
+    dynamic valToJson(GeoUiValue v) => switch (v) {
+          GeoUiString s => s.value,
+          GeoUiNumber n => n.value,
+          GeoUiBool b   => b.value,
+          GeoUiList l   => l.items.map(valToJson).toList(),
+          GeoUiFuncCall f => '${f.name}(${f.args.map(valToJson).join(',')})',
+          _ => v.toString(),
+        };
     // Serialize block tree to a JSON-safe map recursively.
     Map<String, dynamic> blockToMap(GeoUiBlock b) => {
           'keyword': b.keyword,
           'name': b.name,
           'type': b.type,
-          'decls': b.decls,
+          'decls': b.decls.map((k, v) => MapEntry(k, valToJson(v))),
           'children': b.children.map(blockToMap).toList(),
         };
     return blockToMap(target);
