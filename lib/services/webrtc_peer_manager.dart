@@ -84,6 +84,18 @@ class WebRTCPeerManager {
   Map<String, WebRTCPeerConnection> get peers =>
       Map.unmodifiable(_peers);
 
+  /// BT-DHT-v2 §9.3: emits the peer callsign when ICE fails to produce a
+  /// working candidate pair. Triggered either by the peer connection
+  /// reporting `failed` directly, or by 20s elapsing after our own
+  /// gathering completed without the connection reaching `connected`.
+  /// Listeners (e.g. WebRTCSignalingService) initiate the relay-tier
+  /// fallback when they observe this.
+  final _iceFailedController = StreamController<String>.broadcast();
+  Stream<String> get onIceFailed => _iceFailedController.stream;
+
+  /// Per-peer 20-second post-gathering timeout timers, keyed by callsign.
+  final Map<String, Timer> _iceFailureTimers = {};
+
   /// Set the WebRTC configuration
   void setConfig(WebRTCConfig config) {
     _config = config;
@@ -440,6 +452,8 @@ class WebRTCPeerManager {
       switch (state) {
         case RTCIceConnectionState.RTCIceConnectionStateConnected:
         case RTCIceConnectionState.RTCIceConnectionStateCompleted:
+          // ICE succeeded — cancel the §9.3 watchdog if it's still armed.
+          _iceFailureTimers.remove(peer.callsign)?.cancel();
           if (peer.state != WebRTCConnectionState.ready &&
               peer.dataChannel?.state ==
                   RTCDataChannelState.RTCDataChannelOpen) {
@@ -447,8 +461,25 @@ class WebRTCPeerManager {
           }
           break;
         case RTCIceConnectionState.RTCIceConnectionStateFailed:
+          _iceFailureTimers.remove(peer.callsign)?.cancel();
+          if (peer.state != WebRTCConnectionState.closed) {
+            peer.state = WebRTCConnectionState.failed;
+            if (peer.connectionCompleter != null &&
+                !peer.connectionCompleter!.isCompleted) {
+              peer.connectionCompleter!.complete(false);
+            }
+          }
+          if (!_iceFailedController.isClosed) {
+            _iceFailedController.add(peer.callsign);
+            LogService().log(
+              'WebRTCPeerManager: ICE failed for ${peer.callsign}, '
+              'switching to relay',
+            );
+          }
+          break;
         case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
         case RTCIceConnectionState.RTCIceConnectionStateClosed:
+          _iceFailureTimers.remove(peer.callsign)?.cancel();
           if (peer.state != WebRTCConnectionState.closed) {
             peer.state = WebRTCConnectionState.failed;
             if (peer.connectionCompleter != null &&
@@ -459,6 +490,32 @@ class WebRTCPeerManager {
           break;
         default:
           break;
+      }
+    };
+
+    // BT-DHT-v2 §9.3: arm a 20-second watchdog when local ICE gathering
+    // completes. If the connection isn't connected/completed by then, we
+    // assume the candidate pair never worked (carrier-grade NAT) and
+    // emit `onIceFailed` so signaling can switch the data path through
+    // a relay-tier session.
+    pc.onIceGatheringState = (state) {
+      if (state == RTCIceGatheringState.RTCIceGatheringStateComplete) {
+        _iceFailureTimers.remove(peer.callsign)?.cancel();
+        _iceFailureTimers[peer.callsign] = Timer(
+          const Duration(seconds: 20),
+          () {
+            _iceFailureTimers.remove(peer.callsign);
+            final isReady = peer.state == WebRTCConnectionState.ready;
+            if (!isReady && !_iceFailedController.isClosed) {
+              _iceFailedController.add(peer.callsign);
+              LogService().log(
+                'WebRTCPeerManager: ICE failed for ${peer.callsign} '
+                '(no working pair after gathering complete + 20s), '
+                'switching to relay',
+              );
+            }
+          },
+        );
       }
     };
 
