@@ -20,17 +20,24 @@ import '../services/log_service.dart';
 import 'bencode.dart';
 import 'k_bucket.dart';
 
-/// Bootstrap DHT nodes (well-known public routers).
+/// Bootstrap DHT nodes (well-known public routers). Order matches BT-DHT-v2
+/// §16; `dht.aelitis.com` retained as an extra fallback.
 const List<(String host, int port)> kBootstrapNodes = [
   ('router.bittorrent.com', 6881),
-  ('dht.transmissionbt.com', 6881),
   ('router.utorrent.com', 6881),
+  ('dht.transmissionbt.com', 6881),
   ('dht.libtorrent.org', 25401),
   ('dht.aelitis.com', 6881),
 ];
 
-/// How often to re-announce on DHT topics (minutes).
-const int kReannounceMinutes = 25;
+/// How often to re-announce on DHT topics (minutes). DHT entry TTL is
+/// ~30 min (BT-DHT-v2 §6.5), so we re-announce well inside that window.
+const int kReannounceMinutes = 5;
+
+/// DHT-blocked detection window (BT-DHT-v2 §6.7). After bootstrap, if no
+/// `find_node` responses arrive within this many seconds, treat the DHT
+/// as unreachable on this network and emit `onDhtBlocked`.
+const int kDhtBlockedTimeoutSeconds = 30;
 
 /// How often to refresh stale routing table entries (minutes).
 const int kRefreshMinutes = 2;
@@ -210,6 +217,14 @@ class DhtNode {
   Stream<(Uint8List infoHash, PeerInfo peer)> get onPeerFound =>
       _peerFoundController.stream;
 
+  /// DHT-blocked indicator (BT-DHT-v2 §6.7). Emits `true` when bootstrap
+  /// produced no `find_node` responses within `kDhtBlockedTimeoutSeconds`,
+  /// `false` once we successfully receive any DHT response on this socket.
+  final _blockedController = StreamController<bool>.broadcast();
+  Stream<bool> get onDhtBlocked => _blockedController.stream;
+  bool _everReceived = false;
+  bool _blockedReported = false;
+
   /// Node count in routing table.
   int get routingTableSize => _routingTable.nodeCount;
 
@@ -226,7 +241,8 @@ class DhtNode {
   /// Initialize the DHT node.
   ///
   /// [persistedNodeId] — 20-byte node ID from previous session (null = generate new).
-  /// [port] — UDP port to bind (0 = OS-assigned).
+  /// [port] — UDP port to bind. 0 = OS-assigned (legacy). Negative = randomize
+  /// in 49152..65535 per BT-DHT-v2 §6.3 (don't use 6881 — most-blocked port).
   Future<void> start({Uint8List? persistedNodeId, int port = 0}) async {
     if (_running) return;
 
@@ -243,8 +259,23 @@ class DhtNode {
     _tokenSecret = _generateTokenSecret();
     _tokenSecretPrev = _generateTokenSecret();
 
-    // Bind UDP socket
-    _socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, port);
+    // Bind UDP socket. Negative port → spec-mandated randomized high port,
+    // retrying on EADDRINUSE.
+    if (port < 0) {
+      port = _randomHighPort();
+    }
+    var attempt = 0;
+    while (true) {
+      try {
+        _socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, port);
+        break;
+      } on SocketException catch (e) {
+        attempt++;
+        if (attempt >= 5) rethrow;
+        LogService().log('DHT bind retry on $port: $e');
+        port = _randomHighPort();
+      }
+    }
     _localPort = _socket!.port;
 
     _socket!.listen(
@@ -725,7 +756,53 @@ class DhtNode {
     _socket?.close();
     _socket = null;
 
+    if (!_blockedController.isClosed) await _blockedController.close();
+
     LogService().log('DHT node stopped');
+  }
+
+  /// Convenience: announce on a topic using an explicit external port
+  /// (BT-DHT-v2 §6.5: `implied_port=0` with the reachability-published port).
+  /// Use this whenever we have a known reachable address; fall back to
+  /// `announce(...)` with `impliedPort=true` only when reachability is
+  /// unknown.
+  Future<void> announceTopic(Uint8List infoHash, int externalPort,
+          {bool persist = true}) =>
+      announce(infoHash, externalPort,
+          persist: persist, impliedPort: false);
+
+  /// Pick a random port in 49152..65535 (BT-DHT-v2 §6.3).
+  static int _randomHighPort() {
+    return 49152 + Random.secure().nextInt(65536 - 49152);
+  }
+
+  /// Hook called from `_handleDatagram` on every received packet — confirms
+  /// the DHT is reachable on this network. Cancels any pending
+  /// blocked-detector timer.
+  void _markDhtResponded() {
+    if (_everReceived) return;
+    _everReceived = true;
+    if (_blockedReported && !_blockedController.isClosed) {
+      _blockedController.add(false);
+      _blockedReported = false;
+    }
+  }
+
+  /// Schedule the BT-DHT-v2 §6.7 blocked-detector. Fires `onDhtBlocked(true)`
+  /// after `kDhtBlockedTimeoutSeconds` if no DHT packet has arrived. Caller
+  /// (P2PService) is expected to fall back to NOSTR-backed presence and
+  /// re-test the DHT periodically.
+  void scheduleBlockedDetector() {
+    Timer(const Duration(seconds: kDhtBlockedTimeoutSeconds), () {
+      if (!_running) return;
+      if (_everReceived) return;
+      if (_blockedController.isClosed) return;
+      _blockedReported = true;
+      _blockedController.add(true);
+      LogService().log(
+          'DHT blocked: no responses in ${kDhtBlockedTimeoutSeconds}s, '
+          'falling back to NOSTR presence');
+    });
   }
 
   /// Get nodes to cache for next session (best 30 from routing table).
@@ -758,6 +835,8 @@ class DhtNode {
 
     final datagram = _socket?.receive();
     if (datagram == null) return;
+
+    _markDhtResponded();
 
     try {
       final msg = Bencode.decode(datagram.data);

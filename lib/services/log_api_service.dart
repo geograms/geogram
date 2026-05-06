@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:hex/hex.dart' as hex_pkg;
 import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 import 'package:http/http.dart' as http;
@@ -136,6 +137,9 @@ import '../wallet/models/debt_entry.dart';
 import '../wallet/models/debt_summary.dart';
 import '../util/feedback_comment_utils.dart';
 import '../p2p/p2p_service.dart';
+import '../p2p/dht_topics.dart';
+import '../p2p/reachability/reachability_service.dart';
+import 'serverless_settings_service.dart';
 import '../transfer/models/transfer_models.dart';
 import '../transfer/services/transfer_service.dart';
 import '../transfer/services/p2p_transfer_service.dart';
@@ -21325,6 +21329,24 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       );
     }
 
+    // ─── Serverless P2P (BT-DHT-v2) — Phase 1 endpoints ──────────────
+    if (urlPath == 'api/p2p/serverless/status' &&
+        request.method == 'GET') {
+      return _handleServerlessStatus(headers);
+    }
+    if (urlPath == 'api/p2p/serverless/reachability/recheck' &&
+        request.method == 'POST') {
+      return await _handleServerlessReachabilityRecheck(headers);
+    }
+    if (urlPath == 'api/p2p/serverless/dht/topic' &&
+        request.method == 'POST') {
+      return await _handleServerlessDhtTopic(request, headers);
+    }
+    if (urlPath == 'api/p2p/serverless/dht/announce-debug' &&
+        request.method == 'POST') {
+      return await _handleServerlessDhtAnnounceDebug(request, headers);
+    }
+
     // POST /api/p2p/offer - Receive offer from sender (called by remote instance)
     if (urlPath == 'api/p2p/offer' && request.method == 'POST') {
       return await _handleP2PReceiveOffer(request, headers);
@@ -21373,6 +21395,114 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       }),
       headers: headers,
     );
+  }
+
+  // ─── Serverless P2P (BT-DHT-v2) handlers ────────────────────────────
+
+  shelf.Response _handleServerlessStatus(Map<String, String> headers) {
+    final reach = ReachabilityService().currentState;
+    final settings = ServerlessSettingsService().current;
+    final p2p = P2PService();
+    return shelf.Response.ok(
+      jsonEncode({
+        'success': true,
+        'enableServerless': settings.enableServerless,
+        'reachability': reach.toJson(),
+        'reachability_chosen_port': ReachabilityService().chosenPort,
+        'dht_running': p2p.isRunning,
+        'dht_routing_size': p2p.dhtPeerCount,
+        'dht_port': p2p.dhtPort,
+        'dht_blocked': p2p.isDhtBlocked,
+        'public_http_url': p2p.publicHttpUrl,
+        'discovered_peer_count': p2p.discoveredPeers.length,
+        'legacy_topics_enabled': kEnableLegacyTopics,
+      }),
+      headers: headers,
+    );
+  }
+
+  Future<shelf.Response> _handleServerlessReachabilityRecheck(
+      Map<String, String> headers) async {
+    final s = await ReachabilityService().refresh();
+    return shelf.Response.ok(
+      jsonEncode({'success': true, 'reachability': s.toJson()}),
+      headers: headers,
+    );
+  }
+
+  Future<shelf.Response> _handleServerlessDhtTopic(
+      shelf.Request request, Map<String, String> headers) async {
+    try {
+      final body = await request.readAsString();
+      final data = jsonDecode(body) as Map<String, dynamic>;
+      final kind = (data['kind'] as String?)?.toLowerCase();
+      final input = data['input'] as String?;
+      if (kind == null || input == null) {
+        return shelf.Response.badRequest(
+          body: jsonEncode({
+            'success': false,
+            'error': 'kind and input are required',
+          }),
+          headers: headers,
+        );
+      }
+
+      Uint8List specHash;
+      Uint8List? legacyHash;
+      switch (kind) {
+        case 'relay':
+          specHash = DhtTopics.relayTopic();
+          legacyHash = DhtTopics.legacyGeogramHash();
+          break;
+        case 'peer':
+          specHash = DhtTopics.peerTopicFromNpub(input);
+          if (input.startsWith('npub1')) {
+            legacyHash = DhtTopics.legacyNpubHash(input);
+          }
+          break;
+        case 'group':
+          // Allow hex-encoded group id.
+          final raw = Uint8List.fromList(hex_pkg.HEX.decode(input));
+          specHash = DhtTopics.groupTopic(raw);
+          break;
+        default:
+          return shelf.Response.badRequest(
+            body: jsonEncode({
+              'success': false,
+              'error': 'unknown kind: $kind (expected relay|peer|group)',
+            }),
+            headers: headers,
+          );
+      }
+
+      return shelf.Response.ok(
+        jsonEncode({
+          'success': true,
+          'kind': kind,
+          'input': input,
+          'spec_info_hash': hex_pkg.HEX.encode(specHash),
+          if (legacyHash != null)
+            'legacy_info_hash': hex_pkg.HEX.encode(legacyHash),
+        }),
+        headers: headers,
+      );
+    } catch (e) {
+      return shelf.Response.badRequest(
+        body: jsonEncode({'success': false, 'error': e.toString()}),
+        headers: headers,
+      );
+    }
+  }
+
+  Future<shelf.Response> _handleServerlessDhtAnnounceDebug(
+      shelf.Request request, Map<String, String> headers) async {
+    return shelf.Response(501,
+        body: jsonEncode({
+          'success': false,
+          'error':
+              'announce-debug not implemented in PR1 — use existing /api/dht/* helpers'
+        }),
+        headers: headers);
   }
 
   /// Handle POST /api/p2p/offer - Receive offer from remote sender

@@ -5086,3 +5086,82 @@ curl -X POST http://localhost:8080/api/debug \
   -H 'Content-Type: application/json' \
   -d '{"action": "thumbnail_clear_all"}'
 ```
+
+## Serverless P2P API
+
+These endpoints expose the BT-DHT-v2 (`docs/bridges/BT-DHT-v2.md`) serverless
+peer-discovery stack. They land incrementally across PRs 1–4. PR1 ships the
+four endpoints below; signal/sessions/relay endpoints follow in later PRs.
+
+### GET /api/p2p/serverless/status
+
+Snapshot of the current reachability state, DHT routing-table size,
+DHT-blocked flag (BT-DHT-v2 §6.7), and feature-flag state. Useful as a
+single canary for "is this node serverless-ready?".
+
+```bash
+curl http://localhost:8080/api/p2p/serverless/status
+```
+
+Response:
+```json
+{
+  "success": true,
+  "enableServerless": true,
+  "reachability": {
+    "status": "reachableUPnP",
+    "externalAddress": "203.0.113.5",
+    "externalPort": 51234,
+    "detectedAt": "2026-05-06T10:11:12.000Z",
+    "expiresAt":  "2026-05-06T11:11:12.000Z",
+    "note": "UPnP-IGD AddPortMapping"
+  },
+  "reachability_chosen_port": 51234,
+  "dht_running": true,
+  "dht_routing_size": 87,
+  "dht_port": 51234,
+  "dht_blocked": false,
+  "public_http_url": "http://203.0.113.5:8080",
+  "discovered_peer_count": 14,
+  "legacy_topics_enabled": true
+}
+```
+
+### POST /api/p2p/serverless/reachability/recheck
+
+Force-rerun the IPv6 → UPnP-IGD detection chain. NAT-PMP/PCP are deferred per
+spec §7.3.
+
+```bash
+curl -X POST http://localhost:8080/api/p2p/serverless/reachability/recheck
+```
+
+### POST /api/p2p/serverless/dht/topic
+
+Derive the 20-byte info_hash for a topic. Useful to verify two devices agree
+on the same `PEER_TOPIC(npub)` after the v1 → v2 migration.
+
+```bash
+curl -X POST http://localhost:8080/api/p2p/serverless/dht/topic \
+  -H 'Content-Type: application/json' \
+  -d '{"kind": "peer", "input": "npub1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}'
+```
+
+Response:
+```json
+{
+  "success": true,
+  "kind": "peer",
+  "input": "npub1...",
+  "spec_info_hash": "<40 hex chars>",
+  "legacy_info_hash": "<40 hex chars>"
+}
+```
+
+`kind` accepts `relay`, `peer`, or `group`. For `group`, `input` is hex-encoded
+group id bytes. The legacy hash field is present only while
+`legacy_topics_enabled` is `true` (4-week migration window).
+
+### POST /api/p2p/serverless/dht/announce-debug
+
+Reserved for PR2+. Returns HTTP 501 in PR1.

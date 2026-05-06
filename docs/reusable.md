@@ -11945,3 +11945,84 @@ AccountingCategoryBreakdownWidget(
   getCategoryLabel: (cat) => i18n.t(categoryI18nKeys[cat] ?? cat),
 )
 ```
+
+### Serverless P2P primitives (BT-DHT-v2)
+
+Reusable building blocks for the serverless peer-discovery stack defined in
+`docs/bridges/BT-DHT-v2.md`. Phase-1 PR ships the discovery + reachability
+pieces; phases 2–4 build on the same primitives.
+
+#### DhtTopics
+
+Spec-compliant info-hash derivation (BT-DHT-v2 §6.4 / §16). Always derive at
+runtime — never hardcode the resulting bytes.
+
+**File:** `lib/p2p/dht_topics.dart`
+
+```dart
+import 'package:hex/hex.dart';
+import 'lib/p2p/dht_topics.dart';
+
+// Global relay-tier rendezvous.
+final relayHash = DhtTopics.relayTopic();
+
+// Per-recipient (npub bytes — NOT the bech32 string).
+final peerHash = DhtTopics.peerTopicFromNpub('npub1...');
+
+// Per-group.
+final groupHash = DhtTopics.groupTopic(groupIdBytes);
+
+// Migration helpers (4-week dual-announce window controlled by
+// `kEnableLegacyTopics`).
+final legacyGlobal = DhtTopics.legacyGeogramHash();
+final legacyPeer = DhtTopics.legacyNpubHash('npub1...');
+```
+
+The `DhtNode.announceTopic(infoHash, externalPort)` convenience always passes
+`implied_port=0` with the reachability-published port — use it whenever the
+caller has a known reachable address.
+
+#### ReachabilityService
+
+Singleton that orchestrates the §7 detection chain (IPv6 → UPnP-IGD; NAT-PMP
+and PCP deferred per spec §7.3). Picks a randomized high UDP port, schedules
+UPnP lease renewal at 50% TTL, and exposes a state stream.
+
+**File:** `lib/p2p/reachability/reachability_service.dart`
+
+```dart
+import 'lib/p2p/reachability/reachability_service.dart';
+
+await ReachabilityService().start(); // pick a fresh random port
+// or:
+await ReachabilityService().start(chosenPort: 51234); // persisted port
+
+ReachabilityService().onChange.listen((state) {
+  // state.status: notReachable | reachableIPv6 | reachableUPnP | …
+  // state.externalAddress, state.externalPort, state.expiresAt
+});
+```
+
+All internal timers register with TaskMonitor (`reachability.lease_renew`,
+`reachability.recheck`) per project rule "no untracked timers".
+
+Web-safe: the `dart:io`-touching probes are conditionally imported and
+return `notReachable` on web.
+
+#### ServerlessSettings + ServerlessSettingsService
+
+User-facing settings for the serverless P2P stack. Persisted at
+`{callsign}/p2p/serverless_settings.json` via `AppService().profileStorage`
+(encrypted-SQLite-aware; never raw `File`).
+
+**Files:**
+- `lib/models/serverless_settings.dart`
+- `lib/services/serverless_settings_service.dart`
+
+```dart
+final svc = ServerlessSettingsService();
+await svc.load();
+await svc.update((s) => s
+  ..relayMode = true
+  ..batteryThresholdPct = 60);
+```

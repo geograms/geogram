@@ -34,6 +34,8 @@ import 'services/conference_service.dart';
 import 'services/station_node_service.dart';
 import 'services/station_discovery_service.dart';
 import 'p2p/p2p_service.dart';
+import 'p2p/reachability/reachability_service.dart';
+import 'services/serverless_settings_service.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
@@ -694,6 +696,22 @@ void main() async {
       LogService().log(
         'ConnectionManager initialized with USB + LAN + WebRTC + DHT + Peer Relay + Station + BT Classic + BLE transports (deferred)',
       );
+
+      // Serverless P2P (BT-DHT-v2 §7): start reachability detection so the
+      // DHT and WebRTC paths can announce a known reachable address. Gated
+      // on the master switch in ServerlessSettings.
+      try {
+        final settings = await ServerlessSettingsService().load();
+        if (settings.enableServerless) {
+          unawaited(
+              ReachabilityService().start(chosenPort: settings.chosenDhtPort));
+          LogService().log('ReachabilityService started (serverless P2P)');
+        } else {
+          LogService().log('ReachabilityService skipped (serverless disabled)');
+        }
+      } catch (e) {
+        LogService().log('ReachabilityService init error: $e');
+      }
 
       print('[STARTUP] before UpdateService');
       // UpdateService may check for updates - defer it

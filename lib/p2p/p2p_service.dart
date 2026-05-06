@@ -24,6 +24,7 @@ import '../util/task_monitor_helpers.dart';
 import '../connection/connection_manager.dart';
 import '../connection/transports/dht_transport.dart';
 import 'dht_node.dart';
+import 'dht_topics.dart';
 import 'k_bucket.dart';
 import 'node_capability.dart';
 
@@ -113,6 +114,11 @@ class P2PService {
   int _dhtPort = 0;
   int get dhtPort => _dhtPort;
   int get dhtPeerCount => _dht?.routingTableSize ?? 0;
+
+  /// True when the BT-DHT-v2 §6.7 blocked-detector reports no responses
+  /// after bootstrap. Cleared once the DHT receives any datagram.
+  bool _dhtBlocked = false;
+  bool get isDhtBlocked => _dhtBlocked;
   NodeType get nodeType => _capability?.type ?? NodeType.unknown;
   String? get publicIp => _capability?.publicIp;
   int? get publicPort => _capability?.publicPort;
@@ -186,6 +192,13 @@ class P2PService {
 
         _dht!.onPeerFound.listen((e) => _addDiscoveredPeer(e.$2));
 
+        // BT-DHT-v2 §6.7: surface blocked-DHT networks. Logs + state flag
+        // ship in PR1; NOSTR-presence publishing lands with the rest of
+        // the kind-30078 plumbing in PR2.
+        _dht!.onDhtBlocked.listen((blocked) {
+          _dhtBlocked = blocked;
+        });
+
         // Set geogram identity on the DHT node for custom queries
         final profile = ProfileService().getProfile();
         _dht!.geogramCallsign = profile.callsign;
@@ -235,6 +248,9 @@ class P2PService {
             }
           }
         }
+        // Arm the §6.7 detector before bootstrap so any UDP response
+        // arriving during bootstrap clears the flag immediately.
+        _dht!.scheduleBlockedDetector();
         await _dht!.bootstrap(cachedNodes: cached);
         LogService().log(
           'P2P: bootstrap done (${_dht!.routingTableSize} nodes)',
@@ -250,8 +266,8 @@ class P2PService {
     Timer(const Duration(seconds: 2), () async {
       if (!_running || _dht == null) return;
       try {
-        final geogramHash = sha1Hash('geogram');
-        final npubHash = sha1Hash(npub);
+        final relayHashes = _relayTopics();
+        final peerHashes = _peerTopics(npub);
 
         // Announce with implied_port=1 (set in dht_node.dart). The DHT
         // node stores the UDP source port (NAT-mapped external port),
@@ -259,21 +275,19 @@ class P2PService {
         // reachable address through NAT. The declared port value doesn't
         // matter but we pass the local DHT port for consistency.
         final dhtPort = _dht!.localPort;
-        if (_useLightDhtLookups) {
-          await _announceTopic(geogramHash, dhtPort);
-          await _announceTopic(npubHash, dhtPort);
-          _dht!.startPeriodicAnnounce(light: true);
-          LogService().log(
-            'P2P: announced on DHT with light mode (local: $dhtPort, http: $port)',
-          );
-        } else {
-          await _announceTopic(geogramHash, dhtPort);
-          await _announceTopic(npubHash, dhtPort);
-          _dht!.startPeriodicAnnounce();
-          LogService().log(
-            'P2P: announced on DHT (implied_port=1, local: $dhtPort, http: $port)',
-          );
+        for (final h in relayHashes) {
+          await _announceTopic(h, dhtPort);
         }
+        for (final h in peerHashes) {
+          await _announceTopic(h, dhtPort);
+        }
+        _dht!.startPeriodicAnnounce(light: _useLightDhtLookups);
+        LogService().log(
+          'P2P: announced on DHT '
+          '(${_useLightDhtLookups ? "light, " : ""}'
+          'topics=${relayHashes.length + peerHashes.length}, '
+          'local: $dhtPort, http: $port)',
+        );
         _phase4_detect();
       } catch (e) {
         LogService().log('P2P: announce failed: $e');
@@ -369,20 +383,44 @@ class P2PService {
   /// The iterative lookup WILL block the main thread for 10-30s.
   Future<List<PeerInfo>> findDevicesForUser(String npub) async {
     if (_dht == null || !_dht!.isRunning) return [];
-    final hash = sha1Hash(npub);
-    // Check cache first (instant, no blocking)
-    final cached = _dht!.getCachedPeers(hash);
-    if (cached.isNotEmpty) return cached;
-    // Full iterative lookup (blocks — only used by debug API)
-    return _dht!.getPeers(hash);
+    final hashes = _peerTopics(npub);
+    // Check cache first (instant, no blocking) across all topic variants.
+    final cached = <PeerInfo>[];
+    for (final h in hashes) {
+      cached.addAll(_dht!.getCachedPeers(h));
+    }
+    if (cached.isNotEmpty) return _dedupePeers(cached);
+    // Full iterative lookup (blocks — only used by debug API).
+    final fresh = <PeerInfo>[];
+    for (final h in hashes) {
+      fresh.addAll(await _dht!.getPeers(h));
+    }
+    return _dedupePeers(fresh);
   }
 
   Future<List<PeerInfo>> findDevicesForUserLight(String npub) async {
     if (_dht == null || !_dht!.isRunning) return [];
-    final hash = sha1Hash(npub);
-    final peers = await _dht!.getPeersLight(hash, includeCached: false);
-    if (peers.isNotEmpty) return peers;
-    return _dht!.getCachedPeers(hash);
+    final hashes = _peerTopics(npub);
+    final fresh = <PeerInfo>[];
+    for (final h in hashes) {
+      fresh.addAll(await _dht!.getPeersLight(h, includeCached: false));
+    }
+    if (fresh.isNotEmpty) return _dedupePeers(fresh);
+    final cached = <PeerInfo>[];
+    for (final h in hashes) {
+      cached.addAll(_dht!.getCachedPeers(h));
+    }
+    return _dedupePeers(cached);
+  }
+
+  List<PeerInfo> _dedupePeers(List<PeerInfo> peers) {
+    final seen = <String>{};
+    final out = <PeerInfo>[];
+    for (final p in peers) {
+      final key = '${p.ip}:${p.port}';
+      if (seen.add(key)) out.add(p);
+    }
+    return out;
   }
 
   Future<Map<String, dynamic>?> sendGeogramQuery(String ip, int port) async {
@@ -477,6 +515,27 @@ class P2PService {
     );
   }
 
+  /// BT-DHT-v2 §6.4 RELAY_TOPIC, dual with the legacy `SHA1("geogram")`
+  /// hash during the migration window (see `kEnableLegacyTopics`).
+  List<Uint8List> _relayTopics() => [
+        DhtTopics.relayTopic(),
+        if (kEnableLegacyTopics) DhtTopics.legacyGeogramHash(),
+      ];
+
+  /// BT-DHT-v2 §6.4 PEER_TOPIC, dual with the legacy `SHA1(npub_string)`
+  /// hash during the migration window. Decodes bech32 npub to bytes; if the
+  /// input isn't valid bech32, falls back to legacy-only.
+  List<Uint8List> _peerTopics(String npub) {
+    final out = <Uint8List>[];
+    try {
+      out.add(DhtTopics.peerTopicFromNpub(npub));
+    } catch (_) {
+      // Malformed npub — only legacy hash is computable.
+    }
+    if (kEnableLegacyTopics) out.add(DhtTopics.legacyNpubHash(npub));
+    return out;
+  }
+
   Future<void> _refreshPublicHttpAnnounce() async {
     _publicHttpReachable = false;
     _publicHttpUrl = null;
@@ -512,9 +571,12 @@ class P2PService {
     _publicHttpUrl = 'http://$ip:$httpPort';
     LogService().log('P2P: public HTTP endpoint verified at $_publicHttpUrl');
 
-    final geogramHash = sha1Hash('geogram');
-    await _announceTopic(geogramHash, httpPort, impliedPort: false);
-    await _announceTopic(sha1Hash(profile.npub), httpPort, impliedPort: false);
+    for (final h in _relayTopics()) {
+      await _announceTopic(h, httpPort, impliedPort: false);
+    }
+    for (final h in _peerTopics(profile.npub)) {
+      await _announceTopic(h, httpPort, impliedPort: false);
+    }
   }
 
   Future<Map<String, dynamic>?> _fetchDirectHttpStatus(PeerInfo peer) async {
@@ -897,10 +959,21 @@ class P2PService {
       }
     }
 
-    final infoHash = sha1Hash(target.npub);
-    var peers = await _lookupDiscoveryPeers(infoHash, includeCached: false);
+    // BT-DHT-v2 §6.4: lookup against PEER_TOPIC(npub) and the legacy
+    // SHA1(npub_string) hash for the dual-announce window.
+    final peerHashes = _peerTopics(target.npub);
+    final freshPeers = <PeerInfo>[];
+    for (final h in peerHashes) {
+      freshPeers.addAll(
+          await _lookupDiscoveryPeers(h, includeCached: false));
+    }
+    var peers = _dedupePeers(freshPeers);
     if (peers.isEmpty) {
-      peers = _dht!.getCachedPeers(infoHash);
+      final cached = <PeerInfo>[];
+      for (final h in peerHashes) {
+        cached.addAll(_dht!.getCachedPeers(h));
+      }
+      peers = _dedupePeers(cached);
     }
 
     final combinedPeers = _mergeUniquePeers(pairPeers, peers);
@@ -1162,12 +1235,13 @@ class P2PService {
         await _capability!.detectFromDht(_dht!);
       }
       await _probeExistingDiscoveredPeers();
-      final peers = await _lookupDiscoveryPeers(
-        sha1Hash('geogram'),
-        includeCached: false,
-      );
-      for (final peer in peers) {
-        _addDiscoveredPeer(peer);
+      // BT-DHT-v2 §6.4 RELAY_TOPIC + legacy fallback during dual-announce.
+      for (final h in _relayTopics()) {
+        final peers =
+            await _lookupDiscoveryPeers(h, includeCached: false);
+        for (final peer in peers) {
+          _addDiscoveredPeer(peer);
+        }
       }
       if (includeKnownPeerProbe) {
         await _runKnownPeerProbe();
