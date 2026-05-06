@@ -27563,7 +27563,7 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         final outPath = '/tmp/wapp-debug-screenshot.png';
         try {
           final scrot = await io.Process.run(
-            'bash', ['-c', 'scrot -z "$1" || import -window root "$1"',
+            'bash', ['-c', r'scrot -z "$1" || import -window root "$1"',
                      '--', outPath],
           );
           if (scrot.exitCode != 0) {
