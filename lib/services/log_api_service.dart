@@ -3344,7 +3344,7 @@ class LogApiService
       // send actions to it, etc.). Lets headless tests verify a
       // wapp's rendered UI without driving the Flutter widget tree.
       if (action.toLowerCase().startsWith('wapp_')) {
-        return _handleWappAction(action.toLowerCase(), params, headers);
+        return await _handleWappAction(action.toLowerCase(), params, headers);
       }
 
       // Handle thumbnail subsystem debug actions
@@ -27460,13 +27460,17 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
   /// action button presses.
   ///
   /// Endpoints:
-  ///   wapp_status                     — full snapshot of the active wapp
-  ///   wapp_action?name=<action_name>  — fire an action button programmatically
-  shelf.Response _handleWappAction(
+  ///   wapp_status                      — full snapshot of the active wapp
+  ///   wapp_navigate?screen=<name>      — switch to a named screen
+  ///   wapp_ui_def?screen=<name>        — raw GeoUI block tree for a screen
+  ///   wapp_set_field?name=<n>&value=<v>— set a field binding
+  ///   wapp_action?name=<action_name>   — fire an action button programmatically
+  ///   wapp_screenshot                  — capture desktop screenshot → PNG bytes
+  Future<shelf.Response> _handleWappAction(
     String action,
     Map<String, dynamic> params,
     Map<String, String> headers,
-  ) {
+  ) async {
     switch (action) {
       case 'wapp_open':
         final wappId = params['id']?.toString() ?? '';
@@ -27509,6 +27513,81 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           jsonEncode({'success': true, ...snap}),
           headers: headers,
         );
+
+      case 'wapp_navigate':
+        final screen = params['screen']?.toString() ?? '';
+        if (screen.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'screen parameter required'}),
+            headers: headers,
+          );
+        }
+        final navOk = WappPage.debugNavigateTo(screen);
+        return shelf.Response.ok(
+          jsonEncode({'success': navOk,
+            if (!navOk) 'error': 'screen not found or no wapp mounted'}),
+          headers: headers,
+        );
+
+      case 'wapp_ui_def':
+        final screen = params['screen']?.toString() ?? '';
+        final def = WappPage.debugUiDef(screen);
+        if (def == null) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'no wapp mounted'}),
+            headers: headers,
+          );
+        }
+        return shelf.Response.ok(
+          jsonEncode({'success': true, 'ui': def}),
+          headers: headers,
+        );
+
+      case 'wapp_set_field':
+        final fieldName = params['name']?.toString() ?? '';
+        final fieldVal  = params['value']?.toString() ?? '';
+        if (fieldName.isEmpty) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': 'name parameter required'}),
+            headers: headers,
+          );
+        }
+        final setOk = WappPage.debugSetField(fieldName, fieldVal);
+        return shelf.Response.ok(
+          jsonEncode({'success': setOk,
+            if (!setOk) 'error': 'no wapp mounted'}),
+          headers: headers,
+        );
+
+      case 'wapp_screenshot':
+        final outPath = '/tmp/wapp-debug-screenshot.png';
+        try {
+          final scrot = await io.Process.run(
+            'bash', ['-c', 'scrot -z "$1" || import -window root "$1"',
+                     '--', outPath],
+          );
+          if (scrot.exitCode != 0) {
+            return shelf.Response.ok(
+              jsonEncode({'success': false,
+                'error': 'screenshot failed: ${scrot.stderr}'}),
+              headers: headers,
+            );
+          }
+          final bytes = await io.File(outPath).readAsBytes();
+          return shelf.Response.ok(
+            bytes,
+            headers: {
+              ...headers,
+              'content-type': 'image/png',
+              'content-disposition': 'inline; filename="wapp-debug.png"',
+            },
+          );
+        } catch (e) {
+          return shelf.Response.ok(
+            jsonEncode({'success': false, 'error': e.toString()}),
+            headers: headers,
+          );
+        }
 
       case 'wapp_action':
         final name = params['name']?.toString() ?? '';

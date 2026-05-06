@@ -93,6 +93,29 @@ class WappPage extends StatefulWidget {
     return true;
   }
 
+  /// Navigate the active wapp to a named screen. Returns false when no
+  /// wapp is mounted or the screen name is not found.
+  static bool debugNavigateTo(String screenName) {
+    final s = activeState;
+    if (s == null) return false;
+    return s._debugNavigateTo(screenName);
+  }
+
+  /// Dump the raw GeoUI block tree for a named screen (or the active
+  /// screen if screenName is empty). Useful for verifying declared
+  /// structure without a screenshot.
+  static Map<String, dynamic>? debugUiDef(String screenName) =>
+      activeState?._debugUiDef(screenName);
+
+  /// Set a field binding programmatically, as if the user had typed
+  /// into an input. Returns false when no wapp is mounted.
+  static bool debugSetField(String fieldName, String value) {
+    final s = activeState;
+    if (s == null) return false;
+    s._debugSetField(fieldName, value);
+    return true;
+  }
+
   @override
   State<WappPage> createState() => _WappPageState();
 }
@@ -2024,6 +2047,43 @@ class _WappPageState extends State<WappPage>
     }));
     _engine.handleEvent();
     _drainOutbox();
+  }
+
+  bool _debugNavigateTo(String screenName) {
+    final idx = _screenNames.indexOf(screenName);
+    if (idx < 0) return false;
+    setState(() => _tabController?.animateTo(idx));
+    return true;
+  }
+
+  Map<String, dynamic> _debugUiDef(String screenName) {
+    final target = screenName.isEmpty
+        ? (_tabController != null &&
+                _tabController!.index < _screens.length
+            ? _screens[_tabController!.index]
+            : null)
+        : _screens.firstWhere(
+            (s) => s.name == screenName,
+            orElse: () =>
+                GeoUiBlock(keyword: '', name: null, type: null, decls: {}, children: []),
+          );
+    if (target == null || target.keyword.isEmpty) {
+      return {'error': 'screen not found: $screenName'};
+    }
+    // Serialize block tree to a JSON-safe map recursively.
+    Map<String, dynamic> blockToMap(GeoUiBlock b) => {
+          'keyword': b.keyword,
+          'name': b.name,
+          'type': b.type,
+          'decls': b.decls,
+          'children': b.children.map(blockToMap).toList(),
+        };
+    return blockToMap(target);
+  }
+
+  void _debugSetField(String fieldName, String value) {
+    _bindings.setValue(fieldName, value);
+    if (mounted) setState(() {});
   }
 
   /// Per-screen builder. Detects special group `$type` values that
