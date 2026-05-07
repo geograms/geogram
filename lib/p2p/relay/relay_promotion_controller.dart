@@ -54,6 +54,7 @@ class RelayPromotionController {
 
   bool _started = false;
   bool _promoted = false;
+  bool _forced = false;
   String? _lastReason;
 
   bool get isStarted => _started;
@@ -105,21 +106,31 @@ class RelayPromotionController {
     _taskHandle = null;
   }
 
-  /// Manual override (debug API). Bypasses all criteria.
+  /// Manual override (debug API). Bypasses all criteria and sticks
+  /// across periodic re-evaluation until forceDemote is called or the
+  /// controller stops.
   Future<void> forcePromote() async {
     if (_server == null) {
       _log.warn('RelayPromotion: no server attached, cannot promote');
       return;
     }
+    _forced = true;
     if (_promoted) return;
     await _promote(forced: true);
   }
 
-  Future<void> forceDemote() => _demote('manual override');
+  Future<void> forceDemote() async {
+    _forced = false;
+    await _demote('manual override');
+  }
 
   // ── internals ────────────────────────────────────────────────────
 
   Future<void> _evaluate() async {
+    // forcePromote() is a manual override — keep the promoted state
+    // sticky against periodic re-evaluation until forceDemote() runs.
+    if (_forced) return;
+
     final settings = ServerlessSettingsService().current;
     final reach = ReachabilityService().currentState;
     final battery = await probeBattery();
