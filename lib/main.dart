@@ -96,6 +96,7 @@ import 'connection/transports/bluetooth_classic_transport.dart';
 import 'connection/transports/peer_relay_transport.dart';
 import 'connection/transports/station_transport.dart';
 import 'connection/transports/webrtc_transport.dart';
+import 'connection/transports/hole_punch_transport.dart';
 import 'connection/transports/usb_aoa_transport.dart';
 import 'models/app.dart';
 import 'util/file_icon_helper.dart';
@@ -687,6 +688,7 @@ void main() async {
       final connectionManager = ConnectionManager();
       connectionManager.registerTransport(UsbAoaTransport());
       connectionManager.registerTransport(LanTransport());
+      connectionManager.registerTransport(HolePunchTransport());
       connectionManager.registerTransport(WebRTCTransport());
       connectionManager.registerTransport(DhtTransport());
       connectionManager.registerTransport(PeerRelayTransport());

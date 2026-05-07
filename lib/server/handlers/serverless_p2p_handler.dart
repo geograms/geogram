@@ -21,6 +21,7 @@ import '../../p2p/reachability/reachability_service.dart';
 import '../../p2p/relay/relay_client.dart';
 import '../../p2p/relay/relay_promotion_controller.dart';
 import '../../p2p/relay/serverless_relay_mediator.dart';
+import '../../connection/transports/hole_punch_transport.dart';
 import '../../services/serverless_settings_service.dart';
 import '../../services/webrtc_peer_manager.dart';
 import '../../services/webtorrent_signaling_channel.dart';
@@ -85,6 +86,8 @@ class ServerlessP2pHandler {
           return reply(webtorrentStatus());
         case 'POST webtorrent/reconnect':
           return reply(webtorrentReconnect());
+        case 'GET hole_punch/status':
+          return reply(holePunchStatus());
       }
       // Unmatched serverless subpath.
       request.response.statusCode = 404;
@@ -153,6 +156,16 @@ class ServerlessP2pHandler {
         'webtorrent': WebTorrentSignalingChannel().getStatus(),
       },
     );
+  }
+
+  /// GET /api/p2p/serverless/hole_punch/status
+  static ServerlessHttpResult holePunchStatus() {
+    final cm = ConnectionManager();
+    final t = cm.getTransport('hole_punch') as HolePunchTransport?;
+    if (t == null) {
+      return (200, {'success': true, 'hole_punch': {'started': false}});
+    }
+    return (200, {'success': true, 'hole_punch': t.getStatus()});
   }
 
   /// POST /api/p2p/serverless/dht/topic — body `{kind, input}`

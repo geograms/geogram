@@ -25,6 +25,7 @@ import '../connection/connection_manager.dart';
 import '../connection/transports/dht_transport.dart';
 import 'dht_node.dart';
 import 'dht_topics.dart';
+import 'ice_punch.dart';
 import 'k_bucket.dart';
 import 'node_capability.dart';
 import 'reachability/reachability_service.dart';
@@ -102,6 +103,10 @@ class P2PService {
   MonitoredIsolateHandle? _taskHandle;
   DhtNode? _dht;
   NodeCapability? _capability;
+  final IcePunch _icePunch = IcePunch();
+  IcePunch get icePunch => _icePunch;
+  DhtNode? get dht => _dht;
+  RawDatagramSocket? get dhtSocket => _dht?.socket;
   Timer? _refreshTimer;
   Timer? _knownPeerProbeTimer;
 
@@ -206,6 +211,11 @@ class P2PService {
         if (reachPort != _dht!.localPort) {
           unawaited(ReachabilityService().refreshOnPort(_dht!.localPort));
         }
+        // Route non-bencode UDP packets on the DHT socket to the
+        // hole-punch transport. This shares the DHT's NAT mapping
+        // with our direct-UDP path so we never need a second port
+        // open through the router/cellular CGNAT.
+        _dht!.onNonDhtPacket = _icePunch.handleIncomingPacket;
 
         _dht!.onPeerFound.listen((e) => _addDiscoveredPeer(e.$2));
 

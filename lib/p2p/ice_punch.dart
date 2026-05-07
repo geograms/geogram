@@ -66,8 +66,13 @@ class DirectConnection {
   /// Remote peer's IP.
   final String remoteIp;
 
-  /// Remote peer's port.
+  /// Remote peer's port (the one initially advertised).
   final int remotePort;
+
+  /// Actual port responses came from — set when port prediction lands
+  /// on a NAT-remapped port instead of the advertised one.
+  int? _actualRemotePort;
+  int get effectivePort => _actualRemotePort ?? remotePort;
 
   /// Our UDP socket for this connection.
   final RawDatagramSocket socket;
@@ -102,7 +107,7 @@ class DirectConnection {
   void send(Uint8List data) {
     if (_state != DirectConnectionState.connected) return;
     try {
-      socket.send(data, InternetAddress(remoteIp), remotePort);
+      socket.send(data, InternetAddress(remoteIp), effectivePort);
     } catch (e) {
       LogService().log('DirectConnection send error: $e');
     }
@@ -123,7 +128,7 @@ class DirectConnection {
           socket.send(
             Uint8List.fromList(utf8.encode('{"type":"ping"}')),
             InternetAddress(remoteIp),
-            remotePort,
+            effectivePort,
           );
         } catch (_) {
           _state = DirectConnectionState.disconnected;
@@ -179,6 +184,34 @@ class IcePunch {
       return;
     }
 
+    // No exact-port match. Try connections whose remoteIp matches and
+    // are still in the punching state — port prediction may have landed
+    // on a different external port than the advertised one.
+    for (final c in _connections.values) {
+      if (c.remoteIp == datagram.address.address &&
+          c._state == DirectConnectionState.punching) {
+        c._actualRemotePort = datagram.port;
+        c._state = DirectConnectionState.connected;
+        LogService().log(
+            'IcePunch: hole punch SUCCESS from $key (remapped from advertised ${c.remotePort})');
+        c._handleIncoming(datagram.data);
+        return;
+      }
+    }
+
+    // Hole-punch transport's GP01 framing — surface it even before any
+    // local punch was issued (the peer may have punched first via a
+    // tracker-coordinated handshake).
+    if (datagram.data.length >= 4 &&
+        datagram.data[0] == 0x47 && // 'G'
+        datagram.data[1] == 0x50 && // 'P'
+        datagram.data[2] == 0x30 && // '0'
+        datagram.data[3] == 0x31) { // '1'
+      _pendingIncoming[key] = datagram;
+      onUnsolicitedFrame?.call(datagram);
+      return;
+    }
+
     // Check if this is a punch packet from an unknown peer (they punched first)
     try {
       final json = jsonDecode(utf8.decode(datagram.data));
@@ -188,6 +221,12 @@ class IcePunch {
       }
     } catch (_) {}
   }
+
+  /// Optional hook for the hole-punch transport: called when a GP01
+  /// frame arrives from a peer we haven't yet associated with a
+  /// DirectConnection (e.g. they punched first after exchanging
+  /// endpoints over the WebTorrent signaling channel).
+  void Function(Datagram datagram)? onUnsolicitedFrame;
 
   /// Pending incoming packets from unknown peers (they initiated punch).
   final Map<String, Datagram> _pendingIncoming = {};
@@ -202,11 +241,15 @@ class IcePunch {
   /// [ourCandidate] — our public address (from BEP 42).
   /// [theirCandidate] — peer's public address (from DHT discovery).
   /// [capability] — our node capability info.
+  /// [predictedPorts] — extra ports near theirCandidate.port to also fire
+  /// punch packets at, to defeat one-side cellular symmetric NAT (where
+  /// the NAT picks consecutive external ports per outbound destination).
   Future<DirectConnection?> punch({
     required RawDatagramSocket sharedSocket,
     required IceCandidate ourCandidate,
     required IceCandidate theirCandidate,
-    required NodeCapability capability,
+    NodeCapability? capability,
+    List<int> predictedPorts = const <int>[],
   }) async {
     final key = '${theirCandidate.ip}:${theirCandidate.port}';
 
@@ -217,7 +260,8 @@ class IcePunch {
     }
 
     LogService().log('IcePunch: punching to $key '
-        '(our public: ${ourCandidate.ip}:${ourCandidate.port})');
+        '(our public: ${ourCandidate.ip}:${ourCandidate.port}'
+        '${predictedPorts.isNotEmpty ? ", predicted=$predictedPorts" : ""})');
 
     // Use the shared DHT socket — incoming responses are routed via
     // handleIncomingPacket() from DhtNode.onNonDhtPacket callback.
@@ -229,41 +273,68 @@ class IcePunch {
     connection._state = DirectConnectionState.punching;
     _connections[key] = connection;
 
-    // Check if peer already punched us (they may have discovered us first)
-    final pending = _pendingIncoming.remove(key);
+    // Check if peer already punched us (they may have discovered us first).
+    // Also check predicted ports in case the cellular NAT remapped.
+    Datagram? pending = _pendingIncoming.remove(key);
+    if (pending == null) {
+      for (final p in predictedPorts) {
+        final pk = '${theirCandidate.ip}:$p';
+        pending = _pendingIncoming.remove(pk);
+        if (pending != null) {
+          // Switch the connection to the actual port we received from.
+          connection._actualRemotePort = p;
+          break;
+        }
+      }
+    }
     if (pending != null) {
       connection._state = DirectConnectionState.connected;
       connection._handleIncoming(pending.data);
       connection.startKeepalive();
-      LogService().log('IcePunch: connected to $key (peer punched first)');
+      LogService().log('IcePunch: connected to ${connection.remoteIp}:'
+          '${connection.effectivePort} (peer punched first)');
       return connection;
     }
 
-    // Send punch packets (simultaneous open)
+    // Send punch packets (simultaneous open) on the primary port and
+    // any predicted ports, in parallel.
     final remoteAddr = InternetAddress(theirCandidate.ip);
     final punchPayload = Uint8List.fromList(utf8.encode(
         '{"type":"punch","ts":${DateTime.now().millisecondsSinceEpoch}}'));
+    final allPorts = <int>[theirCandidate.port, ...predictedPorts];
 
     for (var i = 0; i < 5; i++) {
-      try {
-        sharedSocket.send(punchPayload, remoteAddr, theirCandidate.port);
-        LogService().log('IcePunch: sent punch packet $i to $key');
-      } catch (e) {
-        LogService().log('IcePunch: send error to $key: $e');
+      for (final p in allPorts) {
+        try {
+          sharedSocket.send(punchPayload, remoteAddr, p);
+        } catch (e) {
+          LogService().log('IcePunch: send error to $remoteAddr:$p: $e');
+        }
       }
       await Future.delayed(const Duration(milliseconds: 200));
     }
 
-    // Wait for response (up to 5 seconds)
-    // The response arrives via handleIncomingPacket → sets state to connected
+    // Wait for response (up to 5 seconds).
     for (var i = 0; i < 25; i++) {
       if (connection._state == DirectConnectionState.connected) break;
+      // Did one of our predicted ports land?
+      for (final p in predictedPorts) {
+        final pk = '${theirCandidate.ip}:$p';
+        final dg = _pendingIncoming.remove(pk);
+        if (dg != null) {
+          connection._actualRemotePort = p;
+          connection._state = DirectConnectionState.connected;
+          connection._handleIncoming(dg.data);
+          break;
+        }
+      }
       await Future.delayed(const Duration(milliseconds: 200));
     }
 
     if (connection._state == DirectConnectionState.connected) {
       connection.startKeepalive();
-      LogService().log('IcePunch: connected to $key');
+      LogService().log('IcePunch: connected to ${connection.remoteIp}:'
+          '${connection.effectivePort}');
       return connection;
     } else {
       _connections.remove(key);

@@ -171,6 +171,7 @@ class DhtNode {
 
   /// UDP socket.
   RawDatagramSocket? _socket;
+  RawDatagramSocket? get socket => _socket;
 
   /// Local UDP port.
   int _localPort = 0;
@@ -832,6 +833,13 @@ class DhtNode {
 
   // ─── UDP Message Handling ───────────────────────────────────────
 
+  /// Hook for non-bencode UDP packets received on the shared DHT socket.
+  /// Used by the hole-punch transport so its hole-punch and reliable-data
+  /// packets ride the same NAT-mapped port the DHT keeps warm. Set this
+  /// after DhtNode.start() — packets arriving before the hook is wired
+  /// are dropped (same as before this hook existed).
+  void Function(Datagram datagram)? onNonDhtPacket;
+
   void _handleDatagram(RawSocketEvent event) {
     if (event != RawSocketEvent.read) return;
 
@@ -842,7 +850,12 @@ class DhtNode {
 
     try {
       final msg = Bencode.decode(datagram.data);
-      if (msg is! Map) return;
+      if (msg is! Map) {
+        // Non-bencode payload on our UDP socket — surface to the
+        // hole-punch transport, drop otherwise.
+        onNonDhtPacket?.call(datagram);
+        return;
+      }
       final dict = Bencode.asMap(msg);
       final type = Bencode.asString(dict['y']);
 
@@ -858,7 +871,9 @@ class DhtNode {
           break;
       }
     } catch (e) {
-      // Silently ignore malformed messages
+      // Bencode decode threw — also a non-bencode packet from our point
+      // of view, hand to the hole-punch hook.
+      onNonDhtPacket?.call(datagram);
     }
   }
 
