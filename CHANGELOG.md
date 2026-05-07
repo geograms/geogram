@@ -1,8 +1,10 @@
 # Geogram Desktop Changelog
 
-## 2026-05-07 - v1.39.0-beta.16
+## 2026-05-07 - v1.39.1-beta.1
 
 Cross-network direct-UDP messaging between two peers, coordinated through the public BitTorrent infrastructure. No private servers, no router config, no UPnP, no NOSTR, no TURN.
+
+> Note: this is the first beta of the 1.39.1 cycle. Numbered 1.39.1-beta.1 instead of 1.39.0-beta.16 because semver §11 makes a `-beta` prerelease *lower* than the stable 1.39.0, so users on 1.39.0 weren't seeing it as an update. Bumping the patch base lets the auto-updater offer it correctly.
 
 ### New: P2P direct UDP transport
 - New `hole_punch` transport at priority 18 (between WebRTC at 15 and DHT at 25). When both peers have a public endpoint and a connected WebTorrent tracker, this beats WebRTC because it doesn't depend on ICE converging across symmetric NATs. Falls through cleanly to the next transport when preconditions aren't met.
