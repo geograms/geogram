@@ -235,10 +235,15 @@ Future<HttpClientResponse> _soap(
   final client = HttpClient()..connectionTimeout = _soapTimeout;
   try {
     final req = await client.postUrl(svc.controlUrl).timeout(_soapTimeout);
+    final encoded = utf8.encode(body);
     req.headers
       ..set('Content-Type', 'text/xml; charset="utf-8"')
       ..set('SOAPAction', '"${svc.serviceType}#$action"');
-    req.write(body);
+    // Many consumer routers (FRITZ!Box, etc.) reject SOAP without a
+    // declared Content-Length and return HTTP 411. Set it explicitly
+    // and write bytes — req.write+close() can default to chunked.
+    req.contentLength = encoded.length;
+    req.add(encoded);
     return await req.close();
   } finally {
     // Caller must drain the response; intentionally not closing client here.
