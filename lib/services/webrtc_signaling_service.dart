@@ -133,6 +133,7 @@ class WebRTCSignalingService {
     final pending = _PendingOffer(completer: completer, offer: offer);
     _pendingOffers[sessionId] = pending;
 
+    Timer? wsWatchdog;
     try {
       // Send the offer (records which path it took on the pending tracker)
       await _sendSignal(offer, pending: pending);
@@ -140,6 +141,27 @@ class WebRTCSignalingService {
         'WebRTCSignaling: Sent offer to $toCallsign (session: $sessionId)'
         ' via ${pending.lastPath ?? "unknown"}',
       );
+
+      // WS silent-failure watchdog. The station echoes back
+      // `webrtc_error: target_not_connected` when the recipient isn't
+      // on the same WS, and that triggers the retry path. But on some
+      // station configurations (and when the station is unreachable)
+      // we get neither an answer nor an error — just silence. This
+      // watchdog treats >3s of WS silence as an implicit failure and
+      // fires the same retry the webrtc_error handler would.
+      if (pending.lastPath == 'ws') {
+        wsWatchdog = Timer(const Duration(seconds: 3), () {
+          if (pending.completer.isCompleted) return;
+          if (pending.retryStarted) return;
+          pending.retryStarted = true;
+          pending.triedPaths.add('ws');
+          LogService().log(
+            'WebRTCSignaling: WS silent for 3s on session $sessionId,'
+            ' retrying via next path',
+          );
+          unawaited(_retryPendingOffer(sessionId, pending));
+        });
+      }
 
       // Wait for answer with timeout
       final answer = await completer.future.timeout(
@@ -157,6 +179,8 @@ class WebRTCSignalingService {
     } catch (e) {
       _pendingOffers.remove(sessionId);
       rethrow;
+    } finally {
+      wsWatchdog?.cancel();
     }
   }
 
@@ -217,17 +241,40 @@ class WebRTCSignalingService {
 
   /// Send a signal via the first available signaling path.
   ///
-  /// Order: WebSocket → peer relay → DHT.
+  /// Order: DHT (when the peer's UDP rendezvous is cached) → WebSocket
+  /// → peer relay → DHT (last-ditch). DHT goes first when we know the
+  /// peer's UDP endpoint because that's a direct peer-to-peer hop with
+  /// no central station in the path. The station-WebSocket path is
+  /// only a useful first try when DHT discovery hasn't converged yet.
   ///
   /// Pass [pending] when sending an offer so the WebSocket-side
-  /// `webrtc_error: target_not_connected` handler can transparently
-  /// retry on the next path. [skipPaths] excludes already-failed paths
-  /// during such retries.
+  /// `webrtc_error: target_not_connected` handler — and the WS
+  /// silent-failure watchdog — can transparently retry on the next
+  /// path. [skipPaths] excludes already-failed paths during retries.
   Future<void> _sendSignal(
     WebRTCSignal signal, {
     _PendingOffer? pending,
     Set<String> skipPaths = const {},
   }) async {
+    // Prefer DHT when we have the peer's UDP rendezvous cached. This
+    // avoids the station-WS round trip (and its silent-failure mode
+    // when the recipient isn't on the same WebSocket).
+    if (!skipPaths.contains('dht') &&
+        P2PService().canSignalPeer(signal.toCallsign)) {
+      final sentViaDht = await P2PService().sendSignalingMessage(
+        signal.toCallsign,
+        signal.toJson(),
+      );
+      if (sentViaDht) {
+        LogService().log(
+          'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via DHT rendezvous',
+        );
+        pending?.lastPath = 'dht';
+        pending?.triedPaths.add('dht');
+        return;
+      }
+    }
+
     if (!skipPaths.contains('ws') && _wsService.isConnected) {
       _wsService.sendWebRTCSignal(signal.toJson());
       pending?.lastPath = 'ws';
@@ -250,6 +297,9 @@ class WebRTCSignalingService {
       }
     }
 
+    // Last-ditch DHT attempt — even when canSignalPeer reported false
+    // initially (it might have flipped true since), let the lower-level
+    // sendSignalingMessage take a final shot.
     if (!skipPaths.contains('dht')) {
       final sentViaDht = await P2PService().sendSignalingMessage(
         signal.toCallsign,
@@ -257,7 +307,7 @@ class WebRTCSignalingService {
       );
       if (sentViaDht) {
         LogService().log(
-          'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via DHT rendezvous',
+          'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via DHT rendezvous (last-ditch)',
         );
         pending?.lastPath = 'dht';
         pending?.triedPaths.add('dht');
