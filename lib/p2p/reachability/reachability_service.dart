@@ -120,6 +120,24 @@ class ReachabilityService {
     return _state;
   }
 
+  /// Switch to a new chosen port (e.g. when the DHT socket actually bound
+  /// somewhere different than the persisted preference) and re-detect.
+  /// Removes any stale UPnP mapping on the previous port first. No-op
+  /// when the service isn't running (serverless disabled).
+  Future<ReachabilityState> refreshOnPort(int newPort) async {
+    final oldPort = _chosenPort;
+    _chosenPort = newPort;
+    if (!_running) return _state;
+    if (oldPort != null && oldPort != newPort &&
+        _state.status == ReachabilityStatus.reachableUPnP) {
+      try {
+        await upnpDeletePortMapping(externalPort: oldPort);
+      } catch (_) {}
+    }
+    await _runDetect();
+    return _state;
+  }
+
   Future<void> _detect() async {
     final port = _chosenPort ?? _randomHighPort();
     _chosenPort = port;
@@ -128,32 +146,15 @@ class ReachabilityService {
     // continue rendering before we touch the network stack.
     await Future<void>.delayed(const Duration(milliseconds: 50));
 
-    // 1. IPv6
-    try {
-      final v6 = await probeIpv6(port);
-      if (v6.socketBindOk && v6.globalAddress != null) {
-        _setState(ReachabilityState(
-          status: ReachabilityStatus.reachableIPv6,
-          externalAddress: v6.globalAddress,
-          externalPort: port,
-          detectedAt: DateTime.now(),
-          note: 'IPv6 global unicast',
-        ));
-        _renewTimer?.cancel();
-        _renewTimer = null;
-        return;
-      }
-      _log.info(
-          'Reachability: IPv6 probe negative (bindOk=${v6.socketBindOk} '
-          'addr=${v6.globalAddress} port=$port)');
-    } catch (e) {
-      _log.warn('Reachability: IPv6 probe error: $e');
-    }
-
-    // Yield between probes to keep the event loop responsive.
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-
-    // 2. UPnP-IGD
+    // 1. UPnP-IGD first — success here is a stronger reachability guarantee
+    //    than IPv6 socket-bind. The router actually opened the port and is
+    //    now forwarding inbound UDP, which means cellular peers (no inbound
+    //    of their own) can connect outbound to the router's WAN IPv4 and
+    //    reach this device. A bare IPv6 bind tells us nothing about whether
+    //    the home network firewall actually permits inbound — and on most
+    //    consumer ISPs (Telekom, Vodafone fixed) it does not. So when the
+    //    router supports UPnP-IGD, treat that as the authoritative path
+    //    and skip IPv6.
     try {
       const lease = Duration(hours: 1);
       final m = await upnpAddPortMapping(
@@ -174,15 +175,43 @@ class ReachabilityService {
         _scheduleRenewal(lease);
         return;
       } else {
-        _log.info('Reachability: UPnP failed: ${m.error}');
+        _log.info('Reachability: UPnP unavailable (${m.error}), falling back to IPv6');
       }
     } catch (e) {
       _log.warn('Reachability: UPnP probe error: $e');
     }
 
+    // Yield between probes to keep the event loop responsive.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    // 2. IPv6 — fallback for networks without UPnP-IGD (cellular, mobile
+    //    hotspots, public wifi). The bind-only check is best-effort; some
+    //    networks bind fine but firewall inbound. Peers still announce the
+    //    address and connect attempts surface real reachability.
+    try {
+      final v6 = await probeIpv6(port);
+      if (v6.socketBindOk && v6.globalAddress != null) {
+        _setState(ReachabilityState(
+          status: ReachabilityStatus.reachableIPv6,
+          externalAddress: v6.globalAddress,
+          externalPort: port,
+          detectedAt: DateTime.now(),
+          note: 'IPv6 global unicast (UPnP unavailable)',
+        ));
+        _renewTimer?.cancel();
+        _renewTimer = null;
+        return;
+      }
+      _log.info(
+          'Reachability: IPv6 probe negative (bindOk=${v6.socketBindOk} '
+          'addr=${v6.globalAddress} port=$port)');
+    } catch (e) {
+      _log.warn('Reachability: IPv6 probe error: $e');
+    }
+
     // 3. NAT-PMP / PCP — deferred (spec §7.3).
     _setState(ReachabilityState.notReachable(
-        note: 'IPv6+UPnP failed; NAT-PMP/PCP deferred'));
+        note: 'UPnP+IPv6 failed; NAT-PMP/PCP deferred'));
     _renewTimer?.cancel();
     _renewTimer = null;
   }

@@ -27,6 +27,7 @@ import 'dht_node.dart';
 import 'dht_topics.dart';
 import 'k_bucket.dart';
 import 'node_capability.dart';
+import 'reachability/reachability_service.dart';
 
 const String _kNodeCachePath = 'p2p/dht_cache.json';
 const String _kNodeIdPath = 'p2p/node_id.bin';
@@ -186,9 +187,25 @@ class P2PService {
         final persistedId = await _loadNodeId();
         _dht = DhtNode();
         _capability = NodeCapability();
-        await _dht!.start(persistedNodeId: persistedId);
+        // BT-DHT-v2 §6.3 + §7.3: bind on the same port that ReachabilityService
+        // chose, so any UPnP-IGD mapping points at our DHT socket. Without
+        // this, UPnP opens an external port that maps to a port nothing
+        // listens on, and home-wifi devices can't actually serve as
+        // bridging connectors for cellular peers. Negative => DhtNode
+        // randomizes per spec §6.3 with EADDRINUSE retry.
+        final reachPort = ReachabilityService().chosenPort;
+        await _dht!.start(
+          persistedNodeId: persistedId,
+          port: reachPort ?? -1,
+        );
         await _saveNodeId(_dht!.nodeId);
         _dhtPort = _dht!.localPort;
+        // If the DHT had to retry past the chosen port (EADDRINUSE), tell
+        // ReachabilityService so the next UPnP renewal targets the actual
+        // socket port. No-op if they already match.
+        if (reachPort != _dht!.localPort) {
+          unawaited(ReachabilityService().refreshOnPort(_dht!.localPort));
+        }
 
         _dht!.onPeerFound.listen((e) => _addDiscoveredPeer(e.$2));
 
