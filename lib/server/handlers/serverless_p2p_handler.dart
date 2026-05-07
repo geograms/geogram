@@ -22,7 +22,6 @@ import '../../p2p/relay/relay_promotion_controller.dart';
 import '../../p2p/relay/serverless_relay_mediator.dart';
 import '../../services/serverless_settings_service.dart';
 import '../../services/webrtc_peer_manager.dart';
-import '../../teleport/nostr/nostr_signaling_channel.dart';
 
 typedef ServerlessHttpResult = (int statusCode, Map<String, dynamic> body);
 
@@ -212,7 +211,6 @@ class ServerlessP2pHandler {
         'success': true,
         'count': out.length,
         'sessions': out,
-        'nostr_signaling_started': NostrSignalingChannel().isStarted,
       }
     );
   }

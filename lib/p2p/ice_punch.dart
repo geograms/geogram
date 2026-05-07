@@ -1,10 +1,11 @@
 /// Simplified ICE-style UDP hole punching for P2P connections.
 ///
-/// No WebRTC overhead — raw UDP with NIP-44 encrypted signaling.
+/// No WebRTC overhead — raw UDP datagrams with out-of-band signaling.
+/// (Currently unused; kept as scaffolding for a future direct-UDP path.)
 ///
 /// Flow:
 /// 1. Both peers learn own public IP:port from STUN
-/// 2. Exchange candidates via NIP-44 encrypted message through a Type A relay
+/// 2. Exchange candidates via the regular geogram signaling channel
 /// 3. Simultaneous UDP send to each other's public address
 /// 4. NAT creates mapping → return traffic allowed → direct link
 library;

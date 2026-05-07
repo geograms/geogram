@@ -141,7 +141,6 @@ import '../p2p/dht_topics.dart';
 import '../p2p/reachability/reachability_service.dart';
 import '../p2p/relay/relay_promotion_controller.dart';
 import '../p2p/relay/serverless_relay_mediator.dart';
-import '../teleport/nostr/nostr_signaling_channel.dart';
 import 'serverless_settings_service.dart';
 import 'webrtc_config.dart';
 import 'webrtc_peer_manager.dart';
@@ -21552,20 +21551,19 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
     try {
       final body = await request.readAsString();
       final data = jsonDecode(body) as Map<String, dynamic>;
-      final toNpub = data['toNpub'] as String?;
       final toCallsign = (data['toCallsign'] as String?) ?? '';
       final sessionId = data['sessionId'] as String? ??
           DateTime.now().millisecondsSinceEpoch.toRadixString(16);
       final typeStr = data['type'] as String?;
-      final route = (data['route'] as String?) ?? 'auto';
+      final route = (data['route'] as String?) ?? 'dht';
       final sdp = data['sdp'] as Map<String, dynamic>?;
       final candidate = data['candidate'] as Map<String, dynamic>?;
 
-      if (toNpub == null || typeStr == null) {
+      if (toCallsign.isEmpty || typeStr == null) {
         return shelf.Response.badRequest(
             body: jsonEncode({
               'success': false,
-              'error': 'toNpub and type are required',
+              'error': 'toCallsign and type are required',
             }),
             headers: headers);
       }
@@ -21602,32 +21600,54 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         candidate: candidate,
       );
 
+      // Serverless P2P uses no NOSTR servers. The remaining routes are
+      // dht (default), relay (peer-volunteered HTTP relay), and ws
+      // (station signaling WebSocket).
       switch (route) {
-        case 'nostr':
-          final n = await NostrSignalingChannel()
-              .sendSignal(toNpub: toNpub, signal: signal);
+        case 'dht':
+          final ok = await P2PService()
+              .sendSignalingMessage(toCallsign, signal.toJson());
           return shelf.Response.ok(
               jsonEncode({
-                'success': n > 0,
-                'route': 'nostr',
-                'relays_sent': n,
+                'success': ok,
+                'route': 'dht',
                 'session_id': sessionId,
               }),
               headers: headers);
-        case 'auto':
-        default:
-          // Reuse the regular signaling pipeline for the WS→Relay→NOSTR→DHT
-          // fallback chain. Note: WebRTCSignalingService picks paths via
-          // `_sendSignal` which is private — for the debug helper we just
-          // try NOSTR-DM directly when toNpub is supplied.
-          final n = await NostrSignalingChannel()
-              .sendSignal(toNpub: toNpub, signal: signal);
+        case 'relay':
+          final ok = await PeerRelayService()
+              .sendSignalingMessage(toCallsign, signal.toJson());
           return shelf.Response.ok(
               jsonEncode({
-                'success': n > 0,
-                'route': 'auto-via-nostr',
-                'relays_sent': n,
+                'success': ok,
+                'route': 'relay',
                 'session_id': sessionId,
+              }),
+              headers: headers);
+        case 'ws':
+          if (!WebSocketService().isConnected) {
+            return shelf.Response.ok(
+                jsonEncode({
+                  'success': false,
+                  'route': 'ws',
+                  'error': 'station websocket not connected',
+                  'session_id': sessionId,
+                }),
+                headers: headers);
+          }
+          WebSocketService().sendWebRTCSignal(signal.toJson());
+          return shelf.Response.ok(
+              jsonEncode({
+                'success': true,
+                'route': 'ws',
+                'session_id': sessionId,
+              }),
+              headers: headers);
+        default:
+          return shelf.Response.badRequest(
+              body: jsonEncode({
+                'success': false,
+                'error': 'unknown route (expected dht|relay|ws)',
               }),
               headers: headers);
       }
@@ -21662,7 +21682,6 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
           'sessions': out,
           'signaling_initialized':
               WebRTCSignalingService().toString().isNotEmpty,
-          'nostr_signaling_started': NostrSignalingChannel().isStarted,
         }),
         headers: headers);
   }

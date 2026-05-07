@@ -6,6 +6,10 @@
 
 ---
 
+> **Implementation deviation (2026-05-07).** The shipped implementation does NOT use NOSTR for serverless P2P. §3 item 3, §8 (NOSTR-DM signaling), and §6.7 (NOSTR-presence DHT-blocked fallback) are spec-only and have no implementation in the codebase. All serverless signaling routes through the DHT geogram_query rendezvous (§6) per user direction — NOSTR relays are third-party servers and the user did not authorize their use for this feature. Existing NOSTR features in the geogram codebase (gift-wrap DMs, NIP-05 registry, blossom) remain functional and are unrelated to this stack.
+
+---
+
 ## 1. Summary
 
 Geogram instances find and talk to each other without central infrastructure by composing four existing systems:

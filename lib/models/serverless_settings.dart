@@ -13,9 +13,6 @@ class ServerlessSettings {
   /// DHT participation toggle (PR1+).
   bool dhtEnabled;
 
-  /// NOSTR-DM signaling path for WebRTC (PR2+).
-  bool nostrSignalingEnabled;
-
   /// Self-bootstrapping relay tier opt-in (PR4+, default off per spec §10.2).
   bool relayMode;
 
@@ -36,7 +33,6 @@ class ServerlessSettings {
   ServerlessSettings({
     this.enableServerless = true,
     this.dhtEnabled = true,
-    this.nostrSignalingEnabled = true,
     this.relayMode = false,
     this.batteryThresholdPct = 50,
     this.bandwidthCapMBPerDay = 500,
@@ -50,7 +46,6 @@ class ServerlessSettings {
   Map<String, dynamic> toJson() => {
         'enableServerless': enableServerless,
         'dhtEnabled': dhtEnabled,
-        'nostrSignalingEnabled': nostrSignalingEnabled,
         'relayMode': relayMode,
         'batteryThresholdPct': batteryThresholdPct,
         'bandwidthCapMBPerDay': bandwidthCapMBPerDay,
@@ -66,7 +61,6 @@ class ServerlessSettings {
       ServerlessSettings(
         enableServerless: json['enableServerless'] as bool? ?? true,
         dhtEnabled: json['dhtEnabled'] as bool? ?? true,
-        nostrSignalingEnabled: json['nostrSignalingEnabled'] as bool? ?? true,
         relayMode: json['relayMode'] as bool? ?? false,
         batteryThresholdPct: json['batteryThresholdPct'] as int? ?? 50,
         bandwidthCapMBPerDay: json['bandwidthCapMBPerDay'] as int? ?? 500,

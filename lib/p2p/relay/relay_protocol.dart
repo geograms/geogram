@@ -8,8 +8,9 @@
 ///
 /// Types:
 ///   HELLO          — latency probe; payload may carry capability flags
-///   OPEN_SESSION   — request to bridge with a target npub; payload is the
-///                    NOSTR pubkey hex of the desired peer (64 chars)
+///   OPEN_SESSION   — request to bridge with a target peer; payload is the
+///                    secp256k1 x-only pubkey hex of the desired peer
+///                    (64 chars; same format as a bech32-decoded npub)
 ///   DATA           — opaque application bytes (relay never inspects)
 ///   CLOSE_SESSION  — graceful teardown
 ///   PONG           — HELLO reply

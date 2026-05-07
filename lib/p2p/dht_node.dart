@@ -789,9 +789,11 @@ class DhtNode {
   }
 
   /// Schedule the BT-DHT-v2 §6.7 blocked-detector. Fires `onDhtBlocked(true)`
-  /// after `kDhtBlockedTimeoutSeconds` if no DHT packet has arrived. Caller
-  /// (P2PService) is expected to fall back to NOSTR-backed presence and
-  /// re-test the DHT periodically.
+  /// after `kDhtBlockedTimeoutSeconds` if no DHT packet has arrived. The
+  /// spec proposed a NOSTR-presence fallback here, but the geogram
+  /// implementation does not use NOSTR; if the DHT is blocked, serverless
+  /// P2P is unavailable on that network until the DHT becomes reachable
+  /// again.
   void scheduleBlockedDetector() {
     Timer(const Duration(seconds: kDhtBlockedTimeoutSeconds), () {
       if (!_running) return;
@@ -800,8 +802,8 @@ class DhtNode {
       _blockedReported = true;
       _blockedController.add(true);
       LogService().log(
-          'DHT blocked: no responses in ${kDhtBlockedTimeoutSeconds}s, '
-          'falling back to NOSTR presence');
+          'DHT blocked: no responses in ${kDhtBlockedTimeoutSeconds}s '
+          '(serverless P2P unavailable until DHT recovers)');
     });
   }
 

@@ -107,7 +107,8 @@ class ServerlessRelayMediator {
       // openSession requires both peer npubs; in PR3 we don't yet have a
       // back-channel to coordinate sessionId with the remote, so we stop
       // at the connect step. Full openSession integration arrives with
-      // PR4 + a session-id agreed via NOSTR signaling.
+      // PR4 + a session-id agreed via the DHT geogram_query signaling
+      // path.
     } catch (e) {
       _log.warn('ServerlessRelayMediator: connect failed: $e');
       _activeRelays.remove(callsign);

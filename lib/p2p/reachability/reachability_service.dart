@@ -143,6 +143,9 @@ class ReachabilityService {
         _renewTimer = null;
         return;
       }
+      _log.info(
+          'Reachability: IPv6 probe negative (bindOk=${v6.socketBindOk} '
+          'addr=${v6.globalAddress} port=$port)');
     } catch (e) {
       _log.warn('Reachability: IPv6 probe error: $e');
     }

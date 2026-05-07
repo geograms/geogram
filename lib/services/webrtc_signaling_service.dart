@@ -7,10 +7,7 @@ library;
 import 'dart:async';
 import 'dart:math';
 import '../p2p/p2p_service.dart';
-import '../teleport/nostr/nostr_signaling_channel.dart';
-import 'devices_service.dart';
 import 'peer_relay_service.dart';
-import 'serverless_settings_service.dart';
 import 'webrtc_config.dart';
 import 'websocket_service.dart';
 import 'profile_service.dart';
@@ -41,7 +38,7 @@ class WebRTCSignalingService {
   /// Pending offers waiting for answers (sessionId -> tracker).
   /// We keep the original offer alongside the completer so the WebSocket
   /// `webrtc_error: target_not_connected` handler can transparently retry
-  /// the same offer over a different signaling channel (NOSTR-DM, DHT).
+  /// the same offer over a different signaling channel (peer relay, DHT).
   final Map<String, _PendingOffer> _pendingOffers = {};
 
   /// Subscription to WebSocket messages
@@ -52,9 +49,6 @@ class WebRTCSignalingService {
 
   /// Subscription to peer relay signaling messages
   StreamSubscription<Map<String, dynamic>>? _relaySubscription;
-
-  /// Subscription to NIP-44 NOSTR-DM signaling messages (BT-DHT-v2 §8).
-  StreamSubscription<WebRTCSignal>? _nostrSubscription;
 
   /// Whether the service is initialized
   bool _initialized = false;
@@ -77,18 +71,6 @@ class WebRTCSignalingService {
       _handleDhtMessage,
     );
 
-    // BT-DHT-v2 §8: NOSTR NIP-44 DM signaling. Gated on the master switch
-    // so users with serverless P2P disabled do not pay the relay
-    // subscription cost.
-    final settings = ServerlessSettingsService();
-    if (settings.current.enableServerless &&
-        settings.current.nostrSignalingEnabled) {
-      unawaited(NostrSignalingChannel().start());
-      _nostrSubscription =
-          NostrSignalingChannel().incomingSignals.listen(_handleNostrSignal);
-      LogService().log('WebRTCSignalingService: NOSTR-DM path enabled');
-    }
-
     _initialized = true;
     LogService().log('WebRTCSignalingService: Initialized');
   }
@@ -98,7 +80,6 @@ class WebRTCSignalingService {
     _wsSubscription?.cancel();
     _relaySubscription?.cancel();
     _dhtSubscription?.cancel();
-    _nostrSubscription?.cancel();
     _signalController.close();
 
     // Cancel any pending offers
@@ -236,7 +217,7 @@ class WebRTCSignalingService {
 
   /// Send a signal via the first available signaling path.
   ///
-  /// Order: WebSocket → peer relay → NOSTR-DM → DHT.
+  /// Order: WebSocket → peer relay → DHT.
   ///
   /// Pass [pending] when sending an offer so the WebSocket-side
   /// `webrtc_error: target_not_connected` handler can transparently
@@ -269,31 +250,6 @@ class WebRTCSignalingService {
       }
     }
 
-    // BT-DHT-v2 §8: NIP-44 NOSTR DM. Works whenever we know the peer's
-    // npub and at least one configured NOSTR relay is connected — i.e.
-    // the serverless path that doesn't require Geogram station infrastructure.
-    if (!skipPaths.contains('nostr')) {
-      final settings = ServerlessSettingsService().current;
-      if (settings.enableServerless && settings.nostrSignalingEnabled) {
-        final theirNpub = _resolveNpubForCallsign(signal.toCallsign);
-        if (theirNpub != null) {
-          final n = await NostrSignalingChannel().sendSignal(
-            toNpub: theirNpub,
-            signal: signal,
-          );
-          if (n > 0) {
-            LogService().log(
-              'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} '
-              'via NOSTR DM ($n relays)',
-            );
-            pending?.lastPath = 'nostr';
-            pending?.triedPaths.add('nostr');
-            return;
-          }
-        }
-      }
-    }
-
     if (!skipPaths.contains('dht')) {
       final sentViaDht = await P2PService().sendSignalingMessage(
         signal.toCallsign,
@@ -315,25 +271,12 @@ class WebRTCSignalingService {
     throw StateError('No signaling path to ${signal.toCallsign}');
   }
 
-  /// Look up the recipient's bech32 npub by callsign via DevicesService.
-  /// Returns null when the device isn't known or has no npub recorded.
-  String? _resolveNpubForCallsign(String callsign) {
-    try {
-      final dev = DevicesService().getDevice(callsign);
-      final npub = dev?.npub;
-      if (npub == null || npub.isEmpty) return null;
-      return npub.startsWith('npub1') ? npub : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
   /// Handle incoming WebSocket messages.
   void _handleWebSocketMessage(Map<String, dynamic> message) {
     // The station can relay back `webrtc_error` when the target peer
     // isn't on the same WebSocket. Treat `target_not_connected` as a
     // signal to retry the offer over the next available path
-    // (NOSTR-DM, DHT) — the station-WebSocket path is then implicitly
+    // (peer relay, DHT) — the station-WebSocket path is then implicitly
     // out of the running for this session.
     if (message['type'] == 'webrtc_error') {
       final err = message['error'] as String?;
@@ -388,26 +331,6 @@ class WebRTCSignalingService {
   /// Handle incoming peer relay messages.
   void _handleRelayMessage(Map<String, dynamic> message) {
     _handleIncomingSignal(message, source: 'PeerRelay');
-  }
-
-  /// Handle incoming NOSTR-DM signals (already decrypted into WebRTCSignal).
-  void _handleNostrSignal(WebRTCSignal signal) {
-    if (signal.type == WebRTCSignalType.answer) {
-      final pending = _pendingOffers.remove(signal.sessionId);
-      if (pending != null && !pending.completer.isCompleted) {
-        pending.completer.complete(signal);
-        LogService().log(
-          'WebRTCSignaling: Received answer from ${signal.fromCallsign} '
-          'via NostrDM (session: ${signal.sessionId})',
-        );
-        return;
-      }
-    }
-    _signalController.add(signal);
-    LogService().log(
-      'WebRTCSignaling: Received ${signal.type.name} from '
-      '${signal.fromCallsign} via NostrDM (session: ${signal.sessionId})',
-    );
   }
 
   void _handleIncomingSignal(
@@ -468,6 +391,6 @@ class _PendingOffer {
 
   /// True once we've fired a retry for this session. Stops duplicate
   /// `webrtc_error` messages (stations emit ~8 of them) from queueing
-  /// 8× NOSTR publishes and tripping relay rate limits.
+  /// repeated DHT/relay sends for the same offer.
   bool retryStarted = false;
 }
