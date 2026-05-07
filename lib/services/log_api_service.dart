@@ -141,6 +141,7 @@ import '../p2p/dht_topics.dart';
 import '../p2p/reachability/reachability_service.dart';
 import '../p2p/relay/relay_promotion_controller.dart';
 import '../p2p/relay/serverless_relay_mediator.dart';
+import '../server/handlers/serverless_p2p_handler.dart';
 import 'serverless_settings_service.dart';
 import 'webrtc_config.dart';
 import 'webrtc_peer_manager.dart';
@@ -21371,6 +21372,10 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         request.method == 'GET') {
       return _handleServerlessRelaySessions(headers);
     }
+    if (urlPath == 'api/p2p/serverless/relay/test' &&
+        request.method == 'POST') {
+      return await _handleServerlessRelayTest(request, headers);
+    }
     if (urlPath == 'api/p2p/serverless/transports' &&
         request.method == 'GET') {
       return _handleListTransports(headers);
@@ -21858,6 +21863,26 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         body: jsonEncode({'success': false, 'error': e.toString()}),
         headers: headers,
       );
+    }
+  }
+
+  /// POST /api/p2p/serverless/relay/test — body `{host, port}`.
+  /// Smoke-test a relay endpoint via HELLO/PONG. Delegates to the shared
+  /// handler so behavior matches the station-side router.
+  Future<shelf.Response> _handleServerlessRelayTest(
+      shelf.Request request, Map<String, String> headers) async {
+    try {
+      final body = await request.readAsString();
+      final data = body.trim().isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(body) as Map<String, dynamic>;
+      final r = await ServerlessP2pHandler.relayTest(data);
+      return shelf.Response(r.$1,
+          body: jsonEncode(r.$2), headers: headers);
+    } catch (e) {
+      return shelf.Response.badRequest(
+          body: jsonEncode({'success': false, 'error': e.toString()}),
+          headers: headers);
     }
   }
 
