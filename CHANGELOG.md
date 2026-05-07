@@ -1,5 +1,38 @@
 # Geogram Desktop Changelog
 
+## 2026-05-07 - v1.39.0-beta.16
+
+Cross-network direct-UDP messaging between two peers, coordinated through the public BitTorrent infrastructure. No private servers, no router config, no UPnP, no NOSTR, no TURN.
+
+### New: P2P direct UDP transport
+- New `hole_punch` transport at priority 18 (between WebRTC at 15 and DHT at 25). When both peers have a public endpoint and a connected WebTorrent tracker, this beats WebRTC because it doesn't depend on ICE converging across symmetric NATs. Falls through cleanly to the next transport when preconditions aren't met.
+- Endpoint discovery via existing BitTorrent DHT BEP 42 — peers report our public IPv4 in their DHT replies, no external STUN server.
+- Endpoint exchange via public WebTorrent WSS trackers (tracker.openwebtorrent.com, tracker.webtorrent.dev). Each peer announces a small JSON envelope on a per-pair info_hash derived from sorted npubs; trackers forward to the other side in 200–400 ms across two ISPs.
+- UDP hole punching with 4-port prediction to defeat one-side cellular symmetric NAT. Reuses the DHT's UDP socket so the NAT mapping is kept warm by DHT keepalives — no second port through the firewall.
+- Reliable framing on top of the hole-punched UDP path: 25-byte fixed header (`GP01|type|sessionId|seq|ack|len|payload`), retransmit unacked DATA every 500 ms up to 5 times, keepalive every 25 s, dead after 60 s of no inbound. Single-frame payloads only (≤1255 bytes) — small messages by design.
+- Sessions are persistent across messages within the same conversation. First DM in a fresh conversation: ~1.4 s. Subsequent messages within seconds: 10–100 ms.
+- Live cross-network test confirmed end-to-end delivery between desktop on home wifi (Telekom Cable, FRITZ!Box, no UPnP) and Android phone on Vodafone cellular hotspot.
+
+### New: HolePunchService public API
+- `lib/p2p/hole_punch_service.dart` exposes a singleton with `connect(callsign)` returning a `HolePunchSession`. Apps can `session.send(Uint8List)` and listen on `session.onData` and `session.onClose` without going through the chat-specific TransportMessage shape. `incomingSessions` stream notifies on remote-initiated sessions. Pure-Dart, runs from CLI.
+- Existing chat path keeps working through the `HolePunchTransport` adapter — it's now a thin wrapper that translates TransportMessage to/from Uint8List on top of HolePunchService.
+
+### Devices browser
+- New orange "P2P" chip on devices reachable via the hole-punch transport. Same visual treatment as BLE / LAN / Internet, signaling that the path is for small-bandwidth messages only. The chip toggles automatically when sessions open and close.
+
+### Reachability + signaling resilience (work that landed alongside the new transport)
+- UPnP-IGD now runs before the IPv6 socket-bind probe (it's the stronger reachability guarantee) and reports parsed SOAP fault details (`UPnP errorCode + description`) in the log. Sets Content-Length explicitly so consumer routers (FRITZ!Box, etc.) accept the SOAP request instead of returning HTTP 411.
+- DHT socket now binds to ReachabilityService's chosen port — without this, an opened UPnP external port mapped to a port nothing was listening on. Refresh path reapplies the mapping if EADDRINUSE forced a different bind.
+- WebTorrent signaling proven cross-network: all WebRTC offer/answer/ICE traffic now rides public WebTorrent trackers as the primary serverless rendezvous, with DHT geogram_query as a no-server fallback. NOSTR removed from the serverless P2P stack entirely.
+- WebTorrent client-conformance fixes for tracker delivery: peer_id signature, leecher state, and started-event in keepalive announces — without these, tracker.openwebtorrent.com silently dropped our offers between peers.
+- Reconnect loop hardened against trackers whose TLS handshake fails after a successful TCP connect (uses `WebSocketChannel.ready` to gate the connected state). Backoff clamps to 2–300 s.
+- Mozilla STUN wired as the WebRTC ICE fallback when no station STUN is in scope. Self-IP filter on DHT-cache prevents stale entries from routing local sends back to ourselves.
+- WS silent-failure watchdog: when the station accepts an offer but never replies, signaling now rolls forward to the next path after 3 s instead of timing out at the application layer.
+
+### Documentation
+- New `docs/connections/p2p-hole-punch.md` covers the working mechanism, the constraints, the public HolePunchService API, and the future-work paths for larger transfers (windowed fragmentation, selective ACK, AIMD/BBR, optional swarm) and unidirectional streaming (RTP-style unreliable STREAM frames).
+- BT-DHT-v2 spec gains a deviation note pointing at the new mechanism.
+
 ## 2026-05-01 - v1.39.0
 
 First stable cut of the 1.39 line. Everything in betas 1–15 plus the
