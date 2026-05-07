@@ -828,6 +828,24 @@ class P2PService {
       return;
     }
 
+    // A peer announce that lists OUR public IP is almost always stale
+    // DHT data — typically it's a device that previously sat behind our
+    // NAT, has since moved networks, but its old announce is still
+    // cached across the DHT. Same-NAT peers shouldn't go through this
+    // public-IP rendezvous at all (most home routers don't NAT-loopback);
+    // they get discovered via LAN/mDNS instead. Dropping the entry here
+    // prevents the desktop from registering a peer at its own external
+    // address and then failing every subsequent connection attempt.
+    final myPublicIp = _capability?.publicIp?.trim();
+    if (myPublicIp != null && myPublicIp.isNotEmpty && ip == myPublicIp) {
+      LogService().log(
+        'P2P: ignoring geogram peer $callsign at $ip '
+        '(http:$httpPort, udp:$udpPort) — IP matches our public IP, '
+        'likely stale DHT cache (peer moved networks)',
+      );
+      return;
+    }
+
     LogService().log(
       'P2P: geogram peer $callsign at $ip '
       '(http:$httpPort, udp:$udpPort${canRelay ? ", relay:${relayHttpPort ?? httpPort}" : ""})',

@@ -7,6 +7,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'serverless_settings_service.dart';
 import 'webrtc_config.dart';
 import 'webrtc_signaling_service.dart';
 import 'websocket_service.dart';
@@ -144,10 +145,25 @@ class WebRTCPeerManager {
         );
       }
     } else {
-      // No station STUN available - use empty config (host candidates only)
-      LogService().log(
-        'WebRTCPeerManager: No station STUN available (LAN connections only)',
-      );
+      // No station STUN. When serverless P2P is enabled, fall back to the
+      // privacy-respecting public STUN per BT-DHT-v2 §9.1
+      // (stun.services.mozilla.com — IP echo only, no data relay). This
+      // unblocks ICE on cross-network pairs where each side is behind
+      // its own NAT and host candidates alone can't reach each other.
+      // Without this, two devices on different ISPs (e.g. home Wi-Fi vs
+      // cellular hotspot) cannot establish a direct WebRTC data channel.
+      final settings = ServerlessSettingsService().current;
+      if (settings.enableServerless) {
+        _config = WebRTCConfig.serverless();
+        LogService().log(
+          'WebRTCPeerManager: Using serverless STUN (Mozilla, IP-echo only)',
+        );
+      } else {
+        // No station STUN, serverless disabled — host candidates only.
+        LogService().log(
+          'WebRTCPeerManager: No STUN configured (LAN connections only)',
+        );
+      }
     }
   }
 
