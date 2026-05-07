@@ -875,10 +875,19 @@ class P2PService {
 
   bool canSignalPeer(String callsign) {
     if (_dht == null || !_dht!.isRunning) return false;
-    final device = DevicesService().getDevice(callsign.toUpperCase());
-    return device?.udpIp != null &&
-        device?.udpPort != null &&
-        device!.udpPort! > 0;
+    // Same multi-entry caveat as sendSignalingMessage: getDevice returns
+    // the legacy-keyed entry first, which may lack UDP info even when a
+    // sibling entry has it. Look across all entries for the callsign.
+    for (final dev
+        in DevicesService().getDevicesByCallsign(callsign.toUpperCase())) {
+      if (dev.udpIp != null &&
+          dev.udpIp!.isNotEmpty &&
+          dev.udpPort != null &&
+          dev.udpPort! > 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Future<bool> sendSignalingMessage(
@@ -888,9 +897,26 @@ class P2PService {
     if (_dht == null || !_dht!.isRunning) return false;
 
     final normalizedCallsign = callsign.toUpperCase();
-    final device = DevicesService().getDevice(normalizedCallsign);
-    final udpIp = device?.udpIp;
-    final udpPort = device?.udpPort;
+
+    // A single callsign can have multiple DevicesService entries when the
+    // same peer was first seen via station-hello (key=CALLSIGN, no UDP)
+    // and later via DHT geogram-peer registration
+    // (key=CALLSIGN:deviceId, has UDP). `getDevice` returns the legacy-keyed
+    // entry first, which lacks the UDP rendezvous info we need here.
+    // Prefer whichever entry actually carries a usable UDP endpoint.
+    final devService = DevicesService();
+    String? udpIp;
+    int? udpPort;
+    for (final dev in devService.getDevicesByCallsign(normalizedCallsign)) {
+      if (dev.udpIp != null &&
+          dev.udpIp!.isNotEmpty &&
+          dev.udpPort != null &&
+          dev.udpPort! > 0) {
+        udpIp = dev.udpIp;
+        udpPort = dev.udpPort;
+        break;
+      }
+    }
     if (udpIp == null || udpPort == null || udpPort <= 0) {
       LogService().log(
         'P2P: no DHT signaling endpoint for $normalizedCallsign',
