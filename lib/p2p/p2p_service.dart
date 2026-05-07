@@ -1457,19 +1457,37 @@ class P2PService {
     _preferredKnownPeerCallsign = null;
     _preferredKnownPeerExpiresAt = null;
 
-    for (final target in targets) {
-      final device = devService.getDevice(target.callsign);
-      final hasDhtEndpoint =
-          device != null &&
+    // Eligible-for-DHT-lookup = any peer that doesn't already have a usable
+    // UDP rendezvous endpoint cached. "Reachable via BLE/USB/station-WS" is
+    // not the same as "DHT-signaling-reachable" — the serverless WebRTC
+    // signaling path needs a UDP endpoint registered in DevicesService and
+    // that only happens through the DHT geogram_query handshake. So even
+    // a peer that's currently online via another transport is eligible
+    // for DHT bootstrap until its UDP endpoint is known.
+    bool hasDhtEndpoint(_KnownPeerTarget t) {
+      final device = devService.getDevice(t.callsign);
+      return device != null &&
           device.udpIp != null &&
           device.udpIp!.isNotEmpty &&
           device.udpPort != null &&
           device.udpPort! > 0;
-      if (target.needsBootstrap ||
-          !target.hasReachableEndpoint ||
-          !hasDhtEndpoint) {
-        return target;
-      }
+    }
+
+    final eligible = <_KnownPeerTarget>[
+      for (final t in targets)
+        if (t.needsBootstrap || !t.hasReachableEndpoint || !hasDhtEndpoint(t))
+          t,
+    ];
+
+    // Round-robin across the eligible set so all peers without a DHT
+    // endpoint get probed in turn instead of the first one starving the
+    // rest. Falls through to the full target rotation when every peer
+    // already has UDP info cached.
+    if (eligible.isNotEmpty) {
+      _npubProbeIndex = _npubProbeIndex % eligible.length;
+      final target = eligible[_npubProbeIndex];
+      _npubProbeIndex++;
+      return target;
     }
 
     _npubProbeIndex = _npubProbeIndex % targets.length;
