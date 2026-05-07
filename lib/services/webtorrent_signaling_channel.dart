@@ -263,6 +263,7 @@ class WebTorrentSignalingChannel {
       'inbound_received': _inboundCount,
       'inbound_dispatched': _dispatchedCount,
       'cached_inbound_offers': _inboundOffers.length,
+      'recent_inbound': List<Map<String, dynamic>>.from(_recentInbound),
       'trackers': _conns.values
           .map((c) => {
                 'url': c.url,
@@ -278,6 +279,7 @@ class WebTorrentSignalingChannel {
 
   int _inboundCount = 0;
   int _dispatchedCount = 0;
+  final List<Map<String, dynamic>> _recentInbound = <Map<String, dynamic>>[];
 
   // ── internals ───────────────────────────────────────────────────
 
@@ -371,10 +373,18 @@ class WebTorrentSignalingChannel {
 
   void _handleInbound(_TrackerConn conn, dynamic raw) {
     _inboundCount++;
-    // Diagnostic: log raw inbound (truncated) so we can see what the
-    // tracker actually delivers vs what we expected.
+    // Diagnostic: keep a small ring buffer of recent inbound payloads
+    // so the status endpoint can surface what trackers actually send.
     if (raw is String) {
-      final trunc = raw.length > 240 ? '${raw.substring(0, 240)}…' : raw;
+      final trunc = raw.length > 400 ? '${raw.substring(0, 400)}…' : raw;
+      _recentInbound.add({
+        'tracker': conn.url,
+        'at': DateTime.now().toIso8601String(),
+        'body': trunc,
+      });
+      while (_recentInbound.length > 16) {
+        _recentInbound.removeAt(0);
+      }
       _log.info('WebTorrentSignaling: <- ${conn.url}: $trunc');
     }
     final parsed = parseTrackerMessage(raw);
