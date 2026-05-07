@@ -522,6 +522,50 @@ class P2PService {
         if (kEnableLegacyTopics) DhtTopics.legacyGeogramHash(),
       ];
 
+  /// Public hook for `RelayPromotionController` to publish this peer's
+  /// promoted relay-tier listening port to the DHT under RELAY_TOPIC
+  /// (and the legacy hash during the migration window). Returns `true`
+  /// when at least one announce succeeded.
+  Future<bool> announceRelayTierPort(int externalPort) async {
+    if (_dht == null || !_dht!.isRunning) return false;
+    if (externalPort <= 0) return false;
+    var any = false;
+    for (final h in _relayTopics()) {
+      try {
+        await _announceTopic(h, externalPort, impliedPort: false);
+        any = true;
+      } catch (e) {
+        LogService().log('P2P: relay-tier announce error: $e');
+      }
+    }
+    if (any) {
+      LogService().log(
+          'P2P: announced relay tier on RELAY_TOPIC port $externalPort');
+    }
+    return any;
+  }
+
+  /// Look up DHT-announced relay-tier peers on RELAY_TOPIC (and the
+  /// legacy hash during migration). Returns deduplicated `(ip, port)`
+  /// peer endpoints. Empty when the DHT hasn't converged yet.
+  Future<List<PeerInfo>> lookupRelayTierPeers() async {
+    if (_dht == null || !_dht!.isRunning) return const [];
+    final out = <PeerInfo>[];
+    final seen = <String>{};
+    for (final h in _relayTopics()) {
+      try {
+        final peers = await _lookupDiscoveryPeers(h, includeCached: true);
+        for (final p in peers) {
+          final key = '${p.ip}:${p.port}';
+          if (seen.add(key)) out.add(p);
+        }
+      } catch (e) {
+        LogService().log('P2P: relay-tier lookup error: $e');
+      }
+    }
+    return out;
+  }
+
   /// BT-DHT-v2 §6.4 PEER_TOPIC, dual with the legacy `SHA1(npub_string)`
   /// hash during the migration window. Decodes bech32 npub to bytes; if the
   /// input isn't valid bech32, falls back to legacy-only.

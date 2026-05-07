@@ -18,6 +18,7 @@ import '../../connection/connection_manager.dart';
 import '../../p2p/dht_topics.dart';
 import '../../p2p/p2p_service.dart';
 import '../../p2p/reachability/reachability_service.dart';
+import '../../p2p/relay/relay_client.dart';
 import '../../p2p/relay/relay_promotion_controller.dart';
 import '../../p2p/relay/serverless_relay_mediator.dart';
 import '../../services/serverless_settings_service.dart';
@@ -69,6 +70,8 @@ class ServerlessP2pHandler {
           return reply(await relayDemote());
         case 'GET relay/sessions':
           return reply(relaySessions());
+        case 'POST relay/test':
+          return reply(await relayTest(await readJsonBody()));
         case 'GET transports':
           return reply(listTransports());
         case 'POST transports/disable':
@@ -247,6 +250,67 @@ class ServerlessP2pHandler {
         'last_reason': c.lastReason,
       }
     );
+  }
+
+  /// POST /api/p2p/serverless/relay/test — body `{host, port}`.
+  /// Drives a HELLO/PONG round-trip against the given relay endpoint
+  /// and returns latency_ms on success. Lets the operator verify that
+  /// a promoted relay is reachable and answering the BT-DHT-v2 §10.4
+  /// wire protocol without needing two coordinated peers.
+  static Future<ServerlessHttpResult> relayTest(
+      Map<String, dynamic> body) async {
+    final host = body['host'] as String?;
+    final portRaw = body['port'];
+    final port = portRaw is int ? portRaw : int.tryParse('${portRaw ?? ''}');
+    if (host == null || host.isEmpty || port == null || port <= 0) {
+      return (
+        400,
+        {
+          'success': false,
+          'error': 'host and port (int) are required',
+        }
+      );
+    }
+    final client = RelayClient(host: host, port: port);
+    try {
+      await client.connect(timeout: const Duration(seconds: 5));
+      final rtt =
+          await client.ping(timeout: const Duration(seconds: 5));
+      await client.disconnect();
+      if (rtt == null) {
+        return (
+          200,
+          {
+            'success': false,
+            'host': host,
+            'port': port,
+            'error': 'no PONG within 5s',
+          }
+        );
+      }
+      return (
+        200,
+        {
+          'success': true,
+          'host': host,
+          'port': port,
+          'latency_ms': rtt.inMilliseconds,
+        }
+      );
+    } catch (e) {
+      try {
+        await client.disconnect();
+      } catch (_) {}
+      return (
+        200,
+        {
+          'success': false,
+          'host': host,
+          'port': port,
+          'error': e.toString(),
+        }
+      );
+    }
   }
 
   /// GET /api/p2p/serverless/relay/sessions

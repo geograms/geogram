@@ -160,26 +160,21 @@ class RelayPromotionController {
     }
     try {
       final actual = await _server!.startServingRelay(port);
-      // Announce on RELAY_TOPIC so DHT consumers can find us.
-      try {
-        // Using the existing announce path keeps this mixed in with
-        // P2PService's reannounce loop automatically.
-        // ignore: invalid_use_of_visible_for_testing_member
-        // Note: P2PService doesn't expose a public announce(topic, port)
-        // hook in PR1. PR4 adds an announce-on-relay-promotion call via
-        // the same internal helper. For now, log so the operator can
-        // verify the action; full wiring lands as a small follow-up
-        // edit to P2PService.
-        final topicHex = _hex(DhtTopics.relayTopic());
+      // Announce on RELAY_TOPIC + legacy hash so DHT consumers can find
+      // us. P2PService's reannounce loop will keep us alive afterwards
+      // because the announce uses persist=true by default.
+      final topicHex = _hex(DhtTopics.relayTopic());
+      final ok = await P2PService().announceRelayTierPort(actual);
+      if (ok) {
         _log.info(
-            'RelayPromotion: would announce RELAY_TOPIC=$topicHex on port $actual ${forced ? "(forced)" : ""}');
-      } catch (e) {
-        _log.warn('RelayPromotion: announce error: $e');
+            'RelayPromotion: announced RELAY_TOPIC=$topicHex on port $actual'
+            ' ${forced ? "(forced)" : ""}');
+      } else {
+        _log.warn(
+            'RelayPromotion: announce failed (DHT not running?); peers'
+            " won't auto-discover us until reannounce");
       }
       _promoted = true;
-      // Touch P2PService so the symbol is referenced (keeps the import
-      // live for future announce-wiring).
-      P2PService();
       _log.info(
           'Relay promoted: serving on tcp/$actual ${forced ? "(forced)" : ""}');
     } catch (e) {
