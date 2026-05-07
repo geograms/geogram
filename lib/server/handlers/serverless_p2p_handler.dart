@@ -23,6 +23,7 @@ import '../../p2p/relay/relay_promotion_controller.dart';
 import '../../p2p/relay/serverless_relay_mediator.dart';
 import '../../services/serverless_settings_service.dart';
 import '../../services/webrtc_peer_manager.dart';
+import '../../services/webtorrent_signaling_channel.dart';
 
 typedef ServerlessHttpResult = (int statusCode, Map<String, dynamic> body);
 
@@ -80,6 +81,10 @@ class ServerlessP2pHandler {
           return reply(enableTransport(await readJsonBody()));
         case 'POST transports/force-only':
           return reply(forceOnlyTransports(await readJsonBody()));
+        case 'GET webtorrent/status':
+          return reply(webtorrentStatus());
+        case 'POST webtorrent/reconnect':
+          return reply(webtorrentReconnect());
       }
       // Unmatched serverless subpath.
       request.response.statusCode = 404;
@@ -125,6 +130,29 @@ class ServerlessP2pHandler {
   static Future<ServerlessHttpResult> reachabilityRecheck() async {
     final s = await ReachabilityService().refresh();
     return (200, {'success': true, 'reachability': s.toJson()});
+  }
+
+  /// GET /api/p2p/serverless/webtorrent/status
+  static ServerlessHttpResult webtorrentStatus() {
+    return (
+      200,
+      {
+        'success': true,
+        'webtorrent': WebTorrentSignalingChannel().getStatus(),
+      },
+    );
+  }
+
+  /// POST /api/p2p/serverless/webtorrent/reconnect
+  static ServerlessHttpResult webtorrentReconnect() {
+    WebTorrentSignalingChannel().reconnectAll();
+    return (
+      200,
+      {
+        'success': true,
+        'webtorrent': WebTorrentSignalingChannel().getStatus(),
+      },
+    );
   }
 
   /// POST /api/p2p/serverless/dht/topic — body `{kind, input}`
