@@ -226,6 +226,7 @@ class HolePunchService {
       sessionId: sessionId,
       onClosedCallback: (cs, reason) {
         _sessions.remove(cs);
+        DevicesService().markP2pDisconnected(cs);
         _log.info('HolePunchService: session $cs closed: $reason');
       },
     );
@@ -236,6 +237,7 @@ class HolePunchService {
     } else {
       await session.openInbound(_dummyHello(sessionId));
     }
+    DevicesService().markP2pConnected(callsign);
     _log.info(
         'HolePunchService: session ready with $callsign at'
         ' ${theirEp.ip}:${conn.effectivePort}');

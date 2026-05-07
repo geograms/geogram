@@ -5023,8 +5023,19 @@ if (ChatApi.isMessagesPath(request.path)) {
 The API automatically routes through the best available transport:
 
 1. **LAN** (priority 10) - Direct HTTP on local network
-2. **BLE** (priority 20) - Bluetooth mesh for offline
-3. **Station** (priority 30) - WebSocket relay via station
+2. **P2P / hole_punch** (priority 18) - Direct UDP between peers, NAT-traversal coordinated via public BitTorrent (WebTorrent) trackers; ≤1255 byte frames, see [`docs/connections/p2p-hole-punch.md`](connections/p2p-hole-punch.md)
+3. **BLE** (priority 20) - Bluetooth mesh for offline
+4. **Station** (priority 30) - WebSocket relay via station
+
+For direct programmatic access to the P2P hole-punch path (outside the
+TransportMessage routing), use `HolePunchService` from
+`lib/p2p/hole_punch_service.dart`:
+
+```dart
+final session = await HolePunchService().connect('X3DEVICE');
+await session?.send(Uint8List.fromList(myBytes));
+session?.onData.listen((bytes) => /* ... */);
+```
 
 ```dart
 // Check device reachability

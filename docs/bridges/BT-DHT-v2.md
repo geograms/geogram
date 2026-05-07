@@ -8,6 +8,8 @@
 
 > **Implementation deviation (2026-05-07).** The shipped implementation does NOT use NOSTR for serverless P2P. §3 item 3, §8 (NOSTR-DM signaling), and §6.7 (NOSTR-presence DHT-blocked fallback) are spec-only and have no implementation in the codebase. All serverless signaling routes through the DHT geogram_query rendezvous (§6) per user direction — NOSTR relays are third-party servers and the user did not authorize their use for this feature. Existing NOSTR features in the geogram codebase (gift-wrap DMs, NIP-05 registry, blossom) remain functional and are unrelated to this stack.
 
+> **Implementation deviation (2026-05-07, second course correction).** §8 (WebRTC transport with ICE) is now augmented by a direct UDP transport coordinated via public WebTorrent WSS trackers and BEP 42 endpoint discovery. Trackers carry a small per-peer-pair JSON envelope (`geoconnect_offer` / `geoconnect_answer`) containing each side's STUN-discovered endpoint; both peers then perform simultaneous UDP hole punching on the DHT's shared socket, with port prediction for one-side cellular symmetric NAT. A reliable framing layer (sequence/ACK/retransmit) on top of the hole-punched UDP path delivers small messages (≤1255 bytes per frame). This transport ships as `hole_punch` at priority 18 (ahead of WebRTC at 15) and surfaces in the Devices browser as an orange "P2P" chip. Cross-network test confirmed ~1.4s for the first message and 10–100 ms for subsequent reuse. Larger transfers and unidirectional streaming layer on the same session API and are documented in [`docs/connections/p2p-hole-punch.md`](../connections/p2p-hole-punch.md).
+
 ---
 
 ## 1. Summary

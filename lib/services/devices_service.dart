@@ -981,6 +981,40 @@ class DevicesService {
     _devicesController.add(getAllDevices());
   }
 
+  /// Add the 'p2p' connection method to a device (used by
+  /// HolePunchService when a hole-punched UDP session opens). The
+  /// label appears in the Devices browser as a small chip,
+  /// indicating the peer is reachable through the BitTorrent-
+  /// coordinated direct UDP path. Bandwidth is intentionally limited
+  /// to small payloads — the chip is the user-facing signal that
+  /// this is not a high-throughput link.
+  void markP2pConnected(String callsign) {
+    final cs = callsign.toUpperCase();
+    final device = _devices[cs];
+    if (device == null) return;
+    if (!device.connectionMethods.contains('p2p')) {
+      device.connectionMethods = [...device.connectionMethods, 'p2p'];
+      device.isOnline = true;
+      device.lastSeen = DateTime.now();
+      LogService().log('DevicesService: marked $cs reachable via P2P');
+      _devicesController.add(getAllDevices());
+    }
+  }
+
+  /// Remove the 'p2p' connection method from a device (HolePunch
+  /// session closed).
+  void markP2pDisconnected(String callsign) {
+    final cs = callsign.toUpperCase();
+    final device = _devices[cs];
+    if (device == null) return;
+    if (device.connectionMethods.contains('p2p')) {
+      device.connectionMethods =
+          device.connectionMethods.where((m) => m != 'p2p').toList();
+      LogService().log('DevicesService: cleared P2P from $cs');
+      _devicesController.add(getAllDevices());
+    }
+  }
+
   /// Remove USB connection method from all devices (when USB disconnects)
   void _removeUsbFromAllDevices() {
     var changed = false;
@@ -3968,6 +4002,9 @@ class RemoteDevice {
       case 'usb':
       case 'usb_aoa':
         return 'USB';
+      case 'p2p':
+      case 'hole_punch':
+        return 'P2P';
       default:
         return method;
     }

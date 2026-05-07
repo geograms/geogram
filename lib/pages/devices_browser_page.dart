@@ -2600,6 +2600,9 @@ class _DevicesBrowserPageState extends State<DevicesBrowserPage>
       case 'usb':
       case 'usb_aoa':
         return Colors.orange;
+      case 'p2p':
+      case 'hole_punch':
+        return Colors.orange;
       default:
         return Colors.grey;
     }
