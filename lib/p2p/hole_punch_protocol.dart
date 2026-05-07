@@ -93,14 +93,35 @@ class HolePunchFrame {
 
 /// State for a single hole-punched session with one peer. Drives
 /// HELLO/HELLO_ACK handshake, DATA reliability, keepalive, and shutdown.
+///
+/// Public surface for app code:
+///  - [send] — fire a payload, awaits DATA_ACK
+///  - [onData] — broadcast Stream<Uint8List> of inbound payloads
+///  - [onClose] — broadcast Stream<String> emitting a close reason once
+///  - [isReady] / [isClosed]
 class HolePunchSession {
   final String callsign;
   final String remoteIp;
   final int remotePort;
   final DirectConnection connection;
   final Uint8List sessionId; // 8 random bytes per session
-  final void Function(Uint8List payload) onData;
-  final void Function(String callsign, String reason) onClosed;
+
+  /// Optional internal hook used by HolePunchTransport for
+  /// TransportMessage decode. App code should subscribe to [onData]
+  /// instead.
+  final void Function(Uint8List payload)? onDataCallback;
+  final void Function(String callsign, String reason)? onClosedCallback;
+
+  final _dataCtl = StreamController<Uint8List>.broadcast();
+  final _closeCtl = StreamController<String>.broadcast();
+
+  /// Inbound payload stream — fires for each DATA frame the peer
+  /// sends. Frames are delivered in network order with at-most-once
+  /// delivery (duplicates suppressed by dedupe).
+  Stream<Uint8List> get onData => _dataCtl.stream;
+
+  /// Fires once with the close reason when the session ends.
+  Stream<String> get onClose => _closeCtl.stream;
 
   // Sequence numbers
   int _outSeq = 0;
@@ -123,8 +144,8 @@ class HolePunchSession {
     required this.remotePort,
     required this.connection,
     required this.sessionId,
-    required this.onData,
-    required this.onClosed,
+    this.onDataCallback,
+    this.onClosedCallback,
   });
 
   bool get isReady => _handshakeDone && !_closed;
@@ -216,7 +237,12 @@ class HolePunchSession {
     _pendingByOutSeq.clear();
     _dataSub?.cancel();
     connection.close();
-    onClosed(callsign, reason);
+    if (!_closeCtl.isClosed) {
+      _closeCtl.add(reason);
+      _closeCtl.close();
+    }
+    if (!_dataCtl.isClosed) _dataCtl.close();
+    onClosedCallback?.call(callsign, reason);
   }
 
   // ── internals ───────────────────────────────────────────────────
@@ -307,7 +333,8 @@ class HolePunchSession {
             _seenInData.clear();
             _seenInData[frame.seq] = frame.payload;
           }
-          onData(frame.payload);
+          onDataCallback?.call(frame.payload);
+          if (!_dataCtl.isClosed) _dataCtl.add(frame.payload);
         }
         _sendFrame(
           type: HolePunchType.dataAck,
