@@ -29,12 +29,13 @@ Uint8List sessionInfoHash({
   return Uint8List.fromList(sha1.convert(input).bytes);
 }
 
-/// 20-byte random peer_id with a recognizable prefix so tracker logs
-/// hint at the client. Spec convention: 8 chars of "-XX0000-" + 12 random.
+/// 20-byte random peer_id. Convention: 8 chars of "-XX0000-" + 12
+/// random bytes. We mimic the WebTorrent client signature (-WW…) so
+/// trackers that filter on known client prefixes accept us.
 Uint8List newPeerId() {
   final r = Random.secure();
   final id = Uint8List(20);
-  const prefix = '-GG0001-';
+  const prefix = '-WW0102-';
   for (var i = 0; i < prefix.length; i++) {
     id[i] = prefix.codeUnitAt(i);
   }
@@ -90,7 +91,10 @@ Map<String, dynamic> buildOfferAnnounce({
     'numwant': 10,
     'uploaded': 0,
     'downloaded': 0,
-    'left': 0,
+    // left>0 marks us as a leecher. Some trackers refuse to match
+    // seeds with seeds (left=0), so non-zero gets us into the
+    // delivery set for offers between any pair of peers.
+    'left': 1,
     'event': 'started',
     'offers': [
       {
@@ -128,6 +132,9 @@ Map<String, dynamic> buildAnswerAnnounce({
 
 /// Build a heartbeat announce with no offers — keeps the tracker
 /// session warm and any new peers' offers flowing toward us.
+/// Includes `event: 'started'` since some public WebTorrent trackers
+/// only place a peer in the deliverable swarm after a started-event
+/// announce.
 Map<String, dynamic> buildKeepaliveAnnounce({
   required Uint8List infoHash,
   required Uint8List peerId,
@@ -139,7 +146,11 @@ Map<String, dynamic> buildKeepaliveAnnounce({
     'numwant': 10,
     'uploaded': 0,
     'downloaded': 0,
-    'left': 0,
+    // left>0 marks us as a leecher. Some trackers refuse to match
+    // seeds with seeds (left=0), so non-zero gets us into the
+    // delivery set for offers between any pair of peers.
+    'left': 1,
+    'event': 'started',
   };
 }
 
