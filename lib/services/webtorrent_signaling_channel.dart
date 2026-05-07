@@ -371,6 +371,12 @@ class WebTorrentSignalingChannel {
 
   void _handleInbound(_TrackerConn conn, dynamic raw) {
     _inboundCount++;
+    // Diagnostic: log raw inbound (truncated) so we can see what the
+    // tracker actually delivers vs what we expected.
+    if (raw is String) {
+      final trunc = raw.length > 240 ? '${raw.substring(0, 240)}…' : raw;
+      _log.info('WebTorrentSignaling: <- ${conn.url}: $trunc');
+    }
     final parsed = parseTrackerMessage(raw);
     if (parsed.kind == WebTorrentInboundKind.ignored) return;
 
