@@ -251,24 +251,33 @@ class WebTorrentSignalingChannel {
   }
 
   Map<String, dynamic> getStatus() {
-    final trackers = _conns.values
-        .map((c) => {
-              'url': c.url,
-              'state': c.state,
-              if (c.lastAnnounceAt != null)
-                'last_announce_at': c.lastAnnounceAt!.toIso8601String(),
-              if (c.lastError != null) 'last_error': c.lastError,
-              'announce_count': c.announceCount,
-            })
-        .toList();
     return {
       'started': _started,
       'connected_count': connectedTrackerCount,
       'tracker_count': _conns.length,
       'active_rendezvous': _activeRendezvous.length,
-      'trackers': trackers,
+      // First 8 hex chars per rendezvous — enough to compare both
+      // peers landed on the same hash without leaking the full ID.
+      'rendezvous_prefixes':
+          _activeRendezvous.map((h) => h.substring(0, 8)).toList(),
+      'inbound_received': _inboundCount,
+      'inbound_dispatched': _dispatchedCount,
+      'cached_inbound_offers': _inboundOffers.length,
+      'trackers': _conns.values
+          .map((c) => {
+                'url': c.url,
+                'state': c.state,
+                if (c.lastAnnounceAt != null)
+                  'last_announce_at': c.lastAnnounceAt!.toIso8601String(),
+                if (c.lastError != null) 'last_error': c.lastError,
+                'announce_count': c.announceCount,
+              })
+          .toList(),
     };
   }
+
+  int _inboundCount = 0;
+  int _dispatchedCount = 0;
 
   // ── internals ───────────────────────────────────────────────────
 
@@ -361,6 +370,7 @@ class WebTorrentSignalingChannel {
   }
 
   void _handleInbound(_TrackerConn conn, dynamic raw) {
+    _inboundCount++;
     final parsed = parseTrackerMessage(raw);
     if (parsed.kind == WebTorrentInboundKind.ignored) return;
 
@@ -406,6 +416,7 @@ class WebTorrentSignalingChannel {
       }
     }
 
+    _dispatchedCount++;
     _signalController.add(signal);
   }
 
