@@ -16,12 +16,13 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../../models/monitored_task.dart';
+import '../../p2p/relay/relay_promotion_controller.dart' show RelayServer;
 import '../../p2p/relay/relay_protocol.dart';
 import '../../services/log_service.dart';
 import '../../services/serverless_settings_service.dart';
 import '../../util/task_monitor_helpers.dart';
 
-mixin ServerlessRelayMixin {
+mixin ServerlessRelayMixin implements RelayServer {
   // Abstract dependencies — supplied by the station class.
 
   /// Tagged log emitter; same shape as the existing station mixins.

@@ -15,6 +15,7 @@ import '../util/nostr_key_generator.dart';
 import '../util/nostr_crypto.dart';
 import '../station.dart';
 import '../cli/pure_storage_config.dart';
+import '../p2p/relay/relay_promotion_controller.dart';
 import 'config_service.dart';
 import 'log_service.dart';
 import 'profile_service.dart';
@@ -449,6 +450,15 @@ class StationNodeService {
         final port = _stationServer!.settings.httpPort;
         throw Exception('Failed to start station server on port $port. The port may already be in use.');
       }
+
+      // BT-DHT-v2 §10: hand the started station to the relay-promotion
+      // controller so it can flip the relay tier on/off based on §10.1
+      // criteria. The mixin satisfies the RelayServer interface, so the
+      // controller can drive startServingRelay/stopServingRelay without
+      // depending on the station class directly.
+      RelayPromotionController().setServer(_stationServer);
+      unawaited(RelayPromotionController().start());
+      LogService().log('RelayPromotionController attached to station server');
 
       // Double-check server is actually running
       if (!_stationServer!.isRunning) {
