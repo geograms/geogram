@@ -133,6 +133,17 @@ class WebRTCSignalingService {
     final pending = _PendingOffer(completer: completer, offer: offer);
     _pendingOffers[sessionId] = pending;
 
+    // If the DHT rendezvous endpoint isn't cached yet for this peer,
+    // kick a one-shot DHT lookup before sending so the offer can ride
+    // the direct DHT path instead of bouncing off WS first. Capped at
+    // 4s so we don't add latency for peers we can already reach.
+    if (!P2PService().canSignalPeer(toCallsign)) {
+      await P2PService().findPeerNow(
+        toCallsign,
+        timeout: const Duration(seconds: 4),
+      );
+    }
+
     Timer? wsWatchdog;
     try {
       // Send the offer (records which path it took on the pending tracker)
@@ -357,6 +368,16 @@ class WebRTCSignalingService {
     _PendingOffer pending,
   ) async {
     try {
+      // Before retrying, give the DHT a one-shot chance to discover the
+      // peer's UDP rendezvous if we don't have it cached yet. The retry
+      // path is reached after WS failed (silently or via webrtc_error),
+      // so bouncing through DHT is the most likely successful next hop.
+      if (!P2PService().canSignalPeer(pending.offer.toCallsign)) {
+        await P2PService().findPeerNow(
+          pending.offer.toCallsign,
+          timeout: const Duration(seconds: 4),
+        );
+      }
       LogService().log(
         'WebRTCSignaling: Retrying offer to ${pending.offer.toCallsign} '
         '(session: $sessionId, skip: ${pending.triedPaths})',

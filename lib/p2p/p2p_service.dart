@@ -952,6 +952,39 @@ class P2PService {
     return false;
   }
 
+  /// Trigger a DHT npub-rendezvous lookup for the given callsign and wait
+  /// up to [timeout] for the peer's UDP endpoint to land in DevicesService.
+  /// Returns true if the peer is now reachable via DHT signaling.
+  ///
+  /// Used by the WebRTC signaling layer when a chat is being sent to a
+  /// peer that hasn't been DHT-discovered yet — without this, the offer
+  /// would either ride the stale WS path or hit "no DHT signaling
+  /// endpoint" on the first attempt and the round-robin rotation might
+  /// not reach this peer for several minutes.
+  Future<bool> findPeerNow(
+    String callsign, {
+    Duration timeout = const Duration(seconds: 6),
+  }) async {
+    if (_dht == null || !_dht!.isRunning) return false;
+    final normalized = callsign.toUpperCase();
+    if (canSignalPeer(normalized)) return true;
+
+    // Skip the rotation by hinting which peer to pick next.
+    _preferredKnownPeerCallsign = normalized;
+    _preferredKnownPeerExpiresAt =
+        DateTime.now().add(const Duration(seconds: 30));
+
+    // Kick the probe immediately, don't wait for the periodic timer.
+    unawaited(_runKnownPeerProbe());
+
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      if (canSignalPeer(normalized)) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    return canSignalPeer(normalized);
+  }
+
   Future<bool> sendSignalingMessage(
     String callsign,
     Map<String, dynamic> signal,
