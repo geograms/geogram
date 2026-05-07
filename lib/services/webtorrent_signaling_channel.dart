@@ -33,9 +33,7 @@ import 'profile_service.dart';
 /// failures show one is dead long-term.
 const List<String> kDefaultWebTorrentTrackers = [
   'wss://tracker.openwebtorrent.com',
-  'wss://tracker.btorrent.xyz',
   'wss://tracker.webtorrent.dev',
-  'wss://tracker.files.fm:7073/announce',
 ];
 
 class _TrackerConn {
@@ -279,41 +277,47 @@ class WebTorrentSignalingChannel {
     if (conn == null) return;
     if (!_started) return;
     conn.state = 'connecting';
-    try {
-      final ch = WebSocketChannel.connect(Uri.parse(url));
-      conn.channel = ch;
-      conn.state = 'connected';
-      conn.lastError = null;
-      conn.reconnectAttempt = 0;
-      _log.info('WebTorrentSignaling: connected $url');
-      conn.sub = ch.stream.listen(
-        (msg) => _handleInbound(conn, msg),
-        onError: (Object e) {
-          conn.lastError = e.toString();
+    conn.lastError = null;
+    final ch = WebSocketChannel.connect(Uri.parse(url));
+    conn.channel = ch;
+    conn.sub = ch.stream.listen(
+      (msg) => _handleInbound(conn, msg),
+      onError: (Object e) {
+        conn.lastError = e.toString();
+        if (conn.state != 'disconnected') {
+          conn.state = 'disconnected';
           _log.warn('WebTorrentSignaling: $url error: $e');
           _scheduleReconnect(url);
-        },
-        onDone: () {
-          if (conn.state == 'connected') {
-            conn.state = 'disconnected';
-            _log.info('WebTorrentSignaling: $url closed');
-            _scheduleReconnect(url);
-          }
-        },
-        cancelOnError: true,
-      );
-      // Re-announce all active rendezvous on (re)connect.
+        }
+      },
+      onDone: () {
+        if (conn.state != 'disconnected') {
+          conn.state = 'disconnected';
+          _log.info('WebTorrentSignaling: $url closed');
+          _scheduleReconnect(url);
+        }
+      },
+      cancelOnError: true,
+    );
+    // Wait for the handshake to actually succeed before pushing
+    // announces. If `ready` fails, the listen callback's onError
+    // handles cleanup; if it succeeds we know the upgrade survived
+    // TLS, HTTP, and WSS upgrade — only then is reconnectAttempt
+    // safe to reset.
+    ch.ready.then((_) {
+      if (!_started) return;
+      if (conn.state == 'disconnected') return;
+      conn.state = 'connected';
+      conn.reconnectAttempt = 0;
+      _log.info('WebTorrentSignaling: connected $url');
       for (final ihHex in _activeRendezvous) {
         final ih = _hexBytes(ihHex);
         final msg = buildKeepaliveAnnounce(infoHash: ih, peerId: _peerId!);
         _send(conn, msg);
       }
-    } catch (e) {
-      conn.state = 'disconnected';
-      conn.lastError = e.toString();
-      _log.warn('WebTorrentSignaling: $url connect failed: $e');
-      _scheduleReconnect(url);
-    }
+    }).catchError((Object e) {
+      // ready failures also surface via stream.onError; nothing to do.
+    });
   }
 
   void _scheduleReconnect(String url) {
@@ -321,7 +325,10 @@ class WebTorrentSignalingChannel {
     if (conn == null) return;
     if (!_started) return;
     conn.reconnectAttempt++;
-    final secs = (1 << conn.reconnectAttempt.clamp(0, 6)).clamp(1, 120);
+    // 2^attempt seconds, clamped to [2s, 300s]. With reconnectAttempt
+    // only resetting on successful traffic, this means broken trackers
+    // back off to 5-minute retries instead of hammering every 1-2s.
+    final secs = (1 << conn.reconnectAttempt.clamp(0, 8)).clamp(2, 300);
     conn.reconnectTimer?.cancel();
     conn.reconnectTimer = Timer(Duration(seconds: secs), () {
       if (!_started) return;
