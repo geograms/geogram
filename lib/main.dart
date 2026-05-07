@@ -38,6 +38,7 @@ import 'p2p/p2p_service.dart';
 import 'p2p/reachability/reachability_service.dart';
 import 'p2p/relay/serverless_relay_mediator.dart';
 import 'services/serverless_settings_service.dart';
+import 'services/webtorrent_signaling_channel.dart';
 import 'services/notification_service.dart';
 import 'services/i18n_service.dart';
 import 'services/chat_notification_service.dart';
@@ -727,6 +728,13 @@ void main() async {
             unawaited(
                 ReachabilityService().start(chosenPort: settings.chosenDhtPort));
             unawaited(ServerlessRelayMediator().start());
+            if (settings.webtorrentEnabled) {
+              unawaited(WebTorrentSignalingChannel().start(
+                trackerUrls: settings.webtorrentTrackers.isEmpty
+                    ? null
+                    : settings.webtorrentTrackers,
+              ));
+            }
             LogService().log('Serverless P2P: deferred boot complete');
           } else {
             LogService().log('Serverless P2P: disabled in settings, skipped');

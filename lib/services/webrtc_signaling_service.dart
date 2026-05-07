@@ -9,6 +9,7 @@ import 'dart:math';
 import '../p2p/p2p_service.dart';
 import 'peer_relay_service.dart';
 import 'webrtc_config.dart';
+import 'webtorrent_signaling_channel.dart';
 import 'websocket_service.dart';
 import 'profile_service.dart';
 import 'log_service.dart';
@@ -50,6 +51,9 @@ class WebRTCSignalingService {
   /// Subscription to peer relay signaling messages
   StreamSubscription<Map<String, dynamic>>? _relaySubscription;
 
+  /// Subscription to WebTorrent tracker signaling messages
+  StreamSubscription<Map<String, dynamic>>? _wtSubscription;
+
   /// Whether the service is initialized
   bool _initialized = false;
 
@@ -70,6 +74,9 @@ class WebRTCSignalingService {
     _dhtSubscription = P2PService().onSignalingMessage.listen(
       _handleDhtMessage,
     );
+    _wtSubscription = WebTorrentSignalingChannel().signalingMessages.listen(
+      _handleWebTorrentMessage,
+    );
 
     _initialized = true;
     LogService().log('WebRTCSignalingService: Initialized');
@@ -80,6 +87,7 @@ class WebRTCSignalingService {
     _wsSubscription?.cancel();
     _relaySubscription?.cancel();
     _dhtSubscription?.cancel();
+    _wtSubscription?.cancel();
     _signalController.close();
 
     // Cancel any pending offers
@@ -153,22 +161,29 @@ class WebRTCSignalingService {
         ' via ${pending.lastPath ?? "unknown"}',
       );
 
-      // WS silent-failure watchdog. The station echoes back
-      // `webrtc_error: target_not_connected` when the recipient isn't
-      // on the same WS, and that triggers the retry path. But on some
-      // station configurations (and when the station is unreachable)
-      // we get neither an answer nor an error — just silence. This
-      // watchdog treats >3s of WS silence as an implicit failure and
-      // fires the same retry the webrtc_error handler would.
-      if (pending.lastPath == 'ws') {
-        wsWatchdog = Timer(const Duration(seconds: 3), () {
+      // Silent-failure watchdog. Some signaling paths complete the
+      // send without surfacing an error even when the message never
+      // reaches the peer (station WS without the recipient online,
+      // tracker accepts an announce but no peer is listening on the
+      // same info_hash). This watchdog treats prolonged silence as an
+      // implicit failure and fires the same retry the explicit error
+      // handlers would. Tuned per path:
+      //   ws — 3s (station echoes target_not_connected fast)
+      //   wt — 4s (tracker round-trip + recipient peer side delivery)
+      final silentMs = pending.lastPath == 'wt'
+          ? 4000
+          : pending.lastPath == 'ws'
+              ? 3000
+              : 0;
+      if (silentMs > 0) {
+        wsWatchdog = Timer(Duration(milliseconds: silentMs), () {
           if (pending.completer.isCompleted) return;
           if (pending.retryStarted) return;
           pending.retryStarted = true;
-          pending.triedPaths.add('ws');
+          pending.triedPaths.add(pending.lastPath ?? '');
           LogService().log(
-            'WebRTCSignaling: WS silent for 3s on session $sessionId,'
-            ' retrying via next path',
+            'WebRTCSignaling: ${pending.lastPath} silent for ${silentMs}ms on'
+            ' session $sessionId, retrying via next path',
           );
           unawaited(_retryPendingOffer(sessionId, pending));
         });
@@ -267,6 +282,29 @@ class WebRTCSignalingService {
     _PendingOffer? pending,
     Set<String> skipPaths = const {},
   }) async {
+    // WebTorrent WSS trackers are the default serverless signaling
+    // path. They work cross-NAT without router config because the
+    // tracker connection is outbound-only WSS, and they are reachable
+    // from cellular CGNAT and consumer NATs alike. The actual WebRTC
+    // media path establishes peer-to-peer via STUN-assisted hole
+    // punching after signaling completes — trackers drop out.
+    if (!skipPaths.contains('wt') &&
+        WebTorrentSignalingChannel().isStarted &&
+        WebTorrentSignalingChannel().connectedTrackerCount > 0) {
+      final sentViaWt = await WebTorrentSignalingChannel().sendSignal(
+        toCallsign: signal.toCallsign,
+        signal: signal.toJson(),
+      );
+      if (sentViaWt) {
+        LogService().log(
+          'WebRTCSignaling: Sent ${signal.type.name} to ${signal.toCallsign} via WebTorrent',
+        );
+        pending?.lastPath = 'wt';
+        pending?.triedPaths.add('wt');
+        return;
+      }
+    }
+
     // Prefer DHT when we have the peer's UDP rendezvous cached. This
     // avoids the station-WS round trip (and its silent-failure mode
     // when the recipient isn't on the same WebSocket).
@@ -402,6 +440,11 @@ class WebRTCSignalingService {
   /// Handle incoming peer relay messages.
   void _handleRelayMessage(Map<String, dynamic> message) {
     _handleIncomingSignal(message, source: 'PeerRelay');
+  }
+
+  /// Handle incoming WebTorrent tracker messages.
+  void _handleWebTorrentMessage(Map<String, dynamic> message) {
+    _handleIncomingSignal(message, source: 'WebTorrent');
   }
 
   void _handleIncomingSignal(

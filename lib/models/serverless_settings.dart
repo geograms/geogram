@@ -30,6 +30,12 @@ class ServerlessSettings {
   /// persist across restarts so routing-table cache stays warm.
   int? chosenDhtPort;
 
+  /// WebTorrent WSS tracker signaling — primary serverless rendezvous.
+  bool webtorrentEnabled;
+
+  /// Override the default tracker list. Empty => use the hardcoded set.
+  List<String> webtorrentTrackers;
+
   ServerlessSettings({
     this.enableServerless = true,
     this.dhtEnabled = true,
@@ -41,7 +47,9 @@ class ServerlessSettings {
     this.relayOnlyWhenUnmetered = true,
     this.manualRelayHostPort,
     this.chosenDhtPort,
-  });
+    this.webtorrentEnabled = true,
+    List<String>? webtorrentTrackers,
+  }) : webtorrentTrackers = webtorrentTrackers ?? const <String>[];
 
   Map<String, dynamic> toJson() => {
         'enableServerless': enableServerless,
@@ -55,6 +63,9 @@ class ServerlessSettings {
         if (manualRelayHostPort != null)
           'manualRelayHostPort': manualRelayHostPort,
         if (chosenDhtPort != null) 'chosenDhtPort': chosenDhtPort,
+        'webtorrentEnabled': webtorrentEnabled,
+        if (webtorrentTrackers.isNotEmpty)
+          'webtorrentTrackers': webtorrentTrackers,
       };
 
   factory ServerlessSettings.fromJson(Map<String, dynamic> json) =>
@@ -69,5 +80,10 @@ class ServerlessSettings {
         relayOnlyWhenUnmetered: json['relayOnlyWhenUnmetered'] as bool? ?? true,
         manualRelayHostPort: json['manualRelayHostPort'] as String?,
         chosenDhtPort: json['chosenDhtPort'] as int?,
+        webtorrentEnabled: json['webtorrentEnabled'] as bool? ?? true,
+        webtorrentTrackers: (json['webtorrentTrackers'] as List?)
+                ?.map((e) => e.toString())
+                .toList() ??
+            const <String>[],
       );
 }

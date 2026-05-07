@@ -139,6 +139,7 @@ import '../util/feedback_comment_utils.dart';
 import '../p2p/p2p_service.dart';
 import '../p2p/dht_topics.dart';
 import '../p2p/reachability/reachability_service.dart';
+import 'webtorrent_signaling_channel.dart';
 import '../p2p/relay/relay_promotion_controller.dart';
 import '../p2p/relay/serverless_relay_mediator.dart';
 import '../server/handlers/serverless_p2p_handler.dart';
@@ -21392,6 +21393,14 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         request.method == 'POST') {
       return await _handleForceOnlyTransport(request, headers);
     }
+    if (urlPath == 'api/p2p/serverless/webtorrent/status' &&
+        request.method == 'GET') {
+      return _handleServerlessWebTorrentStatus(headers);
+    }
+    if (urlPath == 'api/p2p/serverless/webtorrent/reconnect' &&
+        request.method == 'POST') {
+      return _handleServerlessWebTorrentReconnect(headers);
+    }
 
     // POST /api/p2p/offer - Receive offer from sender (called by remote instance)
     if (urlPath == 'api/p2p/offer' && request.method == 'POST') {
@@ -21472,6 +21481,29 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
     final s = await ReachabilityService().refresh();
     return shelf.Response.ok(
       jsonEncode({'success': true, 'reachability': s.toJson()}),
+      headers: headers,
+    );
+  }
+
+  shelf.Response _handleServerlessWebTorrentStatus(
+      Map<String, String> headers) {
+    return shelf.Response.ok(
+      jsonEncode({
+        'success': true,
+        'webtorrent': WebTorrentSignalingChannel().getStatus(),
+      }),
+      headers: headers,
+    );
+  }
+
+  shelf.Response _handleServerlessWebTorrentReconnect(
+      Map<String, String> headers) {
+    WebTorrentSignalingChannel().reconnectAll();
+    return shelf.Response.ok(
+      jsonEncode({
+        'success': true,
+        'webtorrent': WebTorrentSignalingChannel().getStatus(),
+      }),
       headers: headers,
     );
   }
