@@ -67,8 +67,21 @@ Future<UpnpMappingResult> upnpAddPortMapping({
     final resp = await _soap(svc, 'AddPortMapping', body)
         .timeout(_soapTimeout);
     if (resp.statusCode != 200) {
+      // Drain the SOAP fault body so users can see *why* the router said
+      // no — most consumer routers gate UPnP edits behind an admin toggle
+      // and reply with errorCode 403 "Not available Action" until enabled.
+      final faultBody =
+          await utf8.decoder.bind(resp).join().catchError((Object _) => '');
+      final faultCode =
+          RegExp(r'<errorCode>([^<]+)</errorCode>').firstMatch(faultBody);
+      final faultDesc = RegExp(r'<errorDescription>([^<]+)</errorDescription>')
+          .firstMatch(faultBody);
+      final detail = faultCode != null
+          ? ' UPnP ${faultCode.group(1)}: ${faultDesc?.group(1) ?? "?"}'
+          : '';
       return UpnpMappingResult(
-          ok: false, error: 'AddPortMapping HTTP ${resp.statusCode}');
+          ok: false,
+          error: 'AddPortMapping HTTP ${resp.statusCode}$detail');
     }
   } on TimeoutException {
     upnpTimeoutCount++;
