@@ -50,6 +50,7 @@ import 'remote_event_actions.dart';
 import 'chat_file_upload_manager.dart';
 import 'app_args.dart';
 import '../connection/connection_manager.dart';
+import '../connection/transports/hole_punch_transport.dart';
 import '../connection/transport_message.dart';
 import '../teleport/aprs/aprs_is_client.dart';
 import '../teleport/aprs/aprs_message_utils.dart';
@@ -12445,6 +12446,7 @@ class LogApiService
             'peer_relay',
             'station',
             'webrtc',
+            'hole_punch',
             'bluetooth_classic',
             'usb_aoa',
           };
@@ -12550,6 +12552,7 @@ class LogApiService
             'peer_relay',
             'station',
             'webrtc',
+            'hole_punch',
             'bluetooth_classic',
             'usb_aoa',
           };
@@ -12655,6 +12658,7 @@ class LogApiService
             'peer_relay',
             'station',
             'webrtc',
+            'hole_punch',
             'bluetooth_classic',
             'usb_aoa',
           };
@@ -21401,6 +21405,10 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
         request.method == 'POST') {
       return _handleServerlessWebTorrentReconnect(headers);
     }
+    if (urlPath == 'api/p2p/serverless/hole_punch/status' &&
+        request.method == 'GET') {
+      return _handleServerlessHolePunchStatus(headers);
+    }
 
     // POST /api/p2p/offer - Receive offer from sender (called by remote instance)
     if (urlPath == 'api/p2p/offer' && request.method == 'POST') {
@@ -21506,6 +21514,15 @@ document.addEventListener('nostr-connected', function() { location.reload(); });
       }),
       headers: headers,
     );
+  }
+
+  shelf.Response _handleServerlessHolePunchStatus(Map<String, String> headers) {
+    final cm = ConnectionManager();
+    final t = cm.getTransport('hole_punch') as HolePunchTransport?;
+    final body = t == null
+        ? {'success': true, 'hole_punch': {'started': false}}
+        : {'success': true, 'hole_punch': t.getStatus()};
+    return shelf.Response.ok(jsonEncode(body), headers: headers);
   }
 
   Future<shelf.Response> _handleServerlessDhtTopic(
