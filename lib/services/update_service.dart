@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' if (dart.library.html) '../platform/io_stub.dart';
+import 'dart:isolate';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/foundation.dart';
@@ -16,6 +17,7 @@ import '../services/app_args.dart';
 import '../services/config_service.dart';
 import '../services/log_service.dart';
 import '../services/station_service.dart';
+import '../services/update_download_isolate.dart';
 import '../transfer/models/transfer_models.dart';
 import '../transfer/services/transfer_service.dart';
 import '../version.dart';
@@ -70,6 +72,17 @@ class UpdateService {
 
   /// Track pending desktop update (staged but not yet applied — Linux or Windows)
   ({String scriptPath, String version, String appDir})? _pendingDesktopUpdate;
+
+  /// Active download isolate (null when not downloading). Kept so
+  /// [cancelDownload] can kill the worker.
+  Isolate? _downloadIsolate;
+  SendPort? _downloadCancelPort;
+  MonitoredIsolateHandle? _downloadTaskHandle;
+
+  /// Rate-limited error logging for [_updateDownloadServiceProgress].
+  DateTime? _lastProgressErrorAt;
+  int _progressErrorCount = 0;
+  static const _progressErrorLogInterval = Duration(seconds: 10);
 
   /// Initialize update service
   Future<void> initialize() async {
@@ -128,7 +141,11 @@ class UpdateService {
       // so the install button is blue immediately on app open — without
       // this, the user sees a grey button until a fresh GitHub round-trip
       // succeeds, which never happens offline.
-      unawaited(recoverCompletedDownloadFromDisk());
+      unawaited(recoverCompletedDownloadFromDisk()
+          .then((_) => recoverPartialDownloadFromDisk())
+          .catchError((Object e, StackTrace st) {
+        LogService().log('UpdateService: init recovery failed: $e');
+      }));
     } catch (e) {
       LogService().log('Error initializing UpdateService: $e');
     }
@@ -539,14 +556,22 @@ class UpdateService {
     // install button lights up as soon as the new release is observed and
     // the matching APK is found, without waiting for the user to navigate
     // to the Updates page.
-    unawaited(recoverCompletedDownloadFromDisk());
+    unawaited(recoverCompletedDownloadFromDisk()
+        .then((_) => recoverPartialDownloadFromDisk())
+        .catchError((Object e, StackTrace st) {
+      LogService().log('UpdateService: post-check recovery failed: $e');
+    }));
 
     if (updateReady) {
-      unawaited(_maybeAutoDownload(release));
+      unawaited(_maybeAutoDownload(release).catchError((Object e, StackTrace st) {
+        LogService().log('UpdateService: auto-download failed: $e');
+      }));
 
       // Auto-install for debug builds with auto-install enabled
       if (_settings?.autoInstallEnabled == true && !kIsWeb && Platform.isAndroid) {
-        unawaited(_autoInstallDebugApk(release));
+        unawaited(_autoInstallDebugApk(release).catchError((Object e, StackTrace st) {
+          LogService().log('UpdateService: auto-install failed: $e');
+        }));
       }
     }
   }
@@ -1222,7 +1247,10 @@ class UpdateService {
     }
   }
 
-  /// Update the download service notification with progress (Android only)
+  /// Update the download service notification with progress (Android only).
+  ///
+  /// Errors are rate-limited: first error logs immediately, then at most
+  /// once per [_progressErrorLogInterval] with the accumulated count.
   Future<void> _updateDownloadServiceProgress(int progress, String status) async {
     if (kIsWeb || !Platform.isAndroid) return;
 
@@ -1232,7 +1260,16 @@ class UpdateService {
         'status': status,
       });
     } catch (e) {
-      // Don't log every progress update error to avoid spam
+      _progressErrorCount++;
+      final now = DateTime.now();
+      final shouldLog = _lastProgressErrorAt == null ||
+          now.difference(_lastProgressErrorAt!) >= _progressErrorLogInterval;
+      if (shouldLog) {
+        LogService().log(
+            'UpdateService: download notification update failed ($_progressErrorCount occurrence(s)): $e');
+        _lastProgressErrorAt = now;
+        _progressErrorCount = 0;
+      }
     }
   }
 
@@ -1290,19 +1327,7 @@ class UpdateService {
         tempDir = await getTemporaryDirectory();
       }
       LogService().log('Download directory: ${tempDir.path}');
-      final platform = detectPlatform();
-      // On Windows, if we're downloading the setup.exe, use .exe extension
-      final bool isWindowsSetup = !kIsWeb && Platform.isWindows &&
-          release.getAssetUrl(UpdateAssetType.windowsSetup) != null;
-      final extension = platform == UpdatePlatform.android
-          ? '.apk'
-          : isWindowsSetup
-              ? '.exe'
-              : platform == UpdatePlatform.windows || platform == UpdatePlatform.macos
-                  ? '.zip'
-                  : platform == UpdatePlatform.linux
-                      ? '.tar.gz'
-                      : '';
+      final extension = _extensionFor(release);
       final tempFilePath =
           '${tempDir.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
       final partialFilePath = '$tempFilePath.partial';
@@ -1344,99 +1369,63 @@ class UpdateService {
         return tempFilePath;
       }
 
-      // Create HTTP client for better connection management
-      return await withHttpClient((client) async {
-        // Build request with Range header for resume
-        final request = http.Request('GET', Uri.parse(downloadUrl));
-        request.headers['User-Agent'] = 'Geogram-Desktop-Updater';
+      if (supportsResume && existingBytes > 0) {
+        LogService().log('Resuming download from byte $existingBytes');
+      } else if (existingBytes > 0) {
+        // Server doesn't support resume, isolate will delete partial and start fresh
+        LogService().log('Server does not support resume, starting fresh');
+      }
 
-        // Resume from existing bytes if supported
-        int startByte = 0;
-        if (supportsResume && existingBytes > 0) {
-          startByte = existingBytes;
-          request.headers['Range'] = 'bytes=$startByte-';
-          LogService().log('Resuming download from byte $startByte');
-        } else if (existingBytes > 0) {
-          // Server doesn't support resume, delete partial and start fresh
-          LogService().log('Server does not support resume, starting fresh');
-          await partialFile.delete();
-          existingBytes = 0;
+      _bytesDownloaded = existingBytes;
+
+      final tempPath = await _runDownloadIsolate(
+        url: downloadUrl,
+        partialPath: partialFilePath,
+        finalPath: tempFilePath,
+        existingBytes: existingBytes,
+        supportsResume: supportsResume,
+        knownContentLength: contentLength,
+        onProgress: onProgress,
+      );
+
+      if (tempPath == null) {
+        // Partial preserved on disk; resume will pick up next time.
+        return null;
+      }
+
+      // Verify file integrity on Android
+      if (!kIsWeb && Platform.isAndroid) {
+        final downloadedFile = File(tempPath);
+        final actualSize = await downloadedFile.length();
+        LogService().log('APK file size: $actualSize bytes (expected: $_totalBytes)');
+
+        if (_totalBytes > 0 && actualSize < _totalBytes * 0.95) {
+          // File is more than 5% smaller than expected - likely corrupted
+          LogService().log('WARNING: Downloaded file appears incomplete!');
+          await downloadedFile.delete();
+          throw Exception('Download incomplete: got $actualSize bytes, expected $_totalBytes');
         }
 
-        final response = await client.send(request);
-
-        // Check response - 200 for full, 206 for partial
-        if (response.statusCode != 200 && response.statusCode != 206) {
-          throw Exception('Failed to download update: HTTP ${response.statusCode}');
+        // Verify APK is a valid ZIP file (APKs are ZIP archives)
+        final isValidApk = await _verifyApkIntegrity(tempPath);
+        if (!isValidApk) {
+          LogService().log('WARNING: APK integrity check failed - file may be corrupted');
+          await downloadedFile.delete();
+          throw Exception('Downloaded APK is corrupted. Please try again.');
         }
+        LogService().log('APK integrity verified successfully');
+      }
 
-        // Calculate total size for progress
-        final expectedLength = response.contentLength ?? (contentLength - startByte);
-        final totalSize = startByte + expectedLength;
+      // Final progress update
+      _downloadProgress = 1.0;
+      downloadProgress.value = 1.0;
+      onProgress?.call(1.0);
 
-        // Open file for writing - append if resuming
-        final sink = partialFile.openWrite(
-            mode: startByte > 0 ? FileMode.append : FileMode.write);
+      // Store completed download state for UI persistence
+      _setCompletedDownload(tempPath, release.version);
 
-        var downloaded = startByte;
-        _bytesDownloaded = downloaded;
-
-        // Write chunks directly - HTTP streams are already reasonably chunked
-        // and the filesystem handles buffering internally
-        await for (final chunk in response.stream) {
-          // Write chunk directly to file
-          sink.add(chunk);
-          downloaded += chunk.length;
-
-          // Throttled progress update
-          _bytesDownloaded = downloaded;
-          if (totalSize > 0) {
-            final progress = downloaded / totalSize;
-            _updateProgressThrottled(progress, onProgress);
-          }
-        }
-
-        // Ensure all data is flushed to disk
-        await sink.flush();
-        await sink.close();
-
-        // Rename partial file to final name
-        await partialFile.rename(tempFilePath);
-
-        // Verify file integrity on Android
-        if (!kIsWeb && Platform.isAndroid) {
-          final downloadedFile = File(tempFilePath);
-          final actualSize = await downloadedFile.length();
-          LogService().log('APK file size: $actualSize bytes (expected: $totalSize)');
-
-          if (totalSize > 0 && actualSize < totalSize * 0.95) {
-            // File is more than 5% smaller than expected - likely corrupted
-            LogService().log('WARNING: Downloaded file appears incomplete!');
-            await downloadedFile.delete();
-            throw Exception('Download incomplete: got $actualSize bytes, expected $totalSize');
-          }
-
-          // Verify APK is a valid ZIP file (APKs are ZIP archives)
-          final isValidApk = await _verifyApkIntegrity(tempFilePath);
-          if (!isValidApk) {
-            LogService().log('WARNING: APK integrity check failed - file may be corrupted');
-            await downloadedFile.delete();
-            throw Exception('Downloaded APK is corrupted. Please try again.');
-          }
-          LogService().log('APK integrity verified successfully');
-        }
-
-        // Final progress update
-        _downloadProgress = 1.0;
-        downloadProgress.value = 1.0;
-        onProgress?.call(1.0);
-
-        // Store completed download state for UI persistence
-        _setCompletedDownload(tempFilePath, release.version);
-
-        LogService().log('Downloaded $downloaded bytes to $tempFilePath');
-        return tempFilePath;
-      });
+      LogService().log('Downloaded to $tempPath');
+      return tempPath;
     } catch (e) {
       LogService().log('Error downloading update: $e');
       // Don't delete partial file on error - allow resume next time
@@ -1450,6 +1439,123 @@ class UpdateService {
 
       // Stop the foreground service
       await _stopDownloadService();
+    }
+  }
+
+  /// Spawn the download worker isolate and await completion.
+  ///
+  /// Returns the final on-disk path on success, null on failure /
+  /// cancellation. The partial file is preserved on failure so the next
+  /// invocation can resume via `Range:`.
+  Future<String?> _runDownloadIsolate({
+    required String url,
+    required String partialPath,
+    required String finalPath,
+    required int existingBytes,
+    required bool supportsResume,
+    required int knownContentLength,
+    void Function(double progress)? onProgress,
+  }) async {
+    final receivePort = ReceivePort();
+    final exitPort = ReceivePort();
+    final completer = Completer<String?>();
+
+    _downloadTaskHandle = MonitoredIsolateHandle(
+      id: 'update.download',
+      name: 'Update Download',
+      description: 'Streams the latest release asset to disk',
+      serviceName: 'UpdateService',
+    );
+    _downloadTaskHandle!.markRunning();
+
+    final args = DownloadIsolateArgs(
+      sendPort: receivePort.sendPort,
+      url: url,
+      partialPath: partialPath,
+      finalPath: finalPath,
+      existingBytes: existingBytes,
+      supportsResume: supportsResume,
+      knownContentLength: knownContentLength,
+      userAgent: 'Geogram-Desktop-Updater',
+    );
+
+    final sub = receivePort.listen((dynamic msg) {
+      try {
+        if (msg is! Map) return;
+        final type = msg['type'];
+        switch (type) {
+          case 'ready':
+            _downloadCancelPort = msg['cancelPort'] as SendPort?;
+            break;
+          case 'progress':
+            final downloaded = (msg['downloaded'] as int?) ?? 0;
+            final total = (msg['total'] as int?) ?? 0;
+            _bytesDownloaded = downloaded;
+            if (total > 0) {
+              _totalBytes = total;
+              _updateProgressThrottled(downloaded / total, onProgress);
+            }
+            break;
+          case 'completed':
+            final path = msg['path'] as String?;
+            if (!completer.isCompleted) completer.complete(path);
+            break;
+          case 'failed':
+            final err = msg['error'] as String? ?? 'unknown';
+            final cancelled = (msg['cancelled'] as bool?) ?? false;
+            if (cancelled) {
+              LogService().log('UpdateService: download cancelled');
+            } else {
+              LogService().log('UpdateService: download isolate failed: $err');
+            }
+            if (!completer.isCompleted) completer.complete(null);
+            break;
+        }
+      } catch (e) {
+        // A malformed event must not crash the host.
+        LogService().log('UpdateService: error handling isolate event: $e');
+      }
+    });
+
+    // If the isolate dies without sending 'completed' or 'failed' (e.g.
+    // it gets force-killed by cancelDownload's hard-kill timer), the
+    // exit port fires and unblocks the orchestration completer.
+    final exitSub = exitPort.listen((_) {
+      if (!completer.isCompleted) {
+        LogService().log('UpdateService: download isolate exited unexpectedly');
+        completer.complete(null);
+      }
+    });
+
+    try {
+      _downloadIsolate = await Isolate.spawn(downloadIsolateEntry, args,
+          errorsAreFatal: false,
+          onExit: exitPort.sendPort,
+          debugName: 'UpdateDownload');
+    } catch (e) {
+      LogService().log('UpdateService: failed to spawn download isolate: $e');
+      await sub.cancel();
+      await exitSub.cancel();
+      receivePort.close();
+      exitPort.close();
+      _downloadTaskHandle?.markError(e);
+      _downloadTaskHandle?.dispose();
+      _downloadTaskHandle = null;
+      return null;
+    }
+
+    try {
+      return await completer.future;
+    } finally {
+      await sub.cancel();
+      await exitSub.cancel();
+      receivePort.close();
+      exitPort.close();
+      _downloadCancelPort = null;
+      _downloadIsolate = null;
+      _downloadTaskHandle?.markIdle();
+      _downloadTaskHandle?.dispose();
+      _downloadTaskHandle = null;
     }
   }
 
@@ -1491,6 +1597,17 @@ class UpdateService {
     if (!_isDownloading) return;
 
     LogService().log('Download cancelled by user');
+    // Ask the worker isolate to break out of its chunk loop and close the
+    // partial file cleanly. It will then send a 'failed' event with
+    // cancelled=true, which completes the orchestration future.
+    try {
+      _downloadCancelPort?.send('cancel');
+    } catch (_) {}
+    // Force-kill as a hard fallback if the cooperative cancel never
+    // takes effect (e.g. the isolate is stuck on a hung socket).
+    Timer(const Duration(seconds: 5), () {
+      _downloadIsolate?.kill(priority: Isolate.immediate);
+    });
     _isDownloading = false;
     _downloadProgress = 0.0;
     downloadProgress.value = 0.0;
@@ -1784,47 +1901,105 @@ class UpdateService {
     }
   }
 
+  /// If a partial download exists for the known latest release, surface it
+  /// and — when `autoDownloadUpdates` is on — kick the resume immediately.
+  ///
+  /// Without this, a download that was interrupted by a crash or app exit
+  /// stays parked on disk until the user manually opens the Update page,
+  /// at which point the existing `downloadUpdate` flow already handles
+  /// Range-resume.
+  Future<void> recoverPartialDownloadFromDisk() async {
+    if (_completedDownloadPath != null) return; // completed wins
+    if (_isDownloading) return;
+    final release = _latestRelease;
+    if (release == null) return;
+    try {
+      final partial = await findPartialDownload(release);
+      if (partial == null) return;
+      LogService().log(
+          'Found resumable partial: v${release.version} at ${partial.path} (${partial.bytes} bytes)');
+
+      if (_settings?.autoDownloadUpdates == true) {
+        LogService().log('Auto-resume: kicking resume for v${release.version}');
+        unawaited(downloadUpdate(release).catchError((Object e, StackTrace st) {
+          LogService().log('UpdateService: auto-resume failed: $e');
+          return null;
+        }));
+      }
+    } catch (e) {
+      LogService().log('Error recovering partial download: $e');
+    }
+  }
+
+  /// Build the platform-specific extension geogram uses for cached release
+  /// assets in the temp/cache dir.
+  String _extensionFor(ReleaseInfo release) {
+    if (kIsWeb) return '';
+    final platform = detectPlatform();
+    final bool isWindowsSetup = Platform.isWindows &&
+        release.getAssetUrl(UpdateAssetType.windowsSetup) != null;
+    if (platform == UpdatePlatform.android) return '.apk';
+    if (isWindowsSetup) return '.exe';
+    if (platform == UpdatePlatform.windows ||
+        platform == UpdatePlatform.macos) return '.zip';
+    if (platform == UpdatePlatform.linux) return '.tar.gz';
+    return '';
+  }
+
+  /// Candidate directories where geogram caches downloaded release assets.
+  Future<List<Directory>> _downloadCacheDirs() async {
+    final dirs = <Directory>[];
+    try {
+      dirs.add(await getTemporaryDirectory());
+    } catch (_) {}
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final ext = await getExternalCacheDirectories();
+        if (ext != null) dirs.addAll(ext);
+      } catch (_) {}
+    }
+    return dirs;
+  }
+
   /// Check if a completed download file exists for a given release version
   /// Returns the file path if found, null otherwise
   Future<String?> findCompletedDownload(ReleaseInfo release) async {
     if (kIsWeb) return null;
 
     try {
-      final platform = detectPlatform();
-      // On Windows, check for setup.exe first, then fall back to .zip
-      final bool isWindowsSetup = !kIsWeb && Platform.isWindows &&
-          release.getAssetUrl(UpdateAssetType.windowsSetup) != null;
-      final extension = platform == UpdatePlatform.android
-          ? '.apk'
-          : isWindowsSetup
-              ? '.exe'
-              : platform == UpdatePlatform.windows || platform == UpdatePlatform.macos
-                  ? '.zip'
-                  : platform == UpdatePlatform.linux
-                      ? '.tar.gz'
-                      : '';
-
-      // Check primary temp directory
-      final tempDir = await getTemporaryDirectory();
-      final tempFilePath = '${tempDir.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
-      if (await File(tempFilePath).exists()) {
-        LogService().log('Found completed download at: $tempFilePath');
-        return tempFilePath;
-      }
-
-      // Also check external cache on Android
-      if (Platform.isAndroid) {
-        final externalCacheDirs = await getExternalCacheDirectories();
-        if (externalCacheDirs != null && externalCacheDirs.isNotEmpty) {
-          final externalPath = '${externalCacheDirs.first.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
-          if (await File(externalPath).exists()) {
-            LogService().log('Found completed download at: $externalPath');
-            return externalPath;
-          }
+      final extension = _extensionFor(release);
+      for (final dir in await _downloadCacheDirs()) {
+        final path = '${dir.path}${Platform.pathSeparator}geogram-update-${release.version}$extension';
+        if (await File(path).exists()) {
+          LogService().log('Found completed download at: $path');
+          return path;
         }
       }
     } catch (e) {
       LogService().log('Error checking for completed download: $e');
+    }
+
+    return null;
+  }
+
+  /// Check if a partial (`.partial`) download exists for the given release.
+  /// Returns `(path, bytesOnDisk)` if found, null otherwise.
+  Future<({String path, int bytes})?> findPartialDownload(ReleaseInfo release) async {
+    if (kIsWeb) return null;
+
+    try {
+      final extension = _extensionFor(release);
+      for (final dir in await _downloadCacheDirs()) {
+        final path =
+            '${dir.path}${Platform.pathSeparator}geogram-update-${release.version}$extension.partial';
+        final file = File(path);
+        if (await file.exists()) {
+          final bytes = await file.length();
+          if (bytes > 0) return (path: path, bytes: bytes);
+        }
+      }
+    } catch (e) {
+      LogService().log('Error checking for partial download: $e');
     }
 
     return null;

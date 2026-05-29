@@ -61,17 +61,27 @@ class _UpdatePageState extends State<UpdatePage> {
   void dispose() {
     // Mark that UpdatePage is no longer visible
     _updateService.isUpdatePageVisible = false;
+    // Detach listeners and null the slots so any late-firing notifier
+    // event hitting `_setStateIfMounted` after dispose becomes a no-op
+    // instead of a `setState` on a dead State.
     if (_completedDownloadListener != null) {
       _updateService.completedDownloadPathNotifier.removeListener(_completedDownloadListener!);
+      _completedDownloadListener = null;
     }
     if (_updateAvailableListener != null) {
       _updateService.updateAvailable.removeListener(_updateAvailableListener!);
+      _updateAvailableListener = null;
     }
     super.dispose();
   }
 
   void _setStateIfMounted(VoidCallback callback) {
     if (!mounted) return;
+    // Belt-and-braces: if the listener slots are already null we're mid /
+    // post dispose and have no business calling setState.
+    if (_completedDownloadListener == null && _updateAvailableListener == null) {
+      return;
+    }
     setState(callback);
   }
 
